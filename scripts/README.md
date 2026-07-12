@@ -123,23 +123,23 @@ After both component jobs finish, start policy-only frozen Ray cotrain by
 providing either their completed run directories or selected checkpoint files:
 
 ```bash
-bash scripts/e2e_frozen_model_cotrain.sh \
-  /path/to/world_model/run \
-  /path/to/classifier/run
+WORLD_MODEL_CKPT=/path/to/world_model/run \
+CLASSIFIER_CKPT=/path/to/classifier/run \
+  bash scripts/e2e_frozen_model_cotrain.sh
 ```
 
 Resume the same run with its policy checkpoint; WM/CLS are still loaded from
 the two explicit immutable sources:
 
 ```bash
-bash scripts/e2e_frozen_model_cotrain.sh \
-  /path/to/world_model/run \
-  /path/to/classifier/run \
-  --resume-ckpt /path/to/frozen_cotrain_run/checkpoints/manual_cotrain_step_500/manual_cotrain.ckpt
+WORLD_MODEL_CKPT=/path/to/world_model/run \
+CLASSIFIER_CKPT=/path/to/classifier/run \
+COTRAIN_RESUME_CKPT=/path/to/frozen_cotrain_run/checkpoints/manual_cotrain_step_500/manual_cotrain.ckpt \
+  bash scripts/e2e_frozen_model_cotrain.sh
 ```
 
-The resume run root is inferred from the checkpoint. Use `--run-root` only to
-override it explicitly.
+The resume run root is inferred from the checkpoint. Assign
+`COTRAIN_RUN_ROOT=/path/to/run` only when the checkpoint was relocated.
 
 Check collection completeness before a long run:
 

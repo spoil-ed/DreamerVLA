@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Eight-GPU Ray policy-only RL with positional pretrained WM/CLS checkpoints.
+# Eight-GPU Ray policy-only RL with explicit pretrained WM/CLS assignments.
+# WORLD_MODEL_CKPT=/path/to/wm/run CLASSIFIER_CKPT=/path/to/classifier/run \
+#   bash scripts/e2e_frozen_model_cotrain.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"

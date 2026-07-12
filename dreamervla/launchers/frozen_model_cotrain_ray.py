@@ -1,8 +1,7 @@
-"""One-command launcher for eight-GPU frozen-model Ray policy training."""
+"""Eight-GPU frozen-model Ray launch from explicit checkpoint assignments."""
 
 from __future__ import annotations
 
-import argparse
 import os
 import shlex
 import subprocess
@@ -29,20 +28,6 @@ class FrozenRayLaunch:
     out_dir: Path
     visible_gpus: tuple[str, ...]
     resume: bool
-
-
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Train the policy on 8 GPUs with frozen pretrained WM/CLS Ray workers."
-        )
-    )
-    parser.add_argument("world_model_ckpt")
-    parser.add_argument("classifier_ckpt")
-    parser.add_argument("--resume-ckpt", default=None)
-    parser.add_argument("--run-root", default=None)
-    parser.add_argument("--dry-run", action="store_true")
-    return parser
 
 
 def _existing_file(value: str, *, label: str) -> Path:
@@ -89,17 +74,9 @@ def _default_out_dir() -> Path:
     explicit = os.environ.get("COTRAIN_RUN_ROOT") or os.environ.get("RUN_ROOT")
     if explicit:
         return Path(explicit).expanduser().resolve()
-    data_root = Path(
-        os.environ.get("DVLA_DATA_ROOT", PROJECT_ROOT / "data")
-    ).expanduser()
+    data_root = Path(os.environ.get("DVLA_DATA_ROOT", PROJECT_ROOT / "data")).expanduser()
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    return (
-        data_root
-        / "outputs"
-        / "pre_mainline"
-        / "frozen_cotrain_ray"
-        / timestamp
-    ).resolve()
+    return (data_root / "outputs" / "pre_mainline" / "frozen_cotrain_ray" / timestamp).resolve()
 
 
 def _resume_out_dir(resume_ckpt: Path) -> Path:
@@ -107,8 +84,7 @@ def _resume_out_dir(resume_ckpt: Path) -> Path:
         if parent.name == "checkpoints":
             return parent.parent.resolve()
     raise ValueError(
-        "cannot infer the resume run root from the policy checkpoint; "
-        "pass --run-root"
+        "cannot infer the resume run root from the policy checkpoint; assign COTRAIN_RUN_ROOT=/path"
     )
 
 
@@ -129,25 +105,56 @@ def _launch_env(visible_gpus: tuple[str, ...]) -> dict[str, str]:
     return env
 
 
+def _required_environment_path(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise ValueError(f"{name}=/path is required; use an explicit environment assignment")
+    return value
+
+
+def _hydra_overrides(argv: list[str]) -> list[str]:
+    overrides: list[str] = []
+    for item in argv:
+        if "=" not in item:
+            raise ValueError(
+                f"expected Hydra key=value override, got {item!r}; "
+                "set WORLD_MODEL_CKPT=/path and CLASSIFIER_CKPT=/path before the command"
+            )
+        overrides.append(str(item))
+    return overrides
+
+
+def _environment_bool(name: str, *, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return bool(default)
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean assignment, got {raw!r}")
+
+
 def build_launch(argv: list[str]) -> FrozenRayLaunch:
     """Resolve checkpoint paths, Hydra overrides, and the exact 8-GPU command."""
 
-    args, hydra_overrides = _parser().parse_known_args(argv)
+    hydra_overrides = _hydra_overrides(argv)
     wm_ckpt = _component_checkpoint(
-        args.world_model_ckpt,
+        _required_environment_path("WORLD_MODEL_CKPT"),
         component="world_model",
     )
     classifier_ckpt = _component_checkpoint(
-        args.classifier_ckpt,
+        _required_environment_path("CLASSIFIER_CKPT"),
         component="classifier",
     )
+    resume_value = os.environ.get("COTRAIN_RESUME_CKPT", "").strip()
     resume_ckpt = (
-        _existing_file(args.resume_ckpt, label="policy resume checkpoint")
-        if args.resume_ckpt
-        else None
+        _existing_file(resume_value, label="policy resume checkpoint") if resume_value else None
     )
-    if args.run_root:
-        out_dir = Path(args.run_root).expanduser().resolve()
+    explicit_run_root = os.environ.get("COTRAIN_RUN_ROOT", "").strip()
+    if explicit_run_root:
+        out_dir = Path(explicit_run_root).expanduser().resolve()
     elif resume_ckpt is not None:
         out_dir = _resume_out_dir(resume_ckpt)
     else:
@@ -192,8 +199,7 @@ def _print_launch(launch: FrozenRayLaunch) -> None:
         flush=True,
     )
     print(
-        "[frozen-model-ray] command: "
-        + " ".join(shlex.quote(part) for part in launch.command),
+        "[frozen-model-ray] command: " + " ".join(shlex.quote(part) for part in launch.command),
         flush=True,
     )
 
@@ -201,9 +207,8 @@ def _print_launch(launch: FrozenRayLaunch) -> None:
 def main(argv: list[str] | None = None) -> int:
     raw_args = list(sys.argv[1:] if argv is None else argv)
     launch = build_launch(raw_args)
-    args, _ = _parser().parse_known_args(raw_args)
     _print_launch(launch)
-    if bool(args.dry_run):
+    if _environment_bool("COTRAIN_DRY_RUN"):
         return 0
     launch.out_dir.mkdir(parents=True, exist_ok=True)
     return subprocess.run(

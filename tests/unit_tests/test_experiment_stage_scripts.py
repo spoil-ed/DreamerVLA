@@ -81,9 +81,7 @@ def test_experiment_train_scripts_are_hydra_centered_and_include_checks() -> Non
 def test_component_training_scripts_default_to_official_hydra_experiments() -> None:
     root = Path(__file__).resolve().parents[2]
     experiments_dir = root / "scripts" / "experiments"
-    classifier = (experiments_dir / "classifier_training" / "train.sh").read_text(
-        encoding="utf-8"
-    )
+    classifier = (experiments_dir / "classifier_training" / "train.sh").read_text(encoding="utf-8")
     world_model = (experiments_dir / "world_model_training" / "train.sh").read_text(
         encoding="utf-8"
     )
@@ -93,8 +91,7 @@ def test_component_training_scripts_default_to_official_hydra_experiments() -> N
         in classifier
     )
     assert (
-        'WORLD_MODEL_EXPERIMENT="${WORLD_MODEL_EXPERIMENT:-wm_official_upper_bound}"'
-        in world_model
+        'WORLD_MODEL_EXPERIMENT="${WORLD_MODEL_EXPERIMENT:-wm_official_upper_bound}"' in world_model
     )
     assert 'training.out_dir="${CLASSIFIER_RUN_ROOT}"' in classifier
     assert 'training.out_dir="${WORLD_MODEL_RUN_ROOT}"' in world_model
@@ -114,7 +111,7 @@ def test_world_model_profile_script_is_a_thin_one_click_hydra_launcher() -> None
     for marker in (
         'WORLD_MODEL_EXPERIMENT="${WORLD_MODEL_EXPERIMENT:-wm_official_upper_bound_profile}"',
         'WORLD_MODEL_CHECKPOINT_EVERY="${WORLD_MODEL_CHECKPOINT_EVERY:-0}"',
-        'world_model_profile',
+        "world_model_profile",
         'exec bash "${SCRIPT_DIR}/train.sh" "$@"',
     ):
         assert marker in text
@@ -139,9 +136,12 @@ def test_frozen_cotrain_script_only_requires_component_paths_at_handoff() -> Non
     for marker in (
         "dreamervla.launchers.frozen_model_cotrain_ray",
         'CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"',
+        "WORLD_MODEL_CKPT=/path",
+        "CLASSIFIER_CKPT=/path",
         '"$@"',
     ):
         assert marker in text
+    assert "positional" not in text
     assert "dreamervla.train" not in text
 
 
@@ -172,9 +172,9 @@ def test_classifier_and_world_model_train_scripts_expose_resume_and_periodic_ckp
     root = Path(__file__).resolve().parents[2]
     experiments_dir = root / "scripts" / "experiments"
 
-    classifier_text = (
-        experiments_dir / "classifier_training" / "train.sh"
-    ).read_text(encoding="utf-8")
+    classifier_text = (experiments_dir / "classifier_training" / "train.sh").read_text(
+        encoding="utf-8"
+    )
     assert 'CLASSIFIER_RESUME="${CLASSIFIER_RESUME:-${RESUME:-false}}"' in classifier_text
     assert 'export CLASSIFIER_RUN_ROOT="${CLASSIFIER_RUN_ROOT:-' in classifier_text
     assert 'CLASSIFIER_CHECKPOINT_EVERY="${CLASSIFIER_CHECKPOINT_EVERY:-250}"' in classifier_text
@@ -185,17 +185,14 @@ def test_classifier_and_world_model_train_scripts_expose_resume_and_periodic_ckp
     assert "checkpoints/latest.ckpt" in classifier_text
     assert "ckpt/latest.ckpt" in classifier_text
 
-    world_model_text = (
-        experiments_dir / "world_model_training" / "train.sh"
-    ).read_text(encoding="utf-8")
+    world_model_text = (experiments_dir / "world_model_training" / "train.sh").read_text(
+        encoding="utf-8"
+    )
     assert 'WORLD_MODEL_RESUME="${WORLD_MODEL_RESUME:-${RESUME:-false}}"' in world_model_text
     assert 'WORLD_MODEL_CHECKPOINT_EVERY="${WORLD_MODEL_CHECKPOINT_EVERY:-500}"' in world_model_text
     assert 'WORLD_MODEL_TOPK_K="${WORLD_MODEL_TOPK_K:-3}"' in world_model_text
     assert 'training.resume="${WORLD_MODEL_RESUME}"' in world_model_text
-    assert (
-        'training.warmup_checkpoint_every="${WORLD_MODEL_CHECKPOINT_EVERY}"'
-        in world_model_text
-    )
+    assert 'training.warmup_checkpoint_every="${WORLD_MODEL_CHECKPOINT_EVERY}"' in world_model_text
     assert 'training.warmup_topk_k="${WORLD_MODEL_TOPK_K}"' in world_model_text
     assert "wm_warmup.ckpt" in world_model_text
     assert "wm_step_*.ckpt" in world_model_text
@@ -221,9 +218,9 @@ def test_cotrain_world_model_ddp_tracks_unused_parameters() -> None:
 
 def test_experiment_stage_check_module_exposes_required_commands() -> None:
     root = Path(__file__).resolve().parents[2]
-    source = (
-        root / "dreamervla" / "diagnostics" / "experiment_stage_checks.py"
-    ).read_text(encoding="utf-8")
+    source = (root / "dreamervla" / "diagnostics" / "experiment_stage_checks.py").read_text(
+        encoding="utf-8"
+    )
 
     for command in (
         "collect-check",

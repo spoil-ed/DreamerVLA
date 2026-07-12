@@ -18,13 +18,12 @@ def test_frozen_ray_launcher_builds_one_command_for_eight_gpus(
     run_root = tmp_path / "run"
     wm.touch()
     classifier.touch()
+    monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm))
+    monkeypatch.setenv("CLASSIFIER_CKPT", str(classifier))
+    monkeypatch.setenv("COTRAIN_RUN_ROOT", str(run_root))
 
     launch = build_launch(
         [
-            str(wm),
-            str(classifier),
-            "--run-root",
-            str(run_root),
             "manual_cotrain.global_steps=12",
         ]
     )
@@ -54,15 +53,11 @@ def test_frozen_ray_launcher_resume_is_one_command_with_policy_checkpoint(
     classifier.touch()
     resume.parent.mkdir(parents=True)
     resume.touch()
+    monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm))
+    monkeypatch.setenv("CLASSIFIER_CKPT", str(classifier))
+    monkeypatch.setenv("COTRAIN_RESUME_CKPT", str(resume))
 
-    launch = build_launch(
-        [
-            str(wm),
-            str(classifier),
-            "--resume-ckpt",
-            str(resume),
-        ]
-    )
+    launch = build_launch([])
 
     assert launch.resume is True
     assert launch.out_dir == run_root.resolve()
@@ -84,10 +79,11 @@ def test_frozen_ray_launcher_resume_infers_checkpoint_run_even_if_run_root_env_i
     classifier.touch()
     resume.parent.mkdir(parents=True)
     resume.touch()
+    monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm))
+    monkeypatch.setenv("CLASSIFIER_CKPT", str(classifier))
+    monkeypatch.setenv("COTRAIN_RESUME_CKPT", str(resume))
 
-    launch = build_launch(
-        [str(wm), str(classifier), "--resume-ckpt", str(resume)]
-    )
+    launch = build_launch([])
 
     assert launch.out_dir == run_root.resolve()
 
@@ -101,9 +97,11 @@ def test_frozen_ray_launcher_rejects_non_eight_gpu_visibility(
     classifier = tmp_path / "classifier.ckpt"
     wm.touch()
     classifier.touch()
+    monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm))
+    monkeypatch.setenv("CLASSIFIER_CKPT", str(classifier))
 
     with pytest.raises(ValueError, match="exactly 8"):
-        build_launch([str(wm), str(classifier)])
+        build_launch([])
 
 
 def test_frozen_ray_launcher_rejects_duplicate_visible_gpu_ids(
@@ -115,9 +113,11 @@ def test_frozen_ray_launcher_rejects_duplicate_visible_gpu_ids(
     classifier = tmp_path / "classifier.ckpt"
     wm.touch()
     classifier.touch()
+    monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm))
+    monkeypatch.setenv("CLASSIFIER_CKPT", str(classifier))
 
     with pytest.raises(ValueError, match="distinct"):
-        build_launch([str(wm), str(classifier)])
+        build_launch([])
 
 
 def test_frozen_ray_launcher_resolves_completed_stage_directories(
@@ -143,10 +143,32 @@ def test_frozen_ray_launcher_resolves_completed_stage_directories(
         "select_classifier_checkpoint",
         lambda path: selected_classifier,
     )
+    monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm_run))
+    monkeypatch.setenv("CLASSIFIER_CKPT", str(classifier_run))
+    monkeypatch.setenv("COTRAIN_RUN_ROOT", str(tmp_path / "out"))
 
-    launch = build_launch(
-        [str(wm_run), str(classifier_run), "--run-root", str(tmp_path / "out")]
-    )
+    launch = build_launch([])
 
     assert f"init.world_model_state_ckpt={selected_wm}" in launch.command
     assert f"init.classifier_state_ckpt={selected_classifier}" in launch.command
+
+
+def test_frozen_ray_launcher_rejects_positional_component_paths(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("WORLD_MODEL_CKPT", raising=False)
+    monkeypatch.delenv("CLASSIFIER_CKPT", raising=False)
+
+    with pytest.raises(ValueError, match="key=value"):
+        build_launch([str(tmp_path / "wm.ckpt"), str(tmp_path / "classifier.ckpt")])
+
+
+def test_frozen_ray_launcher_requires_explicit_checkpoint_assignments(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("WORLD_MODEL_CKPT", raising=False)
+    monkeypatch.delenv("CLASSIFIER_CKPT", raising=False)
+
+    with pytest.raises(ValueError, match="WORLD_MODEL_CKPT=/path"):
+        build_launch([])

@@ -215,22 +215,22 @@ policy-only frozen Ray cotrain takes those two run directories (or selected
 checkpoint files) and resolves the validated WM/CLS selections:
 
 ```bash
-bash scripts/e2e_frozen_model_cotrain.sh \
-  /path/to/world_model/run \
-  /path/to/classifier/run
+WORLD_MODEL_CKPT=/path/to/world_model/run \
+CLASSIFIER_CKPT=/path/to/classifier/run \
+  bash scripts/e2e_frozen_model_cotrain.sh
 ```
 
 Resume requires the same two immutable sources plus the Ray policy checkpoint:
 
 ```bash
-bash scripts/e2e_frozen_model_cotrain.sh \
-  /path/to/world_model/run \
-  /path/to/classifier/run \
-  --resume-ckpt /path/to/frozen_cotrain_run/checkpoints/manual_cotrain_step_500/manual_cotrain.ckpt
+WORLD_MODEL_CKPT=/path/to/world_model/run \
+CLASSIFIER_CKPT=/path/to/classifier/run \
+COTRAIN_RESUME_CKPT=/path/to/frozen_cotrain_run/checkpoints/manual_cotrain_step_500/manual_cotrain.ckpt \
+  bash scripts/e2e_frozen_model_cotrain.sh
 ```
 
-The launcher infers the original run root from the checkpoint path; an explicit
-`--run-root` remains available when the checkpoint was relocated.
+The launcher infers the original run root from the checkpoint path; assign
+`COTRAIN_RUN_ROOT=/path/to/run` only when the checkpoint was relocated.
 
 `python -m dreamervla.launchers.frozen_model_pre_mainline` composes
 `configs/scripts/frozen_model_pre_mainline.yaml`. It owns one run root with
