@@ -765,7 +765,7 @@ class LatentWorldModelEnv:
 
     def load_world_model_state(self, state_dict: dict[str, Any], version: int) -> None:
         if state_dict:
-            self.world_model.load_state_dict(state_dict)
+            self.world_model.load_state_dict(state_dict, assign=True)
         self.world_model.to(self.device).eval()
         if self.freeze_components:
             self.world_model.requires_grad_(False)
@@ -776,7 +776,7 @@ class LatentWorldModelEnv:
             if state_dict:
                 raise RuntimeError("cannot load classifier state without a classifier module")
         elif state_dict:
-            self.classifier.load_state_dict(state_dict)
+            self.classifier.load_state_dict(state_dict, assign=True)
             self.classifier.to(self.device).eval()
             if self.freeze_components:
                 self.classifier.requires_grad_(False)

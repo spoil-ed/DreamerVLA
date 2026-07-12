@@ -5,6 +5,7 @@ import torch
 
 from dreamervla.envs.world_model.base_world_model_env import WorldModelEnvProtocol
 from dreamervla.envs.world_model.latent_world_model_env import LatentWorldModelEnv
+from dreamervla.utils.frozen_components import state_dict_sha256
 
 
 class _StubWorldEnv:
@@ -66,6 +67,39 @@ def test_latent_world_model_env_builds_flat_hydra_configs_and_freezes_components
     after = env.component_state_hashes()
 
     assert after == before
+
+
+def test_latent_world_model_env_preserves_world_model_checkpoint_dtype_on_load():
+    source = torch.nn.Linear(2, 2).to(torch.bfloat16).state_dict()
+    env = LatentWorldModelEnv(
+        world_model=torch.nn.Linear(2, 2),
+        classifier=None,
+        latent_dim=2,
+        action_dim=1,
+        freeze_components=True,
+    )
+
+    env.load_world_model_state(source, version=1)
+
+    assert next(env.world_model.parameters()).dtype == torch.bfloat16
+    assert env.component_state_hashes()["world_model"] == state_dict_sha256(source)
+
+
+def test_latent_world_model_env_preserves_classifier_checkpoint_dtype_on_load():
+    source = torch.nn.Linear(2, 1).to(torch.bfloat16).state_dict()
+    env = LatentWorldModelEnv(
+        world_model=torch.nn.Linear(2, 2),
+        classifier=torch.nn.Linear(2, 1),
+        latent_dim=2,
+        action_dim=1,
+        freeze_components=True,
+    )
+
+    env.load_classifier_state(source, version=1)
+
+    assert env.classifier is not None
+    assert next(env.classifier.parameters()).dtype == torch.bfloat16
+    assert env.component_state_hashes()["classifier"] == state_dict_sha256(source)
 
 
 def test_latent_world_model_env_uses_predict_next_mode_for_wm_step():
