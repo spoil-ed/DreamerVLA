@@ -52,12 +52,16 @@ class ProgressReporter:
     def set_status(self, status: str | None) -> None:
         self.status = status
 
-    def set(self, current: int) -> None:
+    def set(self, current: int, *, force: bool = False) -> None:
         self._current = int(current)
         if not self.enabled:
             return
         now = self._clock()
-        if self._last_print_t is None or (now - self._last_print_t) >= self.min_interval_s:
+        if (
+            force
+            or self._last_print_t is None
+            or (now - self._last_print_t) >= self.min_interval_s
+        ):
             self._emit(now)
 
     def close(self) -> None:

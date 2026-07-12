@@ -117,6 +117,11 @@ class ManualCotrainRayRunner(BaseRunner):
                 step_metrics = self._run_global_step(groups, global_step)
                 metrics.update(step_metrics)
                 self.log_metrics(step_metrics, step=global_step)
+                self._report_global_step_progress(
+                    global_step=global_step,
+                    total_steps=target_step,
+                    metrics=step_metrics,
+                )
                 last_step = int(global_step)
             metrics["global_step"] = int(last_step)
             if not self._learner_updates_enabled():
@@ -552,6 +557,7 @@ class ManualCotrainRayRunner(BaseRunner):
                 )
 
     def _run_global_step(self, groups: dict[str, Any], global_step: int) -> dict[str, float]:
+        global_step_start = time.perf_counter()
         actor = groups["ActorGroup"]
         rollout = groups["RolloutGroup"]
         learner = groups.get("LearnerGroup")
@@ -791,7 +797,40 @@ class ManualCotrainRayRunner(BaseRunner):
         metrics["time/manual_cotrain/checkpoint_and_metrics_s"] = float(
             time.perf_counter() - checkpoint_start
         )
+        metrics["time/manual_cotrain/global_step_s"] = float(
+            time.perf_counter() - global_step_start
+        )
         return metrics
+
+    def _report_global_step_progress(
+        self,
+        *,
+        global_step: int,
+        total_steps: int,
+        metrics: dict[str, float],
+    ) -> None:
+        """Report one monotonic policy-update progress line per global step."""
+
+        updates = max(0, int(float(metrics.get("actor/ppo_updates", 0.0))))
+        parts = [f"policy_updates={updates}"]
+        if "actor/loss" in metrics:
+            parts.append(f"loss={float(metrics['actor/loss']):.4g}")
+        durations = (
+            ("imagine", "time/manual_cotrain/env_interact_and_rollout_generate_s"),
+            ("actor", "time/manual_cotrain/actor_run_training_s"),
+            ("step", "time/manual_cotrain/global_step_s"),
+        )
+        for label, key in durations:
+            if key in metrics:
+                parts.append(f"{label}={float(metrics[key]):.1f}s")
+        self.console_progress(
+            int(global_step),
+            int(total_steps),
+            "manual-cotrain",
+            unit="step",
+            status=" ".join(parts),
+            force=True,
+        )
 
     @staticmethod
     def _should_sync_world_model_after_learner_update(
@@ -1322,18 +1361,24 @@ class ManualCotrainRayRunner(BaseRunner):
                 parts.append(f"global_step={next(iter(global_steps))}")
             elif global_steps:
                 parts.append(f"global_steps={min(global_steps)}-{max(global_steps)}")
+            running_wm_epochs = sum(
+                int(lease) for _result, lease in active_wm.values()
+            )
+            if (
+                int(completed_wm_epochs)
+                + int(running_wm_epochs)
+                + int(remaining_wm_epochs)
+                != int(total_wm_epochs)
+            ):
+                raise RuntimeError("dynamic WM lease accounting is not conserved")
+            if real_total_chunks > 0:
+                parts.append(f"real_env={int(real_done)}/{int(real_total_chunks)}")
             parts.extend(
                 [
-                    f"real_env={int(real_done)}/{int(real_total_chunks)}",
-                    f"wm_pool={int(wm_done)}/{int(wm_total_chunks)}",
-                    f"wm_epochs={int(completed_wm_epochs)}/{int(total_wm_epochs)}",
-                    "active_wm="
-                    + (
-                        ",".join(str(rank + 1) for rank in sorted(active_wm))
-                        if active_wm
-                        else "none"
-                    ),
-                    f"remaining_wm_epochs={int(remaining_wm_epochs)}",
+                    f"wm={int(wm_done)}/{int(wm_total_chunks)}",
+                    "leases(d/r/q/t)="
+                    f"{int(completed_wm_epochs)}/{int(running_wm_epochs)}/"
+                    f"{int(remaining_wm_epochs)}/{int(total_wm_epochs)}",
                 ]
             )
             parts.extend(
@@ -2444,7 +2489,6 @@ class _ManualCotrainEnvProgressMonitor:
         self._desc = str(desc)
 
     def report(self, *, force: bool = False) -> _ManualCotrainProgressSnapshot:
-        del force
         snapshot = _read_manual_cotrain_progress_snapshot(self.progress_dir)
         if snapshot.total > 0:
             self._console_progress(
@@ -2453,6 +2497,7 @@ class _ManualCotrainEnvProgressMonitor:
                 self._desc,
                 unit="chunk",
                 status=snapshot.status,
+                force=force,
             )
         return snapshot
 
@@ -2465,7 +2510,6 @@ class _ManualCotrainEnvProgressMonitor:
         *,
         force: bool = False,
     ) -> _ManualCotrainProgressSnapshot:
-        del force
         if snapshot.total > 0:
             self._console_progress(
                 snapshot.done,
@@ -2473,6 +2517,7 @@ class _ManualCotrainEnvProgressMonitor:
                 self._desc,
                 unit="chunk",
                 status=snapshot.status,
+                force=force,
             )
         return snapshot
 

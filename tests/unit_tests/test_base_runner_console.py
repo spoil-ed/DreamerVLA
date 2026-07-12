@@ -155,3 +155,16 @@ def test_console_progress_guarded_on_non_main(capsys):
     cfg = OmegaConf.create({"console": {"progress_every_s": 0.0}})
     _progress_runner(cfg, main=False).console_progress(1, 10, "train")
     assert capsys.readouterr().out == ""
+
+
+def test_console_progress_always_emits_and_releases_terminal_state(capsys):
+    cfg = OmegaConf.create({"console": {"progress_every_s": 3600.0}})
+    r = _progress_runner(cfg)
+
+    r.console_progress(0, 10, "train")
+    r.console_progress(10, 10, "train")
+
+    out = capsys.readouterr().out
+    assert "0/10" in out
+    assert "10/10" in out
+    assert "train" not in r._console_state["progress"]

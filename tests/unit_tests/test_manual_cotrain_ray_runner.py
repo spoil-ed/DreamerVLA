@@ -1739,7 +1739,17 @@ def test_dynamic_wm_progress_is_reported_from_central_pool() -> None:
     dones = [snapshot.done for snapshot in reported]
     assert dones == sorted(dones)
     assert reported[-1].done == reported[-1].total
-    assert any(snapshot.status and "wm_pool=" in snapshot.status for snapshot in reported)
+    assert any(snapshot.status and "wm=" in snapshot.status for snapshot in reported)
+    assert all(
+        snapshot.status is None
+        or "leases(d/r/q/t)=" in snapshot.status
+        for snapshot in reported
+    )
+    assert all(
+        snapshot.status is None
+        or "remaining_wm_epochs=" not in snapshot.status
+        for snapshot in reported
+    )
     assert all(
         snapshot.status is None or "wm_env#1=" not in snapshot.status
         for snapshot in reported
@@ -2116,6 +2126,7 @@ def test_run_global_step_syncs_actor_policy_and_wm_env_states(monkeypatch) -> No
     assert "time/manual_cotrain/actor_run_training_s" in metrics
     assert "time/manual_cotrain/learner_update_wm_classifier_s" in metrics
     assert "time/manual_cotrain/learner_to_wm_env_sync_s" in metrics
+    assert metrics["time/manual_cotrain/global_step_s"] >= 0.0
 
 
 def test_frozen_run_global_step_trains_policy_without_real_or_learner_calls() -> None:
@@ -2408,6 +2419,39 @@ def test_run_global_step_dynamic_wm_progress_uses_central_snapshots(monkeypatch)
     assert metrics["actor/received_shards"] == 4.0
     assert [call[0] for call in progress_calls] == ["central", "central"]
     assert all(call[1] == 5 for call in progress_calls)
+
+
+def test_manual_cotrain_global_progress_reports_completed_policy_update() -> None:
+    runner = manual_runner.ManualCotrainRayRunner(_cfg(ngpu=2))
+    calls: list[tuple[int, int, str, str, str | None, bool]] = []
+    runner.console_progress = (
+        lambda current, total, desc, unit="it", status=None, force=False: calls.append(
+            (int(current), int(total), str(desc), str(unit), status, bool(force))
+        )
+    )
+
+    runner._report_global_step_progress(
+        global_step=3,
+        total_steps=20,
+        metrics={
+            "actor/ppo_updates": 1.0,
+            "actor/loss": 0.125,
+            "time/manual_cotrain/env_interact_and_rollout_generate_s": 10.5,
+            "time/manual_cotrain/actor_run_training_s": 2.25,
+            "time/manual_cotrain/global_step_s": 13.75,
+        },
+    )
+
+    assert calls == [
+        (
+            3,
+            20,
+            "manual-cotrain",
+            "step",
+            "policy_updates=1 loss=0.125 imagine=10.5s actor=2.2s step=13.8s",
+            True,
+        )
+    ]
 
 
 def test_receive_actor_trajectories_loads_actual_wm_shards_by_actor_rank() -> None:

@@ -1052,6 +1052,7 @@ class BaseRunner(ABC):
         *,
         unit: str = "it",
         status: str | None = None,
+        force: bool = False,
     ) -> None:
         # One uniform progress line per flow. Caches a wall-time-throttled
         # ProgressReporter per ``desc`` so every loop reports identically; the
@@ -1071,7 +1072,13 @@ class BaseRunner(ABC):
             reporters[desc] = rep
         else:
             rep.set_status(status)
-        rep.set(current)
+        terminal = total is not None and int(total) > 0 and int(current) >= int(total)
+        rep.set(current, force=bool(force or terminal))
+        if terminal:
+            # Per-step descriptors are intentionally unique.  Releasing a
+            # completed reporter prevents a long cotrain run from retaining
+            # thousands of stale bars and re-printing all of them at teardown.
+            reporters.pop(desc, None)
 
     def console_banner(self, title: str, *, subtitle: str | None = None, done: bool = False) -> None:
         if not self.is_main_process:
