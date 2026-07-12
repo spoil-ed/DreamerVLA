@@ -23,6 +23,7 @@ Runtime paths are documented in [docs/data_layout.md](../docs/data_layout.md).
 | `experiments/classifier_training/train.sh` | One-click official-data classifier upper-bound training |
 | `experiments/classifier_training/eval.sh` | Full classifier eval summary |
 | `experiments/world_model_training/train.sh` | One-click official-data world-model upper-bound training |
+| `experiments/world_model_training/profile.sh` | Bounded one-click 8-GPU world-model timing profile |
 | `experiments/world_model_training/eval.sh` | Full-replay world-model eval diagnostic |
 | `eval_libero_vla.sh` | LIBERO rollout eval |
 | `eval/launch_openvla_oft_official_libero_eval.sh` | Official OpenVLA-OFT LIBERO eval wrapper |
@@ -110,6 +111,12 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
 
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   bash scripts/experiments/classifier_training/train.sh
+```
+
+Run the bounded optimized-WM timing profile without spelling out Hydra overrides:
+
+```bash
+bash scripts/experiments/world_model_training/profile.sh
 ```
 
 After both component jobs finish, start policy-only frozen Ray cotrain by

@@ -45,6 +45,24 @@ def test_wm_upper_bound_reads_only_official_data() -> None:
     assert cfg.optim.world_model.lr == 3.0e-5
 
 
+def test_wm_upper_bound_profile_is_bounded_and_keeps_training_hyperparameters() -> None:
+    cfg = _compose("wm_official_upper_bound_profile")
+
+    assert cfg.pre_mainline.stage == "wm_upper_bound"
+    assert cfg.offline_warmup.data_dir == cfg.task.hdf5_reward_dir
+    assert cfg.offline_warmup.hidden_dir == cfg.task.openvla_oft.hidden_token_dir
+    assert cfg.training.wm_warmup_steps == 64
+    assert cfg.training.warmup_replay_epochs == 0
+    assert cfg.training.wm_profile_steps == 32
+    assert cfg.training.wm_prefetch_workers == 1
+    assert cfg.training.replay_warmup_log_every == 10
+    assert cfg.training.warmup_checkpoint_every == 0
+    assert cfg.training.classifier_warmup_steps == 0
+    assert cfg.online_rollout.total_env_steps == 0
+    assert cfg.dataloader.batch_size == 16
+    assert cfg.optim.world_model.lr == 3.0e-5
+
+
 def test_classifier_upper_bound_reads_only_official_data() -> None:
     cfg = _compose("classifier_official_upper_bound")
 

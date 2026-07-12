@@ -104,6 +104,31 @@ def test_component_training_scripts_default_to_official_hydra_experiments() -> N
     assert "optim.world_model.lr=" not in world_model
 
 
+def test_world_model_profile_script_is_a_thin_one_click_hydra_launcher() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = root / "scripts" / "experiments" / "world_model_training" / "profile.sh"
+
+    assert script.is_file()
+    assert os.access(script, os.X_OK)
+    text = script.read_text(encoding="utf-8")
+    for marker in (
+        'WORLD_MODEL_EXPERIMENT="${WORLD_MODEL_EXPERIMENT:-wm_official_upper_bound_profile}"',
+        'WORLD_MODEL_CHECKPOINT_EVERY="${WORLD_MODEL_CHECKPOINT_EVERY:-0}"',
+        'world_model_profile',
+        'exec bash "${SCRIPT_DIR}/train.sh" "$@"',
+    ):
+        assert marker in text
+    for config_owned_override in (
+        "training.wm_warmup_steps=",
+        "training.wm_profile_steps=",
+        "training.wm_prefetch_workers=",
+        "training.warmup_replay_epochs=",
+        "dataloader.batch_size=",
+        "optim.world_model.lr=",
+    ):
+        assert config_owned_override not in text
+
+
 def test_frozen_cotrain_script_only_requires_component_paths_at_handoff() -> None:
     root = Path(__file__).resolve().parents[2]
     script = root / "scripts" / "e2e_frozen_model_cotrain.sh"

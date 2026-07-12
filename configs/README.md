@@ -48,6 +48,7 @@ backend with `logger=tensorboard` / `logger=wandb`.
 | Sync cold-start cotrain | `scripts/e2e_coldstart_warmup_cotrain_noray.sh` | `configs/scripts/coldstart_warmup_cotrain.yaml` |
 | Manual async cotrain | `scripts/e2e_manual_cotrain_async.sh` | `openvla_onetraj_libero_cotrain_ray` |
 | Official-data WM upper bound | `scripts/experiments/world_model_training/train.sh` | `wm_official_upper_bound` |
+| Bounded WM timing profile | `scripts/experiments/world_model_training/profile.sh` | `wm_official_upper_bound_profile` |
 | Official-data classifier upper bound | `scripts/experiments/classifier_training/train.sh` | `classifier_official_upper_bound` |
 | Eight-GPU frozen WM/CLS policy training | `scripts/e2e_frozen_model_cotrain.sh` | `dreamervla_frozen_models_rl_ray` |
 | Pre-mainline frozen-model proof | `scripts/e2e_frozen_model_pre_mainline.sh` | `configs/scripts/frozen_model_pre_mainline.yaml` |
@@ -63,6 +64,7 @@ backend with `logger=tensorboard` / `logger=wandb`.
 | `openvla_onetraj_libero_cotrain_ray` | Ray manual cotrain |
 | `wm_full_dataset_train` | full-replay WM warmup |
 | `wm_official_upper_bound` | pre-mainline WM training from official data |
+| `wm_official_upper_bound_profile` | bounded 8-GPU timing run of the same optimized WM route |
 | `classifier_official_upper_bound` | pre-mainline classifier training from official data |
 | `dreamervla_frozen_models_rl` | policy-only imagined RL with immutable WM/CLS |
 | `dreamervla_frozen_models_rl_ray` | 8-GPU Ray/FSDP policy-only imagined RL with immutable WM/CLS |

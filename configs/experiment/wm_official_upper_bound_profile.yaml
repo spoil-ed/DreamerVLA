@@ -1,0 +1,14 @@
+# @package _global_
+# Bounded 8xH100 timing run for the optimized official-data WM training path.
+defaults:
+  - wm_official_upper_bound
+  - _self_
+
+training:
+  # Run enough updates to report profiled and synchronization-free throughput.
+  wm_warmup_steps: 64
+  warmup_replay_epochs: 0
+  wm_profile_steps: 32
+  wm_prefetch_workers: 1
+  replay_warmup_log_every: 10
+  warmup_checkpoint_every: 0

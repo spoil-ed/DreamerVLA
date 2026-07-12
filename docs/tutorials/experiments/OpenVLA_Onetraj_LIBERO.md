@@ -441,6 +441,16 @@ DVLA_DATA_ROOT=/inspire/qb-ilm/project/space-intelligence-multimodality/liuzheny
 profile 和更长的 WM objective。cotrain `multi_gpu` warmup 已对齐其 LR/BS，
 但仍保留 cotrain 自己的 1200-step cold-start warmup 和 classifier warmup。
 
+只验证当前 8 卡 WM update 时耗优化时，使用有界一键 profile；它固定运行 64
+次 update，前 32 次输出分段 timing，后 32 次用于观察没有逐步 profile 同步时的
+吞吐，不会启动完整的 10-epoch 训练：
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+DVLA_DATA_ROOT=/inspire/qb-ilm/project/space-intelligence-multimodality/liuzhenyang-240108540154/spoil/data \
+  bash scripts/experiments/world_model_training/profile.sh
+```
+
 如果要从独立 WM 结果继续，优先使用其
 `wm_warmup_hf/` 目录作为 `init.world_model_state_ckpt`，然后仍运行 cotrain
 warmup完成 classifier 校准和 `ray_async_init.ckpt` consolidation。不要把
