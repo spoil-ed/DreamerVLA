@@ -279,6 +279,7 @@ def _validate_mainline_hidden_token_contract(cfg: DictConfig) -> None:
         ("learner.model_cfg.world_model.kwargs", "obs_dim"),
         ("learner.model_cfg.classifier.kwargs", None),
         ("inference.cfg.world_model.kwargs", "obs_dim"),
+        ("env.wm.cfg.kwargs", "latent_dim"),
     )
     for key, obs_dim_field in component_specs:
         if OmegaConf.select(cfg, key, default=None) is None:

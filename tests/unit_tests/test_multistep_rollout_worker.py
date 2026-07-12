@@ -79,6 +79,20 @@ class _InspectLogprobTypePolicy(torch.nn.Module):
         return action, log_prob, {"action_chunk": action}
 
 
+class _InspectTokenGridPolicy(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.hidden_shapes: list[tuple[int, ...]] = []
+
+    def forward(self, batch):  # type: ignore[override]
+        hidden = batch["hidden"]
+        self.hidden_shapes.append(tuple(int(dim) for dim in hidden.shape))
+        batch_size = int(hidden.shape[0])
+        action = torch.zeros(batch_size, 2, 3)
+        log_prob = torch.zeros(batch_size, 1)
+        return action, log_prob, {"action_chunk": action}
+
+
 def _real_obs(step: int = 0, *, is_first: bool = False, seed: int = 5) -> ObservationMsg:
     return ObservationMsg(
         env_rank=0,
@@ -319,6 +333,45 @@ def test_generate_batch_uses_batched_obs_hidden_payload() -> None:
     assert all("hidden" not in result.forward_inputs for result in results)
     assert results[0].forward_inputs["lang_emb"].tolist() == [3.0, 3.0]
     assert results[1].forward_inputs["lang_emb"].tolist() == [4.0, 4.0]
+
+
+@pytest.mark.parametrize("use_batched_obs", [False, True])
+def test_generate_batch_preserves_token_grid_for_policy(
+    use_batched_obs: bool,
+) -> None:
+    worker = MultiStepRolloutWorker(
+        policy_cfg=_policy_cfg(),
+        encoder_cfg=None,
+        init_ckpt={},
+        train_cfg={"device": "cpu"},
+    )
+    worker.init()
+    policy = _InspectTokenGridPolicy()
+    worker.policy = policy
+    grids = np.arange(12, dtype=np.float32).reshape(2, 2, 3)
+    observations = [
+        ObservationMsg(
+            env_rank=0,
+            slot_id=index,
+            task_id=0,
+            episode_id=index,
+            step=0,
+            obs=(
+                {"task_description": "task 0"}
+                if use_batched_obs
+                else {"obs_embedding": grids[index]}
+            ),
+            versions={"policy": 0},
+        )
+        for index in range(2)
+    ]
+
+    worker.generate_result_batch(
+        observations,
+        batched_obs={"obs_embedding": grids} if use_batched_obs else None,
+    )
+
+    assert policy.hidden_shapes == [(2, 2, 3)]
 
 
 def test_generate_once_encodes_real_env_observation_without_obs_embedding() -> None:

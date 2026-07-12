@@ -355,6 +355,16 @@ def test_validate_cfg_rejects_world_model_latent_stage_mismatch() -> None:
         validate_cfg(cfg)
 
 
+def test_validate_cfg_rejects_wm_env_token_grid_mismatch() -> None:
+    cfg = _compose_mainline(
+        "experiment=openvla_onetraj_libero_cotrain_ray",
+    )
+    cfg.env.wm.cfg.kwargs.token_count = 128
+
+    with pytest.raises(ValueError, match=r"env\.wm\.cfg\.kwargs\.token_count"):
+        validate_cfg(cfg)
+
+
 def test_validate_cfg_rejects_invalid_chunk_world_model_concat_dim() -> None:
     cfg = OmegaConf.create(
         {

@@ -96,8 +96,14 @@ For the standalone eight-GPU handoff after independently training WM and CLS,
 `dreamervla_frozen_models_rl_ray` reuses `ManualCotrainRayRunner`. It creates
 eight WMEnv workers, eight no-grad Rollout workers, and an eight-rank FSDP
 ActorGroup. RealEnv and LearnerGroup are absent, so the only optimizer is the
-ActorGroup policy optimizer. The single-process experiment remains the
-reference implementation used by the complete proof launcher.
+ActorGroup policy optimizer. This route shares the same WMEnv -> Rollout ->
+Actor RL implementation as non-frozen manual cotrain; disabling LearnerGroup
+updates and loading immutable WM/CLS checkpoints are the model-trainability
+differences. Every shared boundary carries canonical
+`hidden_token [256,4096]`; the WMEnv may store its state flat internally but
+restores the token grid before WM, classifier, rollout-policy, and actor-training
+calls. The single-process experiment remains the reference implementation used
+by the complete proof launcher.
 
 Each WM lease samples one aligned official replay condition (hidden token,
 language embedding, proprioception, and task identity), repeats it across the

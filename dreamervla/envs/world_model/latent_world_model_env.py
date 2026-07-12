@@ -67,6 +67,8 @@ class LatentWorldModelEnv:
         classifier: nn.Module | dict[str, Any] | None = None,
         *,
         latent_dim: int,
+        token_count: int | None = None,
+        token_dim: int | None = None,
         action_dim: int,
         success_threshold: float = 0.5,
         max_episode_steps: int = 64,
@@ -85,6 +87,8 @@ class LatentWorldModelEnv:
         self.world_model = _build_component(world_model)
         self.classifier = None if classifier is None else _build_component(classifier)
         self.latent_dim = int(latent_dim)
+        self.token_count = None if token_count is None else int(token_count)
+        self.token_dim = None if token_dim is None else int(token_dim)
         self.action_dim = int(action_dim)
         self.lang_dim = int(lang_dim)
         self.proprio_dim = int(proprio_dim)
@@ -108,6 +112,16 @@ class LatentWorldModelEnv:
         self.freeze_components = bool(freeze_components)
         if self.num_envs <= 0:
             raise ValueError("num_envs must be positive")
+        if (self.token_count is None) != (self.token_dim is None):
+            raise ValueError("token_count and token_dim must be configured together")
+        if self.token_count is not None and self.token_dim is not None:
+            if self.token_count <= 0 or self.token_dim <= 0:
+                raise ValueError("token_count and token_dim must be positive")
+            if self.latent_dim != self.token_count * self.token_dim:
+                raise ValueError(
+                    "latent_dim must equal token_count * token_dim; "
+                    f"{self.latent_dim} != {self.token_count} * {self.token_dim}"
+                )
         if self.lang_dim < 0:
             raise ValueError("lang_dim must be non-negative")
         if self.proprio_dim < 0:
@@ -371,7 +385,9 @@ class LatentWorldModelEnv:
             )
         batch = {
             "mode": "predict_next",
-            "latent": self._latent[slots].reshape(batch_size, self.latent_dim),
+            "latent": self._token_grid(
+                self._latent[slots].reshape(batch_size, self.latent_dim)
+            ),
             "action": action_t.reshape(batch_size, self.action_dim),
             "actions": action_t.reshape(batch_size, 1, self.action_dim),
         }
@@ -482,7 +498,9 @@ class LatentWorldModelEnv:
             raise ValueError("actions must include at least one chunk step")
         batch = {
             "mode": "predict_next_chunk",
-            "latent": self._latent[slots].reshape(batch_size, self.latent_dim),
+            "latent": self._token_grid(
+                self._latent[slots].reshape(batch_size, self.latent_dim)
+            ),
             "actions": action_t,
         }
         if self.lang_dim > 0:
@@ -850,6 +868,7 @@ class LatentWorldModelEnv:
                 .numpy()
                 .astype(np.float32, copy=True)
             )
+        latent = self._token_grid(latent)
         obs = {
             "latent": latent,
             "task_id": int(self._task_ids[slot_id]),
@@ -906,7 +925,9 @@ class LatentWorldModelEnv:
         classifier_cfg = getattr(self.classifier, "cfg", None)
         window = getattr(classifier_cfg, "window", None)
         if window is None:
-            raw = self.classifier(latent.reshape(latent.shape[0], self.latent_dim))
+            raw = self.classifier(
+                self._token_grid(latent.reshape(latent.shape[0], self.latent_dim))
+            )
         else:
             (
                 latent_window,
@@ -920,7 +941,7 @@ class LatentWorldModelEnv:
                 proprio=proprio,
             )
             raw = self.classifier(
-                latent_window,
+                self._token_grid(latent_window),
                 **self._classifier_sidecars(
                     latent.shape[0],
                     int(window),
@@ -964,6 +985,23 @@ class LatentWorldModelEnv:
         if window is not None:
             self._commit_classifier_history(latent_updates, proprio_updates)
         return scores
+
+    def _token_grid(
+        self,
+        latent: torch.Tensor | np.ndarray,
+    ) -> torch.Tensor | np.ndarray:
+        if self.token_count is None or self.token_dim is None:
+            return latent
+        if int(latent.shape[-1]) != self.latent_dim:
+            raise ValueError(
+                "latent tokenization expects trailing latent_dim "
+                f"{self.latent_dim}, got {tuple(latent.shape)}"
+            )
+        return latent.reshape(
+            *tuple(int(dim) for dim in latent.shape[:-1]),
+            self.token_count,
+            self.token_dim,
+        )
 
     def _classifier_window_size(self) -> int:
         classifier_cfg = getattr(self.classifier, "cfg", None)

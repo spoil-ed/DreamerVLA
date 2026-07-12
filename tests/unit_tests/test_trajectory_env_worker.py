@@ -1723,6 +1723,48 @@ def test_get_rollout_result_batch_injects_hidden_from_slot_obs() -> None:
         worker.close()
 
 
+def test_get_rollout_result_batch_preserves_token_grid_for_actor() -> None:
+    worker = BaseTrajectoryEnvWorker(
+        role="wm_env",
+        env_cfg=_counter_env_cfg(),
+        num_slots=1,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=2,
+        num_action_chunks=2,
+        task_id=0,
+    )
+    try:
+        worker.init()
+        worker.bootstrap_obs()
+        worker._obs_by_slot[0]["obs_embedding"] = torch.arange(6).reshape(2, 3)
+        batch = RolloutResultBatchMsg(
+            env_rank=0,
+            results=[],
+            slot_ids=[0],
+            task_ids=[0],
+            episode_ids=[0],
+            steps=[0],
+            actions=torch.zeros(1, 2, 3),
+            prev_logprobs=torch.zeros(1, 1),
+            prev_values=None,
+            forward_inputs={"action": torch.zeros(1, 2, 3)},
+            versions={"policy": torch.ones(1, dtype=torch.long)},
+        )
+        channel = _MemoryChannel([batch])
+
+        results = worker._get_rollout_result_batch(
+            channel,
+            [0],
+            worker._new_interact_metrics(),
+        )
+
+        assert results[0].forward_inputs["hidden"].shape == (1, 2, 3)
+        shard = worker.apply_rollout_result(results[0])
+        assert shard.forward_inputs["hidden"].shape == (1, 1, 2, 3)
+    finally:
+        worker.close()
+
+
 def test_get_rollout_result_batch_injects_bf16_tensor_hidden() -> None:
     worker = BaseTrajectoryEnvWorker(
         role="wm_env",

@@ -75,6 +75,8 @@ env:
         world_model: ${world_model}
         classifier: ${classifier}
         latent_dim: ${task.openvla_oft.hidden_token.wm_obs_dim}
+        token_count: ${task.openvla_oft.hidden_token.token_count}
+        token_dim: ${task.openvla_oft.hidden_token.token_dim}
         action_dim: ${task.action_dim}
         lang_dim: ${task.openvla_oft.hidden_token.lang_dim}
         proprio_dim: ${task.openvla_oft.hidden_token.proprio_dim}

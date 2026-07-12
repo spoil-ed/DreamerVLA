@@ -3282,7 +3282,7 @@ class BaseTrajectoryEnvWorker(Worker):
                         hidden = value.detach().to(dtype=torch.float32, device="cpu")
                     else:
                         hidden = torch.as_tensor(np.asarray(value, dtype=np.float32))
-                    result.forward_inputs["hidden"] = hidden.reshape(1, -1)
+                    result.forward_inputs["hidden"] = hidden.unsqueeze(0)
                     break
         keys_csv = ",".join(result.key for result in results)
         _hs_trace(

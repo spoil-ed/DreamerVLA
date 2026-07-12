@@ -139,6 +139,52 @@ def test_every_mainline_route_suite_composition_has_exact_hidden_token_contract(
         assert cfg.ray_components.classifier.kwargs.token_dim == 4096
         assert cfg.ray_components.policy.kwargs.source_token_count == 256
         assert cfg.ray_components.policy.kwargs.source_token_dim == 4096
+        assert cfg.env.wm.cfg.kwargs.token_count == 256
+        assert cfg.env.wm.cfg.kwargs.token_dim == 4096
+
+
+def test_frozen_ray_reuses_mainline_rl_components_and_hidden_token_contract() -> None:
+    mainline = _compose(
+        [
+            "experiment=openvla_onetraj_libero_cotrain_ray",
+            "task=openvla_onetraj_libero",
+        ]
+    )
+    frozen = _compose(
+        [
+            "experiment=dreamervla_frozen_models_rl_ray",
+            "task=openvla_onetraj_libero",
+        ]
+    )
+
+    for cfg in (mainline, frozen):
+        assert cfg._target_ == "dreamervla.runners.ManualCotrainRayRunner"
+        assert cfg.env.wm.cfg.kwargs.token_count == 256
+        assert cfg.env.wm.cfg.kwargs.token_dim == 4096
+        assert cfg.env.wm.cfg.kwargs.latent_dim == 256 * 4096
+    assert OmegaConf.to_container(
+        frozen.ray_components.policy,
+        resolve=True,
+    ) == OmegaConf.to_container(mainline.ray_components.policy, resolve=True)
+    assert OmegaConf.to_container(
+        frozen.actor.policy_cfg,
+        resolve=True,
+    ) == OmegaConf.to_container(mainline.actor.policy_cfg, resolve=True)
+    assert OmegaConf.to_container(
+        frozen.rollout.policy_cfg,
+        resolve=True,
+    ) == OmegaConf.to_container(mainline.rollout.policy_cfg, resolve=True)
+    assert (
+        OmegaConf.select(
+            mainline,
+            "manual_cotrain.learner_updates_enabled",
+            default=True,
+        )
+        is True
+    )
+    assert mainline.learner is not None
+    assert frozen.manual_cotrain.learner_updates_enabled is False
+    assert frozen.learner is None
 
 
 @pytest.mark.parametrize("offline_task,_coldstart_task,_suite", MATRIX)

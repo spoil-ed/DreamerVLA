@@ -125,7 +125,12 @@ class MultiStepRolloutWorker(Worker):
             hidden_t = _to_device_float_tensor(
                 batched_hidden,
                 self.torch_device,
-            ).reshape(len(obs_msgs), -1)
+            )
+            if hidden_t.ndim == 0 or int(hidden_t.shape[0]) != len(obs_msgs):
+                raise ValueError(
+                    "batched hidden must preserve a leading observation batch "
+                    f"dimension of {len(obs_msgs)}, got {tuple(hidden_t.shape)}"
+                )
             encoder_extras = [{} for _ in obs_msgs]
         else:
             hidden_values: list[Any] = []
@@ -770,7 +775,7 @@ def _to_device_float_batch(values: list[Any], device: torch.device) -> torch.Ten
         return torch.empty((0, 0), dtype=torch.float32, device=device)
     if all(isinstance(value, np.ndarray) for value in values):
         arrays = [
-            np.asarray(value, dtype=np.float32).reshape(-1)
+            np.asarray(value, dtype=np.float32)
             for value in values
         ]
         return torch.from_numpy(np.stack(arrays, axis=0)).to(
@@ -779,11 +784,11 @@ def _to_device_float_batch(values: list[Any], device: torch.device) -> torch.Ten
         )
     if all(isinstance(value, torch.Tensor) for value in values):
         return torch.stack(
-            [value.detach().reshape(-1) for value in values],
+            [value.detach() for value in values],
             dim=0,
         ).to(device=device)
     return torch.stack(
-        [_to_device_float_tensor(value, device).reshape(-1) for value in values],
+        [_to_device_float_tensor(value, device) for value in values],
         dim=0,
     )
 
