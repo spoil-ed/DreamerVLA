@@ -119,8 +119,9 @@ Run the bounded optimized-WM timing profile without spelling out Hydra overrides
 bash scripts/experiments/world_model_training/profile.sh
 ```
 
-After both component jobs finish, start policy-only frozen Ray cotrain by
-providing either their completed run directories or selected checkpoint files:
+Start policy-only frozen Ray cotrain by providing a run directory or any
+compatible checkpoint file. A WM run directory resolves the currently available
+lowest-loss top-k, then the final checkpoint, then the latest progress checkpoint:
 
 ```bash
 WORLD_MODEL_CKPT=/path/to/world_model/run \

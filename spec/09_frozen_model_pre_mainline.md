@@ -210,9 +210,11 @@ bash scripts/experiments/world_model_training/train.sh
 bash scripts/experiments/classifier_training/train.sh
 ```
 
-They create separate timestamped run directories. Once both runs complete,
-policy-only frozen Ray cotrain takes those two run directories (or selected
-checkpoint files) and resolves the validated WM/CLS selections:
+They create separate timestamped run directories. The manual policy-only frozen
+Ray cotrain handoff accepts those run directories or explicit compatible
+checkpoint files. Unlike the complete proof-chain selector, its WM handoff does
+not require training completion: a run directory resolves current top-k, final,
+or latest progress state in that order.
 
 ```bash
 WORLD_MODEL_CKPT=/path/to/world_model/run \

@@ -4,8 +4,8 @@
 
 Expose the official-data world-model and classifier stages as two independent,
 one-command jobs. Fresh training must not require artifact paths. Paths are
-required only when resuming a job or when frozen-policy RL consumes the two
-completed runs.
+required only when resuming a job or when frozen-policy RL consumes explicit
+component sources.
 
 ## Entrypoints
 
@@ -57,11 +57,11 @@ CLASSIFIER_CKPT=/path/to/classifier.ckpt \
   bash scripts/e2e_frozen_model_cotrain.sh
 ```
 
-The selected paths normally come from the completed WM run's loss-ranked
-checkpoints and the classifier run's `summary.json`. Component schema,
-construction config, classifier threshold, and frozen hashes remain validated
-by `FrozenModelPolicyRunner`. The cotrain output directory is automatic for a
-fresh run; only resume additionally requires `COTRAIN_RUN_ROOT`.
+The WM path may be any compatible training checkpoint; when a run directory is
+given, the manual handoff chooses current top-k, final, or latest progress state
+in that order. The classifier can be a compatible checkpoint or completed run
+selection. Component schema, construction config, classifier threshold, and
+frozen hashes remain validated by the active frozen runner.
 
 ## Scope and Verification
 

@@ -11,8 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from dreamervla.launchers.frozen_model_pre_mainline import (
+    select_available_world_model_checkpoint,
     select_classifier_checkpoint,
-    select_world_model_checkpoint,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -43,7 +43,7 @@ def _component_checkpoint(value: str, *, component: str) -> Path:
         return path
     if path.is_dir():
         if component == "world_model":
-            return select_world_model_checkpoint(path)
+            return select_available_world_model_checkpoint(path)
         if component == "classifier":
             return select_classifier_checkpoint(path)
         raise ValueError(f"unknown frozen component {component!r}")

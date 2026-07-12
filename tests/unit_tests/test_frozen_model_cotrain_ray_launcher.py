@@ -135,7 +135,7 @@ def test_frozen_ray_launcher_resolves_completed_stage_directories(
     selected_classifier.touch()
     monkeypatch.setattr(
         launcher,
-        "select_world_model_checkpoint",
+        "select_available_world_model_checkpoint",
         lambda path: selected_wm,
     )
     monkeypatch.setattr(

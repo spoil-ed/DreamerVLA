@@ -126,6 +126,66 @@ def test_world_model_selector_requires_complete_canonical_checkpoint(
         select_world_model_checkpoint(tmp_path / "wm")
 
 
+def test_available_world_model_selector_accepts_incomplete_ranked_checkpoint(
+    tmp_path: Path,
+) -> None:
+    from dreamervla.launchers.frozen_model_pre_mainline import (
+        select_available_world_model_checkpoint,
+    )
+
+    ranked = tmp_path / "wm" / "ckpt" / "warmup_topk" / "wm"
+    ranked.mkdir(parents=True)
+    state = {"weight": torch.ones(1)}
+    component_config = {"_target_": "test.WorldModel", "hidden_dim": 1}
+    worse = ranked / "wm_step=00003000-loss=0.200000.ckpt"
+    better = ranked / "wm_step=00004000-loss=0.097758.ckpt"
+    for path, step, loss in ((worse, 3000, 0.2), (better, 4000, 0.097758)):
+        torch.save(
+            {
+                "world_model": state,
+                "warmup_component": "wm",
+                "warmup_step": step,
+                "warmup_total_steps": 23160,
+                "complete": False,
+                "metrics": {"loss": loss},
+                "config": {"world_model": component_config},
+            },
+            path,
+        )
+
+    assert select_available_world_model_checkpoint(tmp_path / "wm") == better.resolve()
+
+
+def test_available_world_model_selector_uses_latest_progress_without_topk(
+    tmp_path: Path,
+) -> None:
+    from dreamervla.launchers.frozen_model_pre_mainline import (
+        select_available_world_model_checkpoint,
+    )
+
+    progress = tmp_path / "wm" / "ckpt" / "warmup_progress"
+    progress.mkdir(parents=True)
+    state = {"weight": torch.ones(1)}
+    component_config = {"_target_": "test.WorldModel", "hidden_dim": 1}
+    older = progress / "wm_step_00000500.ckpt"
+    latest = progress / "wm_step_00001000.ckpt"
+    for path, step in ((older, 500), (latest, 1000)):
+        torch.save(
+            {
+                "world_model": state,
+                "warmup_component": "wm",
+                "warmup_step": step,
+                "warmup_total_steps": 23160,
+                "complete": False,
+                "metrics": {"loss": 0.2},
+                "config": {"world_model": component_config},
+            },
+            path,
+        )
+
+    assert select_available_world_model_checkpoint(tmp_path / "wm") == latest.resolve()
+
+
 def test_classifier_selector_requires_heldout_window_best_checkpoint(
     tmp_path: Path,
 ) -> None:

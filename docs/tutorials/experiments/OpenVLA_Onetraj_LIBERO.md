@@ -25,14 +25,14 @@ WORLD_MODEL_RESUME=true \
 WORLD_MODEL_RUN_ROOT=/path/to/world_model/run \
   bash scripts/experiments/world_model_training/train.sh
 
-# 冻结已完成的 WM/CLS，启动 8 卡 Ray policy-only cotrain
-WORLD_MODEL_CKPT=/path/to/completed/world_model/run \
-CLASSIFIER_CKPT=/path/to/completed/classifier/run \
+# 冻结任意选定的兼容 WM checkpoint，启动 8 卡 Ray policy-only cotrain
+WORLD_MODEL_CKPT=/path/to/world_model/run-or-checkpoint \
+CLASSIFIER_CKPT=/path/to/classifier/run-or-checkpoint \
   bash scripts/e2e_frozen_model_cotrain.sh
 
 # 恢复冻结 cotrain
-WORLD_MODEL_CKPT=/path/to/completed/world_model/run \
-CLASSIFIER_CKPT=/path/to/completed/classifier/run \
+WORLD_MODEL_CKPT=/path/to/world_model/run-or-checkpoint \
+CLASSIFIER_CKPT=/path/to/classifier/run-or-checkpoint \
 COTRAIN_RESUME_CKPT=/path/to/manual_cotrain.ckpt \
   bash scripts/e2e_frozen_model_cotrain.sh
 
@@ -41,10 +41,10 @@ bash scripts/e2e_coldstart_warmup_cotrain_ray.sh \
   task=goal ngpu=8 profile=multi_gpu render_backend=osmesa
 ```
 
-冻结 cotrain 的 `WORLD_MODEL_CKPT` 应指向已经生成
-`ckpt/wm_warmup.ckpt` 的完整 WM run 目录；不要传
-`ckpt/warmup_progress/wm_step_*.ckpt`。额外实验参数继续使用 Hydra
-`key=value` override。
+冻结 cotrain 的 `WORLD_MODEL_CKPT` 可以直接指向任意兼容 WM checkpoint，
+包括 `warmup_topk` 或 `warmup_progress`。传 run 目录时，launcher 依次选择当前
+最低-loss top-k、最终 checkpoint、最新 progress，不要求训练完成。额外实验
+参数继续使用 Hydra `key=value` override。
 
 ## 1. 主线路由
 

@@ -22,6 +22,7 @@ _STAGES = {"all", "wm", "classifier", "rl", "eval"}
 _WM_LOSS_RE = re.compile(
     r"^wm_step=(?P<step>\d{8})-loss=(?P<loss>[-+0-9.eE]+)\.ckpt$"
 )
+_WM_PROGRESS_RE = re.compile(r"^wm_step_(?P<step>\d{8})\.ckpt$")
 
 
 @dataclass(frozen=True)
@@ -517,6 +518,70 @@ def select_world_model_checkpoint(wm_root: str | Path) -> Path:
     if ranked:
         return min(ranked, key=lambda item: (item[0], str(item[1])))[1]
     return complete_path.resolve()
+
+
+def _validate_available_world_model_checkpoint(path: Path) -> Mapping[str, Any]:
+    loaded = load_frozen_component(path, "world_model")
+    metadata = loaded.metadata
+    component = metadata.get("warmup_component")
+    if component not in (None, "wm"):
+        raise ValueError(f"checkpoint is not a WM warmup checkpoint: {path}")
+    config = metadata.get("config")
+    if not isinstance(config, Mapping) or not isinstance(config.get("world_model"), Mapping):
+        raise ValueError(f"WM checkpoint has no config.world_model metadata: {path}")
+    return metadata
+
+
+def select_available_world_model_checkpoint(wm_root: str | Path) -> Path:
+    """Select the best currently available WM checkpoint without a completion gate."""
+
+    root = Path(wm_root).expanduser().resolve()
+    ranked: list[tuple[float, Path]] = []
+    ranked_dir = root / "ckpt" / "warmup_topk" / "wm"
+    for path in sorted(ranked_dir.glob("*.ckpt")):
+        match = _WM_LOSS_RE.match(path.name)
+        if match is None:
+            continue
+        metadata = _validate_available_world_model_checkpoint(path)
+        metrics = metadata.get("metrics")
+        if not isinstance(metrics, Mapping) or "loss" not in metrics:
+            raise ValueError(f"ranked WM checkpoint has no metrics.loss: {path}")
+        loss = float(metrics["loss"])
+        filename_loss = float(match.group("loss"))
+        if not math.isfinite(loss) or not math.isfinite(filename_loss):
+            raise ValueError(f"ranked WM checkpoint loss is not finite: {path}")
+        expected_name = f"wm_step={int(match.group('step')):08d}-loss={loss:.6f}.ckpt"
+        if path.name != expected_name:
+            raise ValueError(f"ranked WM filename does not match its rounded loss metadata: {path}")
+        ranked.append((loss, path.resolve()))
+    if ranked:
+        return min(ranked, key=lambda item: (item[0], str(item[1])))[1]
+
+    final_path = root / "ckpt" / "wm_warmup.ckpt"
+    if final_path.is_file():
+        _validate_available_world_model_checkpoint(final_path)
+        return final_path.resolve()
+
+    progress: list[tuple[int, Path]] = []
+    progress_dir = root / "ckpt" / "warmup_progress"
+    for path in sorted(progress_dir.glob("wm_step_*.ckpt")):
+        match = _WM_PROGRESS_RE.match(path.name)
+        if match is not None:
+            progress.append((int(match.group("step")), path.resolve()))
+    if progress:
+        step, selected = max(progress, key=lambda item: (item[0], str(item[1])))
+        metadata = _validate_available_world_model_checkpoint(selected)
+        recorded_step = int(metadata.get("warmup_step", 0) or 0)
+        if recorded_step != step:
+            raise ValueError(
+                f"WM progress filename does not match warmup_step metadata: {selected}"
+            )
+        return selected
+
+    raise FileNotFoundError(
+        "no world-model checkpoint found under run directory; expected an existing "
+        f"warmup_topk, wm_warmup.ckpt, or warmup_progress checkpoint under {root}"
+    )
 
 
 def select_classifier_checkpoint(classifier_root: str | Path) -> Path:
