@@ -43,7 +43,7 @@ def test_manual_cotrain_allows_zero_gpu() -> None:
     ("field", "value", "baseline"),
     (
         ("real_rollout_target_trajectories", 8, 32),
-        ("wm_rollout_target_trajectories", 128, 256),
+        ("wm_rollout_target_trajectories", 128, 1024),
         ("max_steps_per_rollout_epoch", 64, 512),
     ),
 )
@@ -200,6 +200,53 @@ def test_manual_cotrain_geometry_uses_wm_target_trajectories_when_present() -> N
     cfg.actor.train_cfg.algorithm_cfg = {"group_size": 8}
 
     validate_cfg(cfg)
+
+
+def test_manual_cotrain_accepts_rlinf_ppo_batch_geometry() -> None:
+    cfg = _cfg(
+        ngpu=8,
+        wm_envs_per_worker=16,
+        wm_rollout_target_trajectories=1024,
+        max_steps_per_rollout_epoch=512,
+        num_action_chunks=8,
+    )
+    cfg.actor.train_cfg.algorithm_cfg = {"group_size": 8}
+    cfg.actor.train_cfg.global_batch_size = 16384
+    cfg.actor.train_cfg.micro_batch_size = 32
+
+    validate_cfg(cfg)
+
+
+def test_manual_cotrain_rejects_ppo_batch_not_divisible_across_actor_ranks() -> None:
+    cfg = _cfg(
+        ngpu=8,
+        wm_envs_per_worker=16,
+        wm_rollout_target_trajectories=1024,
+        max_steps_per_rollout_epoch=512,
+        num_action_chunks=8,
+    )
+    cfg.actor.train_cfg.algorithm_cfg = {"group_size": 8}
+    cfg.actor.train_cfg.global_batch_size = 16000
+    cfg.actor.train_cfg.micro_batch_size = 32
+
+    with pytest.raises(ValueError, match="micro_batch_size.*Actor ranks"):
+        validate_cfg(cfg)
+
+
+def test_manual_cotrain_rejects_rollout_samples_not_divisible_by_global_batch() -> None:
+    cfg = _cfg(
+        ngpu=8,
+        wm_envs_per_worker=16,
+        wm_rollout_target_trajectories=640,
+        max_steps_per_rollout_epoch=512,
+        num_action_chunks=8,
+    )
+    cfg.actor.train_cfg.algorithm_cfg = {"group_size": 8}
+    cfg.actor.train_cfg.global_batch_size = 16384
+    cfg.actor.train_cfg.micro_batch_size = 32
+
+    with pytest.raises(ValueError, match="flattened rollout samples.*global_batch_size"):
+        validate_cfg(cfg)
 
 
 def test_manual_cotrain_wm_target_uses_wm_envs_per_worker_when_present() -> None:

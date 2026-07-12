@@ -32,7 +32,9 @@ manual_cotrain:
   real_rollout_epoch: 1
   real_rollout_target_trajectories: 32
   wm_rollout_epoch: ${manual_cotrain.rollout_epoch}
-  wm_rollout_target_trajectories: 256
+  # RLinf LIBERO geometry: 64 env slots * 16 rollout epochs = 1024
+  # trajectories.  Each trajectory spans 512 physical steps (64 OFT chunks).
+  wm_rollout_target_trajectories: 1024
   wm_rollout_lease_epochs: 1
   max_steps_per_rollout_epoch: 512
   wm_rollout_multiplier: 1
@@ -66,12 +68,29 @@ algorithm:
   kl_beta: 0.0
   entropy_bonus: 0.0
 
+# Shared by the trainable-WM/CLS mainline and the frozen-WM/CLS Ray test.
+ray_actor_optimizer:
+  name: adam
+  lr: 5.0e-7
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+  weight_decay: 0.0
+  grad_clip_norm: 1.0
+  zero_grad_set_to_none: true
+
 actor:
   policy_cfg: ${ray_components.policy}
   init_ckpt: {}
   train_cfg:
     device: auto
     lr: 5.0e-7
+    # Counts are flattened trajectory-chunk samples, matching RLinf ActorGroup.
+    # 1024 trajectories * (512 / 8) chunks = 65536 samples, hence four
+    # optimizer steps per PPO epoch at global_batch_size=16384.
+    global_batch_size: 16384
+    micro_batch_size: 32
+    seed: ${seed}
+    progress_every_s: 5.0
     syncer:
       store_name: DreamerVLAActorRolloutPatchStore
       precision: bf16
@@ -83,11 +102,7 @@ actor:
       backend: nccl
       use_orig_params: true
     optimizers:
-      policy:
-        lr: 5.0e-7
-        weight_decay: 0.0
-        grad_clip_norm: 1.0
-        zero_grad_set_to_none: true
+      policy: ${ray_actor_optimizer}
     algorithm_cfg:
       group_size: ${algorithm.group_size}
       ppo_update_epochs: 1

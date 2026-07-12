@@ -115,6 +115,14 @@ def test_frozen_models_rl_ray_is_eight_gpu_policy_only_and_uses_official_replay(
     assert cfg.manual_cotrain.real_env_enabled is False
     assert cfg.manual_cotrain.learner_updates_enabled is False
     assert cfg.manual_cotrain.real_env_workers == 0
+    assert cfg.manual_cotrain.wm_rollout_target_trajectories == 1024
+    assert cfg.manual_cotrain.max_steps_per_rollout_epoch == 512
+    assert (
+        cfg.manual_cotrain.wm_rollout_target_trajectories
+        * cfg.manual_cotrain.max_steps_per_rollout_epoch
+        // cfg.manual_cotrain.num_action_chunks
+        == 65536
+    )
     assert cfg.manual_cotrain.refresh_wm_initial_conditions_per_lease is True
     assert cfg.env.real is None
     assert cfg.learner is None
@@ -144,10 +152,22 @@ def test_frozen_models_rl_ray_is_eight_gpu_policy_only_and_uses_official_replay(
     assert cfg.actor.train_cfg.fsdp.cpu_offload is False
     assert cfg.actor.train_cfg.syncer.precision == "bf16"
     assert cfg.rollout.train_cfg.precision == "bf16"
-    assert (
-        cfg.actor.train_cfg.algorithm_cfg.update_micro_batch_starts
-        == cfg.algorithm.lumos.update_micro_batch_starts
+    assert cfg.actor.train_cfg.micro_batch_size == 32
+    assert cfg.actor.train_cfg.global_batch_size == 16384
+    ppo_samples = (
+        cfg.manual_cotrain.wm_rollout_target_trajectories
+        * cfg.manual_cotrain.max_steps_per_rollout_epoch
+        // cfg.manual_cotrain.num_action_chunks
     )
+    optimizer_steps = ppo_samples // cfg.actor.train_cfg.global_batch_size
+    micro_batches_per_optimizer = (
+        cfg.actor.train_cfg.global_batch_size
+        // cfg.manual_cotrain.ngpu
+        // cfg.actor.train_cfg.micro_batch_size
+    )
+    assert optimizer_steps == 4
+    assert micro_batches_per_optimizer == 64
+    assert optimizer_steps * micro_batches_per_optimizer == 256
     assert cfg.actor.train_cfg.algorithm_cfg.clip_log_ratio == cfg.algorithm.clip_log_ratio
     assert cfg.env.wm.cfg.bootstrap_group_size == cfg.manual_cotrain.wm_envs_per_worker
     assert cfg.env.wm.cfg.defer_initial_condition_bootstrap is True
@@ -195,6 +215,39 @@ def test_wm_classifier_configs_are_shared_across_training_and_cotrain() -> None:
     )
 
 
+def test_frozen_ray_reuses_mainline_actor_ppo_hydra_contract() -> None:
+    mainline = _compose("openvla_onetraj_libero_cotrain_ray")
+    frozen = _compose("dreamervla_frozen_models_rl_ray")
+    shared_paths = (
+        "manual_cotrain.rollout_epoch",
+        "manual_cotrain.wm_rollout_target_trajectories",
+        "manual_cotrain.max_steps_per_rollout_epoch",
+        "manual_cotrain.num_action_chunks",
+        "actor.train_cfg.global_batch_size",
+        "actor.train_cfg.micro_batch_size",
+        "actor.train_cfg.algorithm_cfg.group_size",
+        "actor.train_cfg.algorithm_cfg.ppo_update_epochs",
+        "actor.train_cfg.algorithm_cfg.logprob_type",
+        "actor.train_cfg.algorithm_cfg.loss_agg_func",
+        "actor.train_cfg.algorithm_cfg.clip_ratio_low",
+        "actor.train_cfg.algorithm_cfg.clip_ratio_high",
+        "actor.train_cfg.algorithm_cfg.clip_ratio_c",
+        "actor.train_cfg.optimizers.policy.lr",
+        "actor.train_cfg.fsdp.strategy",
+        "actor.train_cfg.fsdp.precision",
+    )
+
+    for path in shared_paths:
+        assert OmegaConf.select(frozen, path) == OmegaConf.select(mainline, path), path
+    assert OmegaConf.to_container(
+        frozen.actor.train_cfg.optimizers.policy,
+        resolve=True,
+    ) == OmegaConf.to_container(
+        mainline.actor.train_cfg.optimizers.policy,
+        resolve=True,
+    )
+
+
 def test_frozen_models_rl_ray_validates_with_explicit_component_checkpoints(
     tmp_path: Path,
 ) -> None:
@@ -209,7 +262,7 @@ def test_frozen_models_rl_ray_validates_with_explicit_component_checkpoints(
     validate_cfg(cfg)
 
 
-def test_frozen_models_rl_ray_geometry_counts_all_eight_wm_workers(
+def test_frozen_models_rl_ray_rejects_non_rlinf_trajectory_budget(
     tmp_path: Path,
 ) -> None:
     cfg = _compose("dreamervla_frozen_models_rl_ray")
@@ -221,7 +274,7 @@ def test_frozen_models_rl_ray_geometry_counts_all_eight_wm_workers(
     )
     OmegaConf.update(cfg, "manual_cotrain.wm_rollout_target_trajectories", 112)
 
-    with pytest.raises(ValueError, match="each WM worker"):
+    with pytest.raises(ValueError, match="1024 trajectories.*512 physical steps"):
         validate_cfg(cfg)
 
 
@@ -290,9 +343,9 @@ def test_frozen_models_rl_ray_resume_requires_policy_checkpoint(tmp_path: Path) 
             "CPU offload",
         ),
         (
-            "actor.train_cfg.algorithm_cfg.update_micro_batch_starts",
-            1,
-            "policy-update settings",
+            "actor.train_cfg.micro_batch_size",
+            16,
+            "PPO batch settings",
         ),
         (
             "env.wm.cfg.bootstrap_task_ids",
@@ -322,6 +375,31 @@ def test_frozen_models_rl_ray_rejects_trainable_or_real_components(
     OmegaConf.update(cfg, path, value, force_add=True)
 
     with pytest.raises(ValueError, match=match):
+        validate_cfg(cfg)
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        ("manual_cotrain.wm_rollout_target_trajectories", 256),
+        ("manual_cotrain.max_steps_per_rollout_epoch", 40),
+    ],
+)
+def test_frozen_models_rl_ray_requires_rlinf_rollout_geometry(
+    tmp_path: Path,
+    path: str,
+    value: int,
+) -> None:
+    cfg = _compose("dreamervla_frozen_models_rl_ray")
+    OmegaConf.update(cfg, "init.world_model_state_ckpt", str(tmp_path / "wm.ckpt"))
+    OmegaConf.update(
+        cfg,
+        "init.classifier_state_ckpt",
+        str(tmp_path / "classifier.ckpt"),
+    )
+    OmegaConf.update(cfg, path, value)
+
+    with pytest.raises(ValueError, match="1024 trajectories.*512 physical steps"):
         validate_cfg(cfg)
 
 

@@ -107,11 +107,11 @@ def build_manual_cotrain_placement(
         RolePlacement(kind="rollout", role="rollout", rank=gpu, gpu_ids=[gpu])
         for gpu in range(count)
     ]
-    actor_gpus = (
-        (list(range(1, count)) or [0])
-        if include_learner
-        else list(range(count))
-    )
+    # Keep ActorGroup identical between online cotrain and frozen-WM/CLS RL.
+    # LearnerGroup is intentionally co-located with actor rank 0; excluding GPU
+    # 0 would turn the eight-GPU mainline into a seven-rank FSDP job and break
+    # the RLinf global-batch contract.
+    actor_gpus = list(range(count))
     actor_specs = [
         RolePlacement(kind="actor", role="actor", rank=rank, gpu_ids=[gpu])
         for rank, gpu in enumerate(actor_gpus)
@@ -244,11 +244,8 @@ def _default_actor_groups(
     *,
     include_learner: bool = True,
 ) -> list[list[int]]:
-    actor_gpus = (
-        (list(range(1, count)) or [0])
-        if include_learner
-        else list(range(count))
-    )
+    del include_learner
+    actor_gpus = list(range(count))
     return [[gpu] for gpu in actor_gpus]
 
 

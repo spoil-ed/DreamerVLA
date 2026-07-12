@@ -255,14 +255,18 @@ def _debug_async_online_overrides(
         )
         or int(num_action_chunks)
     )
-    wm_workers = max(0, _requested_gpu_count(ngpu) - 1)
+    actor_ranks = max(1, _requested_gpu_count(ngpu))
+    wm_workers = max(0, actor_ranks - 1)
     real_target = _ceil_to_multiple(
         max(8, int(real_env_workers) * int(envs_per_worker)),
         int(envs_per_worker),
     )
     wm_target = _ceil_to_multiple(
         max(8, int(wm_workers) * int(wm_envs_per_worker)),
-        _lcm_int(int(wm_envs_per_worker), int(group_size)),
+        _lcm_int(
+            int(wm_envs_per_worker),
+            int(group_size) * int(actor_ranks),
+        ),
     )
     max_steps_per_rollout_epoch = _ceil_to_multiple(
         max(
@@ -271,6 +275,27 @@ def _debug_async_online_overrides(
         ),
         int(num_action_chunks),
     )
+    ppo_samples = (
+        int(wm_target)
+        * int(max_steps_per_rollout_epoch)
+        // int(num_action_chunks)
+    )
+    actor_batch_overrides: list[str] = []
+    explicit_global_batch = _last_int_override(
+        explicit_overrides,
+        "actor.train_cfg.global_batch_size",
+    )
+    resolved_global_batch = explicit_global_batch or ppo_samples
+    if explicit_global_batch is None:
+        actor_batch_overrides.append(
+            f"actor.train_cfg.global_batch_size={resolved_global_batch}"
+        )
+    if not _has_override(explicit_overrides, "actor.train_cfg.micro_batch_size"):
+        per_rank_global_batch = max(1, resolved_global_batch // actor_ranks)
+        actor_batch_overrides.append(
+            "actor.train_cfg.micro_batch_size="
+            f"{_largest_divisor_at_most(per_rank_global_batch, 32)}"
+        )
     return [
         "++training.debug=true",
         "manual_cotrain.global_steps=1",
@@ -280,6 +305,7 @@ def _debug_async_online_overrides(
         f"manual_cotrain.real_rollout_target_trajectories={real_target}",
         f"manual_cotrain.wm_rollout_target_trajectories={wm_target}",
         f"manual_cotrain.max_steps_per_rollout_epoch={max_steps_per_rollout_epoch}",
+        *actor_batch_overrides,
         *_debug_async_env_width_overrides(
             explicit_overrides=explicit_overrides,
             envs_per_worker=envs_per_worker,

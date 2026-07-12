@@ -23,6 +23,11 @@ training:
   resume_dir: null
   require_policy_update: true
 
+# Override the legacy single-process frozen-RL optimizer with the shared
+# manual-Ray ActorGroup contract inherited from the mainline config.
+optim:
+  policy: ${ray_actor_optimizer}
+
 manual_cotrain:
   ngpu: 8
   global_steps: 20000
@@ -34,7 +39,7 @@ manual_cotrain:
   sync_every: 1
   requires_bootstrap_value: false
   wm_env_write_replay: false
-  rollout_epoch: 2
+  rollout_epoch: ${algorithm.rollout_epoch}
   real_env_enabled: false
   learner_updates_enabled: false
   real_env_workers: 0
@@ -42,10 +47,10 @@ manual_cotrain:
   real_rollout_target_trajectories: null
   real_render_backend: null
   wm_rollout_epoch: ${manual_cotrain.rollout_epoch}
-  wm_rollout_target_trajectories: 256
+  wm_rollout_target_trajectories: 1024
   wm_rollout_lease_epochs: 1
   refresh_wm_initial_conditions_per_lease: true
-  max_steps_per_rollout_epoch: 40
+  max_steps_per_rollout_epoch: 512
   wm_rollout_multiplier: 1
   num_action_chunks: ${task.openvla_oft.hidden_token.chunk_size}
   envs_per_worker: 1
@@ -99,16 +104,6 @@ actor:
       sync_module_states: true
     algorithm_cfg:
       clip_log_ratio: ${algorithm.clip_log_ratio}
-      update_micro_batch_starts: ${algorithm.lumos.update_micro_batch_starts}
-    optimizers:
-      policy:
-        name: ${optim.policy.name}
-        lr: ${optim.policy.lr}
-        betas: ${optim.policy.betas}
-        eps: ${optim.policy.eps}
-        weight_decay: ${optim.policy.weight_decay}
-        grad_clip_norm: ${optim.grad_clip_norm}
-        zero_grad_set_to_none: ${optim.zero_grad_set_to_none}
 
 replay:
   cfg:

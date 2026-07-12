@@ -506,16 +506,44 @@ def test_actor_run_training_updates_policy_parameters() -> None:
     assert any(not torch.equal(before[key], after[key]) for key in before)
 
 
+def test_actor_training_uses_rlinf_global_and_micro_batches(capsys) -> None:
+    cfg = _actor_cfg()
+    cfg["train_cfg"].update(
+        {
+            "global_batch_size": 2,
+            "micro_batch_size": 1,
+            "seed": 7,
+            "progress_every_s": 0.0,
+        }
+    )
+    actor = EmbodiedFSDPActor(**cfg)
+    actor.init()
+    actor.set_global_step(3)
+    actor.load_trajectory_shards([_shard(0.0, 1.0)])
+    actor.compute_advantages_and_returns()
+
+    metrics = actor.run_training()
+    output = capsys.readouterr().out
+
+    assert metrics["actor/ppo_optimizer_steps"] == 2.0
+    assert metrics["actor/ppo_updates"] == 2.0
+    assert metrics["actor/ppo_forward_backward_steps"] == 4.0
+    assert metrics["actor/ppo_progress_ops"] == 6.0
+    assert metrics["actor/lr"] == pytest.approx(1.0e-3)
+    assert 0.0 <= metrics["actor/clip_fraction"] <= 1.0
+    assert torch.isfinite(torch.tensor(metrics["actor/approx_kl"]))
+    assert "ppo/00000003" in output
+    assert "6/6" in output
+    assert "optimizer=2/2" in output
+
+
 def test_actor_microbatch_matches_full_batch_update() -> None:
-    # Two shards -> 4 rollouts, group_size=2 -> 2 GRPO groups. With
-    # update_micro_batch_starts=1 the rollout dim is split into two
-    # single-group slices; grads accumulate across slices into one
-    # optimizer.step, so the trained policy must match the full-batch run.
-    def _train(micro_batch_starts: int) -> dict:
+    # Two shards -> 4 rollouts * 2 chunks = 8 flattened samples. Both routes
+    # use one global batch / optimizer step; only gradient accumulation differs.
+    def _train(micro_batch_size: int) -> dict:
         cfg = _actor_cfg()
-        cfg["train_cfg"]["algorithm_cfg"][
-            "update_micro_batch_starts"
-        ] = micro_batch_starts
+        cfg["train_cfg"]["global_batch_size"] = 8
+        cfg["train_cfg"]["micro_batch_size"] = micro_batch_size
         torch.manual_seed(1234)
         actor = EmbodiedFSDPActor(**cfg)
         actor.init()
@@ -524,8 +552,8 @@ def test_actor_microbatch_matches_full_batch_update() -> None:
         actor.run_training()
         return actor.state_dict()
 
-    full = _train(0)
-    micro = _train(1)
+    full = _train(8)
+    micro = _train(2)
 
     assert set(full) == set(micro)
     for key in full:
@@ -534,21 +562,21 @@ def test_actor_microbatch_matches_full_batch_update() -> None:
 
 def test_actor_microbatch_slices_hidden_before_device_transfer(monkeypatch) -> None:
     cfg = _actor_cfg()
-    cfg["train_cfg"]["algorithm_cfg"]["update_micro_batch_starts"] = 1
+    cfg["train_cfg"]["global_batch_size"] = 8
+    cfg["train_cfg"]["micro_batch_size"] = 2
     actor = EmbodiedFSDPActor(**cfg)
     actor.init()
     actor.load_trajectory_shards([_shard(0.0, 1.0), _shard(2.0, 3.0)])
     actor.compute_advantages_and_returns()
     assert actor.batch is not None
-    hidden = actor.batch.forward_inputs["hidden"]
-    hidden_storage = hidden.untyped_storage().data_ptr()
     transferred_batch_sizes: list[int] = []
     original_to = torch.Tensor.to
 
     def tracked_to(tensor, *args, **kwargs):
         if (
             tensor.ndim == 2
-            and tensor.untyped_storage().data_ptr() == hidden_storage
+            and int(tensor.shape[-1]) == 4
+            and tensor.device.type == "cpu"
         ):
             transferred_batch_sizes.append(int(tensor.shape[0]))
         return original_to(tensor, *args, **kwargs)
@@ -557,7 +585,8 @@ def test_actor_microbatch_slices_hidden_before_device_transfer(monkeypatch) -> N
 
     actor.run_training()
 
-    assert transferred_batch_sizes == [2, 2, 2, 2]
+    assert len(transferred_batch_sizes) >= 4
+    assert set(transferred_batch_sizes) == {2}
 
 
 def test_actor_hidden_transfer_uses_configured_fsdp_precision() -> None:
@@ -581,7 +610,8 @@ def test_actor_fsdp_no_syncs_all_but_final_accumulated_backward(
     monkeypatch,
 ) -> None:
     cfg = _actor_cfg()
-    cfg["train_cfg"]["algorithm_cfg"]["update_micro_batch_starts"] = 1
+    cfg["train_cfg"]["global_batch_size"] = 8
+    cfg["train_cfg"]["micro_batch_size"] = 2
     actor = EmbodiedFSDPActor(**cfg)
     actor.init()
     policy = _NoSyncProbePolicy()
@@ -599,7 +629,8 @@ def test_actor_fsdp_no_syncs_all_but_final_accumulated_backward(
 
 def test_actor_training_avoids_per_microbatch_scalar_device_sync(monkeypatch) -> None:
     cfg = _actor_cfg()
-    cfg["train_cfg"]["algorithm_cfg"]["update_micro_batch_starts"] = 1
+    cfg["train_cfg"]["global_batch_size"] = 8
+    cfg["train_cfg"]["micro_batch_size"] = 2
     actor = EmbodiedFSDPActor(**cfg)
     actor.init()
     actor.load_trajectory_shards([_shard(0.0, 1.0), _shard(2.0, 3.0)])

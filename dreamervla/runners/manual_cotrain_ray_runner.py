@@ -811,10 +811,34 @@ class ManualCotrainRayRunner(BaseRunner):
     ) -> None:
         """Report one monotonic policy-update progress line per global step."""
 
-        updates = max(0, int(float(metrics.get("actor/ppo_updates", 0.0))))
-        parts = [f"policy_updates={updates}"]
+        updates = max(
+            0,
+            int(
+                float(
+                    metrics.get(
+                        "actor/ppo_optimizer_steps",
+                        metrics.get("actor/ppo_updates", 0.0),
+                    )
+                )
+            ),
+        )
+        parts = [f"ppo_steps={updates}"]
+        valid_samples = metrics.get("actor/global_loss_mask_sum")
+        total_samples = metrics.get("actor/global_ppo_samples")
+        if valid_samples is not None and total_samples is not None:
+            parts.append(f"samples={int(valid_samples)}/{int(total_samples)}")
+        if "actor/global_batch_size" in metrics:
+            parts.append(f"batch={int(metrics['actor/global_batch_size'])}")
+        if "actor/micro_batch_size" in metrics:
+            parts.append(f"micro={int(metrics['actor/micro_batch_size'])}")
         if "actor/loss" in metrics:
             parts.append(f"loss={float(metrics['actor/loss']):.4g}")
+        if "actor/approx_kl" in metrics:
+            parts.append(f"approx_kl={float(metrics['actor/approx_kl']):.4g}")
+        if "actor/clip_fraction" in metrics:
+            parts.append(f"clip_frac={float(metrics['actor/clip_fraction']):.4g}")
+        if "actor/lr" in metrics:
+            parts.append(f"lr={float(metrics['actor/lr']):.4g}")
         durations = (
             ("imagine", "time/manual_cotrain/env_interact_and_rollout_generate_s"),
             ("actor", "time/manual_cotrain/actor_run_training_s"),
@@ -2337,9 +2361,27 @@ def _aggregate_actor_metric_lists(items: list[Any]) -> dict[str, float]:
 
     aggregated: dict[str, float] = {}
     for key, values in values_by_key.items():
-        if key in {"actor/trajectory_count", "actor/received_shards"}:
+        if key in {
+            "actor/trajectory_count",
+            "actor/received_shards",
+            "actor/loss_mask_sum",
+            "actor/reward_filtered_rollouts",
+        }:
             aggregated[key] = float(sum(values))
-        elif key in {"actor/ppo_updates"}:
+        elif key in {
+            "actor/ppo_updates",
+            "actor/ppo_optimizer_steps",
+            "actor/ppo_forward_backward_steps",
+            "actor/ppo_progress_ops",
+            "actor/global_time_steps",
+            "actor/global_rollout_trajectories",
+            "actor/global_ppo_samples",
+            "actor/global_batch_size",
+            "actor/per_rank_global_batch_size",
+            "actor/micro_batch_size",
+            "actor/global_loss_mask_sum",
+            "actor/global_logprob_token_count",
+        }:
             aggregated[key] = float(max(values))
         else:
             aggregated[key] = float(sum(values) / len(values))

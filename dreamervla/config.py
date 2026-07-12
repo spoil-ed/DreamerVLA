@@ -794,9 +794,6 @@ def _validate_pre_mainline_routes(cfg: DictConfig) -> None:
                 "frozen-model Ray RL does not permit Actor CPU offload"
             )
         actor_update_contract = {
-            "actor.train_cfg.algorithm_cfg.update_micro_batch_starts": (
-                "algorithm.lumos.update_micro_batch_starts"
-            ),
             "actor.train_cfg.algorithm_cfg.clip_log_ratio": (
                 "algorithm.clip_log_ratio"
             ),
@@ -809,6 +806,16 @@ def _validate_pre_mainline_routes(cfg: DictConfig) -> None:
                 raise ValueError(
                     "frozen-model Ray RL Actor policy-update settings must match "
                     "the canonical frozen-policy Hydra config"
+                )
+        actor_batch_contract = {
+            "actor.train_cfg.micro_batch_size": 32,
+            "actor.train_cfg.global_batch_size": 16384,
+        }
+        for actor_path, expected in actor_batch_contract.items():
+            if int(OmegaConf.select(cfg, actor_path, default=0)) != expected:
+                raise ValueError(
+                    "frozen-model Ray RL PPO batch settings must match the "
+                    f"RLinf contract: {actor_path}={expected}"
                 )
         if int(_select_int(cfg, "cluster.num_nodes") or 0) != 1:
             raise ValueError("frozen-model Ray RL is single-node only")
@@ -1008,6 +1015,18 @@ def _validate_pre_mainline_routes(cfg: DictConfig) -> None:
                 default=0,
             )
         )
+        max_steps_per_trajectory = int(
+            OmegaConf.select(
+                cfg,
+                "manual_cotrain.max_steps_per_rollout_epoch",
+                default=0,
+            )
+        )
+        if target_trajectories != 1024 or max_steps_per_trajectory != 512:
+            raise ValueError(
+                "frozen-model Ray RL requires 1024 trajectories and 512 physical "
+                "steps per trajectory before every PPO update"
+            )
         total_leases = (
             target_trajectories // wm_envs_per_worker
             if wm_envs_per_worker > 0
@@ -1473,6 +1492,7 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
                 "manual_cotrain.num_action_chunks"
             )
     _validate_manual_cotrain_group_geometry(cfg)
+    _validate_manual_actor_ppo_batches(cfg)
     _validate_manual_cotrain_replay_window(cfg)
     _validate_manual_cotrain_classifier_window(cfg)
 
@@ -1496,7 +1516,7 @@ def _warn_manual_cotrain_baseline_overrides(cfg: DictConfig) -> None:
 
     baselines = {
         "real_rollout_target_trajectories": 32,
-        "wm_rollout_target_trajectories": 256,
+        "wm_rollout_target_trajectories": 1024,
         "max_steps_per_rollout_epoch": 512,
     }
     for field, baseline in baselines.items():
@@ -1631,6 +1651,70 @@ def _validate_manual_cotrain_group_geometry(cfg: DictConfig) -> None:
             f"real replay trajectory count={real_trajectory_count}, "
             f"actor WM trajectory count={actor_trajectory_count}, "
             f"group_size={group_size}"
+        )
+
+
+def _validate_manual_actor_ppo_batches(cfg: DictConfig) -> None:
+    """Validate the RLinf global-batch/micro-batch hierarchy before Ray starts."""
+
+    target = str(OmegaConf.select(cfg, "_target_", default="") or "")
+    if not target.endswith("ManualCotrainRayRunner"):
+        return
+    global_batch_raw = OmegaConf.select(
+        cfg,
+        "actor.train_cfg.global_batch_size",
+        default=None,
+    )
+    micro_batch_raw = OmegaConf.select(
+        cfg,
+        "actor.train_cfg.micro_batch_size",
+        default=None,
+    )
+    if global_batch_raw is None and micro_batch_raw is None:
+        return
+    if global_batch_raw is None or micro_batch_raw is None:
+        raise ValueError(
+            "actor.train_cfg.global_batch_size and micro_batch_size must be "
+            "configured together"
+        )
+    global_batch = int(global_batch_raw)
+    micro_batch = int(micro_batch_raw)
+    actor_ranks = max(
+        1,
+        int(OmegaConf.select(cfg, "manual_cotrain.ngpu", default=1)),
+    )
+    if global_batch <= 0 or micro_batch <= 0:
+        raise ValueError("Actor PPO global_batch_size and micro_batch_size must be positive")
+    if global_batch % (micro_batch * actor_ranks) != 0:
+        raise ValueError(
+            "actor.train_cfg.global_batch_size must be divisible by "
+            "micro_batch_size * Actor ranks: "
+            f"{global_batch} % ({micro_batch} * {actor_ranks}) != 0"
+        )
+
+    trajectories = OmegaConf.select(
+        cfg,
+        "manual_cotrain.wm_rollout_target_trajectories",
+        default=None,
+    )
+    max_steps = OmegaConf.select(
+        cfg,
+        "manual_cotrain.max_steps_per_rollout_epoch",
+        default=None,
+    )
+    chunk_size = OmegaConf.select(
+        cfg,
+        "manual_cotrain.num_action_chunks",
+        default=None,
+    )
+    if trajectories is None or max_steps is None or chunk_size is None:
+        return
+    flattened_samples = int(trajectories) * (int(max_steps) // int(chunk_size))
+    if flattened_samples % global_batch != 0:
+        raise ValueError(
+            "manual cotrain flattened rollout samples must be divisible by Actor "
+            "global_batch_size: "
+            f"{flattened_samples} % {global_batch} != 0"
         )
 
 

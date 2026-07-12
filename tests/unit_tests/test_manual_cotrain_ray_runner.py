@@ -104,7 +104,7 @@ def test_runner_plans_manual_notes_groups() -> None:
         "wm_env",
         "wm_env",
     ]
-    assert len(plan.actor_specs) == 4
+    assert len(plan.actor_specs) == 5
     assert len(plan.rollout_specs) == 5
     assert plan.learner_spec.gpu_ids == [0]
 
@@ -1008,7 +1008,7 @@ def test_manual_cotrain_oft_backbone_experiment_composes() -> None:
     assert cfg.manual_cotrain.real_rollout_epoch == 1
     assert cfg.manual_cotrain.wm_rollout_epoch == 16
     assert cfg.manual_cotrain.real_rollout_target_trajectories == 32
-    assert cfg.manual_cotrain.wm_rollout_target_trajectories == 256
+    assert cfg.manual_cotrain.wm_rollout_target_trajectories == 1024
     assert cfg.manual_cotrain.wm_rollout_lease_epochs == 1
     assert cfg.manual_cotrain.max_steps_per_rollout_epoch == 512
     assert cfg.manual_cotrain.wm_rollout_multiplier == 1
@@ -1037,6 +1037,8 @@ def test_manual_cotrain_oft_backbone_experiment_composes() -> None:
     assert "kl_coef" not in cfg.actor.train_cfg.algorithm_cfg
     assert cfg.actor.train_cfg.algorithm_cfg.clip_log_ratio is None
     assert cfg.actor.train_cfg.algorithm_cfg.loss_normalization == "token_mean"
+    assert cfg.actor.train_cfg.micro_batch_size == 32
+    assert cfg.actor.train_cfg.global_batch_size == 16384
     assert cfg.rollout.train_cfg.logprob_type == "token_level"
 
 
@@ -1070,7 +1072,7 @@ def test_manual_cotrain_actor_rollout_budget_uses_wm_only() -> None:
 
     assert cfg.manual_cotrain.real_rollout_epoch == 1
     assert cfg.manual_cotrain.real_rollout_target_trajectories == 32
-    assert cfg.manual_cotrain.wm_rollout_target_trajectories == 256
+    assert cfg.manual_cotrain.wm_rollout_target_trajectories == 1024
     assert cfg.manual_cotrain.wm_rollout_target_trajectories % cfg.algorithm.group_size == 0
     real_trajectories = (
         cfg.manual_cotrain.envs_per_worker * cfg.manual_cotrain.real_rollout_epoch
@@ -2434,8 +2436,16 @@ def test_manual_cotrain_global_progress_reports_completed_policy_update() -> Non
         global_step=3,
         total_steps=20,
         metrics={
-            "actor/ppo_updates": 1.0,
+            "actor/ppo_updates": 4.0,
+            "actor/ppo_optimizer_steps": 4.0,
+            "actor/global_ppo_samples": 65536.0,
+            "actor/global_loss_mask_sum": 64000.0,
+            "actor/global_batch_size": 16384.0,
+            "actor/micro_batch_size": 32.0,
             "actor/loss": 0.125,
+            "actor/approx_kl": 0.00125,
+            "actor/clip_fraction": 0.075,
+            "actor/lr": 5.0e-7,
             "time/manual_cotrain/env_interact_and_rollout_generate_s": 10.5,
             "time/manual_cotrain/actor_run_training_s": 2.25,
             "time/manual_cotrain/global_step_s": 13.75,
@@ -2448,10 +2458,41 @@ def test_manual_cotrain_global_progress_reports_completed_policy_update() -> Non
             20,
             "manual-cotrain",
             "step",
-            "policy_updates=1 loss=0.125 imagine=10.5s actor=2.2s step=13.8s",
+            "ppo_steps=4 samples=64000/65536 batch=16384 micro=32 "
+            "loss=0.125 approx_kl=0.00125 clip_frac=0.075 lr=5e-07 "
+            "imagine=10.5s actor=2.2s step=13.8s",
             True,
         )
     ]
+
+
+def test_actor_metric_aggregation_preserves_count_semantics() -> None:
+    metrics = manual_runner._aggregate_actor_metric_lists(
+        [
+            [
+                {
+                    "actor/trajectory_count": 128.0,
+                    "actor/reward_filtered_rollouts": 8.0,
+                    "actor/ppo_optimizer_steps": 4.0,
+                    "actor/global_ppo_samples": 65536.0,
+                    "actor/loss": 0.1,
+                },
+                {
+                    "actor/trajectory_count": 128.0,
+                    "actor/reward_filtered_rollouts": 16.0,
+                    "actor/ppo_optimizer_steps": 4.0,
+                    "actor/global_ppo_samples": 65536.0,
+                    "actor/loss": 0.3,
+                },
+            ]
+        ]
+    )
+
+    assert metrics["actor/trajectory_count"] == 256.0
+    assert metrics["actor/reward_filtered_rollouts"] == 24.0
+    assert metrics["actor/ppo_optimizer_steps"] == 4.0
+    assert metrics["actor/global_ppo_samples"] == 65536.0
+    assert metrics["actor/loss"] == pytest.approx(0.2)
 
 
 def test_receive_actor_trajectories_loads_actual_wm_shards_by_actor_rank() -> None:

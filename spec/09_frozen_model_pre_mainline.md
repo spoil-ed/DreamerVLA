@@ -112,6 +112,14 @@ groups. The replay cursor rotates across all ten `libero_goal` tasks and is
 stored as lightweight resume state. Actor FSDP synchronizes initial module
 state across all eight ranks before the first update.
 
+The Ray experiment uses the same RLinf-aligned PPO geometry as the non-frozen
+manual mainline: one manual global step records exactly 1024 trajectories of
+512 physical steps, or 65536 flattened OFT chunk samples at `chunk_size=8`.
+`actor.train_cfg.global_batch_size=16384` and `micro_batch_size=32` therefore
+produce four policy optimizer steps per manual global step. These values live
+in the shared mainline Hydra config; the frozen experiment inherits them and
+only disables LearnerGroup plus loads immutable WM/CLS checkpoints.
+
 ### Construction
 
 The runner:

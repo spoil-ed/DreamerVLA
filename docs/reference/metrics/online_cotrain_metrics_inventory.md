@@ -68,6 +68,36 @@ muddy the cumulative/recent semantics.
    `rl/classifier_updates`
    Source: Ray learner actor-signal gate. Keep as Ray diagnostics.
 
+## actor（manual Ray PPO）
+
+1. `actor/ppo_optimizer_steps`
+   Source: completed policy optimizer steps in the current manual global step. This is
+   the authoritative “PPO updated” counter; `actor/ppo_updates` is a compatibility alias.
+2. `actor/ppo_forward_backward_steps`, `actor/ppo_progress_ops`
+   Source: completed micro-batch forward/backward operations and the sum of
+   forward/backward plus optimizer operations. These are progress counters, not quality
+   metrics.
+3. `actor/global_rollout_trajectories`, `actor/global_ppo_samples`,
+   `actor/global_loss_mask_sum`
+   Source: ActorGroup-wide trajectory count, flattened chunk-sample count, and valid
+   sample count after termination/reward filtering.
+4. `actor/global_batch_size`, `actor/per_rank_global_batch_size`,
+   `actor/micro_batch_size`
+   Source: resolved Hydra/FSDP batch hierarchy. These are run-contract diagnostics.
+5. `actor/policy_loss`, `actor/total_loss`
+   Source: micro-batch mean PPO surrogate and the optimized objective after KL/entropy
+   terms. `actor/loss` is a compatibility alias of `actor/total_loss`.
+6. `actor/ratio`, `actor/ratio_abs`, `actor/clipped_ratio`, `actor/approx_kl`,
+   `actor/clip_fraction`, `actor/dual_clip_fraction`
+   Source: RLinf-style PPO stability diagnostics averaged over micro batches and Actor
+   ranks.
+7. `actor/grad_norm`, `actor/lr`
+   Source: policy gradient norm and optimizer learning rate after each global batch.
+   `actor/policy_grad_norm` is a compatibility alias.
+8. `actor/skipped_zero_valid_update`, `actor/zero_loss_micro_batches`
+   Source: explicit no-signal/update diagnostics. A skipped update must have
+   `actor/ppo_optimizer_steps=0`.
+
 ## LUMOS
 
 1. `LUMOS/success_rate`
@@ -115,3 +145,8 @@ The main online cotrain dashboard should prioritize:
 13. `cls/acc`
 14. `wm/loss`
 15. WM hidden reconstruction/cosine losses when emitted by the selected WM.
+16. `actor/ppo_optimizer_steps`
+17. `actor/policy_loss`
+18. `actor/approx_kl`
+19. `actor/clip_fraction`
+20. `actor/grad_norm`

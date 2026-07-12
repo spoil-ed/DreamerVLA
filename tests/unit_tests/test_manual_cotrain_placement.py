@@ -28,7 +28,9 @@ def test_gpu_placement_matches_manual_notes_for_five_gpus() -> None:
     assert [spec.role for spec in plan.env_specs[1:]] == ["wm_env"] * 4
     assert plan.learner_spec.gpu_ids == [0]
     assert [spec.gpu_ids for spec in plan.rollout_specs] == [[0], [1], [2], [3], [4]]
-    assert [spec.gpu_ids for spec in plan.actor_specs] == [[1], [2], [3], [4]]
+    assert [spec.gpu_ids for spec in plan.actor_specs] == [
+        [0], [1], [2], [3], [4]
+    ]
 
 
 def test_one_gpu_placement_keeps_actor_spec_on_gpu_zero() -> None:
@@ -56,6 +58,26 @@ def test_frozen_policy_placement_uses_all_eight_gpus_without_real_or_learner() -
     ]
     assert [spec.gpu_ids for spec in plan.actor_specs] == [[gpu] for gpu in range(8)]
     assert plan.learner_spec is None
+
+
+def test_mainline_and_frozen_routes_share_all_eight_actor_ranks() -> None:
+    mainline = build_manual_cotrain_placement(
+        8,
+        real_env_workers=4,
+        include_learner=True,
+    )
+    frozen = build_manual_cotrain_placement(
+        8,
+        real_env_workers=0,
+        include_learner=False,
+    )
+
+    expected = [[gpu] for gpu in range(8)]
+    assert [spec.gpu_ids for spec in mainline.actor_specs] == expected
+    assert [spec.gpu_ids for spec in frozen.actor_specs] == expected
+    assert mainline.learner_spec is not None
+    assert mainline.learner_spec.gpu_ids == [0]
+    assert frozen.learner_spec is None
 
 
 def test_manual_cotrain_placement_honors_component_gpu_groups() -> None:

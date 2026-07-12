@@ -1450,7 +1450,9 @@ def test_launcher_debug_control_covers_collection_warmup_and_async_online(tmp_pa
     assert _override_values(plan_debug.cotrain_online_cmd, "manual_cotrain.envs_per_worker")[-1] == "4"
     assert _override_values(plan_debug.cotrain_online_cmd, "manual_cotrain.wm_envs_per_worker")[-1] == "4"
     assert _override_values(plan_debug.cotrain_online_cmd, "manual_cotrain.real_rollout_target_trajectories")[-1] == "16"
-    assert _override_values(plan_debug.cotrain_online_cmd, "manual_cotrain.wm_rollout_target_trajectories")[-1] == "24"
+    assert _override_values(plan_debug.cotrain_online_cmd, "manual_cotrain.wm_rollout_target_trajectories")[-1] == "48"
+    assert _override_values(plan_debug.cotrain_online_cmd, "actor.train_cfg.global_batch_size")[-1] == "384"
+    assert _override_values(plan_debug.cotrain_online_cmd, "actor.train_cfg.micro_batch_size")[-1] == "32"
 
 
 def test_launcher_debug_control_keeps_async_env_width_adjustable(tmp_path) -> None:
@@ -1926,7 +1928,7 @@ def test_multi_gpu_profile_limits_rollout_pressure_on_actor_gpu(tmp_path) -> Non
         in plan.cotrain_online_cmd
     )
     assert (
-        "manual_cotrain.wm_rollout_target_trajectories=256"
+        "manual_cotrain.wm_rollout_target_trajectories=1024"
         in plan.cotrain_online_cmd
     )
     assert "manual_cotrain.max_steps_per_rollout_epoch=512" in plan.cotrain_online_cmd
@@ -2355,7 +2357,7 @@ def test_multi_gpu_profile_does_not_force_async_real_rollout_actor_alignment(tmp
         in profile_plan.cotrain_online_cmd
     )
     assert (
-        "manual_cotrain.wm_rollout_target_trajectories=256"
+        "manual_cotrain.wm_rollout_target_trajectories=1024"
         in profile_plan.cotrain_online_cmd
     )
     assert not any(
@@ -2382,7 +2384,7 @@ def test_multi_gpu_profile_does_not_force_async_real_rollout_actor_alignment(tmp
         in override_plan.cotrain_online_cmd
     )
     assert (
-        "manual_cotrain.wm_rollout_target_trajectories=256"
+        "manual_cotrain.wm_rollout_target_trajectories=1024"
         not in override_plan.cotrain_online_cmd
     )
 
