@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -236,14 +235,10 @@ def load_policy(cfg: dict[str, Any], gpu_id: int | str | torch.device) -> Any:
         use_proprio=use_proprio,
         use_film=False,
         freeze_vla_backbone=True,
+        unnorm_key=str(cfg["unnorm_key"]),
     )
     policy.eval()
     policy.to(device)
-
-    # Load LIBERO-specific norm_stats from dataset_statistics.json
-    stats_path = Path(model_path) / "dataset_statistics.json"
-    with stats_path.open() as fh:
-        policy.vla.norm_stats = json.load(fh)
 
     unnorm_key = cfg["unnorm_key"]
     assert unnorm_key in policy.vla.norm_stats, (

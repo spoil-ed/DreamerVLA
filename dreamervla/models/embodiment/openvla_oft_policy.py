@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,34 @@ def _torch_dtype(name: str | torch.dtype) -> torch.dtype:
     if normalized in {"fp32", "float32"}:
         return torch.float32
     raise ValueError(f"Unsupported torch dtype: {name}")
+
+
+def _install_checkpoint_norm_stats(
+    vla: Any,
+    *,
+    model_path: str | Path,
+    unnorm_key: str,
+) -> dict[str, Any]:
+    """Replace remote-code defaults with checkpoint-specific dataset statistics."""
+
+    stats_path = Path(model_path) / "dataset_statistics.json"
+    if not stats_path.is_file():
+        raise FileNotFoundError(
+            "OpenVLA-OFT checkpoint is missing dataset statistics required for "
+            f"action unnormalization: {stats_path}"
+        )
+    with stats_path.open(encoding="utf-8") as handle:
+        norm_stats = json.load(handle)
+    if not isinstance(norm_stats, dict):
+        raise TypeError(f"OpenVLA-OFT dataset statistics must be a mapping: {stats_path}")
+    key = str(unnorm_key)
+    if key not in norm_stats:
+        raise KeyError(
+            f"OpenVLA-OFT unnorm_key {key!r} is absent from {stats_path}; "
+            f"available keys: {sorted(norm_stats)}"
+        )
+    vla.norm_stats = norm_stats
+    return norm_stats
 
 
 def _left_pad_prompt_batch(
@@ -233,6 +262,11 @@ class OpenVLAOFTPolicy(nn.Module):
             torch_dtype=dtype,
             low_cpu_mem_usage=bool(low_cpu_mem_usage),
             trust_remote_code=trust_remote_code,
+        )
+        _install_checkpoint_norm_stats(
+            vla,
+            model_path=self.model_path,
+            unnorm_key=self.unnorm_key,
         )
         vla.vision_backbone.set_num_images_in_input(self.num_images_in_input)
         loaded_token_count, loaded_token_dim = _validate_loaded_hidden_token_geometry(

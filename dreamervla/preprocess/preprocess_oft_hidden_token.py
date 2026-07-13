@@ -264,6 +264,7 @@ def _load_oft_components(args: SimpleNamespace, device: torch.device) -> dict[st
         use_proprio=False,
         use_film=False,
         freeze_vla_backbone=True,
+        unnorm_key=str(args.unnorm_key),
     )
     policy.eval()
     policy.to(device)

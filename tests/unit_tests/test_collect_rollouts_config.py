@@ -1,3 +1,5 @@
+import json
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
@@ -11,6 +13,51 @@ from dreamervla.runners.collect_parallel_rollouts import (
     _require_keys,
     _resolve_task_ids,
 )
+
+
+def test_collector_forwards_non_goal_unnorm_key_to_policy_constructor(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from dreamervla.runners.oft_collect_common import load_policy
+
+    key = "libero_object_no_noops"
+    (tmp_path / "dataset_statistics.json").write_text(
+        json.dumps({key: {"action": {}}}),
+        encoding="utf-8",
+    )
+    captured = {}
+
+    class _FakePolicy:
+        proprio_projector = None
+
+        def __init__(self, *, unnorm_key, **_kwargs):
+            captured["unnorm_key"] = unnorm_key
+            self.vla = SimpleNamespace(norm_stats={key: {"action": {}}})
+
+        def eval(self):
+            return self
+
+        def to(self, _device):
+            return self
+
+    monkeypatch.setattr(
+        "dreamervla.models.embodiment.openvla_oft_policy.OpenVLAOFTPolicy",
+        _FakePolicy,
+    )
+
+    load_policy(
+        {
+            "model_path": str(tmp_path),
+            "policy_mode": "discrete",
+            "num_images_in_input": 1,
+            "unnorm_key": key,
+            "_rank": 0,
+        },
+        "cpu",
+    )
+
+    assert captured["unnorm_key"] == key
 
 
 def test_gpu_preflight_raises_when_target_gpu_is_occupied():

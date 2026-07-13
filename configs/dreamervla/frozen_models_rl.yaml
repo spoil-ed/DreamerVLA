@@ -64,6 +64,7 @@ encoder:
   use_proprio: ${task.openvla_oft.use_proprio}
   use_film: false
   freeze_vla_backbone: true
+  unnorm_key: ${task.openvla_oft.dataset_statistics_key}
 
 task_conditioning:
   enabled: false

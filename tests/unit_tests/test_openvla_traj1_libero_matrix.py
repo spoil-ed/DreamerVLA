@@ -124,6 +124,7 @@ def test_every_mainline_route_suite_composition_has_exact_hidden_token_contract(
         assert cfg.collect.policy_mode == "discrete"
         assert cfg.collect.num_images_in_input == 1
     elif experiment.endswith("_noray"):
+        assert cfg.encoder.unnorm_key == cfg.task.openvla_oft.dataset_statistics_key
         assert cfg.world_model.token_count == 256
         assert cfg.world_model.token_dim == 4096
         assert cfg.world_model.obs_dim == 1_048_576

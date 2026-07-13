@@ -6,6 +6,7 @@ import numpy as np
 import torch
 from torch import nn
 
+from dreamervla.models.embodiment import openvla_oft_policy as oft_policy_module
 from dreamervla.models.embodiment.openvla_oft_policy import OpenVLAOFTPolicy
 
 
@@ -18,6 +19,9 @@ class _FakeVisionBackbone:
 
     def get_num_images_in_input(self) -> int:
         return 1
+
+    def set_num_images_in_input(self, num_images: int) -> None:
+        assert int(num_images) == 1
 
 
 class _FunctionalEmbedding(nn.Module):
@@ -137,6 +141,70 @@ def _policy() -> OpenVLAOFTPolicy:
     policy.action_dim = 7
     policy.time_horizon = 8
     return policy
+
+
+def test_checkpoint_dataset_statistics_replace_remote_code_defaults(tmp_path) -> None:
+    stats = {
+        "libero_goal_no_noops": {
+            "action": {"q01": [-1.0] * 7, "q99": [1.0] * 7},
+        }
+    }
+    (tmp_path / "dataset_statistics.json").write_text(
+        __import__("json").dumps(stats),
+        encoding="utf-8",
+    )
+    vla = SimpleNamespace(norm_stats={"bridge_orig": {}})
+
+    loaded = oft_policy_module._install_checkpoint_norm_stats(
+        vla,
+        model_path=tmp_path,
+        unnorm_key="libero_goal_no_noops",
+    )
+
+    assert loaded == stats
+    assert vla.norm_stats == stats
+
+
+def test_policy_constructor_installs_checkpoint_dataset_statistics(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    stats = {
+        "libero_goal_no_noops": {
+            "action": {"q01": [-0.5] * 7, "q99": [0.5] * 7},
+        }
+    }
+    (tmp_path / "dataset_statistics.json").write_text(
+        __import__("json").dumps(stats),
+        encoding="utf-8",
+    )
+    loaded_vla = _FakeVLA()
+    loaded_vla.norm_stats = {"bridge_orig": {}}
+
+    import transformers
+
+    monkeypatch.setattr(
+        transformers.AutoProcessor,
+        "from_pretrained",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            tokenizer=SimpleNamespace(vocab_size=32_000)
+        ),
+    )
+    monkeypatch.setattr(
+        transformers.AutoModelForVision2Seq,
+        "from_pretrained",
+        lambda *_args, **_kwargs: loaded_vla,
+    )
+
+    policy = OpenVLAOFTPolicy(
+        model_path=str(tmp_path),
+        token_count=256,
+        token_dim=4096,
+        use_lora=False,
+        unnorm_key="libero_goal_no_noops",
+    )
+
+    assert policy.vla.norm_stats == stats
 
 
 def test_policy_geometry_is_derived_from_the_loaded_vla() -> None:

@@ -42,6 +42,47 @@ def test_auto_mode_is_not_a_public_compatibility_alias(tmp_path: Path) -> None:
         resolve_oft_policy_mode(tmp_path, "auto")
 
 
+def test_hidden_preprocess_forwards_non_goal_unnorm_key_to_policy_constructor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key = "libero_spatial_no_noops"
+    captured: dict[str, str] = {}
+
+    class _FakePolicy:
+        def __init__(self, *, unnorm_key: str, **_kwargs: object) -> None:
+            captured["unnorm_key"] = unnorm_key
+            self.vla = SimpleNamespace()
+            self.processor = SimpleNamespace()
+
+        def eval(self):
+            return self
+
+        def to(self, _device):
+            return self
+
+    monkeypatch.setattr(
+        "dreamervla.models.embodiment.openvla_oft_policy.OpenVLAOFTPolicy",
+        _FakePolicy,
+    )
+    args = SimpleNamespace(
+        fake_oft_components=False,
+        load_in_8bit=False,
+        load_in_4bit=False,
+        oft_ckpt=str(tmp_path),
+        policy_mode="discrete",
+        num_images_in_input=1,
+        history=1,
+        image_keys=["agentview_rgb"],
+        center_crop=True,
+        unnorm_key=key,
+    )
+
+    _load_oft_components(args, torch.device("cpu"))
+
+    assert captured["unnorm_key"] == key
+
+
 def test_explicit_l1_mode_is_closed(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="L1/action-query checkpoints are closed"):
         resolve_oft_policy_mode(tmp_path, "l1")
