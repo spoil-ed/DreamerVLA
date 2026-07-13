@@ -370,6 +370,39 @@ def test_real_env_worker_attaches_rollout_sidecars_to_no_embedding_env_records()
         worker.close()
 
 
+def test_real_env_worker_converts_bfloat16_rollout_sidecars_to_numpy() -> None:
+    replay = _MemoryReplay()
+    worker = RealEnvWorker(
+        env_cfg=_no_sidecar_env_cfg(),
+        num_slots=1,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=1,
+        num_action_chunks=1,
+        task_id=0,
+        replay=replay,
+    )
+    result = replace(
+        _sidecar_rollout_result(),
+        forward_inputs={
+            "hidden": torch.full((1, 4), 7.0, dtype=torch.bfloat16),
+            "lang_emb": torch.full((2,), 3.0, dtype=torch.bfloat16),
+        },
+    )
+    try:
+        worker.init()
+        worker.bootstrap_obs()
+
+        worker.apply_rollout_result(result)
+
+        step = replay.episodes[0][0]
+        assert step["obs_embedding"].dtype == np.float32
+        assert step["lang_emb"].dtype == np.float32
+        assert step["obs_embedding"].tolist() == [7.0, 7.0, 7.0, 7.0]
+        assert step["lang_emb"].tolist() == [3.0, 3.0]
+    finally:
+        worker.close()
+
+
 def test_real_env_worker_pins_egl_for_inproc_slots(monkeypatch) -> None:
     cfg = dict(_counter_env_cfg())
     cfg["render_backend"] = "egl"

@@ -766,6 +766,8 @@ def _concat_worker_slot_shards(shards: list[TrajectoryShard]) -> TrajectoryShard
 
 def _transition_value(value: Any) -> Any:
     tensor = as_tensor(value).detach().cpu()
+    if tensor.dtype == torch.bfloat16:
+        tensor = tensor.float()
     if tensor.ndim > 0 and int(tensor.shape[0]) == 1:
         tensor = tensor.squeeze(0)
     return tensor.numpy()
