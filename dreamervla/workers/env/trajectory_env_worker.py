@@ -1297,7 +1297,7 @@ class BaseTrajectoryEnvWorker(Worker):
         )
 
     def _use_spawn_env_slots(self) -> bool:
-        if self.role != "real_env":
+        if self.role not in {"real_env", "eval_env"}:
             return False
         raw = self.env_cfg.get("spawn_env_slots", False)
         return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
@@ -1332,8 +1332,8 @@ class BaseTrajectoryEnvWorker(Worker):
         enabled = str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
         if enabled:
             raise ValueError(
-                "env_cfg.spawn_env_slots has been removed from manual cotrain; "
-                "EnvWorker slots now run in the Ray actor process."
+                "env_cfg.spawn_env_slots is supported only for real and evaluation "
+                "environment workers"
             )
 
     def bootstrap_obs(self) -> list[ObservationMsg]:

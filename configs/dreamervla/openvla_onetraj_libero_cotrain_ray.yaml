@@ -67,7 +67,9 @@ manual_cotrain:
     task_suite_name: ${task.suite}
     task_ids: ${ray_data.task_ids}
     num_episodes_per_task: 10
-    num_envs: 10
+    # Run the 100-episode evaluation as four waves of 25 CPU-rendered envs.
+    num_envs: 25
+    spawn_env_slots: true
     action_steps: ${task.openvla_oft.hidden_token.chunk_size}
     history_length: ${task.openvla_oft.hidden_token.expected_history}
     seed: ${seed}

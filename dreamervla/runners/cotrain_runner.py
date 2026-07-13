@@ -1450,6 +1450,13 @@ class CotrainRunner(BaseRunner):
         if cfg["render_backend"] != "osmesa":
             raise ValueError("resident evaluation requires OSMesa CPU rendering")
         cfg["num_envs_per_worker"] = self._eval_num_envs()
+        cfg["spawn_env_slots"] = bool(
+            OmegaConf.select(
+                self.cfg,
+                "manual_cotrain.eval_protocol.spawn_env_slots",
+                default=True,
+            )
+        )
         cfg["one_trajectory_per_rollout_epoch"] = True
         cfg["emit_actor_trajectories"] = False
         return cfg

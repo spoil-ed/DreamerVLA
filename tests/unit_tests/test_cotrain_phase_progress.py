@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
+
+from omegaconf import OmegaConf
 
 from dreamervla.runners.cotrain_runner import (
     _EvaluationProgressMonitor,
@@ -136,3 +139,53 @@ def test_eval_env_pins_osmesa_before_env_build(monkeypatch) -> None:
     worker.init()
 
     assert events[:2] == [("helper", "osmesa", 0, []), ("build", "osmesa")]
+
+
+def test_eval_env_runs_osmesa_slots_in_spawned_processes(monkeypatch) -> None:
+    events: list[tuple[Any, ...]] = []
+    worker = EvaluationEnvironmentWorker(
+        env_cfg={
+            "target": "unused",
+            "render_backend": "osmesa",
+            "spawn_env_slots": True,
+        },
+        num_slots=25,
+        rollout_epoch=4,
+        max_steps_per_rollout_epoch=304,
+        num_action_chunks=8,
+        task_ids=list(range(10)),
+    )
+
+    monkeypatch.setattr(
+        worker,
+        "_init_spawned_env_slots",
+        lambda: events.append(("spawn", worker.num_slots)),
+    )
+    monkeypatch.setattr(
+        worker,
+        "_bootstrap_wm_initial_latents_from_replay",
+        lambda: events.append(("bootstrap",)),
+    )
+    monkeypatch.setattr(
+        worker,
+        "_apply_pending_component_states",
+        lambda: events.append(("state",)),
+    )
+
+    worker.init()
+
+    assert events == [("spawn", 25), ("bootstrap",), ("state",)]
+
+
+def test_cotrain_eval_defaults_to_25_parallel_osmesa_slots() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    cfg = OmegaConf.load(
+        project_root
+        / "configs"
+        / "dreamervla"
+        / "openvla_onetraj_libero_cotrain_ray.yaml"
+    )
+
+    assert cfg.manual_cotrain.eval_protocol.render_backend == "osmesa"
+    assert cfg.manual_cotrain.eval_protocol.num_envs == 25
+    assert cfg.manual_cotrain.eval_protocol.spawn_env_slots is True
