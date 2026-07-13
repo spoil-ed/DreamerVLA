@@ -24,7 +24,7 @@ training:
 manual_cotrain:
   ngpu: 8
   global_steps: 20000
-  checkpoint_every: 500
+  checkpoint_every: 10
   save_replay_state: false
   real_env_enabled: true
   real_env_workers: 1

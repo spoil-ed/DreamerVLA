@@ -263,6 +263,15 @@ def build_launch(argv: list[str]) -> FrozenRayLaunch:
         )
     command.extend(hydra_overrides)
     training_cfg = _compose_training_config(command)
+    if bool(OmegaConf.select(training_cfg, "training.debug", default=False)):
+        for key, value in (
+            ("manual_cotrain.global_steps", "10"),
+            ("manual_cotrain.eval_interval_global_steps", "1"),
+            ("manual_cotrain.checkpoint_every", "1"),
+        ):
+            _take_override(command, key, default=value)
+            command.append(f"{key}={value}")
+        training_cfg = _compose_training_config(command)
     periodic_eval = periodic_vla_eval_spec(training_cfg)
     if periodic_eval.enabled and not _has_hydra_override(
         command,

@@ -63,6 +63,16 @@ class ManualCotrainRayRunner(BaseRunner):
 
     def __init__(self, cfg: dict[str, Any] | DictConfig) -> None:
         config = cfg if isinstance(cfg, DictConfig) else OmegaConf.create(cfg)
+        if bool(OmegaConf.select(config, "training.debug", default=False)):
+            # Periodic eval launches absolute one-step segments (1, 2, ..., 10).
+            # Preserve those smaller targets while capping an ordinary debug run.
+            if int(config.manual_cotrain.global_steps) > 10:
+                config.manual_cotrain.global_steps = 10
+            config.manual_cotrain.eval_interval_global_steps = 1
+            config.manual_cotrain.debug_eval_interval_global_steps = 1
+            config.manual_cotrain.checkpoint_every = 1
+            config.manual_cotrain.real_rollout_target_trajectories = 8
+            config.manual_cotrain.wm_rollout_target_trajectories = 256
         super().__init__(config)
         self.history: dict[str, float | int] | None = None
         self._real_rollout_episodes = 0
@@ -87,6 +97,7 @@ class ManualCotrainRayRunner(BaseRunner):
         super().teardown()
 
     def run(self) -> dict[str, float | int]:
+        self._print_training_summary()
         cluster_cfg = OmegaConf.select(self.cfg, "cluster", default=None)
         cluster = Cluster(cluster_cfg)
         try:
@@ -131,6 +142,44 @@ class ManualCotrainRayRunner(BaseRunner):
         finally:
             self._pending_manual_resume_payload = None
             cluster.shutdown()
+
+    def _print_training_summary(self) -> None:
+        visible = os.environ.get("CUDA_VISIBLE_DEVICES", "") or "<not-set>"
+        debug = bool(OmegaConf.select(self.cfg, "training.debug", default=False))
+        print(
+            "[manual-cotrain] config "
+            f"debug={str(debug).lower()} "
+            f"total_global_steps={self._global_steps()} "
+            f"eval_interval_global_steps={self._eval_interval_global_steps()} "
+            f"ngpu={self._ngpu()} visible_gpus={visible}",
+            flush=True,
+        )
+        if debug:
+            print(
+                "[manual-cotrain] debug_samples "
+                f"real_trajectories={self._real_rollout_target_trajectories()} "
+                f"imagined_trajectories={self._wm_rollout_target_trajectories()} "
+                f"max_steps={self._max_steps_per_rollout_epoch()}",
+                flush=True,
+            )
+        checkpoint_paths = {
+            "vla": OmegaConf.select(self.cfg, "init.vla_ckpt_path", default=None),
+            "world_model": OmegaConf.select(
+                self.cfg, "init.world_model_state_ckpt", default=None
+            ),
+            "classifier": OmegaConf.select(
+                self.cfg, "init.classifier_state_ckpt", default=None
+            ),
+            "warmup": OmegaConf.select(self.cfg, "init.warmup_ckpt_path", default=None),
+            "resume": OmegaConf.select(
+                self.cfg, "manual_cotrain.resume_ckpt", default=None
+            ),
+        }
+        rendered = " ".join(
+            f"{name}={value if value not in (None, '') else '<none>'}"
+            for name, value in checkpoint_paths.items()
+        )
+        print(f"[manual-cotrain] checkpoints {rendered}", flush=True)
 
     def _placement_plan(self) -> ManualCotrainPlacementPlan:
         return build_manual_cotrain_placement(

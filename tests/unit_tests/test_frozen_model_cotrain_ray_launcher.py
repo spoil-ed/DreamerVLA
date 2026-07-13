@@ -553,3 +553,30 @@ def test_wmcls_eval_recipe_enables_learner_and_uses_same_eval_protocol(
     assert cfg.replay.seed is None
     assert cfg.manual_cotrain.env_rollout_timeout_s == 5400
     assert cfg.learner is not None
+
+
+def test_wmcls_debug_oneclick_uses_ten_single_step_eval_segments(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    wm = tmp_path / "wm.ckpt"
+    classifier = tmp_path / "classifier.ckpt"
+    wm.touch()
+    _save_classifier_checkpoint(classifier)
+    monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm))
+    monkeypatch.setenv("CLASSIFIER_CKPT", str(classifier))
+    monkeypatch.setenv("COTRAIN_RUN_ROOT", str(tmp_path / "run"))
+
+    launch = build_launch(
+        [
+            "experiment=dreamervla_wmcls_cotrain_ray_eval",
+            "manual_cotrain.global_steps=20000",
+            "++training.debug=true",
+        ]
+    )
+    cfg = launcher._compose_training_config(launch.command)
+
+    assert periodic_eval.manual_cotrain_target_step(launch.command) == 10
+    assert launch.periodic_eval.interval_global_steps == 1
+    assert cfg.manual_cotrain.checkpoint_every == 1

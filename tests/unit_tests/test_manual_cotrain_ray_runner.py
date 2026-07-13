@@ -1038,6 +1038,73 @@ def test_manual_runner_does_not_mirror_real_rollout_to_eval_in_debug() -> None:
     assert not any(key.startswith("eval/") for key in metrics)
 
 
+def test_manual_runner_debug_only_overrides_requested_training_budget() -> None:
+    cfg = _cfg(
+        ngpu=8,
+        real_env_workers=1,
+        real_rollout_target_trajectories=32,
+        wm_envs_per_worker=16,
+        wm_rollout_target_trajectories=1024,
+    )
+    cfg.training.debug = True
+    cfg.manual_cotrain.global_steps = 20_000
+    cfg.manual_cotrain.eval_interval_global_steps = 10
+    cfg.manual_cotrain.debug_eval_interval_global_steps = 0
+    cfg.manual_cotrain.max_steps_per_rollout_epoch = 512
+    cfg.manual_cotrain.real_max_steps_per_rollout_epoch = 304
+    cfg.manual_cotrain.num_action_chunks = 8
+    cfg.manual_cotrain.envs_per_worker = 8
+    cfg.manual_cotrain.learner_updates_per_global_step = 128
+    cfg.manual_cotrain.learner_early_stop_patience = 16
+    cfg.actor.train_cfg.global_batch_size = 16_384
+    cfg.actor.train_cfg.micro_batch_size = 32
+
+    runner = runners.ManualCotrainRayRunner(cfg)
+
+    assert runner._global_steps() == 10
+    assert runner._eval_interval_global_steps() == 1
+    assert cfg.manual_cotrain.checkpoint_every == 1
+    assert runner._real_rollout_target_trajectories() == 8
+    assert runner._wm_rollout_target_trajectories() == 256
+    assert runner._max_steps_per_rollout_epoch() == 512
+    assert runner._real_max_steps_per_rollout_epoch() == 304
+    assert runner._envs_per_worker() == 8
+    assert runner._wm_envs_per_worker() == 16
+    assert runner._learner_updates_per_global_step() == 128
+    assert runner._learner_early_stop_patience() == 16
+    assert cfg.actor.train_cfg.global_batch_size == 16_384
+    assert cfg.actor.train_cfg.micro_batch_size == 32
+
+
+def test_manual_runner_prints_explicit_training_summary(
+    monkeypatch,
+    capsys,
+) -> None:
+    cfg = _cfg(ngpu=8)
+    cfg.training.debug = True
+    cfg.manual_cotrain.global_steps = 20_000
+    cfg.init = {
+        "vla_ckpt_path": "/checkpoints/vla",
+        "world_model_state_ckpt": "/checkpoints/wm.ckpt",
+        "classifier_state_ckpt": "/checkpoints/cls.ckpt",
+        "warmup_ckpt_path": None,
+    }
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,2,3,4,5,6,7")
+    runner = runners.ManualCotrainRayRunner(cfg)
+
+    runner._print_training_summary()
+
+    output = capsys.readouterr().out
+    assert "debug=true" in output
+    assert "total_global_steps=10" in output
+    assert "eval_interval_global_steps=1" in output
+    assert "ngpu=8" in output
+    assert "visible_gpus=0,1,2,3,4,5,6,7" in output
+    assert "vla=/checkpoints/vla" in output
+    assert "world_model=/checkpoints/wm.ckpt" in output
+    assert "classifier=/checkpoints/cls.ckpt" in output
+
+
 def _compose_train_config(*overrides: str):
     from pathlib import Path
 
@@ -1118,6 +1185,15 @@ def test_manual_cotrain_oft_backbone_experiment_composes() -> None:
     assert cfg.actor.train_cfg.micro_batch_size == 32
     assert cfg.actor.train_cfg.global_batch_size == 16384
     assert cfg.rollout.train_cfg.logprob_type == "token_level"
+
+
+def test_wmcls_production_cotrain_checkpoints_every_ten_global_steps() -> None:
+    cfg = _compose_train_config(
+        "experiment=dreamervla_wmcls_cotrain_ray_eval",
+        "task=openvla_onetraj_libero",
+    )
+
+    assert cfg.manual_cotrain.checkpoint_every == 10
 
 
 def test_manual_cotrain_oft_rollout_carries_checkpoint_num_images() -> None:
