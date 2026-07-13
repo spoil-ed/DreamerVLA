@@ -190,6 +190,15 @@ class OFTRolloutHiddenExtractor:
         for key in self._image_keys:
             self._buffers[key].clear()
 
+    def unnormalize_actions(self, normalized_actions: Any) -> np.ndarray:
+        """Map normalized actor outputs with this checkpoint's dataset statistics."""
+
+        actions = self._policy.vla._unnormalize_actions(
+            np.asarray(normalized_actions, dtype=np.float32),
+            self._unnorm_key,
+        )
+        return np.asarray(actions, dtype=np.float32)
+
     def _get_history(self, key: str, current_frame: np.ndarray) -> list[np.ndarray]:
         """Return a list of ``self._history`` frames for ``key``.
 

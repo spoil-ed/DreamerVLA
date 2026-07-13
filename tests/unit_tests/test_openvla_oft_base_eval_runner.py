@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 import torch
 from omegaconf import OmegaConf
 
@@ -93,6 +94,10 @@ def test_openvla_oft_vla_policy_eval_uses_full_checkpoint_raw_path() -> None:
     extractor = _Extractor()
 
     class _Policy:
+        # If a future policy exposes both capabilities, make_extractor remains
+        # authoritative for the complete restored VLA path.
+        requires_external_hidden_extractor = True
+
         def __init__(self) -> None:
             self.make_extractor_calls = 0
 
@@ -110,7 +115,11 @@ def test_openvla_oft_vla_policy_eval_uses_full_checkpoint_raw_path() -> None:
     runner.cfg = OmegaConf.create({})
     runner.device = torch.device("cpu")
     runner._vla_policy_eval_policy = policy
-    runner._base_oft_extractor = extractor
+    runner._configure_vla_policy_eval_encoder(
+        cfg=runner.cfg,
+        base_vla_ckpt="/tmp/unused-base-oft",
+        policy=policy,
+    )
     runner._libero_current_raw_obs = {
         "agentview_image": np.zeros((2, 2, 3), dtype=np.uint8),
         "robot0_eye_in_hand_image": np.ones((2, 2, 3), dtype=np.uint8),
@@ -133,7 +142,145 @@ def test_openvla_oft_vla_policy_eval_uses_full_checkpoint_raw_path() -> None:
 
     slot_extractor = runner._make_parallel_oft_slot_extractor()
     assert slot_extractor is extractor
-    assert policy.make_extractor_calls == 1
+    assert policy.make_extractor_calls == 2
+
+
+def test_frozen_hidden_actor_eval_uses_base_oft_extractor() -> None:
+    class _FrozenHiddenActor:
+        requires_external_hidden_extractor = True
+
+    policy = _FrozenHiddenActor()
+    adapter = object()
+    calls: list[tuple[object, str]] = []
+    runner = object.__new__(EmbodiedEvalRunner)
+    runner._build_oft_base_eval_adapter = lambda cfg, path: (
+        calls.append((cfg, path)) or adapter
+    )
+    cfg = OmegaConf.create({"task": {}})
+
+    runner._configure_vla_policy_eval_encoder(
+        cfg=cfg,
+        base_vla_ckpt="/tmp/base-oft",
+        policy=policy,
+    )
+
+    assert runner.encoder is adapter
+    assert calls == [(cfg, "/tmp/base-oft")]
+
+
+def test_vla_policy_eval_rejects_module_without_raw_input_boundary() -> None:
+    runner = object.__new__(EmbodiedEvalRunner)
+
+    with pytest.raises(TypeError, match="requires_external_hidden_extractor"):
+        runner._configure_vla_policy_eval_encoder(
+            cfg=OmegaConf.create({}),
+            base_vla_ckpt="/tmp/base-oft",
+            policy=object(),
+        )
+
+
+def test_frozen_hidden_actor_eval_decodes_restored_policy_from_base_hidden() -> None:
+    hidden = torch.arange(2 * 4, dtype=torch.float16).reshape(2, 4)
+
+    class _Extractor:
+        def __init__(self) -> None:
+            self.unnormalize_calls: list[np.ndarray] = []
+
+        def reset(self) -> None:
+            return None
+
+        def step(self, _obs, _task):
+            return SimpleNamespace(
+                action_chunk=[np.full((7,), 99.0, dtype=np.float32)],
+                hidden_state=hidden,
+            )
+
+        def unnormalize_actions(self, actions):
+            self.unnormalize_calls.append(np.asarray(actions).copy())
+            result = np.asarray(actions, dtype=np.float32).copy()
+            result[..., :6] = 0.123
+            return result
+
+    class _FrozenHiddenActor(torch.nn.Module):
+        requires_external_hidden_extractor = True
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.anchor = torch.nn.Parameter(torch.zeros(()))
+            self.calls: list[dict] = []
+
+        def forward(self, batch):
+            self.calls.append(batch)
+            action_chunk = torch.zeros((1, 2, 7), device=self.anchor.device)
+            action_chunk[:, 1, -1] = 1.0
+            return action_chunk, torch.zeros((1,), device=self.anchor.device), {}
+
+    policy = _FrozenHiddenActor()
+    runner = object.__new__(EmbodiedEvalRunner)
+    runner.cfg = OmegaConf.create({})
+    runner.device = torch.device("cpu")
+    runner._vla_policy_eval_policy = policy
+    extractor = _Extractor()
+    runner._base_oft_extractor = extractor
+    runner._vla_policy_eval_external_hidden = True
+    runner._libero_current_raw_obs = {
+        "agentview_image": np.zeros((2, 2, 3), dtype=np.uint8),
+        "robot0_eye_in_hand_image": np.ones((2, 2, 3), dtype=np.uint8),
+    }
+
+    actions = runner._generate_actions(
+        backbone=None,
+        item_processor=None,
+        frame_history=[],
+        state=np.arange(8, dtype=np.float32),
+        task_description="open the drawer",
+        action_steps=2,
+    )
+
+    assert len(policy.calls) == 1
+    call = policy.calls[0]
+    assert call["mode"] == "sample"
+    assert call["deterministic"] is True
+    assert call["return_chunk"] is True
+    torch.testing.assert_close(call["hidden"], hidden.float().unsqueeze(0))
+    assert len(actions) == 2
+    assert len(extractor.unnormalize_calls) == 1
+    np.testing.assert_allclose(actions[0][:6], 0.123)
+    assert actions[0][-1] == 1.0
+    assert actions[1][-1] == -1.0
+    assert not np.any(actions[0] == 99.0)
+
+
+def test_frozen_hidden_actor_parallel_eval_has_25_isolated_slot_extractors() -> None:
+    from dreamervla.workers.inference.oft_rollout import OFTRolloutBundle
+
+    base_policy = SimpleNamespace(use_proprio=False)
+    bundle = object.__new__(OFTRolloutBundle)
+    bundle._policy = base_policy
+    bundle._image_keys = ["agentview_rgb"]
+    bundle._history = 1
+    bundle._rotate = True
+    bundle._center_crop = True
+    bundle._unnorm_key = "libero_goal_no_noops"
+    bundle._obs_hidden_source = "hidden_token"
+
+    runner = object.__new__(EmbodiedEvalRunner)
+    runner._vla_policy_eval_policy = SimpleNamespace(
+        requires_external_hidden_extractor=True
+    )
+    runner._oft_eval_bundle = bundle
+
+    extractors = [runner._make_parallel_oft_slot_extractor() for _ in range(25)]
+
+    assert len({id(extractor) for extractor in extractors}) == 25
+    assert all(extractor._policy is base_policy for extractor in extractors)
+    frame = np.zeros((2, 2, 3), dtype=np.uint8)
+    extractors[0]._buffers["agentview_rgb"].append(frame)
+    assert len(extractors[0]._buffers["agentview_rgb"]) == 1
+    assert all(
+        len(extractor._buffers["agentview_rgb"]) == 0
+        for extractor in extractors[1:]
+    )
 
 
 def test_vla_policy_checkpoint_kind_dispatches_without_world_model(

@@ -382,6 +382,34 @@ class EmbodiedEvalRunner(
             return None
         return bundle.make_extractor()
 
+    def _configure_vla_policy_eval_encoder(
+        self,
+        *,
+        cfg: DictConfig,
+        base_vla_ckpt: str,
+        policy: torch.nn.Module,
+    ) -> None:
+        """Bind raw LIBERO observations to the restored policy's input boundary."""
+
+        make_extractor = getattr(policy, "make_extractor", None)
+        if callable(make_extractor):
+            extractor = make_extractor()
+            self._base_oft_extractor = extractor
+            self._oft_eval_bundle = None
+            self._vla_policy_eval_external_hidden = False
+            self.encoder = _OFTBaseEvalAdapter(extractor)
+            return
+
+        if bool(getattr(policy, "requires_external_hidden_extractor", False)):
+            self._vla_policy_eval_external_hidden = True
+            self.encoder = self._build_oft_base_eval_adapter(cfg, base_vla_ckpt)
+            return
+
+        raise TypeError(
+            "VLA-policy checkpoint module must implement make_extractor() or "
+            "declare requires_external_hidden_extractor"
+        )
+
     @property
     def _action_token_id(self) -> int:
         """Action-token id used for all token insertions (X-03; adjustable)."""
@@ -549,12 +577,11 @@ class EmbodiedEvalRunner(
         ckpt_path: str,
         payload: dict[str, Any],
     ) -> list[dict[str, Any]]:
-        """Evaluate the complete restored OpenVLA policy on raw LIBERO input.
+        """Evaluate a restored policy checkpoint on raw LIBERO input.
 
-        ``state_dicts.policy`` contains the trainable input encoder and native
-        projected-token-to-action decoder.  Evaluation must use the extractor
-        created by this restored policy; using a separately loaded base VLA
-        encoder would put the actor in a stale hidden-token space.
+        Full OpenVLA policies own their raw-input extractor.  The isolated
+        frozen-model feasibility route instead restores a hidden-token actor,
+        so evaluation composes it with the unchanged base OFT extractor.
         """
 
         state_dicts = payload.get("state_dicts", {})
@@ -626,13 +653,11 @@ class EmbodiedEvalRunner(
         self._load_module_state(policy, dict(policy_state), "policy")
         policy.eval()
         self._vla_policy_eval_policy = policy
-        make_extractor = getattr(policy, "make_extractor", None)
-        if not callable(make_extractor):
-            raise TypeError("VLA-policy checkpoint module must implement make_extractor()")
-        extractor = make_extractor()
-        self._base_oft_extractor = extractor
-        self._oft_eval_bundle = None
-        self.encoder = _OFTBaseEvalAdapter(extractor)
+        self._configure_vla_policy_eval_encoder(
+            cfg=train_cfg,
+            base_vla_ckpt=base_vla_ckpt,
+            policy=policy,
+        )
         self._setup_cotrain_eval_observer(
             cfg=train_cfg,
             payload=payload,
@@ -1707,7 +1732,63 @@ class EmbodiedEvalRunner(
             obs = self._oft_base_eval_obs_from_libero_raw(raw_obs, state)
             decoded = oft_extractor.step(obs, task_description)
             vla_policy = getattr(self, "_vla_policy_eval_policy", None)
-            if vla_policy is not None:
+            if vla_policy is not None and bool(
+                getattr(self, "_vla_policy_eval_external_hidden", False)
+            ):
+                hidden = getattr(decoded, "hidden_state", None)
+                if not isinstance(hidden, torch.Tensor):
+                    raise TypeError(
+                        "external-hidden VLA-policy eval requires extractor hidden_state"
+                    )
+                if hidden.ndim == 2:
+                    hidden = hidden.unsqueeze(0)
+                elif hidden.ndim != 3:
+                    raise ValueError(
+                        "extractor hidden_state must be [N,D] or [B,N,D], got "
+                        f"{tuple(hidden.shape)}"
+                    )
+                try:
+                    policy_parameter = next(vla_policy.parameters())
+                except StopIteration:
+                    policy_parameter = None
+                policy_device = (
+                    policy_parameter.device if policy_parameter is not None else self.device
+                )
+                policy_dtype = (
+                    policy_parameter.dtype
+                    if policy_parameter is not None and policy_parameter.is_floating_point()
+                    else torch.float32
+                )
+                with torch.no_grad():
+                    action_chunk_tensor, _, _ = vla_policy(
+                        {
+                            "mode": "sample",
+                            "hidden": hidden.to(
+                                device=policy_device,
+                                dtype=policy_dtype,
+                            ),
+                            "deterministic": True,
+                            "return_chunk": True,
+                        }
+                    )
+                action_chunk_raw = (
+                    action_chunk_tensor.detach().cpu().float().numpy()
+                )
+                action_chunk_raw = action_chunk_raw.reshape(
+                    -1, action_chunk_raw.shape[-1]
+                )
+                unnormalize_actions = getattr(
+                    oft_extractor,
+                    "unnormalize_actions",
+                    None,
+                )
+                if not callable(unnormalize_actions):
+                    raise TypeError(
+                        "external-hidden VLA-policy eval requires checkpoint-specific "
+                        "extractor action unnormalization"
+                    )
+                action_chunk = unnormalize_actions(action_chunk_raw)
+            elif vla_policy is not None:
                 # ``oft_extractor`` is minted by the restored policy itself in
                 # the vla_policy route, so this action already traversed the
                 # updated encoder and updated native actor exactly once.

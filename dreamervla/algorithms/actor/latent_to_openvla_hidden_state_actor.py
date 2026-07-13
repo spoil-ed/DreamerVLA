@@ -18,6 +18,11 @@ logger = logging.getLogger(__name__)
 class LatentToOpenVLAHiddenStateActor(BaseActor):
     """Bridge ``[B,256,4096]`` hidden tokens to internal action slots."""
 
+    # Raw-image preprocessing remains owned by the frozen OpenVLA-OFT
+    # checkpoint.  Standalone evaluators use this narrow capability marker to
+    # compose that extractor with this restored hidden-token actor.
+    requires_external_hidden_extractor = True
+
     def __init__(
         self,
         hidden_dim: int | None = None,

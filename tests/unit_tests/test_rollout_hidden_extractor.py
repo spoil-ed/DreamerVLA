@@ -90,6 +90,33 @@ def test_history_buffer_is_single_frame_on_mainline() -> None:
     assert len(second_history) == 1 and np.array_equal(second_history[0], second)
 
 
+def test_extractor_unnormalizes_with_checkpoint_policy_stats() -> None:
+    calls = []
+
+    class _VLA:
+        @staticmethod
+        def _unnormalize_actions(actions, unnorm_key):
+            calls.append((np.asarray(actions).copy(), unnorm_key))
+            return np.asarray(actions) + 3.0
+
+    class _Policy(_MinimalPolicy):
+        vla = _VLA()
+
+    extractor = OFTRolloutHiddenExtractor(
+        _Policy(),
+        image_keys=["agentview_rgb"],
+        history=1,
+        unnorm_key="libero_goal_no_noops",
+    )
+    normalized = np.zeros((2, 7), dtype=np.float32)
+
+    actual = extractor.unnormalize_actions(normalized)
+
+    assert calls[0][1] == "libero_goal_no_noops"
+    np.testing.assert_array_equal(calls[0][0], normalized)
+    np.testing.assert_array_equal(actual, np.full((2, 7), 3.0, dtype=np.float32))
+
+
 def test_hidden_token_accepts_only_canonical_projected_shape() -> None:
     projected = torch.zeros(2, TOKEN_COUNT, TOKEN_DIM)
     projected[:, -1, -1] = 7
