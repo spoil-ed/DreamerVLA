@@ -42,6 +42,7 @@ bash scripts/preprocess/35_oft_hidden_token.sh
 Use the cold-start cotrain launcher or the full-replay WM warmup script:
 
 ```bash
-bash scripts/e2e_coldstart_warmup_cotrain_ray.sh task=goal ngpu=8 profile=multi_gpu
+bash scripts/experiments/cotrain/train.sh
+bash scripts/experiments/cotrain/eval.sh eval.ckpt_path=/path/to/checkpoint
 bash scripts/experiments/world_model_training/train.sh
 ```

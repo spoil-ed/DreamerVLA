@@ -1189,7 +1189,7 @@ def test_manual_cotrain_oft_backbone_experiment_composes() -> None:
 
 def test_wmcls_production_cotrain_checkpoints_every_ten_global_steps() -> None:
     cfg = _compose_train_config(
-        "experiment=dreamervla_wmcls_cotrain_ray_eval",
+        "experiment=dreamervla_wmcls_cotrain_ray",
         "task=openvla_onetraj_libero",
     )
 

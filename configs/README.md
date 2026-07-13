@@ -44,15 +44,13 @@ backend with `logger=tensorboard` / `logger=wandb`.
 
 | Stage | Script | Default Config |
 | --- | --- | --- |
-| Ray cold-start cotrain | `scripts/e2e_coldstart_warmup_cotrain_ray.sh` | `configs/scripts/coldstart_warmup_cotrain.yaml` |
-| Sync cold-start cotrain | `scripts/e2e_coldstart_warmup_cotrain_noray.sh` | `configs/scripts/coldstart_warmup_cotrain.yaml` |
-| Manual async cotrain | `scripts/e2e_manual_cotrain_async.sh` | `openvla_onetraj_libero_cotrain_ray` |
+| Trainable WM/CLS cotrain | `scripts/experiments/cotrain/train.sh` | `dreamervla_wmcls_cotrain_ray` |
+| Cotrain policy eval | `scripts/experiments/cotrain/eval.sh` | `eval_cotrain` |
 | Official-data WM upper bound | `scripts/experiments/world_model_training/train.sh` | `wm_official_upper_bound` |
 | Bounded WM timing profile | `scripts/experiments/world_model_training/profile.sh` | `wm_official_upper_bound_profile` |
 | Official-data classifier upper bound | `scripts/experiments/classifier_training/train.sh` | `classifier_official_upper_bound` |
-| Eight-GPU frozen WM/CLS policy training | `scripts/e2e_frozen_model_cotrain.sh` | `dreamervla_frozen_models_rl_ray` |
-| Pre-mainline frozen-model proof | `scripts/e2e_frozen_model_pre_mainline.sh` | `configs/scripts/frozen_model_pre_mainline.yaml` |
-| LIBERO eval | `scripts/eval_libero_vla.sh` | `eval_libero_vla` |
+| Cold-start collect/warmup pipeline | `python -m dreamervla.launchers.coldstart_warmup_cotrain` | `configs/scripts/coldstart_warmup_cotrain.yaml` |
+| Pre-mainline frozen-model proof | `python -m dreamervla.launchers.frozen_model_pre_mainline` | `configs/scripts/frozen_model_pre_mainline.yaml` |
 
 ## Experiments
 

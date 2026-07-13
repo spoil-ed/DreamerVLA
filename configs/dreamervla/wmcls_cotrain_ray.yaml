@@ -1,5 +1,5 @@
 # @package _global_
-# Staged full-policy cotrain with trainable WM/CLS.  Every global step collects
+# Staged full-policy cotrain with trainable WM/CLS. Every global step collects
 # fresh real trajectories, updates the native OpenVLA encoder, replaces replay,
 # refits WM/CLS in the new token space, then runs imagined-only PPO.
 defaults:
@@ -14,7 +14,7 @@ cluster:
   component_placement: null
 
 training:
-  out_dir: ${oc.env:RUN_ROOT,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/pre_mainline/wmcls_cotrain_ray_eval/${now:%Y%m%d_%H%M%S}}
+  out_dir: ${oc.env:RUN_ROOT,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/pre_mainline/wmcls_cotrain_ray/${now:%Y%m%d_%H%M%S}}
   device: cuda
   distributed_strategy: single
   resume: false
@@ -34,14 +34,9 @@ manual_cotrain:
   wm_rollout_lease_epochs: 1
   max_steps_per_rollout_epoch: 512
   wm_envs_per_worker: 16
-  # The staged route treats every policy update as one complete causal
-  # transaction. Its fixed 100-trajectory read-only eval runs every 10 steps.
-  eval_interval_global_steps: 10
-  eval_initial_global_step: true
+  eval_interval_global_steps: 0
+  eval_initial_global_step: false
   eval_protocol:
-    # 100 fixed episodes / 25 CPU OSMesa workers = four exact epochs. This
-    # consumes a modest share of a 192-logical-CPU node while leaving headroom
-    # for colocated jobs; callers can still override it explicitly.
     num_envs: 25
 
 replay:
@@ -55,7 +50,7 @@ replay:
     replay_sampling:
       enabled: false
   # Warm checkpoints initialise WM/CLS weights, but no old trajectory survives
-  # into a staged step.  replace_real_trajectories() installs exactly the 32
+  # into a staged step. replace_real_trajectories() installs exactly the 32
   # current-policy real trajectories before either learner is called.
   seed: null
 

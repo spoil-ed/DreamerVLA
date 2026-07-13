@@ -23,20 +23,20 @@ bash scripts/download_assets.sh download.openvla_one_traj=true only=[30_openvla_
 bash scripts/download_assets.sh only=[40_libero_dataset] env.LIBERO_SUITES=libero_goal
 
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-  bash scripts/e2e_coldstart_warmup_cotrain_ray.sh \
-  task=goal ngpu=8 profile=multi_gpu render_backend=osmesa
+  bash scripts/experiments/cotrain/train.sh
+
+bash scripts/experiments/cotrain/eval.sh \
+  eval.ckpt_path=/path/to/manual_cotrain.ckpt
 ```
 
 For the independent official-data upper-bound jobs:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-  GPU_COUNT=8 \
   DVLA_DATA_ROOT=/path/to/data \
   bash scripts/experiments/world_model_training/train.sh
 
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-  GPU_COUNT=8 \
   DVLA_DATA_ROOT=/path/to/data \
   bash scripts/experiments/classifier_training/train.sh
 ```
@@ -50,7 +50,7 @@ proof route is intentionally `libero_goal`-only:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-  bash scripts/e2e_frozen_model_pre_mainline.sh task=goal ngpu=8
+  python -m dreamervla.launchers.frozen_model_pre_mainline task=goal ngpu=8
 ```
 
 It then evaluates the unmodified one-trajectory OpenVLA-OFT checkpoint and the
@@ -66,12 +66,10 @@ to inspect commands. This test does not replace the
 1. Install the environment with `scripts/install_env.sh`.
 2. Download OpenVLA-OFT one-trajectory checkpoints and LIBERO data with
    `scripts/download_assets.sh`.
-3. Collect rollout shards with `scripts/e2e_coldstart_warmup_cotrain_ray.sh`
-   or `scripts/e2e_coldstart_warmup_cotrain_noray.sh`.
-4. Warm up the world model and classifier from collected replay.
-5. Continue with online cotrain when `online_rollout.total_env_steps` is raised
-   above zero.
-6. Evaluate with `scripts/eval_libero_vla.sh`.
+3. Train with `scripts/experiments/cotrain/train.sh`; WM/CLS use random
+   initialization unless both warm-start checkpoints are supplied.
+4. Evaluate an explicit policy checkpoint with
+   `scripts/experiments/cotrain/eval.sh`.
 
 ## Repository Layout
 
@@ -92,24 +90,27 @@ docs/               documentation index, references, tutorials, reports, papers
 | Install | `bash scripts/install_env.sh` |
 | Download OpenVLA-OFT one-trajectory | `bash scripts/download_assets.sh download.openvla_one_traj=true only=[30_openvla_oft_one_trajectory]` |
 | Download LIBERO | `bash scripts/download_assets.sh only=[40_libero_dataset] env.LIBERO_SUITES=libero_goal` |
-| Ray cold-start cotrain | `bash scripts/e2e_coldstart_warmup_cotrain_ray.sh task=goal ngpu=8 profile=multi_gpu render_backend=osmesa` |
-| Sync cold-start cotrain | `bash scripts/e2e_coldstart_warmup_cotrain_noray.sh task=goal ngpu=8 profile=multi_gpu render_backend=osmesa` |
+| WM/CLS cotrain | `bash scripts/experiments/cotrain/train.sh` |
 | Full-dataset WM warmup | `bash scripts/experiments/world_model_training/train.sh` |
-| Pre-mainline frozen WM/CLS policy test | `bash scripts/e2e_frozen_model_pre_mainline.sh task=goal ngpu=8` |
-| Eval | `bash scripts/eval_libero_vla.sh gpus=0 eval.ckpt_path=<ckpt> eval.ckpt_kind=auto` |
+| Pre-mainline frozen WM/CLS policy test | `python -m dreamervla.launchers.frozen_model_pre_mainline task=goal ngpu=8` |
+| Cotrain eval | `bash scripts/experiments/cotrain/eval.sh eval.ckpt_path=<ckpt>` |
 
 Common overrides:
 
 ```bash
 DVLA_DATA_ROOT=data
-bash scripts/e2e_coldstart_warmup_cotrain_ray.sh \
-  task=goal ngpu=8 profile=multi_gpu render_backend=osmesa
+bash scripts/experiments/cotrain/train.sh \
+  manual_cotrain.global_steps=20000
 bash scripts/experiments/world_model_training/train.sh \
   training.out_dir="${DVLA_DATA_ROOT}/outputs/wm_full_dataset_train/run"
 ```
 
 `DVLA_DATA_ROOT` is independent of `DVLA_ROOT`; use a separate disk or shared
 storage path when that is more convenient.
+
+Shell entrypoints do not define training or evaluation defaults. Their launcher
+configs under `configs/scripts/` select complete recipes under
+`configs/experiment/`; use Hydra `key=value` overrides for changes.
 
 ## Config Fields
 

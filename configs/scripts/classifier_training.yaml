@@ -1,0 +1,27 @@
+name: classifier_training
+experiment: classifier_official_upper_bound
+data_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}
+python: python
+dry_run: false
+print_config: false
+distributed: true
+write_libero_config: true
+task: null
+gpus: null
+ngpu: 8
+master_port: 29501
+batch_size: null
+num_workers: null
+max_steps: null
+num_epochs: null
+out_dir: null
+run_tag: null
+env:
+  PYTHONUNBUFFERED: 1
+  OMP_NUM_THREADS: 8
+  MALLOC_ARENA_MAX: 4
+  CUDA_MODULE_LOADING: LAZY
+  PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+  NCCL_NVLS_ENABLE: 0
+  NCCL_DEBUG: WARN
+  TORCH_NCCL_ASYNC_ERROR_HANDLING: 1

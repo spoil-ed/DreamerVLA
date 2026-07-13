@@ -57,8 +57,8 @@ def test_frozen_ray_launcher_builds_one_command_for_eight_gpus(
         in launch.command
     )
     assert f"training.out_dir={json.dumps(str(run_root.resolve()))}" in launch.command
-    assert "manual_cotrain.ngpu=8" in launch.command
-    assert "cluster.num_gpus=8" in launch.command
+    assert "manual_cotrain.ngpu=8" not in launch.command
+    assert "cluster.num_gpus=8" not in launch.command
     assert "algorithm.lumos.classifier_threshold=0.45" in launch.command
     assert launch.command[-1] == "manual_cotrain.global_steps=12"
     assert launch.resume is False
@@ -99,7 +99,7 @@ def test_frozen_ray_launcher_quotes_hydra_checkpoint_paths_containing_equals(
     "experiment",
     [
         "dreamervla_frozen_models_rl_ray_eval",
-        "dreamervla_wmcls_cotrain_ray_eval",
+        "dreamervla_wmcls_cotrain_ray",
     ],
 )
 def test_frozen_ray_launcher_resume_is_one_composable_command_with_policy_checkpoint(
@@ -295,6 +295,44 @@ def test_frozen_ray_launcher_requires_explicit_checkpoint_assignments(
         build_launch([])
 
 
+def test_wmcls_train_launcher_uses_random_components_when_pair_is_absent(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("WORLD_MODEL_CKPT", raising=False)
+    monkeypatch.delenv("CLASSIFIER_CKPT", raising=False)
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.setenv("COTRAIN_RUN_ROOT", str(tmp_path / "run"))
+
+    launch = build_launch(["experiment=dreamervla_wmcls_cotrain_ray"])
+    cfg = launcher._compose_training_config(launch.command)
+
+    assert not any(
+        item.startswith("init.world_model_state_ckpt=") for item in launch.command
+    )
+    assert not any(
+        item.startswith("init.classifier_state_ckpt=") for item in launch.command
+    )
+    assert launch.periodic_eval.enabled is False
+    assert cfg.manual_cotrain.learner_updates_enabled is True
+
+
+def test_wmcls_train_launcher_rejects_partial_component_pair(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    wm = tmp_path / "wm.ckpt"
+    wm.touch()
+    monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm))
+    monkeypatch.delenv("CLASSIFIER_CKPT", raising=False)
+
+    with pytest.raises(
+        ValueError,
+        match="both WORLD_MODEL_CKPT and CLASSIFIER_CKPT",
+    ):
+        build_launch(["experiment=dreamervla_wmcls_cotrain_ray"])
+
+
 def test_frozen_ray_periodic_eval_schedule_is_step_zero_then_strict_tens() -> None:
     assert launcher.periodic_eval_steps(
         start_step=0,
@@ -473,7 +511,7 @@ def test_learned_wmcls_policy_eval_enables_fixed_read_only_diagnostics(
 @pytest.mark.parametrize(
     "experiment",
     [
-        "dreamervla_wmcls_cotrain_ray_eval",
+        "dreamervla_wmcls_cotrain_ray",
         "dreamervla_frozen_models_rl_ray_eval",
     ],
 )
@@ -521,7 +559,7 @@ def test_periodic_eval_resume_segment_composes_for_supported_recipe_schemas(
     ) == 1
 
 
-def test_wmcls_eval_recipe_enables_learner_and_uses_same_eval_protocol(
+def test_wmcls_train_recipe_enables_learner_without_periodic_eval(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -536,14 +574,14 @@ def test_wmcls_eval_recipe_enables_learner_and_uses_same_eval_protocol(
 
     launch = build_launch(
         [
-            "experiment=dreamervla_wmcls_cotrain_ray_eval",
+            "experiment=dreamervla_wmcls_cotrain_ray",
             "manual_cotrain.global_steps=20",
         ]
     )
     cfg = launcher._compose_training_config(launch.command)
 
-    assert launch.periodic_eval.interval_global_steps == 10
-    assert launch.periodic_eval.include_initial is True
+    assert launch.periodic_eval.interval_global_steps == 0
+    assert launch.periodic_eval.include_initial is False
     assert launch.periodic_eval.num_envs == 25
     assert cfg.manual_cotrain.learner_updates_enabled is True
     assert cfg.manual_cotrain.staged_policy_update is True
@@ -555,7 +593,7 @@ def test_wmcls_eval_recipe_enables_learner_and_uses_same_eval_protocol(
     assert cfg.learner is not None
 
 
-def test_wmcls_debug_oneclick_uses_ten_single_step_eval_segments(
+def test_wmcls_debug_train_keeps_periodic_eval_disabled(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -570,7 +608,7 @@ def test_wmcls_debug_oneclick_uses_ten_single_step_eval_segments(
 
     launch = build_launch(
         [
-            "experiment=dreamervla_wmcls_cotrain_ray_eval",
+            "experiment=dreamervla_wmcls_cotrain_ray",
             "manual_cotrain.global_steps=20000",
             "++training.debug=true",
         ]
@@ -578,5 +616,6 @@ def test_wmcls_debug_oneclick_uses_ten_single_step_eval_segments(
     cfg = launcher._compose_training_config(launch.command)
 
     assert periodic_eval.manual_cotrain_target_step(launch.command) == 10
-    assert launch.periodic_eval.interval_global_steps == 1
+    assert launch.periodic_eval.interval_global_steps == 0
+    assert launch.periodic_eval.include_initial is False
     assert cfg.manual_cotrain.checkpoint_every == 1

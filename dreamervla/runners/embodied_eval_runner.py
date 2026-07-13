@@ -6,7 +6,7 @@ code path for LIBERO success-rate measurement.
 
 Typical use:
 
-  bash scripts/eval_libero_vla.sh \\
+  python -m dreamervla.launchers.train --config-name eval_libero_vla \\
     eval.ckpt_path=data/outputs/vla/<run>/checkpoints/latest.ckpt \\
     eval.task_suite_name=libero_goal \\
     eval.num_episodes_per_task=10
@@ -1295,7 +1295,7 @@ class EmbodiedEvalRunner(
             return {}
         if self.distributed.uses_fsdp:
             print(
-                "  [Eval] Skipping online_latent eval under FSDP. Use scripts/eval_libero_vla.sh."
+                "  [Eval] Skipping online_latent eval under FSDP. Use the eval_libero_vla Python launcher."
             )
             return {}
 

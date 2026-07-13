@@ -2,6 +2,12 @@
 
 **Date:** 2026-07-13
 
+> Scope correction: the classifier-training, single-trajectory-overfit, and
+> world-model-training experiment scripts are retained. Experiment shell files
+> now contain no parameter defaults; Hydra configs own those values, and cotrain
+> eval receives `eval.ckpt_path=<checkpoint>` as a Hydra override. The older
+> surface and `COTRAIN_CKPT` details below are superseded.
+
 ## Context
 
 DreamerVLA currently exposes many top-level and experiment-specific shell

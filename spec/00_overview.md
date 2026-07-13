@@ -30,11 +30,11 @@ collect rollouts -> seed replay/data -> warm up world model + classifier -> onli
 当前主线围绕 OpenVLA-OFT one-trajectory cold start：
 
 ```text
-scripts/e2e_coldstart_warmup_cotrain_noray.sh
-scripts/e2e_coldstart_warmup_cotrain_ray.sh
+python -m dreamervla.launchers.coldstart_warmup_cotrain mode=noray
+python -m dreamervla.launchers.coldstart_warmup_cotrain mode=ray
 ```
 
-这两个脚本调用 `python -m dreamervla.launchers.coldstart_warmup_cotrain`。launcher 根据
+launcher 根据
 `configs/scripts/coldstart_warmup_cotrain.yaml` 生成 collection 和 cotrain 阶段命令。
 
 ## Stable Boundaries

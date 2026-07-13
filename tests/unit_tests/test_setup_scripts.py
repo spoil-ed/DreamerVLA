@@ -16,7 +16,7 @@ def _project_root() -> Path:
 def test_script_python_module_entrypoints_are_importable() -> None:
     root = _project_root()
     script_paths = sorted((root / "scripts" / "preprocess").glob("*.sh"))
-    script_paths.extend(sorted((root / "scripts" / "experiments").glob("*.sh")))
+    script_paths.extend(sorted((root / "scripts" / "experiments").rglob("*.sh")))
 
     missing: list[str] = []
     for path in script_paths:
@@ -87,14 +87,9 @@ def _write_hdf5_reward_repair_python_stub(path: Path) -> None:
 
 def test_release_shell_entrypoints_are_self_contained() -> None:
     root = _project_root()
-    libero_entrypoints = (
-        "scripts/train_dreamervla.sh",
-        "scripts/eval_libero_vla.sh",
+    release_entrypoints = (
         "scripts/preprocess_libero.sh",
         "scripts/preprocess/prepare_libero_data.sh",
-    )
-    release_entrypoints = (
-        *libero_entrypoints,
         "scripts/download_assets.sh",
         "scripts/install_env.sh",
         "scripts/preprocess/process_all_libero_data.sh",
@@ -106,13 +101,18 @@ def test_release_shell_entrypoints_are_self_contained() -> None:
         assert "DVLA_ROOT" in text, relpath
         assert "DVLA_DATA_ROOT" in text, relpath
 
-    for relpath in (
-        "scripts/train_dreamervla.sh",
-        "scripts/eval_libero_vla.sh",
-    ):
-        text = (root / relpath).read_text(encoding="utf-8")
-        assert "dreamervla.launchers.train" in text, relpath
-        assert "LIBERO_CONFIG_PATH=" not in text, relpath
+    train_text = (root / "scripts/experiments/cotrain/train.sh").read_text(
+        encoding="utf-8"
+    )
+    eval_text = (root / "scripts/experiments/cotrain/eval.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "dreamervla.launchers.frozen_model_cotrain_ray" in train_text
+    assert "dreamervla.launchers.train" in eval_text
+    assert "DVLA_ROOT" not in train_text
+    assert "DVLA_DATA_ROOT" not in train_text
+    assert "DVLA_ROOT" not in eval_text
+    assert "DVLA_DATA_ROOT" not in eval_text
     launcher_text = (root / "dreamervla" / "launchers" / "train.py").read_text(encoding="utf-8")
     assert "LIBERO_CONFIG_PATH" in launcher_text
     assert "datasets: {data_root}/datasets/libero" in launcher_text
@@ -848,31 +848,23 @@ def test_release_scripts_tree_is_curated() -> None:
 
     assert top_level_files == {
         "README.md",
-        "check_ray.sh",
-        "collect_parallel.sh",
         "download_assets.sh",
-        "e2e_coldstart_warmup_cotrain_noray.sh",
-        "e2e_coldstart_warmup_cotrain_ray.sh",
-        "e2e_frozen_model_cotrain.sh",
-        "e2e_frozen_model_cotrain_eval.sh",
-        "e2e_frozen_model_pre_mainline.sh",
-        "e2e_manual_cotrain_async.sh",
-        "e2e_wmcls_cotrain_eval.sh",
-        "e2e_wmcls_cotrain_eval_oneclick.sh",
-        "eval_libero_vla.sh",
         "install_env.sh",
         "preprocess_libero.sh",
-        "run_wandb_relay_sync.sh",
-        "start_ray.sh",
-        "train_dreamervla.sh",
     }
     assert top_level_dirs == {
         "download",
-        "eval",
         "experiments",
         "install",
         "preprocess",
     }
+    assert sorted(path.name for path in (scripts / "experiments").iterdir()) == [
+        "classifier_training",
+        "cotrain",
+        "single_trajectory_overfit",
+        "world_model_training",
+    ]
+    assert len(list(scripts.rglob("*.sh"))) == 29
     gitignore = (root / ".gitignore").read_text(encoding="utf-8")
     assert "__pycache__/" in gitignore
     assert "*.pyc" in gitignore
@@ -915,18 +907,8 @@ def test_active_shell_scripts_use_hydra_overrides_for_dreamervla_modules() -> No
         "--nproc-per-node",
         "--standalone",
     }
-    allowed_by_script = {
-        "scripts/run_wandb_relay_sync.sh": {
-            "--dry-run",
-            "--interval",
-            "--lock-file",
-            "--log-file",
-            "--once",
-            "--wandb-bin",
-            "--wandb-dir",
-            "--wandb-entity",
-            "--wandb-project",
-        }
+    allowed_by_script: dict[str, set[str]] = {
+        "scripts/experiments/single_trajectory_overfit/train.sh": {"--run"},
     }
     offenders: dict[str, list[str]] = {}
 
@@ -951,7 +933,7 @@ def test_active_shell_scripts_use_hydra_overrides_for_dreamervla_modules() -> No
 def test_training_launchers_do_not_nest_out_dir_default_expansion() -> None:
     root = _project_root()
     launchers = [
-        root / "scripts" / "train_dreamervla.sh",
+        root / "scripts" / "experiments" / "cotrain" / "train.sh",
     ]
     offenders = [
         str(path.relative_to(root))

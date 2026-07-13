@@ -86,7 +86,9 @@ def test_docs_and_smoke_script_do_not_point_at_removed_entrypoints() -> None:
 
     readme = (project_root / "README.md").read_text(encoding="utf-8")
     scripts_readme = (project_root / "scripts" / "README.md").read_text(encoding="utf-8")
-    eval_script = (project_root / "scripts" / "eval_libero_vla.sh").read_text(encoding="utf-8")
+    eval_script = (
+        project_root / "scripts" / "experiments" / "cotrain" / "eval.sh"
+    ).read_text(encoding="utf-8")
 
     assert "eval_wm.sh" not in readme
     assert "pretokenize_sft_wm_vla_smoke" not in scripts_readme
@@ -94,7 +96,7 @@ def test_docs_and_smoke_script_do_not_point_at_removed_entrypoints() -> None:
     assert "dreamervla.launchers.train" in eval_script
 
 
-def test_frozen_model_route_is_documented_as_pre_mainline_only() -> None:
+def test_cotrain_train_and_eval_entrypoints_are_documented() -> None:
     project_root = Path(__file__).resolve().parents[2]
     agents = (project_root / "AGENTS.md").read_text(encoding="utf-8")
     readme = (project_root / "README.md").read_text(encoding="utf-8")
@@ -102,23 +104,13 @@ def test_frozen_model_route_is_documented_as_pre_mainline_only() -> None:
     config_registry = (project_root / "configs" / "README.md").read_text(
         encoding="utf-8"
     )
-    routes = (project_root / "spec" / "06_routes.md").read_text(encoding="utf-8")
     scripts = (project_root / "scripts" / "README.md").read_text(encoding="utf-8")
 
-    command = "scripts/e2e_frozen_model_pre_mainline.sh"
-    experiment = "dreamervla_frozen_models_rl"
-    for text in (agents, readme, readme_zh, config_registry, routes, scripts):
-        assert command in text
-    for text in (agents, config_registry, routes):
-        assert experiment in text
-    assert "pre-mainline" in agents.lower()
-    assert "pre-mainline" in readme.lower()
-    assert "主线前" in readme_zh
-    assert "预主线" in routes
-    assert (
-        "collect rollouts -> seed replay -> warm up world model + success classifier -> online cotrain"
-        in agents
-    )
+    train = "scripts/experiments/cotrain/train.sh"
+    evaluate = "scripts/experiments/cotrain/eval.sh"
+    for text in (agents, readme, readme_zh, config_registry, scripts):
+        assert train in text
+        assert evaluate in text
 
 
 def test_openvla_mainline_uses_only_hidden_token_public_names() -> None:
@@ -140,7 +132,6 @@ def test_openvla_mainline_uses_only_hidden_token_public_names() -> None:
         project_root / "dreamervla" / "runners" / "rollout_hidden_extractor.py",
         project_root / "dreamervla" / "runners" / "embodied_eval_runner.py",
         project_root / "dreamervla" / "preprocess" / "preprocess_oft_hidden_token.py",
-        project_root / "scripts" / "collect_parallel.sh",
         project_root / "scripts" / "preprocess" / "35_oft_hidden_token.sh",
     ]
     globbed_paths = [
@@ -296,8 +287,8 @@ def test_readme_documents_current_cotrain_entrypoints() -> None:
     project_root = Path(__file__).resolve().parents[2]
     readme = (project_root / "README.md").read_text(encoding="utf-8")
 
-    assert "e2e_coldstart_warmup_cotrain_ray.sh" in readme
-    assert "scripts/experiments/world_model_training/train.sh" in readme
+    assert "scripts/experiments/cotrain/train.sh" in readme
+    assert "scripts/experiments/cotrain/eval.sh" in readme
     assert "train_wm.sh" not in readme
     assert "train_vla.sh" not in readme
 
@@ -306,9 +297,8 @@ def test_setup_guide_documents_current_cotrain_entrypoints() -> None:
     project_root = Path(__file__).resolve().parents[2]
     setup = (project_root / "SETUP.md").read_text(encoding="utf-8")
 
-    assert "e2e_coldstart_warmup_cotrain_ray.sh" in setup
-    assert "e2e_coldstart_warmup_cotrain_noray.sh" in setup
-    assert "scripts/experiments/world_model_training/train.sh" in setup
+    assert "scripts/experiments/cotrain/train.sh" in setup
+    assert "scripts/experiments/cotrain/eval.sh" in setup
     assert "train_wm.sh" not in setup
     assert "train_vla.sh" not in setup
     _assert_no_removed_wm_wording(setup)
@@ -333,9 +323,8 @@ def test_scripts_readme_documents_current_cotrain_launchers() -> None:
         encoding="utf-8"
     )
 
-    assert "e2e_coldstart_warmup_cotrain_ray.sh" in scripts_readme
-    assert "experiments/world_model_training/train.sh" in scripts_readme
-    assert "experiments/world_model_training/eval.sh" in scripts_readme
+    assert "experiments/cotrain/train.sh" in scripts_readme
+    assert "experiments/cotrain/eval.sh" in scripts_readme
     _assert_no_removed_wm_wording(scripts_readme)
 
 
@@ -379,7 +368,8 @@ def test_openvla_onetraj_tutorial_prefers_role_based_wm_route_examples() -> None
         / "OpenVLA_Onetraj_LIBERO.md"
     ).read_text(encoding="utf-8")
 
-    assert "e2e_coldstart_warmup_cotrain_ray.sh" in tutorial
+    assert "scripts/experiments/cotrain/train.sh" in tutorial
+    assert "scripts/experiments/cotrain/eval.sh" in tutorial
     assert "experiment=collect_rollouts_ray" in tutorial
     _assert_no_removed_wm_wording(tutorial)
 
@@ -425,8 +415,8 @@ def test_openvla_model_dataset_reference_prefers_role_based_wm_route_examples() 
         / "openvla_oft_libero_goal.md"
     ).read_text(encoding="utf-8")
 
-    assert "scripts/experiments/world_model_training/train.sh" in reference
-    assert "e2e_coldstart_warmup_cotrain_ray.sh" in reference
+    assert "scripts/experiments/cotrain/train.sh" in reference
+    assert "scripts/experiments/cotrain/eval.sh" in reference
     _assert_no_removed_wm_wording(reference)
 
 
@@ -476,7 +466,8 @@ def test_active_docs_and_launchers_only_reference_existing_route_configs() -> No
         config_dir / "README.md",
         project_root / "scripts" / "README.md",
         project_root / "dreamervla" / "train.py",
-        project_root / "scripts" / "train_dreamervla.sh",
+        project_root / "scripts" / "experiments" / "cotrain" / "train.sh",
+        project_root / "scripts" / "experiments" / "cotrain" / "eval.sh",
     ]
 
     for text_file in active_text_files:

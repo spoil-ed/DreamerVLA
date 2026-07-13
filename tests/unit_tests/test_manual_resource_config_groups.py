@@ -26,15 +26,8 @@ def test_manual_precision_and_parallelism_groups_compose_for_ray_backend() -> No
     assert cfg.learner.train_cfg.fsdp.activation_checkpointing is True
 
 
-def test_scheduler_group_and_ray_scripts_are_manual_ops_entrypoints() -> None:
-    root = Path(__file__).resolve().parents[2]
+def test_scheduler_group_configures_local_single_node_runtime() -> None:
     cfg = _tiny_fixture_with("scheduler/local.yaml")
 
     assert cfg.scheduler.cluster.num_nodes == 1
     assert cfg.scheduler.component_placement.learner.strategy == "node"
-    assert "conda activate dreamervla" in (root / "scripts/start_ray.sh").read_text(
-        encoding="utf-8"
-    )
-    assert "ray status" in (root / "scripts/check_ray.sh").read_text(
-        encoding="utf-8"
-    )

@@ -513,7 +513,7 @@ class PretokenizeVLARunner(BaseRunner):
         if self.distributed.uses_fsdp:
             if epoch == -1:
                 print(
-                    "  [Eval] Skipping baseline eval under FSDP. Use scripts/eval_libero_vla.sh on saved checkpoints."
+                    "  [Eval] Skipping baseline eval under FSDP. Use the eval_libero_vla Python launcher on saved checkpoints."
                 )
             return {}
 

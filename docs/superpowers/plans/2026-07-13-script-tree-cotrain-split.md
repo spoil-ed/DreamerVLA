@@ -1,5 +1,10 @@
 # Script Tree Simplification and Cotrain Split Implementation Plan
 
+> Superseded scope note: retain the classifier-training,
+> single-trajectory-overfit, and world-model-training experiment scripts. Shell
+> defaults move to Hydra configs, and cotrain eval uses the required Hydra
+> override `eval.ckpt_path=<checkpoint>`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Reduce `scripts/` to protected install/download/preprocess entrypoints plus independent cotrain `train.sh` and `eval.sh` commands.
