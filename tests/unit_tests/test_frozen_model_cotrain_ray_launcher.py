@@ -544,6 +544,7 @@ def test_wmcls_eval_recipe_enables_learner_and_uses_same_eval_protocol(
 
     assert launch.periodic_eval.interval_global_steps == 10
     assert launch.periodic_eval.include_initial is True
+    assert launch.periodic_eval.num_envs == 25
     assert cfg.manual_cotrain.learner_updates_enabled is True
     assert cfg.manual_cotrain.staged_policy_update is True
     assert cfg.manual_cotrain.real_env_enabled is True

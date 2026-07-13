@@ -38,6 +38,11 @@ manual_cotrain:
   # transaction. Its fixed 100-trajectory read-only eval runs every 10 steps.
   eval_interval_global_steps: 10
   eval_initial_global_step: true
+  eval_protocol:
+    # 100 fixed episodes / 25 CPU OSMesa workers = four exact epochs. This
+    # consumes a modest share of a 192-logical-CPU node while leaving headroom
+    # for colocated jobs; callers can still override it explicitly.
+    num_envs: 25
 
 replay:
   cfg:
