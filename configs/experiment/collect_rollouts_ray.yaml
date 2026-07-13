@@ -3,10 +3,11 @@ defaults:
   - _self_
   - /task: openvla_onetraj_coldstart_libero
 
-_target_: dreamervla.runners.ColdStartRayCollectRunner
+_target_: dreamervla.runners.RolloutCollectionRunner
 mode: oft
 
 collect:
+  backend: ray
   policy_mode: discrete
   num_images_in_input: ${task.openvla_oft.num_images_in_input}
   episodes_per_task: 50   # all LIBERO init states per task (one episode each)

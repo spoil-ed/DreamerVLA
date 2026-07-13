@@ -5,7 +5,7 @@ import random
 import torch
 from omegaconf import OmegaConf
 
-from dreamervla.runners._dreamer_runner_common import DreamerCkptResumeMixin
+from dreamervla.runtime.world_model_training_utils import DreamerCkptResumeMixin
 
 
 class _MiniDreamer(DreamerCkptResumeMixin):

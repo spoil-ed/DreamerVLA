@@ -6,7 +6,7 @@ import pytest
 import torch
 from torch import nn
 
-from dreamervla.runners.online_utils import load_world_model_state_from_dict
+from dreamervla.runtime.online_utils import load_world_model_state_from_dict
 
 
 class _TinyWM(nn.Module):

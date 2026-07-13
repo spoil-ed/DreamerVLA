@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from dreamervla.runners.action_chunk_queue import ActionChunkQueue
+from dreamervla.runtime.action_chunk_queue import ActionChunkQueue
 
 
 def test_action_chunk_queue_executes_full_chunk_before_refill() -> None:

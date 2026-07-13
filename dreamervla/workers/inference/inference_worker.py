@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 import torch
 
-from dreamervla.runners.action_chunk_queue import ActionChunkQueue
+from dreamervla.runtime.action_chunk_queue import ActionChunkQueue
 from dreamervla.scheduler.worker import Worker
 from dreamervla.workers.inference.rollout_contract import RolloutBatchOutput
 

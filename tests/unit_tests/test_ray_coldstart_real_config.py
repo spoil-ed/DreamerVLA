@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 def test_oft_collect_common_exposes_shared_helpers() -> None:
-    from dreamervla.runners.oft_collect_common import (
+    from dreamervla.runtime.oft_collect import (
         assert_policy_mode_matches,
         load_policy,
         make_preprocess_config,
@@ -21,7 +21,7 @@ def test_oft_collect_common_exposes_shared_helpers() -> None:
 def test_oft_collect_policy_device_accepts_cpu_sentinel() -> None:
     import torch
 
-    from dreamervla.runners.oft_collect_common import _policy_device_from_id
+    from dreamervla.runtime.oft_collect import _policy_device_from_id
 
     assert _policy_device_from_id(-1) == torch.device("cpu")
     assert _policy_device_from_id("cpu") == torch.device("cpu")
@@ -30,7 +30,7 @@ def test_oft_collect_policy_device_accepts_cpu_sentinel() -> None:
 
 
 def test_vla_hidden_token_spec_derives_loaded_policy_geometry() -> None:
-    from dreamervla.runners.oft_collect_common import vla_hidden_token_spec
+    from dreamervla.runtime.oft_collect import vla_hidden_token_spec
 
     class _VisionBackbone:
         per_image = 128

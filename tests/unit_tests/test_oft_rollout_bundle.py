@@ -5,8 +5,8 @@ import pytest
 
 
 def test_oft_rollout_bundle_wires_decoder_and_extractor(monkeypatch) -> None:
-    import dreamervla.runners.oft_collect_common as common
-    import dreamervla.runners.rollout_hidden_extractor as rhe
+    import dreamervla.runtime.oft_collect as common
+    import dreamervla.runtime.rollout_hidden_extractor as rhe
     from dreamervla.workers.inference import oft_rollout
 
     class _FakePolicy:
@@ -63,8 +63,8 @@ def test_oft_rollout_bundle_wires_decoder_and_extractor(monkeypatch) -> None:
 
 
 def test_oft_rollout_bundle_loads_on_requested_gpu_and_moves_policy(monkeypatch) -> None:
-    import dreamervla.runners.oft_collect_common as common
-    import dreamervla.runners.rollout_hidden_extractor as rhe
+    import dreamervla.runtime.oft_collect as common
+    import dreamervla.runtime.rollout_hidden_extractor as rhe
     from dreamervla.workers.inference import oft_rollout
 
     captured = {}
@@ -98,8 +98,8 @@ def test_oft_rollout_bundle_loads_on_requested_gpu_and_moves_policy(monkeypatch)
 
 
 def test_oft_rollout_bundle_cpu_device_requests_cpu_policy_load(monkeypatch) -> None:
-    import dreamervla.runners.oft_collect_common as common
-    import dreamervla.runners.rollout_hidden_extractor as rhe
+    import dreamervla.runtime.oft_collect as common
+    import dreamervla.runtime.rollout_hidden_extractor as rhe
     from dreamervla.workers.inference import oft_rollout
 
     captured = {}
@@ -163,7 +163,7 @@ def test_oft_rollout_bundle_rejects_non_mainline_contract_before_loading(
     obs_hidden_source,
     match,
 ) -> None:
-    import dreamervla.runners.oft_collect_common as common
+    import dreamervla.runtime.oft_collect as common
     from dreamervla.workers.inference import oft_rollout
 
     monkeypatch.setattr(
@@ -186,7 +186,7 @@ def test_oft_rollout_bundle_rejects_non_mainline_contract_before_loading(
 def test_oft_rollout_bundle_validates_detected_policy_mode(monkeypatch) -> None:
     import pytest
 
-    import dreamervla.runners.oft_collect_common as common
+    import dreamervla.runtime.oft_collect as common
     from dreamervla.workers.inference import oft_rollout
 
     class _FakePolicy:

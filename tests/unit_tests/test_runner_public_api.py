@@ -46,10 +46,30 @@ def test_world_model_package_exports_role_based_wm_aliases() -> None:
     assert ModuleChunkAwareWorldModel is ChunkAwareWorldModel
 
 
-def test_runner_public_api_exports_route_specific_names() -> None:
+def test_runner_public_api_exports_only_canonical_mainline_roles() -> None:
     import dreamervla.runners as runners
 
-    expected = {
+    expected = [
+        "RolloutCollectionRunner",
+        "WorldModelTrainingRunner",
+        "SuccessClassifierTrainingRunner",
+        "CotrainRunner",
+        "LIBEROVLAEvaluationRunner",
+    ]
+
+    assert runners.PUBLIC_RUNNERS == expected
+    assert set(expected).issubset(set(runners.__all__))
+    for name in expected:
+        cls = getattr(runners, name)
+        assert cls.__name__ == name
+        assert isinstance(cls.runner_name, str)
+        assert cls.runner_status == "current"
+        assert callable(cls.setup)
+        assert callable(cls.execute)
+        assert callable(cls.run)
+        assert callable(cls.teardown)
+
+    for removed in (
         "JointDreamerVLARunner",
         "EmbodiedEvalRunner",
         "LatentClassifierRunner",
@@ -60,36 +80,54 @@ def test_runner_public_api_exports_route_specific_names() -> None:
         "ManualCotrainRayRunner",
         "ColdStartRayCollectRunner",
         "FrozenModelPolicyRunner",
-    }
-
-    assert expected == set(runners.PUBLIC_RUNNERS)
-    assert expected.issubset(set(runners.__all__))
-    for name in expected:
-        cls = getattr(runners, name)
-        assert cls.__name__ == name
-        assert isinstance(cls.runner_name, str)
-        assert callable(cls.setup)
-        assert callable(cls.execute)
-        assert callable(cls.run)
-        assert callable(cls.teardown)
+    ):
+        assert not hasattr(runners, removed)
 
 
-def test_runner_directory_contains_route_specific_runners() -> None:
+def test_runner_directory_contains_only_canonical_route_runners() -> None:
     runner_dir = Path(__file__).resolve().parents[2] / "dreamervla" / "runners"
     top_level_python_files = {path.name for path in runner_dir.glob("*.py")}
     assert {
         "__init__.py",
         "base_runner.py",
-        "dreamervla_runner.py",
-        "embodied_eval_runner.py",
-        "latent_classifier_runner.py",
-        "pretokenize_vla_runner.py",
+        "rollout_collection_runner.py",
+        "world_model_training_runner.py",
+        "success_classifier_training_runner.py",
+        "cotrain_runner.py",
+        "libero_vla_evaluation_runner.py",
     }.issubset(top_level_python_files)
-    assert "pretokenize_sft_runner.py" not in top_level_python_files
-    assert "pretokenize_wm_runner.py" not in top_level_python_files
-    assert "semantic_bottleneck_wm_runner.py" not in top_level_python_files
+    assert {
+        "cold_start_ray_collect_runner.py",
+        "collect_rollouts_runner.py",
+        "embodied_eval_runner.py",
+        "frozen_model_policy_runner.py",
+        "latent_classifier_runner.py",
+        "manual_cotrain_ray_runner.py",
+        "online_cotrain_pipeline_runner.py",
+        "online_cotrain_ray_runner.py",
+        "online_cotrain_runner.py",
+    }.isdisjoint(top_level_python_files)
     assert not (runner_dir.parent / "workspace").exists()
     assert not (runner_dir.parent / "workspace_impl").exists()
+
+
+def test_canonical_runners_do_not_wrap_legacy_runner_classes() -> None:
+    runner_dir = Path(__file__).resolve().parents[2] / "dreamervla" / "runners"
+    for filename in (
+        "rollout_collection_runner.py",
+        "world_model_training_runner.py",
+        "success_classifier_training_runner.py",
+        "cotrain_runner.py",
+        "libero_vla_evaluation_runner.py",
+    ):
+        text = (runner_dir / filename).read_text(encoding="utf-8")
+        assert "ManualCotrainRayRunner" not in text
+        assert "OnlineCotrainPipelineRunner" not in text
+        assert "OnlineCotrainRunner" not in text
+        assert "ColdStartRayCollectRunner" not in text
+        assert "CollectRolloutsRunner" not in text
+        assert "LatentClassifierRunner" not in text
+        assert "EmbodiedEvalRunner" not in text
 
 
 def test_removed_compatibility_shims_are_absent() -> None:
@@ -167,7 +205,12 @@ def test_base_dataset_no_longer_exposes_spec_alias() -> None:
 
 def test_active_configs_target_route_specific_runner_classes() -> None:
     expected = {
-        "eval_libero_vla": "dreamervla.runners.EmbodiedEvalRunner",
+        "eval_libero_vla": "dreamervla.runners.LIBEROVLAEvaluationRunner",
+        "wm_full_dataset_train": "dreamervla.runners.WorldModelTrainingRunner",
+        "latent_classifier_openvla_onetraj_libero_goal_h1": (
+            "dreamervla.runners.SuccessClassifierTrainingRunner"
+        ),
+        "dreamervla_wmcls_cotrain_ray": "dreamervla.runners.CotrainRunner",
     }
 
     config_dir = Path(__file__).resolve().parents[2] / "configs"
@@ -227,7 +270,7 @@ def test_train_config_resolves_public_default_experiment() -> None:
 
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         cfg = compose(config_name="train")
-        assert cfg._target_ == "dreamervla.runners.ManualCotrainRayRunner"
+        assert cfg._target_ == "dreamervla.runners.CotrainRunner"
         assert "ray_cotrain" in cfg.training.out_dir
 
 
@@ -257,10 +300,10 @@ def test_implementation_runner_classes_are_not_public_aliases() -> None:
 
     implementation_names = {
         "ChameleonLatentActionWMRunner",
-        "DreamerVLARunner",
+        "WorldModelTrainingBase",
         "DreamerV3PixelRunner",
         "DreamerV3TokenRunner",
-        "PretokenizeVLARunner",
+        "LIBEROVLAEvaluationBase",
         "BackboneDreamerV3WMRunner",
     }
 
@@ -347,7 +390,7 @@ def test_all_configs_compose_and_resolve_route_specific_runner_targets() -> None
             target = cfg.get("_target_")
             if target is not None:
                 cls = get_class(str(target))
-                assert cls.__module__ == "dreamervla.runners"
+                assert cls.__module__.startswith("dreamervla.runners.")
                 assert str(target).rsplit(".", 1)[-1] in runners.PUBLIC_RUNNERS
                 assert "workspace" not in cfg
         for experiment_name in EXPERIMENT_MODULES:
@@ -355,6 +398,6 @@ def test_all_configs_compose_and_resolve_route_specific_runner_targets() -> None
             target = cfg.get("_target_")
             assert target is not None
             cls = get_class(str(target))
-            assert cls.__module__ == "dreamervla.runners"
+            assert cls.__module__.startswith("dreamervla.runners.")
             assert str(target).rsplit(".", 1)[-1] in runners.PUBLIC_RUNNERS
             assert "workspace" not in cfg

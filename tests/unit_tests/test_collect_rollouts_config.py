@@ -4,7 +4,7 @@ from unittest import mock
 
 import pytest
 
-from dreamervla.runners.collect_parallel_rollouts import (
+from dreamervla.runtime.collect_parallel_rollouts import (
     _REQUIRED_COLLECT_KEYS,
     _assert_gpu_free_memory,
     _assert_policy_mode_matches,
@@ -19,7 +19,7 @@ def test_collector_forwards_non_goal_unnorm_key_to_policy_constructor(
     tmp_path,
     monkeypatch,
 ) -> None:
-    from dreamervla.runners.oft_collect_common import load_policy
+    from dreamervla.runtime.oft_collect import load_policy
 
     key = "libero_object_no_noops"
     (tmp_path / "dataset_statistics.json").write_text(
@@ -63,7 +63,7 @@ def test_collector_forwards_non_goal_unnorm_key_to_policy_constructor(
 def test_gpu_preflight_raises_when_target_gpu_is_occupied():
     # 6 GB free, need 18 GB -> clear, GPU-named error instead of a silent OOM.
     with mock.patch(
-        "dreamervla.runners.collect_parallel_rollouts.torch.cuda.mem_get_info",
+        "dreamervla.runtime.collect_parallel_rollouts.torch.cuda.mem_get_info",
         return_value=(6 * 1024**3, 80 * 1024**3),
     ):
         with pytest.raises(RuntimeError, match="GPU 3 has only"):
@@ -72,7 +72,7 @@ def test_gpu_preflight_raises_when_target_gpu_is_occupied():
 
 def test_gpu_preflight_passes_with_enough_free_memory():
     with mock.patch(
-        "dreamervla.runners.collect_parallel_rollouts.torch.cuda.mem_get_info",
+        "dreamervla.runtime.collect_parallel_rollouts.torch.cuda.mem_get_info",
         return_value=(40 * 1024**3, 80 * 1024**3),
     ):
         _assert_gpu_free_memory(0, 18.0, rank=0)  # no raise
@@ -188,13 +188,13 @@ def test_resolve_task_ids(task_ids, expected):
 
 
 def test_build_work_list_fresh_collection_starts_at_zero():
-    from dreamervla.runners.collect_parallel_rollouts import _build_work_list
+    from dreamervla.runtime.collect_parallel_rollouts import _build_work_list
 
     assert _build_work_list([0, 1], 2, {}) == [(0, 0), (0, 1), (1, 0), (1, 1)]
 
 
 def test_build_work_list_resume_continues_from_collected_count():
-    from dreamervla.runners.collect_parallel_rollouts import _build_work_list
+    from dreamervla.runtime.collect_parallel_rollouts import _build_work_list
 
     # task 0 already has 2 episodes -> continue at 2,3; task 1 has 1 -> continue at 1,2.
     # No init_state (episode_id) is re-collected.
@@ -202,7 +202,7 @@ def test_build_work_list_resume_continues_from_collected_count():
 
 
 def test_build_resume_work_list_reaches_target_without_recollecting_complete_ids():
-    from dreamervla.runners.collect_parallel_rollouts import _build_resume_work_list
+    from dreamervla.runtime.collect_parallel_rollouts import _build_resume_work_list
 
     assert _build_resume_work_list([0], 4, {0: {0, 2}}) == [
         (0, 1),
@@ -211,7 +211,7 @@ def test_build_resume_work_list_reaches_target_without_recollecting_complete_ids
 
 
 def test_collect_rollouts_missing_keys_raises_before_gpu():
-    from dreamervla.runners.collect_parallel_rollouts import collect_rollouts
+    from dreamervla.runtime.collect_parallel_rollouts import collect_rollouts
 
     # Empty cfg must fail at _require_keys, before any CUDA/model work.
     with pytest.raises(KeyError):
@@ -256,19 +256,19 @@ def test_vectorized_path_threads_obs_hidden_source_to_decoder(monkeypatch, tmp_p
         return 0
 
     monkeypatch.setattr(
-        "dreamervla.runners.rollout_hidden_extractor.OFTBatchedDecoder",
+        "dreamervla.runtime.rollout_hidden_extractor.OFTBatchedDecoder",
         FakeDecoder,
     )
     monkeypatch.setattr(
-        "dreamervla.runners.vec_rollout_env.VecRolloutEnv",
+        "dreamervla.runtime.vec_rollout_env.VecRolloutEnv",
         FakeVecEnv,
     )
     monkeypatch.setattr(
-        "dreamervla.runners.vectorized_collect.collect_vectorized",
+        "dreamervla.runtime.vectorized_collect.collect_vectorized",
         fake_collect_vectorized,
     )
     monkeypatch.setattr(
-        "dreamervla.runners.collect_parallel_rollouts._make_dump_writer",
+        "dreamervla.runtime.collect_parallel_rollouts._make_dump_writer",
         lambda *args, **kwargs: FakeWriter(),
     )
 
@@ -332,19 +332,19 @@ def test_vectorized_path_threads_libero_render_regime_to_children(monkeypatch, t
     monkeypatch.setenv("MUJOCO_GL", "osmesa")
     monkeypatch.setenv("PYOPENGL_PLATFORM", "osmesa")
     monkeypatch.setattr(
-        "dreamervla.runners.rollout_hidden_extractor.OFTBatchedDecoder",
+        "dreamervla.runtime.rollout_hidden_extractor.OFTBatchedDecoder",
         FakeDecoder,
     )
     monkeypatch.setattr(
-        "dreamervla.runners.vec_rollout_env.VecRolloutEnv",
+        "dreamervla.runtime.vec_rollout_env.VecRolloutEnv",
         FakeVecEnv,
     )
     monkeypatch.setattr(
-        "dreamervla.runners.vectorized_collect.collect_vectorized",
+        "dreamervla.runtime.vectorized_collect.collect_vectorized",
         lambda *args, **kwargs: 0,
     )
     monkeypatch.setattr(
-        "dreamervla.runners.collect_parallel_rollouts._make_dump_writer",
+        "dreamervla.runtime.collect_parallel_rollouts._make_dump_writer",
         lambda *args, **kwargs: FakeWriter(),
     )
 

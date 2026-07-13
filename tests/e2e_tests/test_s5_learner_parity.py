@@ -1,7 +1,7 @@
 """P0 parity: the Ray-actor learner must train identically to the in-process
 (single-machine) learner for the same components + batch.
 
-The two cotrain *runners* (ray vs single-machine `OnlineCotrainPipelineRunner`)
+The two cotrain *runners* (ray vs single-machine `WorldModelTrainingRunner`)
 have structurally different loops (async vs sync, offline warmup, different
 update cadence), so a full-loop aggregate `allclose` is neither achievable nor
 meaningful. The equivalence that actually matters — and that this guards — is

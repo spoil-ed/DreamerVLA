@@ -142,7 +142,7 @@ def test_make_dump_writer_routes_one_to_per_traj(tmp_path):
         RolloutDumpWriter,
         RotatingRolloutDumpWriter,
     )
-    from dreamervla.runners.collect_parallel_rollouts import _make_dump_writer
+    from dreamervla.runtime.collect_parallel_rollouts import _make_dump_writer
 
     kwargs = dict(shard_name="s_000.hdf5", shard_prefix="s", start_index=0)
     per_traj = _make_dump_writer(

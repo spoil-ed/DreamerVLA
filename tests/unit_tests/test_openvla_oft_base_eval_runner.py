@@ -7,7 +7,7 @@ import pytest
 import torch
 from omegaconf import OmegaConf
 
-from dreamervla.runners.embodied_eval_runner import EmbodiedEvalRunner
+from dreamervla.runners.libero_vla_evaluation_runner import LIBEROVLAEvaluationRunner
 
 
 def test_openvla_oft_base_eval_policy_cfg_uses_task_metadata() -> None:
@@ -27,7 +27,7 @@ def test_openvla_oft_base_eval_policy_cfg_uses_task_metadata() -> None:
         }
     )
 
-    policy_cfg = EmbodiedEvalRunner._oft_base_policy_cfg(cfg, "/tmp/oft")
+    policy_cfg = LIBEROVLAEvaluationRunner._oft_base_policy_cfg(cfg, "/tmp/oft")
 
     assert policy_cfg == {
         "model_path": "/tmp/oft",
@@ -41,7 +41,7 @@ def test_openvla_oft_base_eval_policy_cfg_uses_task_metadata() -> None:
 
 
 def test_openvla_oft_base_eval_generates_postprocessed_actions() -> None:
-    runner = object.__new__(EmbodiedEvalRunner)
+    runner = object.__new__(LIBEROVLAEvaluationRunner)
     runner.cfg = OmegaConf.create({})
     runner._base_oft_extractor = SimpleNamespace(
         reset=lambda: None,
@@ -111,7 +111,7 @@ def test_openvla_oft_vla_policy_eval_uses_full_checkpoint_raw_path() -> None:
             )
 
     policy = _Policy()
-    runner = object.__new__(EmbodiedEvalRunner)
+    runner = object.__new__(LIBEROVLAEvaluationRunner)
     runner.cfg = OmegaConf.create({})
     runner.device = torch.device("cpu")
     runner._vla_policy_eval_policy = policy
@@ -152,7 +152,7 @@ def test_frozen_hidden_actor_eval_uses_base_oft_extractor() -> None:
     policy = _FrozenHiddenActor()
     adapter = object()
     calls: list[tuple[object, str]] = []
-    runner = object.__new__(EmbodiedEvalRunner)
+    runner = object.__new__(LIBEROVLAEvaluationRunner)
     runner._build_oft_base_eval_adapter = lambda cfg, path: (
         calls.append((cfg, path)) or adapter
     )
@@ -169,7 +169,7 @@ def test_frozen_hidden_actor_eval_uses_base_oft_extractor() -> None:
 
 
 def test_vla_policy_eval_rejects_module_without_raw_input_boundary() -> None:
-    runner = object.__new__(EmbodiedEvalRunner)
+    runner = object.__new__(LIBEROVLAEvaluationRunner)
 
     with pytest.raises(TypeError, match="requires_external_hidden_extractor"):
         runner._configure_vla_policy_eval_encoder(
@@ -216,7 +216,7 @@ def test_frozen_hidden_actor_eval_decodes_restored_policy_from_base_hidden() -> 
             return action_chunk, torch.zeros((1,), device=self.anchor.device), {}
 
     policy = _FrozenHiddenActor()
-    runner = object.__new__(EmbodiedEvalRunner)
+    runner = object.__new__(LIBEROVLAEvaluationRunner)
     runner.cfg = OmegaConf.create({})
     runner.device = torch.device("cpu")
     runner._vla_policy_eval_policy = policy
@@ -264,7 +264,7 @@ def test_frozen_hidden_actor_parallel_eval_has_25_isolated_slot_extractors() -> 
     bundle._unnorm_key = "libero_goal_no_noops"
     bundle._obs_hidden_source = "hidden_token"
 
-    runner = object.__new__(EmbodiedEvalRunner)
+    runner = object.__new__(LIBEROVLAEvaluationRunner)
     runner._vla_policy_eval_policy = SimpleNamespace(
         requires_external_hidden_extractor=True
     )
@@ -288,7 +288,7 @@ def test_vla_policy_checkpoint_kind_dispatches_without_world_model(
 ) -> None:
     checkpoint = tmp_path / "policy.ckpt"
     checkpoint.touch()
-    runner = EmbodiedEvalRunner(
+    runner = LIBEROVLAEvaluationRunner(
         OmegaConf.create(
                 {
                     "seed": 7,
@@ -311,7 +311,7 @@ def test_vla_policy_checkpoint_kind_dispatches_without_world_model(
         (cfg, path, item)
     ) or [{"eval_success_rate": 0.5}]
     monkeypatch.setattr(
-        "dreamervla.runners.embodied_eval_runner.is_hf_checkpoint",
+        "dreamervla.runners.libero_vla_evaluation_runner.is_hf_checkpoint",
         lambda _path: False,
     )
 
@@ -323,7 +323,7 @@ def test_vla_policy_checkpoint_kind_dispatches_without_world_model(
 
 
 def test_cotrain_eval_observer_loads_checkpoint_models_and_fixed_threshold() -> None:
-    runner = object.__new__(EmbodiedEvalRunner)
+    runner = object.__new__(LIBEROVLAEvaluationRunner)
     runner.device = torch.device("cpu")
     runner.distributed = SimpleNamespace(is_main_process=False)
     built = [torch.nn.Linear(1, 1), torch.nn.Linear(1, 1)]

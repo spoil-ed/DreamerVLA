@@ -17,7 +17,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from dreamervla.runners.vectorized_collect import collect_vectorized
+from dreamervla.runtime.vectorized_collect import collect_vectorized
 
 # ── fakes ─────────────────────────────────────────────────────────────────────
 

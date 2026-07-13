@@ -13,7 +13,7 @@ import pytest
 from omegaconf import OmegaConf
 
 from dreamervla.runners.collect_rollouts_runner import CollectRolloutsRunner
-from dreamervla.runners.oft_collect_common import select_vla_image_keys
+from dreamervla.runtime.oft_collect import select_vla_image_keys
 
 
 def _make_cfg(num_images=None):

@@ -1,8 +1,10 @@
 # @package _global_
 defaults:
   - /task: openvla_onetraj_libero
-  - override /dreamervla: openvla_onetraj_libero_cotrain_noray
+  - override /dreamervla: openvla_onetraj_libero_cotrain_ray_base
   - _self_
+
+_target_: dreamervla.runners.WorldModelTrainingRunner
 
 # Complete 8xH100 recipe for full-dataset Chunk-WM replay training.
 training:

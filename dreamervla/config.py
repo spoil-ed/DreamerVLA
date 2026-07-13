@@ -382,28 +382,19 @@ def _validate_sidecar_routes(cfg: DictConfig) -> None:
 
 
 def _validate_pre_mainline_routes(cfg: DictConfig) -> None:
-    """Keep pre-mainline feasibility stages on official data and isolated."""
+    """Keep independent WM/classifier stages on canonical official data."""
 
     stage = _select_str(cfg, "pre_mainline.stage")
-    target = _select_str(cfg, "_target_")
-    if (
-        target == "dreamervla.runners.FrozenModelPolicyRunner"
-        and stage != "frozen_models_rl"
-    ):
-        raise ValueError(
-            "FrozenModelPolicyRunner requires pre_mainline.stage=frozen_models_rl"
-        )
     if stage is None:
         return
     if _select_str(cfg, "task.suite") != "libero_goal":
         raise ValueError(
-            "the frozen-model pre-mainline feasibility route currently supports "
-            "only task.suite=libero_goal"
+            "independent component training currently supports only "
+            "task.suite=libero_goal"
         )
     if _select_str(cfg, "pre_mainline.suite") != "libero_goal":
         raise ValueError(
-            "the frozen-model pre-mainline route requires "
-            "pre_mainline=libero_goal_official"
+            "independent component training requires pre_mainline=libero_goal_official"
         )
     artifact_name = _select_str(cfg, "task.artifact_name")
     if artifact_name != "OpenVLA_Onetraj_LIBERO_libero_goal":
@@ -461,10 +452,10 @@ def _validate_pre_mainline_routes(cfg: DictConfig) -> None:
             ("offline_warmup.hidden_dir", "task.openvla_oft.hidden_token_dir"),
         )
         if _select_str(cfg, "_target_") != (
-            "dreamervla.runners.OnlineCotrainPipelineRunner"
+            "dreamervla.runners.WorldModelTrainingRunner"
         ):
             raise ValueError(
-                "pre-mainline WM upper bound must use OnlineCotrainPipelineRunner"
+                "independent WM training must use WorldModelTrainingRunner"
             )
         if int(_select_int(cfg, "training.wm_warmup_steps") or 0) <= 0:
             raise ValueError(
@@ -507,9 +498,12 @@ def _validate_pre_mainline_routes(cfg: DictConfig) -> None:
             ("data.success_dir_raw", "task.hdf5_reward_dir"),
             ("data.success_dir_hidden", "task.openvla_oft.hidden_token_dir"),
         )
-        if _select_str(cfg, "_target_") != "dreamervla.runners.LatentClassifierRunner":
+        if _select_str(cfg, "_target_") != (
+            "dreamervla.runners.SuccessClassifierTrainingRunner"
+        ):
             raise ValueError(
-                "pre-mainline classifier upper bound must use LatentClassifierRunner"
+                "independent classifier training must use "
+                "SuccessClassifierTrainingRunner"
             )
         if int(_select_int(cfg, "training.num_epochs") or 0) <= 0:
             raise ValueError(
@@ -578,507 +572,6 @@ def _validate_pre_mainline_routes(cfg: DictConfig) -> None:
         ):
             raise ValueError(
                 "pre-mainline classifier upper bound cannot add failure datasets"
-            )
-    elif stage == "frozen_models_rl":
-        path_pairs = (
-            ("official_replay.data_dir", "task.hdf5_reward_dir"),
-            (
-                "official_replay.hidden_dir",
-                "task.openvla_oft.hidden_token_dir",
-            ),
-        )
-        target = _select_str(cfg, "_target_")
-        if target != "dreamervla.runners.FrozenModelPolicyRunner":
-            raise ValueError(
-                "pre-mainline frozen-model RL must use "
-                "dreamervla.runners.FrozenModelPolicyRunner"
-            )
-        _reject_official_complete_marker_requirement(
-            cfg,
-            "official_replay.require_reference_complete",
-        )
-        for key in (
-            "init.world_model_state_ckpt",
-            "init.classifier_state_ckpt",
-        ):
-            if _select_str(cfg, key) in (None, ""):
-                raise ValueError(
-                    f"{key} requires an explicit frozen checkpoint"
-                )
-        if bool(OmegaConf.select(cfg, "training.resume", default=False)) and _select_str(
-            cfg, "training.resume_dir"
-        ) in (None, ""):
-            raise ValueError(
-                "frozen-model RL resume requires an explicit training.resume_dir"
-            )
-        forbidden_optimizers = (
-            "optim.world_model",
-            "optim.classifier",
-            "optim.critic",
-        )
-        missing = object()
-        for key in forbidden_optimizers:
-            if OmegaConf.select(cfg, key, default=missing) is not missing:
-                raise ValueError(
-                    f"{key} optimizer is forbidden in policy-only frozen-model RL"
-                )
-        if OmegaConf.select(cfg, "optim.policy", default=None) is None:
-            raise ValueError("frozen-model RL requires exactly one policy optimizer")
-        if OmegaConf.select(cfg, "env", default=missing) is not missing:
-            raise ValueError(
-                "frozen-model RL cannot construct a real environment"
-            )
-        if OmegaConf.select(cfg, "online_rollout", default=missing) is not missing:
-            raise ValueError(
-                "frozen-model RL cannot configure a real rollout"
-            )
-        if _select_int(cfg, "training.num_updates") is None or int(
-            _select_int(cfg, "training.num_updates") or 0
-        ) <= 0:
-            raise ValueError("frozen-model RL requires training.num_updates > 0")
-        if _select_int(cfg, "dataloader.batch_size") is None or int(
-            _select_int(cfg, "dataloader.batch_size") or 0
-        ) <= 0:
-            raise ValueError("frozen-model RL requires dataloader.batch_size > 0")
-        if not bool(
-            OmegaConf.select(
-                cfg,
-                "training.require_policy_update",
-                default=False,
-            )
-        ):
-            raise ValueError(
-                "frozen-model RL requires training.require_policy_update=true"
-            )
-        raw_task_ids = OmegaConf.select(cfg, "official_replay.task_ids", default=[])
-        task_ids = [int(value) for value in (raw_task_ids or [])]
-        if task_ids != list(range(10)):
-            raise ValueError(
-                "frozen-model RL official replay requires all ten task IDs [0..9]"
-            )
-        if OmegaConf.select(cfg, "official_replay.task_id", default=None) is not None:
-            raise ValueError(
-                "frozen-model RL official replay cannot force one task_id"
-            )
-        if not bool(
-            OmegaConf.select(
-                cfg,
-                "official_replay.infer_task_id_from_shard",
-                default=False,
-            )
-        ):
-            raise ValueError(
-                "frozen-model RL official replay must infer task IDs from shards"
-            )
-        if (
-            OmegaConf.select(
-                cfg,
-                "official_replay.max_episodes_per_task",
-                default=None,
-            )
-            is not None
-        ):
-            raise ValueError(
-                "frozen-model RL must seed every official replay episode"
-            )
-        _require_equal_if_present(
-            cfg,
-            "official_replay.sequence_length",
-            "task.openvla_oft.wm_sequence_length",
-            message="Frozen-model RL replay length must match task WM metadata.",
-        )
-        if int(_select_int(cfg, "official_replay.capacity") or 0) <= 0:
-            raise ValueError("frozen-model RL requires official_replay.capacity > 0")
-        replay_contract = {
-            "official_replay.capacity_mode": "total_sharded",
-            "official_replay.task_balanced": True,
-            "official_replay.rank": 0,
-            "official_replay.replay_sampling.enabled": False,
-        }
-        for key, expected in replay_contract.items():
-            actual = OmegaConf.select(cfg, key, default=None)
-            if actual != expected:
-                raise ValueError(
-                    f"frozen-model RL official replay requires {key}={expected!r}, "
-                    f"got {actual!r}"
-                )
-        route = get_actor_update_route(
-            str(OmegaConf.select(cfg, "algorithm.update_type"))
-        )
-        if route.world_model_arg != "chunk_world_model" or not route.requires_classifier:
-            raise ValueError(
-                "frozen-model RL actor route requires classifier-backed "
-                "chunk-world-model imagination"
-            )
-    elif stage == "frozen_models_rl_ray":
-        path_pairs = (
-            ("replay.seed.data_dir", "task.hdf5_reward_dir"),
-            ("replay.seed.hidden_dir", "task.openvla_oft.hidden_token_dir"),
-        )
-        if _select_str(cfg, "_target_") != (
-            "dreamervla.runners.ManualCotrainRayRunner"
-        ):
-            raise ValueError(
-                "pre-mainline frozen-model Ray RL must use "
-                "dreamervla.runners.ManualCotrainRayRunner"
-            )
-        for key in (
-            "init.world_model_state_ckpt",
-            "init.classifier_state_ckpt",
-        ):
-            if _select_str(cfg, key) in (None, ""):
-                raise ValueError(f"{key} requires an explicit frozen checkpoint")
-        if bool(OmegaConf.select(cfg, "training.resume", default=False)) and _select_str(
-            cfg,
-            "manual_cotrain.resume_ckpt",
-        ) in (None, ""):
-            raise ValueError(
-                "frozen-model Ray RL resume requires an explicit policy checkpoint"
-            )
-        if bool(OmegaConf.select(cfg, "manual_cotrain.real_env_enabled", default=True)):
-            raise ValueError(
-                "frozen-model Ray RL cannot construct or use a real environment"
-            )
-        if int(
-            OmegaConf.select(cfg, "manual_cotrain.real_env_workers", default=1)
-        ) != 0:
-            raise ValueError(
-                "frozen-model Ray RL requires manual_cotrain.real_env_workers=0"
-            )
-        if OmegaConf.select(cfg, "env.real", default=None) is not None:
-            raise ValueError(
-                "frozen-model Ray RL cannot construct a real environment"
-            )
-        if bool(
-            OmegaConf.select(
-                cfg,
-                "manual_cotrain.learner_updates_enabled",
-                default=True,
-            )
-        ):
-            raise ValueError(
-                "frozen-model Ray RL cannot construct or update a learner"
-            )
-        if OmegaConf.select(cfg, "learner", default=None) is not None:
-            raise ValueError(
-                "frozen-model Ray RL cannot construct a trainable learner"
-            )
-        actor_optimizers = OmegaConf.select(
-            cfg,
-            "actor.train_cfg.optimizers",
-            default=None,
-        )
-        optimizer_names = (
-            set(str(key) for key in actor_optimizers.keys())
-            if actor_optimizers is not None
-            else set()
-        )
-        if optimizer_names != {"policy"}:
-            raise ValueError(
-                "frozen-model Ray RL requires exactly one policy optimizer; "
-                f"got {sorted(optimizer_names)}"
-            )
-        actor_policy_optimizer = OmegaConf.to_container(
-            actor_optimizers["policy"],
-            resolve=True,
-        )
-        expected_policy_optimizer = {
-            "name": _select_str(cfg, "optim.policy.name"),
-            "lr": OmegaConf.select(cfg, "optim.policy.lr"),
-            "betas": list(OmegaConf.select(cfg, "optim.policy.betas") or []),
-            "eps": OmegaConf.select(cfg, "optim.policy.eps"),
-            "weight_decay": OmegaConf.select(cfg, "optim.policy.weight_decay"),
-            "grad_clip_norm": OmegaConf.select(cfg, "optim.grad_clip_norm"),
-            "zero_grad_set_to_none": OmegaConf.select(
-                cfg,
-                "optim.zero_grad_set_to_none",
-            ),
-        }
-        if actor_policy_optimizer != expected_policy_optimizer:
-            raise ValueError(
-                "frozen-model Ray RL Actor optimizer must exactly match the "
-                "policy-only Hydra optimizer contract"
-            )
-        if not bool(
-            OmegaConf.select(
-                cfg,
-                "actor.train_cfg.fsdp.sync_module_states",
-                default=False,
-            )
-        ):
-            raise ValueError(
-                "frozen-model Ray RL requires actor FSDP sync_module_states=true"
-            )
-        actor_fsdp_strategy = str(
-            OmegaConf.select(
-                cfg,
-                "actor.train_cfg.fsdp.strategy",
-                default="",
-            )
-        ).strip().lower()
-        if actor_fsdp_strategy not in {"fsdp", "fsdp1"}:
-            raise ValueError(
-                "frozen-model Ray RL requires the FSDP strategy across all eight "
-                "Actor ranks"
-            )
-        if bool(
-            OmegaConf.select(
-                cfg,
-                "actor.train_cfg.fsdp.cpu_offload",
-                default=False,
-            )
-        ):
-            raise ValueError(
-                "frozen-model Ray RL does not permit Actor CPU offload"
-            )
-        actor_update_contract = {
-            "actor.train_cfg.algorithm_cfg.clip_log_ratio": (
-                "algorithm.clip_log_ratio"
-            ),
-        }
-        for actor_path, canonical_path in actor_update_contract.items():
-            if OmegaConf.select(cfg, actor_path) != OmegaConf.select(
-                cfg,
-                canonical_path,
-            ):
-                raise ValueError(
-                    "frozen-model Ray RL Actor policy-update settings must match "
-                    "the canonical frozen-policy Hydra config"
-                )
-        actor_batch_contract = {
-            "actor.train_cfg.micro_batch_size": 32,
-            "actor.train_cfg.global_batch_size": 16384,
-        }
-        for actor_path, expected in actor_batch_contract.items():
-            if int(OmegaConf.select(cfg, actor_path, default=0)) != expected:
-                raise ValueError(
-                    "frozen-model Ray RL PPO batch settings must match the "
-                    f"RLinf contract: {actor_path}={expected}"
-                )
-        if int(_select_int(cfg, "cluster.num_nodes") or 0) != 1:
-            raise ValueError("frozen-model Ray RL is single-node only")
-        ngpu = int(_select_int(cfg, "manual_cotrain.ngpu") or 0)
-        cluster_gpus = int(_select_int(cfg, "cluster.num_gpus") or 0)
-        if ngpu != 8 or cluster_gpus != 8:
-            raise ValueError(
-                "frozen-model Ray RL requires exactly eight visible GPUs"
-            )
-        if OmegaConf.select(
-            cfg,
-            "cluster.component_placement",
-            default=None,
-        ) is not None:
-            raise ValueError(
-                "frozen-model Ray RL fixes the eight-GPU topology and forbids "
-                "cluster.component_placement overrides"
-            )
-        if not bool(
-            OmegaConf.select(
-                cfg,
-                "env.wm.cfg.kwargs.freeze_components",
-                default=False,
-            )
-        ):
-            raise ValueError(
-                "frozen-model Ray RL requires frozen WM/classifier components"
-            )
-        if OmegaConf.select(cfg, "rollout.encoder_cfg", default=None) is not None:
-            raise ValueError(
-                "frozen-model Ray RL consumes WM latents and cannot build a real-image encoder"
-            )
-        for component in ("world_model", "classifier"):
-            canonical = OmegaConf.select(cfg, component, default=None)
-            wm_env_component = OmegaConf.select(
-                cfg,
-                f"env.wm.cfg.kwargs.{component}",
-                default=None,
-            )
-            if canonical is None or wm_env_component is None or OmegaConf.to_container(
-                canonical,
-                resolve=True,
-            ) != OmegaConf.to_container(wm_env_component, resolve=True):
-                raise ValueError(
-                    f"frozen-model Ray RL {component} config must match the "
-                    "official upper-bound component exactly"
-                )
-        _reject_official_complete_marker_requirement(
-            cfg,
-            "replay.seed.require_reference_complete",
-        )
-        task_ids = [
-            int(value)
-            for value in (
-                OmegaConf.select(cfg, "replay.seed.task_ids", default=[]) or []
-            )
-        ]
-        if task_ids != official_task_ids:
-            raise ValueError(
-                "frozen-model Ray RL replay seed requires all ten task IDs [0..9]"
-            )
-        replay_task_ids = [
-            int(value)
-            for value in (
-                OmegaConf.select(cfg, "replay.cfg.task_ids", default=[]) or []
-            )
-        ]
-        bootstrap_task_ids = [
-            int(value)
-            for value in (
-                OmegaConf.select(
-                    cfg,
-                    "env.wm.cfg.bootstrap_task_ids",
-                    default=[],
-                )
-                or []
-            )
-        ]
-        if replay_task_ids != official_task_ids or bootstrap_task_ids != official_task_ids:
-            raise ValueError(
-                "frozen-model Ray RL replay and WM bootstrap require all ten task IDs"
-            )
-        if not bool(
-            OmegaConf.select(
-                cfg,
-                "env.wm.cfg.require_balanced_initial_conditions",
-                default=False,
-            )
-        ):
-            raise ValueError(
-                "frozen-model Ray RL requires balanced initial conditions"
-            )
-        if OmegaConf.select(cfg, "replay.seed.task_id", default=None) is not None:
-            raise ValueError(
-                "frozen-model Ray RL replay seed cannot force one task_id"
-            )
-        if not bool(
-            OmegaConf.select(
-                cfg,
-                "replay.seed.infer_task_id_from_shard",
-                default=False,
-            )
-        ):
-            raise ValueError(
-                "frozen-model Ray RL replay must infer task IDs from shards"
-            )
-        if OmegaConf.select(
-            cfg,
-            "replay.seed.max_episodes_per_task",
-            default=None,
-        ) is not None:
-            raise ValueError(
-                "frozen-model Ray RL must seed every official replay episode"
-            )
-        replay_contract = {
-            "replay.cfg.capacity_mode": "total_sharded",
-            "replay.cfg.task_balanced": True,
-            "replay.cfg.rank": 0,
-            "replay.cfg.replay_sampling.enabled": False,
-        }
-        for key, expected in replay_contract.items():
-            actual = OmegaConf.select(cfg, key, default=None)
-            if actual != expected:
-                raise ValueError(
-                    f"frozen-model Ray RL replay requires {key}={expected!r}, "
-                    f"got {actual!r}"
-                )
-        if not bool(
-            OmegaConf.select(
-                cfg,
-                "training.require_policy_update",
-                default=False,
-            )
-        ):
-            raise ValueError(
-                "frozen-model Ray RL requires training.require_policy_update=true"
-            )
-        wm_envs_per_worker = int(
-            OmegaConf.select(
-                cfg,
-                "manual_cotrain.wm_envs_per_worker",
-                default=0,
-            )
-        )
-        bootstrap_group_size = int(
-            OmegaConf.select(
-                cfg,
-                "env.wm.cfg.bootstrap_group_size",
-                default=0,
-            )
-        )
-        actor_group_size = int(
-            OmegaConf.select(cfg, "algorithm.group_size", default=0)
-        )
-        if (
-            bootstrap_group_size != wm_envs_per_worker
-            or actor_group_size <= 0
-            or bootstrap_group_size % actor_group_size != 0
-        ):
-            raise ValueError(
-                "frozen-model Ray RL requires every WM worker shard to repeat "
-                "one replay condition in complete policy groups"
-            )
-        if not bool(
-            OmegaConf.select(
-                cfg,
-                "manual_cotrain.refresh_wm_initial_conditions_per_lease",
-                default=False,
-            )
-        ):
-            raise ValueError(
-                "frozen-model Ray RL must refresh its grouped replay condition "
-                "before every WM lease"
-            )
-        if not bool(
-            OmegaConf.select(
-                cfg,
-                "env.wm.cfg.defer_initial_condition_bootstrap",
-                default=False,
-            )
-        ):
-            raise ValueError(
-                "frozen-model Ray RL must defer initial replay sampling until "
-                "after the resume cursor is restored"
-            )
-        lease_epochs = int(
-            OmegaConf.select(
-                cfg,
-                "manual_cotrain.wm_rollout_lease_epochs",
-                default=0,
-            )
-        )
-        target_trajectories = int(
-            OmegaConf.select(
-                cfg,
-                "manual_cotrain.wm_rollout_target_trajectories",
-                default=0,
-            )
-        )
-        max_steps_per_trajectory = int(
-            OmegaConf.select(
-                cfg,
-                "manual_cotrain.max_steps_per_rollout_epoch",
-                default=0,
-            )
-        )
-        if target_trajectories != 1024 or max_steps_per_trajectory != 512:
-            raise ValueError(
-                "frozen-model Ray RL requires 1024 trajectories and 512 physical "
-                "steps per trajectory before every PPO update"
-            )
-        total_leases = (
-            target_trajectories // wm_envs_per_worker
-            if wm_envs_per_worker > 0
-            else 0
-        )
-        if total_leases < ngpu:
-            raise ValueError(
-                "manual_cotrain.wm_rollout_target_trajectories is too small to "
-                "give each WM worker one grouped replay condition"
-            )
-        if lease_epochs != 1 or total_leases < len(official_task_ids):
-            raise ValueError(
-                "frozen-model Ray RL needs one replay condition per WM lease and "
-                "at least ten leases to cover all official tasks"
             )
     else:
         raise ValueError(f"unknown pre_mainline.stage: {stage!r}")
@@ -1425,7 +918,7 @@ def _validate_latent_spec(
 
 def _validate_online_cotrain_pipeline(cfg: DictConfig) -> None:
     target = str(OmegaConf.select(cfg, "_target_", default="") or "")
-    if not target.endswith("OnlineCotrainPipelineRunner"):
+    if not target.endswith("WorldModelTrainingRunner"):
         return
     data_dir = OmegaConf.select(cfg, "offline_warmup.data_dir", default=None)
     hidden_dir = OmegaConf.select(cfg, "offline_warmup.hidden_dir", default=None)
@@ -1467,9 +960,8 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
     target = str(OmegaConf.select(cfg, "_target_", default="") or "")
     is_ray_runner = target.endswith(
         (
-            "OnlineCotrainRayRunner",
-            "ManualCotrainRayRunner",
-            "ColdStartRayCollectRunner",
+            "CotrainRunner",
+            "RolloutCollectionRunner",
         )
     )
     if not is_ray_runner:
@@ -1606,11 +1098,8 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
 
 def _warn_manual_cotrain_baseline_overrides(cfg: DictConfig) -> None:
     target = str(OmegaConf.select(cfg, "_target_", default="") or "")
-    if not target.endswith("ManualCotrainRayRunner"):
+    if not target.endswith("CotrainRunner"):
         return
-    if _select_str(cfg, "pre_mainline.stage") == "frozen_models_rl_ray":
-        return
-
     baselines = {
         "real_rollout_target_trajectories": 32,
         "wm_rollout_target_trajectories": 1024,
@@ -1634,7 +1123,7 @@ def _validate_manual_cotrain_group_geometry(cfg: DictConfig) -> None:
     """Validate manual-cotrain rollout slots against actor GRPO grouping."""
 
     target = str(OmegaConf.select(cfg, "_target_", default="") or "")
-    if not target.endswith("ManualCotrainRayRunner"):
+    if not target.endswith("CotrainRunner"):
         return
 
     envs_per_worker_raw = OmegaConf.select(
@@ -1755,7 +1244,7 @@ def _validate_manual_actor_ppo_batches(cfg: DictConfig) -> None:
     """Validate the RLinf global-batch/micro-batch hierarchy before Ray starts."""
 
     target = str(OmegaConf.select(cfg, "_target_", default="") or "")
-    if not target.endswith("ManualCotrainRayRunner"):
+    if not target.endswith("CotrainRunner"):
         return
     global_batch_raw = OmegaConf.select(
         cfg,
@@ -1819,7 +1308,7 @@ def _validate_manual_cotrain_replay_window(cfg: DictConfig) -> None:
     """Validate that EnvWorker can produce replay windows used by LearnerWorker."""
 
     target = str(OmegaConf.select(cfg, "_target_", default="") or "")
-    if not target.endswith("ManualCotrainRayRunner"):
+    if not target.endswith("CotrainRunner"):
         return
 
     sequence_length_raw = OmegaConf.select(cfg, "replay.cfg.sequence_length", default=None)
@@ -1847,7 +1336,7 @@ def _validate_manual_cotrain_classifier_window(cfg: DictConfig) -> None:
     """Validate rollout length against classifier replay-window sampling."""
 
     target = str(OmegaConf.select(cfg, "_target_", default="") or "")
-    if not target.endswith("ManualCotrainRayRunner"):
+    if not target.endswith("CotrainRunner"):
         return
 
     max_steps_raw = OmegaConf.select(

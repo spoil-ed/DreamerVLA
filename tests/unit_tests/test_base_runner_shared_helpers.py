@@ -250,14 +250,14 @@ def test_base_runner_checkpoint_uses_state_dict_hooks(tmp_path: Path) -> None:
 
 
 def test_vla_family_runners_inherit_shared_base_helpers() -> None:
-    from dreamervla.runners.dreamervla_runner import DreamerVLARunner
-    from dreamervla.runners.embodied_eval_runner import EmbodiedEvalRunner
-    from dreamervla.runners.pretokenize_vla_runner import PretokenizeVLARunner
+    from dreamervla.runtime.world_model_training_base import WorldModelTrainingBase
+    from dreamervla.runners.libero_vla_evaluation_runner import LIBEROVLAEvaluationRunner
+    from dreamervla.runtime.libero_vla_evaluation_base import LIBEROVLAEvaluationBase
 
     for cls in (
-        PretokenizeVLARunner,
-        DreamerVLARunner,
-        EmbodiedEvalRunner,
+        LIBEROVLAEvaluationBase,
+        WorldModelTrainingBase,
+        LIBEROVLAEvaluationRunner,
     ):
         assert "_resolve_vla_init_path" not in cls.__dict__
         assert "_build_frozen_encoder_cfg" not in cls.__dict__
@@ -266,18 +266,18 @@ def test_vla_family_runners_inherit_shared_base_helpers() -> None:
         assert "set_dataloader_epoch" not in cls.__dict__
 
     for cls in (
-        PretokenizeVLARunner,
-        DreamerVLARunner,
-        EmbodiedEvalRunner,
+        LIBEROVLAEvaluationBase,
+        WorldModelTrainingBase,
+        LIBEROVLAEvaluationRunner,
     ):
         assert cls.save_checkpoint is BaseRunner.save_checkpoint
         assert cls.load_payload is BaseRunner.load_payload
 
 
 def test_vla_hf_sidecar_strips_encoder_backbone_prefix() -> None:
-    from dreamervla.runners.pretokenize_vla_runner import PretokenizeVLARunner
+    from dreamervla.runtime.libero_vla_evaluation_base import LIBEROVLAEvaluationBase
 
-    state = PretokenizeVLARunner._extract_backbone_state_for_hf(
+    state = LIBEROVLAEvaluationBase._extract_backbone_state_for_hf(
         {
             "state_dicts": {
                 "encoder": {

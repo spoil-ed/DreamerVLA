@@ -158,6 +158,20 @@ class EmbodiedFSDPActor(Worker):
         config = _as_plain_dict(self.train_cfg.get("encoder_sft", {}))
         epochs = max(1, int(config.get("epochs", 1)))
         batch_size = max(1, int(config.get("batch_size", 1)))
+        total_optimizer_steps = epochs * (
+            (len(decisions) + batch_size - 1) // batch_size
+        )
+        progress = ProgressReporter(
+            total_optimizer_steps,
+            f"cotrain-vla-real-sft/{int(self.global_step):08d}",
+            enabled=int(self.rank) == 0,
+            min_interval_s=float(self.train_cfg.get("progress_every_s", 5.0)),
+            unit="update",
+        )
+        progress.set_status(
+            f"phase=encoder_sft epoch=1/{epochs} update=0/{total_optimizer_steps}"
+        )
+        progress.set(0, force=True)
         zero_grad_set_to_none = bool(config.get("zero_grad_set_to_none", True))
         policy = self._policy()
         original_training = bool(policy.training)
@@ -211,6 +225,15 @@ class EmbodiedFSDPActor(Worker):
                     optimizer.step()
                     loss_sum += float(loss.detach().cpu().item())
                     optimizer_steps += 1
+                    progress.set_status(
+                        f"phase=encoder_sft epoch={_epoch + 1}/{epochs} "
+                        f"update={optimizer_steps}/{total_optimizer_steps} "
+                        f"loss={float(loss.detach().cpu().item()):.4g}"
+                    )
+                    progress.set(
+                        optimizer_steps,
+                        force=optimizer_steps == total_optimizer_steps,
+                    )
         finally:
             for parameter in policy.parameters():
                 parameter.requires_grad_(original_requires_grad[id(parameter)])
@@ -615,7 +638,7 @@ class EmbodiedFSDPActor(Worker):
 
         progress = ProgressReporter(
             progress_ops_total,
-            f"ppo/{int(self.global_step):08d}",
+            f"cotrain-vla-ppo/{int(self.global_step):08d}",
             enabled=int(self.rank) == 0,
             min_interval_s=float(self.train_cfg.get("progress_every_s", 5.0)),
             unit="op",

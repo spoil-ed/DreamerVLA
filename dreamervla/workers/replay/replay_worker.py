@@ -6,7 +6,7 @@ import importlib.util
 from pathlib import Path
 from typing import Any
 
-from dreamervla.runners.offline_seed import seed_replay_from_offline
+from dreamervla.runtime.offline_seed import seed_replay_from_offline
 from dreamervla.scheduler.worker import Worker
 from dreamervla.workers.cotrain.messages import RealTrajectoryBatch
 

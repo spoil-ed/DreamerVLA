@@ -170,33 +170,77 @@ class LearnerWorker(Worker):
         stale_steps = 0
         completed = 0
         metrics: dict[str, float] = {}
-        for _index in range(requested):
-            if str(phase) == "wm":
-                step_metrics = self._dreamervla_wm_update_once()
-            elif str(phase) == "classifier":
-                step_metrics = self._dreamervla_classifier_update_once()
-            elif str(phase) == "cotrain":
-                step_metrics = {
-                    **self._dreamervla_wm_update_once(),
-                    **self._dreamervla_classifier_update_once(),
-                }
-            else:
-                raise ValueError(
-                    "step-local staged learner phase must be wm, classifier, "
-                    f"or cotrain; got {phase!r}"
+        phase_name = str(phase)
+        wm_total = requested if phase_name in {"wm", "cotrain"} else 0
+        cls_total = requested if phase_name in {"classifier", "cotrain"} else 0
+        self._set_train_progress(
+            active=True,
+            phase=phase_name,
+            train_step=0,
+            total_train_steps=requested,
+            wm_step=0,
+            wm_total_steps=wm_total,
+            cls_step=0,
+            cls_total_steps=cls_total,
+            vlarl_step=0,
+            vlarl_total_steps=0,
+        )
+        try:
+            for _index in range(requested):
+                if phase_name == "wm":
+                    step_metrics = self._dreamervla_wm_update_once()
+                elif phase_name == "classifier":
+                    step_metrics = self._dreamervla_classifier_update_once()
+                elif phase_name == "cotrain":
+                    step_metrics = {
+                        **self._dreamervla_wm_update_once(),
+                        **self._dreamervla_classifier_update_once(),
+                    }
+                else:
+                    raise ValueError(
+                        "step-local staged learner phase must be wm, classifier, "
+                        f"or cotrain; got {phase!r}"
+                    )
+                metrics.update(step_metrics)
+                completed += 1
+                self._set_train_progress(
+                    active=True,
+                    phase=phase_name,
+                    train_step=completed,
+                    total_train_steps=requested,
+                    wm_step=(completed if wm_total else 0),
+                    wm_total_steps=wm_total,
+                    cls_step=(completed if cls_total else 0),
+                    cls_total_steps=cls_total,
+                    vlarl_step=0,
+                    vlarl_total_steps=0,
                 )
-            metrics.update(step_metrics)
-            completed += 1
-            monitored = sum(
-                float(step_metrics[key]) for key in ("wm/loss", "cls/loss") if key in step_metrics
+                monitored = sum(
+                    float(step_metrics[key])
+                    for key in ("wm/loss", "cls/loss")
+                    if key in step_metrics
+                )
+                if monitored + min_delta < best_loss:
+                    best_loss = monitored
+                    stale_steps = 0
+                else:
+                    stale_steps += 1
+                    if stale_steps >= patience:
+                        break
+        except Exception:
+            self._set_train_progress(
+                active=False,
+                phase="failed",
+                train_step=completed,
+                total_train_steps=requested,
+                wm_step=(completed if wm_total else 0),
+                wm_total_steps=wm_total,
+                cls_step=(completed if cls_total else 0),
+                cls_total_steps=cls_total,
+                vlarl_step=0,
+                vlarl_total_steps=0,
             )
-            if monitored + min_delta < best_loss:
-                best_loss = monitored
-                stale_steps = 0
-            else:
-                stale_steps += 1
-                if stale_steps >= patience:
-                    break
+            raise
         if str(phase) in {"classifier", "cotrain"}:
             metrics.update(self._calibrate_classifier_threshold())
         metrics.update(
@@ -206,6 +250,18 @@ class LearnerWorker(Worker):
                 "learner/early_stopped": float(completed < requested),
                 "learner/early_stop_patience": float(patience),
             }
+        )
+        self._set_train_progress(
+            active=False,
+            phase="done",
+            train_step=completed,
+            total_train_steps=requested,
+            wm_step=(completed if wm_total else 0),
+            wm_total_steps=wm_total,
+            cls_step=(completed if cls_total else 0),
+            cls_total_steps=cls_total,
+            vlarl_step=0,
+            vlarl_total_steps=0,
         )
         return metrics
 
@@ -1125,7 +1181,7 @@ def namespaced_world_model_metrics(metrics: dict[str, Any]) -> dict[str, float]:
 def online_classifier_update_step(**kwargs: Any) -> dict[str, Any]:
     """Lazy import wrapper preserving optional-Ray import isolation."""
 
-    from dreamervla.runners.classifier_update import online_classifier_update_step as _impl
+    from dreamervla.runtime.classifier_update import online_classifier_update_step as _impl
 
     return _impl(**kwargs)
 

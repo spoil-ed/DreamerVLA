@@ -19,7 +19,7 @@ from typing import Any
 
 import numpy as np
 
-from dreamervla.runners.render_device_config import (
+from dreamervla.runtime.render_device import (
     cuda_visible_devices_from_env,
     parse_device_ids,
 )

@@ -5,7 +5,6 @@ import torch
 
 from dreamervla.envs.world_model.base_world_model_env import WorldModelEnvProtocol
 from dreamervla.envs.world_model.latent_world_model_env import LatentWorldModelEnv
-from dreamervla.utils.frozen_components import state_dict_sha256
 
 
 class _StubWorldEnv:
@@ -35,7 +34,7 @@ def test_world_model_env_protocol_runtime_checkable():
     assert isinstance(_StubWorldEnv(), WorldModelEnvProtocol)
 
 
-def test_latent_world_model_env_builds_flat_hydra_configs_and_freezes_components():
+def test_latent_world_model_env_builds_flat_hydra_configs_for_inference():
     env = LatentWorldModelEnv(
         world_model={
             "_target_": (
@@ -52,21 +51,13 @@ def test_latent_world_model_env_builds_flat_hydra_configs_and_freezes_components
         },
         latent_dim=2,
         action_dim=1,
-        freeze_components=True,
     )
 
     assert env.world_model.training is False
     assert env.classifier is not None
     assert env.classifier.training is False
-    assert all(not parameter.requires_grad for parameter in env.world_model.parameters())
-    assert all(not parameter.requires_grad for parameter in env.classifier.parameters())
-
-    before = env.component_state_hashes()
     env.reset_slot(0)
     env.step_slot(0, [0.0])
-    after = env.component_state_hashes()
-
-    assert after == before
 
 
 def test_latent_world_model_env_preserves_world_model_checkpoint_dtype_on_load():
@@ -76,13 +67,13 @@ def test_latent_world_model_env_preserves_world_model_checkpoint_dtype_on_load()
         classifier=None,
         latent_dim=2,
         action_dim=1,
-        freeze_components=True,
     )
 
     env.load_world_model_state(source, version=1)
 
     assert next(env.world_model.parameters()).dtype == torch.bfloat16
-    assert env.component_state_hashes()["world_model"] == state_dict_sha256(source)
+    loaded = env.world_model.state_dict()
+    assert all(torch.equal(loaded[key], value) for key, value in source.items())
 
 
 def test_latent_world_model_env_preserves_classifier_checkpoint_dtype_on_load():
@@ -92,14 +83,14 @@ def test_latent_world_model_env_preserves_classifier_checkpoint_dtype_on_load():
         classifier=torch.nn.Linear(2, 1),
         latent_dim=2,
         action_dim=1,
-        freeze_components=True,
     )
 
     env.load_classifier_state(source, version=1)
 
     assert env.classifier is not None
     assert next(env.classifier.parameters()).dtype == torch.bfloat16
-    assert env.component_state_hashes()["classifier"] == state_dict_sha256(source)
+    loaded = env.classifier.state_dict()
+    assert all(torch.equal(loaded[key], value) for key, value in source.items())
 
 
 def test_latent_world_model_env_preserves_token_grid_at_model_boundaries():

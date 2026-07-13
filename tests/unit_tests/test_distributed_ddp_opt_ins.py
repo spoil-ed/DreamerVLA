@@ -3,7 +3,7 @@
 DDP / the process group cannot be constructed on a single CPU process, so these
 tests follow the established pattern in ``test_reduce_mean_dict_batched.py``:
 build the helper directly with ``world_size > 1`` and monkeypatch the
-``dreamervla.runners.distributed`` module globals (``DDP`` / ``dist`` /
+``dreamervla.runtime.distributed`` module globals (``DDP`` / ``dist`` /
 ``torch.cuda``) to capture what the helper *would* construct.
 """
 
@@ -13,7 +13,7 @@ from datetime import timedelta
 
 import torch
 
-from dreamervla.runners.distributed import NopretokenizeSFTDistributedHelper
+from dreamervla.runtime.distributed import NopretokenizeSFTDistributedHelper
 
 
 def _make_helper(world_size: int) -> NopretokenizeSFTDistributedHelper:
@@ -41,7 +41,7 @@ class _FakeDDP(torch.nn.Module):
 
 
 def _patch_ddp(monkeypatch) -> None:
-    monkeypatch.setattr("dreamervla.runners.distributed.DDP", _FakeDDP)
+    monkeypatch.setattr("dreamervla.runtime.distributed.DDP", _FakeDDP)
 
 
 # ── wrap_trainable_module: default-off must stay byte-identical ───────────────
@@ -160,20 +160,20 @@ def _patch_init(monkeypatch, captured: dict) -> None:
     monkeypatch.setenv("WORLD_SIZE", "2")
     monkeypatch.setenv("LOCAL_RANK", "0")
     monkeypatch.setattr(
-        "dreamervla.runners.distributed.dist.is_available", lambda: True
+        "dreamervla.runtime.distributed.dist.is_available", lambda: True
     )
     monkeypatch.setattr(
-        "dreamervla.runners.distributed.dist.is_initialized", lambda: False
+        "dreamervla.runtime.distributed.dist.is_initialized", lambda: False
     )
     monkeypatch.setattr(
-        "dreamervla.runners.distributed.torch.cuda.is_available", lambda: False
+        "dreamervla.runtime.distributed.torch.cuda.is_available", lambda: False
     )
 
     def _fake_init(**kwargs):  # noqa: ANN003
         captured.update(kwargs)
 
     monkeypatch.setattr(
-        "dreamervla.runners.distributed.dist.init_process_group", _fake_init
+        "dreamervla.runtime.distributed.dist.init_process_group", _fake_init
     )
 
 

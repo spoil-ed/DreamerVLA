@@ -1,6 +1,26 @@
 import numpy as np
+import pytest
 import torch
 from omegaconf import OmegaConf
+
+
+@pytest.mark.parametrize("backend", ["ray", "vectorized"])
+def test_rollout_collection_runner_selects_configured_backend(backend: str) -> None:
+    from dreamervla.runners import RolloutCollectionRunner
+
+    runner = RolloutCollectionRunner(
+        OmegaConf.create({"collect": {"backend": backend}})
+    )
+    assert runner.collection_backend == backend
+
+
+def test_rollout_collection_runner_rejects_unknown_backend() -> None:
+    from dreamervla.runners import RolloutCollectionRunner
+
+    with pytest.raises(ValueError, match="collect.backend"):
+        RolloutCollectionRunner(
+            OmegaConf.create({"collect": {"backend": "legacy"}})
+        )
 
 
 def test_collect_rollouts_experiment_composes_and_validates():
@@ -22,7 +42,7 @@ def test_collect_rollouts_experiment_composes_and_validates():
     OmegaConf.resolve(cfg)
     validate_cfg(cfg)
 
-    assert cfg._target_ == "dreamervla.runners.CollectRolloutsRunner"
+    assert cfg._target_ == "dreamervla.runners.RolloutCollectionRunner"
     oft = cfg.task.openvla_oft
     assert str(oft.ckpt_path).endswith("Openvla-oft-SFT-libero-goal-traj1")
     hidden_token = oft.hidden_token
@@ -41,7 +61,7 @@ def test_collect_rollouts_experiment_composes_and_validates():
 def _fake_cfg():
     return OmegaConf.create(
         {
-            "_target_": "dreamervla.runners.CollectRolloutsRunner",
+            "_target_": "dreamervla.runners.RolloutCollectionRunner",
             "task": {
                 "suite": "libero_goal",
                 "action_dim": 7,
@@ -81,9 +101,9 @@ def _fake_cfg():
 
 
 def test_build_collect_cfg_maps_task_and_collect():
-    from dreamervla.runners import CollectRolloutsRunner
+    from dreamervla.runners import RolloutCollectionRunner
 
-    runner = CollectRolloutsRunner(_fake_cfg())
+    runner = RolloutCollectionRunner(_fake_cfg())
     cc = runner._build_collect_cfg()
 
     assert cc["model_path"].endswith("Openvla-oft-SFT-libero-goal-traj1")
@@ -110,25 +130,25 @@ def test_build_collect_cfg_maps_task_and_collect():
     assert cc["memory_fraction"] == _fake_cfg().collect.memory_fraction
     assert cc["demos_per_shard"] == 0  # default: one shard per rank
     # every required key present
-    from dreamervla.runners.collect_parallel_rollouts import _require_keys
+    from dreamervla.runtime.collect_parallel_rollouts import _require_keys
     _require_keys(cc)
 
 
 def test_build_collect_cfg_forwards_demos_per_shard():
-    from dreamervla.runners import CollectRolloutsRunner
+    from dreamervla.runners import RolloutCollectionRunner
 
     cfg = _fake_cfg()
     cfg.collect.demos_per_shard = 25
-    cc = CollectRolloutsRunner(cfg)._build_collect_cfg()
+    cc = RolloutCollectionRunner(cfg)._build_collect_cfg()
     assert cc["demos_per_shard"] == 25
 
 
 def test_build_collect_cfg_forwards_num_inference_workers():
-    from dreamervla.runners import CollectRolloutsRunner
+    from dreamervla.runners import RolloutCollectionRunner
 
     cfg = _fake_cfg()
     cfg.collect.num_inference_workers = 2
-    cc = CollectRolloutsRunner(cfg)._build_collect_cfg()
+    cc = RolloutCollectionRunner(cfg)._build_collect_cfg()
     assert cc["num_inference_workers"] == 2
 
 
@@ -207,8 +227,8 @@ class _LangEpisodeExtractor(_EpisodeExtractor):
 
 
 def test_single_episode_executes_action_chunk_open_loop(monkeypatch):
-    import dreamervla.runners.collect_parallel_rollouts as mod
-    import dreamervla.runners.oft_collect_common as occ
+    import dreamervla.runtime.collect_parallel_rollouts as mod
+    import dreamervla.runtime.oft_collect as occ
 
     # process_action is now applied inside the shared oft_open_loop_action; patch it
     # at its real call site so the open-loop action SEQUENCE check stays independent
@@ -233,8 +253,8 @@ def test_single_episode_executes_action_chunk_open_loop(monkeypatch):
 
 
 def test_single_episode_records_language_embedding(monkeypatch):
-    import dreamervla.runners.collect_parallel_rollouts as mod
-    import dreamervla.runners.oft_collect_common as occ
+    import dreamervla.runtime.collect_parallel_rollouts as mod
+    import dreamervla.runtime.oft_collect as occ
 
     monkeypatch.setattr(occ, "process_action", lambda action: np.asarray(action, dtype=np.float64))
     env = _EpisodeEnv(done_after=2)

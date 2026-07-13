@@ -717,7 +717,7 @@ def test_production_experiments_do_not_embed_test_only_workers() -> None:
     project_root = Path(__file__).resolve().parents[2]
     experiment_dir = project_root / "configs" / "experiment"
 
-    assert not (experiment_dir / "manual_cotrain_ray_tiny.yaml").exists()
+    assert not (experiment_dir / "cotrain_tiny.yaml").exists()
     offenders = [
         path.relative_to(project_root)
         for path in experiment_dir.glob("*.yaml")
@@ -732,7 +732,7 @@ def test_online_replay_is_library_module_not_cli_local_class() -> None:
     runner_text = runner_path.read_text(encoding="utf-8")
 
     assert (project_root / "dreamervla" / "runners" / "online_replay.py").is_file()
-    assert "from dreamervla.runners.online_replay import" in runner_text
+    assert "from dreamervla.runtime.online_replay import" in runner_text
     assert "class OnlineReplay" not in runner_text
     assert "def pack_replay_task_stats_for_ddp" not in runner_text
     assert "def unpack_replay_task_stats_from_ddp" not in runner_text

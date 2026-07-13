@@ -8,7 +8,7 @@ import random
 
 from test_online_replay_task_balanced import _episode
 
-from dreamervla.runners.online_replay import OnlineReplay
+from dreamervla.runtime.online_replay import OnlineReplay
 
 
 def test_add_episode_stamps_current_policy_version():

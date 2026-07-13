@@ -5,7 +5,7 @@ import torch
 from torch import nn
 
 from dreamervla.envs.world_model.latent_world_model_env import LatentWorldModelEnv
-from dreamervla.runners.online_replay import OnlineReplay
+from dreamervla.runtime.online_replay import OnlineReplay
 from dreamervla.workers.env.trajectory_env_worker import WMEnvWorker
 
 
@@ -359,41 +359,3 @@ def test_wm_env_worker_bootstraps_initial_proprios_from_replay() -> None:
     finally:
         worker.close()
 
-
-def test_wm_env_worker_exposes_frozen_component_hashes() -> None:
-    worker = WMEnvWorker(
-        env_cfg={
-            "target": (
-                "dreamervla.envs.world_model.latent_world_model_env:"
-                "LatentWorldModelEnv"
-            ),
-            "kwargs": {
-                "world_model": {
-                    "target": (
-                        "dreamervla.workers.actor._test_models:"
-                        "TinyLumosWorldModel"
-                    ),
-                    "kwargs": {"hidden_dim": 2, "action_dim": 1},
-                },
-                "classifier": None,
-                "latent_dim": 2,
-                "action_dim": 1,
-                "num_envs": 1,
-                "device": "cpu",
-                "freeze_components": True,
-            },
-        },
-        num_slots=1,
-        rollout_epoch=1,
-        max_steps_per_rollout_epoch=1,
-        num_action_chunks=1,
-    )
-    try:
-        worker.init()
-
-        hashes = worker.component_state_hashes()
-
-        assert set(hashes) == {"world_model"}
-        assert len(hashes["world_model"]) == 64
-    finally:
-        worker.close()

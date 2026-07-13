@@ -59,7 +59,7 @@ def _plain_dict(value: Any) -> dict[str, Any]:
 
 
 def _libero_render_gpu_pool(env_cfg: Mapping[str, Any]) -> list[int]:
-    from dreamervla.runners.render_device_config import parse_device_ids
+    from dreamervla.runtime.render_device import parse_device_ids
 
     for key in ("gpu_pool", "render_devices", "egl_device_pool"):
         devices = parse_device_ids(_plain_dict(env_cfg).get(key))
@@ -2641,7 +2641,7 @@ class BaseTrajectoryEnvWorker(Worker):
         if self.action_postprocess in {"", "none", "false"}:
             env_actions = _batch_action_chunks(policy_action_chunks)
         elif self.action_postprocess in {"openvla_oft", "oft"}:
-            from dreamervla.runners.oft_collect_common import process_action_batch
+            from dreamervla.runtime.oft_collect import process_action_batch
 
             env_actions = process_action_batch(_batch_action_chunks(policy_action_chunks))
         else:
@@ -2852,27 +2852,6 @@ class BaseTrajectoryEnvWorker(Worker):
                     "or success_threshold"
                 )
 
-    def component_state_hashes(self) -> dict[str, str]:
-        """Return matching WM/classifier hashes across local inference envs."""
-
-        if self.role != "wm_env":
-            raise RuntimeError("component state hashes are only defined for WMEnvWorker")
-        if not self.envs:
-            raise RuntimeError("WMEnvWorker.init() has not been called")
-        hashes_by_env: list[dict[str, str]] = []
-        for env in self.envs:
-            hasher = getattr(env, "component_state_hashes", None)
-            if not callable(hasher):
-                raise TypeError(
-                    f"WMEnvWorker env {type(env).__name__} must expose "
-                    "component_state_hashes()"
-                )
-            hashes_by_env.append(dict(hasher()))
-        expected = hashes_by_env[0]
-        if any(item != expected for item in hashes_by_env[1:]):
-            raise RuntimeError("WMEnvWorker local component hashes diverged")
-        return expected
-
     def refresh_wm_initial_conditions(self) -> dict[str, float]:
         """Resample the next WM rollout group's aligned replay condition."""
 
@@ -2900,7 +2879,7 @@ class BaseTrajectoryEnvWorker(Worker):
     def _reset_slot(self, slot_id: int) -> dict[str, Any]:
         self._validate_slot(slot_id)
         env = self._env_for_slot(slot_id)
-        if self.role == "real_env":
+        if self.role in {"real_env", "eval_env"}:
             self._task_ids_by_slot[slot_id] = self._scheduled_task_id(slot_id)
         task_id = int(self._task_ids_by_slot[slot_id])
         episode_id = int(self._episode_ids_by_slot[slot_id])
@@ -3112,6 +3091,16 @@ class BaseTrajectoryEnvWorker(Worker):
                     0,
                     int(float(metric_values.get(f"env/{key}", 0.0))),
                 )
+        if self.role in {"real_env", "eval_env"}:
+            metric_values = metrics or {}
+            payload["episodes_completed"] = max(
+                0,
+                int(float(metric_values.get("env/episodes_completed", 0.0))),
+            )
+            payload["episodes_successful"] = max(
+                0,
+                int(float(metric_values.get("env/episodes_successful", 0.0))),
+            )
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = path.with_name(f".{path.name}.tmp.{os.getpid()}")
         tmp_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
@@ -3166,7 +3155,7 @@ class BaseTrajectoryEnvWorker(Worker):
         if self.action_postprocess in {"", "none", "false"}:
             return action_arr
         if self.action_postprocess in {"openvla_oft", "oft"}:
-            from dreamervla.runners.oft_collect_common import process_action
+            from dreamervla.runtime.oft_collect import process_action
 
             env_action = process_action(action_arr)
             if not np.isfinite(env_action).all():
@@ -3213,7 +3202,7 @@ class BaseTrajectoryEnvWorker(Worker):
         return True
 
     def _one_trajectory_per_rollout_epoch(self) -> bool:
-        if self.role != "real_env":
+        if self.role not in {"real_env", "eval_env"}:
             return False
         raw = self.env_cfg.get("one_trajectory_per_rollout_epoch", False)
         return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}

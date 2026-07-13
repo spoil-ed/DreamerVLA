@@ -93,16 +93,26 @@ def build_manual_cotrain_placement(
             component_groups=component_groups,
         )
 
-    real_workers = min(real_workers, count)
+    real_workers = min(real_workers, 1)
     env_specs = [
         RolePlacement(
             kind="env",
-            role="real_env" if gpu < real_workers else "wm_env",
-            rank=gpu,
+            role="real_env",
+            rank=rank,
+            gpu_ids=[],
+        )
+        for rank in range(real_workers)
+    ]
+    wm_gpus = list(range(1, count)) if real_workers else list(range(count))
+    env_specs.extend(
+        RolePlacement(
+            kind="env",
+            role="wm_env",
+            rank=real_workers + rank,
             gpu_ids=[gpu],
         )
-        for gpu in range(count)
-    ]
+        for rank, gpu in enumerate(wm_gpus)
+    )
     rollout_specs = [
         RolePlacement(kind="rollout", role="rollout", rank=gpu, gpu_ids=[gpu])
         for gpu in range(count)

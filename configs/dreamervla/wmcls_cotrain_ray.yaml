@@ -6,7 +6,7 @@ defaults:
   - openvla_onetraj_libero_cotrain_ray
   - _self_
 
-_target_: dreamervla.runners.ManualCotrainRayRunner
+_target_: dreamervla.runners.CotrainRunner
 
 cluster:
   num_nodes: 1
@@ -15,6 +15,7 @@ cluster:
 
 training:
   out_dir: ${oc.env:RUN_ROOT,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/pre_mainline/wmcls_cotrain_ray/${now:%Y%m%d_%H%M%S}}
+  debug: false
   device: cuda
   distributed_strategy: single
   resume: false
@@ -34,8 +35,8 @@ manual_cotrain:
   wm_rollout_lease_epochs: 1
   max_steps_per_rollout_epoch: 512
   wm_envs_per_worker: 16
-  eval_interval_global_steps: 0
-  eval_initial_global_step: false
+  eval_interval_global_steps: 10
+  eval_initial_global_step: true
   eval_protocol:
     num_envs: 25
 
@@ -61,5 +62,3 @@ env:
       bootstrap_group_size: ${manual_cotrain.wm_envs_per_worker}
       defer_initial_condition_bootstrap: true
       require_balanced_initial_conditions: true
-      kwargs:
-        freeze_components: false

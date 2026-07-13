@@ -107,7 +107,7 @@ def test_release_shell_entrypoints_are_self_contained() -> None:
     eval_text = (root / "scripts/experiments/cotrain/eval.sh").read_text(
         encoding="utf-8"
     )
-    assert "dreamervla.launchers.frozen_model_cotrain_ray" in train_text
+    assert "dreamervla.launchers.cotrain" in train_text
     assert "dreamervla.launchers.train" in eval_text
     assert "DVLA_ROOT" not in train_text
     assert "DVLA_DATA_ROOT" not in train_text

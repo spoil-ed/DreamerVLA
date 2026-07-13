@@ -4,8 +4,8 @@ import pytest
 import torch
 
 from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
-from dreamervla.runners.offline_seed import seed_replay_from_offline
-from dreamervla.runners.online_replay import OnlineReplay
+from dreamervla.runtime.offline_seed import seed_replay_from_offline
+from dreamervla.runtime.online_replay import OnlineReplay
 
 _HIDDEN_TOKEN_CONFIG = {
     "action_head_type": "oft_discrete_token",

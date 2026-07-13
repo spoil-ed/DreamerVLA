@@ -23,7 +23,7 @@ from omegaconf import DictConfig, ListConfig, OmegaConf, open_dict
 from torch.utils.data import DataLoader
 
 from dreamervla.constants import CHECKPOINT_FORMAT_VERSION
-from dreamervla.runners.online_utils import SuccessTracker
+from dreamervla.runtime.online_utils import SuccessTracker
 from dreamervla.utils.console import (
     fmt_value,
     format_metric_table,

@@ -13,8 +13,8 @@ from typing import Any
 import numpy as np
 import torch
 
-from dreamervla.runners.action_chunk_queue import ActionChunkQueue
-from dreamervla.runners.oft_collect_common import process_action
+from dreamervla.runtime.action_chunk_queue import ActionChunkQueue
+from dreamervla.runtime.oft_collect import process_action
 from dreamervla.scheduler.worker import Worker
 from dreamervla.workers.inference.rollout_contract import RolloutBatchOutput
 

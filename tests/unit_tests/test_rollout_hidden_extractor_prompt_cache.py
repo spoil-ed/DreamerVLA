@@ -22,7 +22,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from dreamervla.runners.rollout_hidden_extractor import OFTRolloutHiddenExtractor
+from dreamervla.runtime.rollout_hidden_extractor import OFTRolloutHiddenExtractor
 
 
 # ── fake processor mirroring PrismaticProcessor.__call__ structure ───────────

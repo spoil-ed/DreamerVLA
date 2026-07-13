@@ -22,7 +22,7 @@ def test_ray_coldstart_real_oft_matches_nonray_schema(tmp_path) -> None:
     from hydra import compose, initialize_config_dir
 
     from dreamervla.runners.cold_start_ray_collect_runner import ColdStartRayCollectRunner
-    from dreamervla.runners.oft_collect_common import load_policy, vla_hidden_token_spec
+    from dreamervla.runtime.oft_collect import load_policy, vla_hidden_token_spec
     from dreamervla.train import run
 
     if ray.is_initialized():

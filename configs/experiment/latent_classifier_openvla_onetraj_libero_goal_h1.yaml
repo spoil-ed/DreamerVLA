@@ -3,7 +3,7 @@ defaults:
   - /task: openvla_onetraj_libero
   - _self_
 
-_target_: dreamervla.runners.LatentClassifierRunner
+_target_: dreamervla.runners.SuccessClassifierTrainingRunner
 seed: 7
 
 training:

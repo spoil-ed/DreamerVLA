@@ -898,7 +898,7 @@ class OpenVLAOFTPolicy(nn.Module):
 
         if self.processor is None:
             raise RuntimeError("make_extractor requires a checkpoint-loaded processor")
-        from dreamervla.runners.rollout_hidden_extractor import (
+        from dreamervla.runtime.rollout_hidden_extractor import (
             OFTRolloutHiddenExtractor,
         )
 

@@ -112,7 +112,7 @@ def test_eval_libero_config_uses_latent_dreamer_defaults() -> None:
 
 
 def test_compat_rssm_actor_input_source_normalizes_to_latent() -> None:
-    from dreamervla.runners.embodied_eval_runner import (
+    from dreamervla.runners.libero_vla_evaluation_runner import (
         normalize_dreamer_actor_input_source,
         normalize_dreamer_rollout_mode,
     )
@@ -124,7 +124,7 @@ def test_compat_rssm_actor_input_source_normalizes_to_latent() -> None:
 
 
 def test_manual_ray_oft_eval_normalizer_keeps_stateless_latent_mode() -> None:
-    from dreamervla.runners.embodied_eval_runner import EmbodiedEvalRunner
+    from dreamervla.runners.libero_vla_evaluation_runner import LIBEROVLAEvaluationRunner
 
     cfg = OmegaConf.create(
         {
@@ -160,7 +160,7 @@ def test_manual_ray_oft_eval_normalizer_keeps_stateless_latent_mode() -> None:
         }
     )
 
-    EmbodiedEvalRunner._normalize_manual_ray_dreamer_eval_cfg(cfg)
+    LIBEROVLAEvaluationRunner._normalize_manual_ray_dreamer_eval_cfg(cfg)
 
     assert OmegaConf.select(cfg, "eval.dreamer_rollout_mode") == "stateless"
     assert OmegaConf.select(cfg, "eval.dreamer_actor_input_source") == "latent"
@@ -168,10 +168,10 @@ def test_manual_ray_oft_eval_normalizer_keeps_stateless_latent_mode() -> None:
 
 
 def test_stateless_dreamer_eval_dispatches_to_dreamer_path(monkeypatch) -> None:
-    from dreamervla.runners.embodied_eval_runner import EmbodiedEvalRunner
-    from dreamervla.runners.pretokenize_vla_runner import PretokenizeVLARunner
+    from dreamervla.runners.libero_vla_evaluation_runner import LIBEROVLAEvaluationRunner
+    from dreamervla.runtime.libero_vla_evaluation_base import LIBEROVLAEvaluationBase
 
-    runner = EmbodiedEvalRunner.__new__(EmbodiedEvalRunner)
+    runner = LIBEROVLAEvaluationRunner.__new__(LIBEROVLAEvaluationRunner)
     runner._dreamer_eval = True
     runner._dreamer_rollout_mode = "stateless"
     called: list[int] = []
@@ -184,11 +184,11 @@ def test_stateless_dreamer_eval_dispatches_to_dreamer_path(monkeypatch) -> None:
         raise AssertionError("stateless Dreamer eval fell back to base VLA eval")
 
     monkeypatch.setattr(
-        EmbodiedEvalRunner,
+        LIBEROVLAEvaluationRunner,
         "_evaluate_libero_online_latent",
         fake_dreamer_eval,
     )
-    monkeypatch.setattr(PretokenizeVLARunner, "evaluate_libero", fail_base_eval)
+    monkeypatch.setattr(LIBEROVLAEvaluationBase, "evaluate_libero", fail_base_eval)
 
     metrics = runner.evaluate_libero(epoch=5)
 
@@ -197,7 +197,7 @@ def test_stateless_dreamer_eval_dispatches_to_dreamer_path(monkeypatch) -> None:
 
 
 def test_eval_summary_averages_three_trials_per_task() -> None:
-    from dreamervla.runners.eval_metrics import summarize_libero_task_success
+    from dreamervla.runtime.eval_metrics import summarize_libero_task_success
 
     metrics = summarize_libero_task_success(
         [
@@ -217,7 +217,7 @@ def test_eval_summary_averages_three_trials_per_task() -> None:
 
 
 def test_eval_summary_uses_task_macro_average_not_episode_weighted() -> None:
-    from dreamervla.runners.eval_metrics import summarize_libero_task_success
+    from dreamervla.runtime.eval_metrics import summarize_libero_task_success
 
     metrics = summarize_libero_task_success(
         [
@@ -255,9 +255,9 @@ def test_libero_action_chunk_selection_matches_rlinf(monkeypatch) -> None:
 
 
 def test_eval_init_state_indices_default_uses_num_episodes() -> None:
-    from dreamervla.runners.embodied_eval_runner import EmbodiedEvalRunner
+    from dreamervla.runners.libero_vla_evaluation_runner import LIBEROVLAEvaluationRunner
 
-    indices = EmbodiedEvalRunner._eval_init_state_indices(
+    indices = LIBEROVLAEvaluationRunner._eval_init_state_indices(
         num_init_states=50,
         num_episodes=3,
         enumerate_all_init_states=False,
@@ -267,10 +267,10 @@ def test_eval_init_state_indices_default_uses_num_episodes() -> None:
 
 
 def test_eval_init_state_indices_enumerate_visits_every_state_once_in_order() -> None:
-    from dreamervla.runners.embodied_eval_runner import EmbodiedEvalRunner
+    from dreamervla.runners.libero_vla_evaluation_runner import LIBEROVLAEvaluationRunner
 
     num_init_states = 7
-    indices = EmbodiedEvalRunner._eval_init_state_indices(
+    indices = LIBEROVLAEvaluationRunner._eval_init_state_indices(
         num_init_states=num_init_states,
         num_episodes=3,
         enumerate_all_init_states=True,
@@ -283,7 +283,7 @@ def test_eval_init_state_indices_enumerate_visits_every_state_once_in_order() ->
 
 
 def test_eval_enumerate_drives_mock_env_over_all_init_states_in_order() -> None:
-    from dreamervla.runners.embodied_eval_runner import EmbodiedEvalRunner
+    from dreamervla.runners.libero_vla_evaluation_runner import LIBEROVLAEvaluationRunner
 
     # Distinct sentinels stand in for a task's init states.
     initial_states = [f"init_{i}" for i in range(5)]
@@ -297,7 +297,7 @@ def test_eval_enumerate_drives_mock_env_over_all_init_states_in_order() -> None:
             return state
 
     env = MockEnv()
-    indices = EmbodiedEvalRunner._eval_init_state_indices(
+    indices = LIBEROVLAEvaluationRunner._eval_init_state_indices(
         num_init_states=len(initial_states),
         num_episodes=3,
         enumerate_all_init_states=True,

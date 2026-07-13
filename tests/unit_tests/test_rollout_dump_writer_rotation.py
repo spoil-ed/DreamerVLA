@@ -140,8 +140,8 @@ def test_start_index_offsets_shard_names_for_resume(
 
 def test_seed_replay_reads_rotated_shards(tmp_path, hidden_token_preprocess_config):
     """The warmup loader globs *.hdf5, so sliced shards seed exactly like one shard."""
-    from dreamervla.runners.offline_seed import seed_replay_from_offline
-    from dreamervla.runners.online_replay import OnlineReplay
+    from dreamervla.runtime.offline_seed import seed_replay_from_offline
+    from dreamervla.runtime.online_replay import OnlineReplay
 
     reward, hidden = tmp_path / "reward", tmp_path / "hidden"
     _write(

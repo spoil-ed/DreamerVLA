@@ -39,8 +39,8 @@ def test_cotrain_train_script_uses_train_only_recipe_without_pinned_warm_states(
         encoding="utf-8"
     )
 
-    assert "dreamervla.launchers.frozen_model_cotrain_ray" in text
-    assert "experiment=dreamervla_wmcls_cotrain_ray" in text
+    assert "dreamervla.launchers.cotrain" in text
+    assert "experiment=dreamervla_wmcls_cotrain_ray" not in text
     assert "manual_cotrain.global_steps" not in text
     assert "/inspire/" not in text
     assert "20260712" not in text
@@ -103,7 +103,7 @@ def test_hidden_token_preprocess_uses_configured_torchrun_world_size() -> None:
 def test_cotrain_world_model_ddp_keeps_online_defaults_configurable() -> None:
     from omegaconf import OmegaConf
 
-    from dreamervla.runners.online_cotrain_runner import (
+    from dreamervla.runtime.world_model_training_common import (
         _world_model_ddp_wrap_kwargs,
     )
 

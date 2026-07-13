@@ -8,7 +8,7 @@ from omegaconf import OmegaConf
 
 
 def test_eval_protocol_metadata_records_comparator_fields() -> None:
-    from dreamervla.runners.embodied_eval_runner import evaluation_protocol_metadata
+    from dreamervla.runners.libero_vla_evaluation_runner import evaluation_protocol_metadata
 
     cfg = OmegaConf.create(
         {
@@ -57,9 +57,9 @@ def test_eval_protocol_metadata_records_comparator_fields() -> None:
 
 
 def test_eval_strict_component_load_rejects_partial_state() -> None:
-    from dreamervla.runners.embodied_eval_runner import EmbodiedEvalRunner
+    from dreamervla.runners.libero_vla_evaluation_runner import LIBEROVLAEvaluationRunner
 
-    runner = EmbodiedEvalRunner.__new__(EmbodiedEvalRunner)
+    runner = LIBEROVLAEvaluationRunner.__new__(LIBEROVLAEvaluationRunner)
     runner.cfg = OmegaConf.create({"eval": {"require_strict_component_load": True}})
     runner.distributed = SimpleNamespace(is_main_process=False)
     model = torch.nn.Linear(2, 1)

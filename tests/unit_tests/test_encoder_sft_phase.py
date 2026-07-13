@@ -93,6 +93,29 @@ def test_encoder_sft_updates_only_encoder_from_successful_decisions() -> None:
     )
 
 
+def test_encoder_sft_uses_dedicated_cotrain_progress_name(monkeypatch) -> None:
+    import dreamervla.workers.actor.embodied_fsdp_actor as actor_module
+
+    names: list[str] = []
+
+    class _Progress:
+        def __init__(self, _total, name, **_kwargs) -> None:
+            names.append(str(name))
+
+        def set_status(self, _status: str) -> None:
+            return None
+
+        def set(self, _done: int, **_kwargs) -> None:
+            return None
+
+    monkeypatch.setattr(actor_module, "ProgressReporter", _Progress)
+    actor = _actor()
+
+    actor.encoder_sft(_batch())
+
+    assert names == ["cotrain-vla-real-sft/00000007"]
+
+
 def test_encoder_sft_skips_without_success_and_changes_no_parameters() -> None:
     actor = _actor()
     before = _parameters(actor, "")

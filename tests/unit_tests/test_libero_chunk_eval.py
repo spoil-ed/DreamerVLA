@@ -4,7 +4,7 @@ import numpy as np
 from omegaconf import OmegaConf
 
 from dreamervla.envs.libero.libero_env import LiberoEnv
-from dreamervla.runners.libero_chunk_eval import ChunkEvalTally, run_rlinf_chunk_eval
+from dreamervla.runtime.libero_chunk_eval import ChunkEvalTally, run_rlinf_chunk_eval
 
 
 class _ScriptedChunkEnv:
@@ -180,7 +180,7 @@ def test_libero_env_ordered_reset_ids_tile_to_requested_num_envs():
 
 
 def test_runner_rlinf_chunk_uses_configured_num_envs_without_episode_cap(monkeypatch):
-    from dreamervla.runners.pretokenize_vla_runner import PretokenizeVLARunner
+    from dreamervla.runtime.libero_vla_evaluation_base import LIBEROVLAEvaluationBase
 
     created: dict[str, int] = {}
 
@@ -210,11 +210,11 @@ def test_runner_rlinf_chunk_uses_configured_num_envs_without_episode_cap(monkeyp
         FakeLiberoEnv,
     )
     monkeypatch.setattr(
-        "dreamervla.runners.libero_chunk_eval.run_rlinf_chunk_eval",
+        "dreamervla.runtime.libero_chunk_eval.run_rlinf_chunk_eval",
         lambda *_args, **_kwargs: FakeTally(),
     )
 
-    runner = PretokenizeVLARunner.__new__(PretokenizeVLARunner)
+    runner = LIBEROVLAEvaluationBase.__new__(LIBEROVLAEvaluationBase)
     runner.cfg = OmegaConf.create(
         {
             "eval": {
@@ -264,7 +264,7 @@ def test_runner_rlinf_chunk_uses_configured_num_envs_without_episode_cap(monkeyp
 def test_build_libero_env_cfg_maps_eval_knobs():
     from omegaconf import OmegaConf
 
-    from dreamervla.runners.pretokenize_vla_runner import build_libero_env_cfg
+    from dreamervla.runtime.libero_vla_evaluation_base import build_libero_env_cfg
 
     eval_cfg = OmegaConf.create(
         {

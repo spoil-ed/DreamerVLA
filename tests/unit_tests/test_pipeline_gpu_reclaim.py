@@ -5,7 +5,7 @@ pre-seeded sidecar embeddings), so the pipeline runner shuttles it to CPU for th
 warmup and back to the device before the online phase that needs it.
 """
 
-from dreamervla.runners.online_cotrain_pipeline_runner import OnlineCotrainPipelineRunner
+from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
 
 
 class _SpyEncoder:
@@ -18,7 +18,7 @@ class _SpyEncoder:
 
 
 def _bare_runner(encoder):
-    runner = OnlineCotrainPipelineRunner.__new__(OnlineCotrainPipelineRunner)
+    runner = WorldModelTrainingRunner.__new__(WorldModelTrainingRunner)
     runner.encoder = encoder
     return runner
 

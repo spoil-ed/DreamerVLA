@@ -49,7 +49,7 @@ def apply_libero_render_regime(backend: str, shard_id: int, gpu_pool: list[int])
         os.environ.pop("MUJOCO_EGL_DEVICE_ID", None)
         return
 
-    from dreamervla.runners.render_device_config import parse_device_ids
+    from dreamervla.runtime.render_device import parse_device_ids
 
     devices = parse_device_ids(gpu_pool)
     if not devices:

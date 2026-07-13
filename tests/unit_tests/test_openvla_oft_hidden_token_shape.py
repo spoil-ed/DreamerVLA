@@ -18,8 +18,8 @@ from dreamervla.preprocess.sidecar_schema import (
     validate_hidden_token_preprocess_config,
     validate_hidden_token_sidecar_dir,
 )
-from dreamervla.runners.oft_collect_common import make_preprocess_config
-from dreamervla.runners.rollout_hidden_extractor import (
+from dreamervla.runtime.oft_collect import make_preprocess_config
+from dreamervla.runtime.rollout_hidden_extractor import (
     hidden_token_from_projected,
 )
 

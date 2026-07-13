@@ -1,5 +1,5 @@
-from dreamervla.runners.eval_metrics import summarize_libero_task_success
-from dreamervla.runners.libero_rollout_runner import (
+from dreamervla.runtime.eval_metrics import summarize_libero_task_success
+from dreamervla.runtime.libero_rollout import (
     SuccessTally,
     build_grid_work_list,
     run_vectorized_rollout,
@@ -112,7 +112,7 @@ class _StubOFTExtractor:
 def test_parallel_oft_slots_isolate_per_slot_call_count():
     import numpy as np
 
-    from dreamervla.runners.pretokenize_vla_runner import _EvalFrameHistoryExtractor
+    from dreamervla.runtime.libero_vla_evaluation_base import _EvalFrameHistoryExtractor
 
     def rec(v):
         img = np.zeros((4, 4, 3), dtype=np.uint8)

@@ -13,11 +13,6 @@ import numpy as np
 import torch
 from torch import nn
 
-from dreamervla.utils.frozen_components import (
-    assert_module_frozen,
-    module_state_sha256,
-)
-
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -82,7 +77,6 @@ class LatentWorldModelEnv:
         num_envs: int = 1,
         inference_dtype: str | torch.dtype | None = None,
         observation_format: str = "numpy",
-        freeze_components: bool = False,
     ) -> None:
         self.world_model = _build_component(world_model)
         self.classifier = None if classifier is None else _build_component(classifier)
@@ -109,7 +103,6 @@ class LatentWorldModelEnv:
                 f"got {observation_format!r}"
             )
         self.observation_format = normalized_observation_format
-        self.freeze_components = bool(freeze_components)
         if self.num_envs <= 0:
             raise ValueError("num_envs must be positive")
         if (self.token_count is None) != (self.token_dim is None):
@@ -165,10 +158,6 @@ class LatentWorldModelEnv:
         ]
         if self.classifier is not None:
             self.classifier.to(self.device).eval()
-        if self.freeze_components:
-            self.world_model.requires_grad_(False)
-            if self.classifier is not None:
-                self.classifier.requires_grad_(False)
         classifier_window = self._classifier_window_size()
         classifier_history_dtype = self._observation_tensor_dtype()
         self._classifier_latent_history = torch.zeros(
@@ -195,18 +184,6 @@ class LatentWorldModelEnv:
 
     def set_success_threshold(self, threshold: float) -> None:
         self.success_threshold = float(threshold)
-
-    def component_state_hashes(self) -> dict[str, str]:
-        """Hash immutable inference components for causal-audit boundaries."""
-
-        if self.freeze_components:
-            assert_module_frozen(self.world_model, name="world_model")
-            if self.classifier is not None:
-                assert_module_frozen(self.classifier, name="classifier")
-        hashes = {"world_model": module_state_sha256(self.world_model)}
-        if self.classifier is not None:
-            hashes["classifier"] = module_state_sha256(self.classifier)
-        return hashes
 
     def reset(
         self,
@@ -1020,8 +997,6 @@ class LatentWorldModelEnv:
         if state_dict:
             self.world_model.load_state_dict(state_dict, assign=True)
         self.world_model.to(self.device).eval()
-        if self.freeze_components:
-            self.world_model.requires_grad_(False)
         self.wm_version = int(version)
 
     def load_classifier_state(self, state_dict: dict[str, Any], version: int) -> None:
@@ -1031,8 +1006,6 @@ class LatentWorldModelEnv:
         elif state_dict:
             self.classifier.load_state_dict(state_dict, assign=True)
             self.classifier.to(self.device).eval()
-            if self.freeze_components:
-                self.classifier.requires_grad_(False)
         self.classifier_version = int(version)
 
     def make_transition(

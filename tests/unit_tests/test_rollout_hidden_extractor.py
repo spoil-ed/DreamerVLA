@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 import torch
 
-from dreamervla.runners.rollout_hidden_extractor import (
+from dreamervla.runtime.rollout_hidden_extractor import (
     OFTBatchedDecoder,
     OFTRolloutHiddenExtractor,
     hidden_token_from_projected,
@@ -153,7 +153,7 @@ def test_rollout_hidden_extractor_docs_use_role_based_wm_wording() -> None:
 
 
 def test_left_pad_batch_pads_left_and_repositions_bos() -> None:
-    from dreamervla.runners.rollout_hidden_extractor import _left_pad_batch
+    from dreamervla.runtime.rollout_hidden_extractor import _left_pad_batch
 
     bos, pad = 1, 0
     short = torch.tensor([[bos, 10, 11]])
@@ -172,7 +172,7 @@ def test_left_pad_batch_pads_left_and_repositions_bos() -> None:
 
 
 def test_left_pad_batch_same_length_is_noop() -> None:
-    from dreamervla.runners.rollout_hidden_extractor import _left_pad_batch
+    from dreamervla.runtime.rollout_hidden_extractor import _left_pad_batch
 
     first = torch.tensor([[1, 10, 11]])
     second = torch.tensor([[1, 20, 21]])
@@ -185,7 +185,7 @@ def test_left_pad_batch_same_length_is_noop() -> None:
 
 
 def test_batched_forward_rejects_empty() -> None:
-    from dreamervla.runners.rollout_hidden_extractor import batched_forward
+    from dreamervla.runtime.rollout_hidden_extractor import batched_forward
 
     with pytest.raises(ValueError):
         batched_forward(object(), [], "dummy")
@@ -256,7 +256,7 @@ def _random_obs(seed: int) -> dict[str, np.ndarray]:
 )
 @pytest.mark.skipif(not _gpu_available(), reason=_SKIP_GPU)
 def test_batched_forward_discrete_headless(oft_discrete_policy) -> None:
-    from dreamervla.runners.rollout_hidden_extractor import batched_forward
+    from dreamervla.runtime.rollout_hidden_extractor import batched_forward
 
     assert oft_discrete_policy.action_head is None
     task = "open the middle drawer of the cabinet"

@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 
 from dreamervla.runners import vec_rollout_env as vec_mod
-from dreamervla.runners.vec_rollout_env import VecRolloutEnv, default_env_factory
+from dreamervla.runtime.vec_rollout_env import VecRolloutEnv, default_env_factory
 
 # ── module-level fakes (must be importable for spawn pickling) ────────────────
 

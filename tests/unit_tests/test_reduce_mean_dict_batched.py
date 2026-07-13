@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import torch
 
-from dreamervla.runners.distributed import NopretokenizeSFTDistributedHelper
+from dreamervla.runtime.distributed import NopretokenizeSFTDistributedHelper
 
 
 def _make_helper(world_size: int) -> NopretokenizeSFTDistributedHelper:
@@ -69,7 +69,7 @@ def test_issues_exactly_one_all_reduce_for_multi_key_dict(monkeypatch):
         return None
 
     monkeypatch.setattr(
-        "dreamervla.runners.distributed.dist.all_reduce", _fake_all_reduce
+        "dreamervla.runtime.distributed.dist.all_reduce", _fake_all_reduce
     )
 
     metrics = {"a": 1.0, "b": 2.0, "c": 3.0, "d": 4.0}
@@ -100,7 +100,7 @@ def test_distributed_divisor_and_keys_preserved(monkeypatch):
     helper = _make_helper(world_size=world_size)
     monkeypatch.setattr(helper, "_reduce_device", lambda: torch.device("cpu"))
     monkeypatch.setattr(
-        "dreamervla.runners.distributed.dist.all_reduce",
+        "dreamervla.runtime.distributed.dist.all_reduce",
         lambda tensor, op=None: None,  # identity SUM (single rank)
     )
 

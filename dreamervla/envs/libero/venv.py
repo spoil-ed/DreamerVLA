@@ -1222,7 +1222,7 @@ class _EglSubprocEnvWorker(SubprocEnvWorker):
 
 def _default_factory(cfg_kwargs: dict[str, Any]) -> Any:
     """Build + enter the DreamerVLA online train env (same env as the osmesa path)."""
-    from dreamervla.runners.vec_rollout_env import default_env_factory
+    from dreamervla.runtime.vec_rollout_env import default_env_factory
 
     return default_env_factory(cfg_kwargs)
 

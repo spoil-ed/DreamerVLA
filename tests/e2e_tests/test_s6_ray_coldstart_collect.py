@@ -148,8 +148,8 @@ def test_fake_coldstart_50pct_success_seeds_cotrain_warmup(tmp_path, monkeypatch
     import torch
 
     from dreamervla.runners.cold_start_ray_collect_runner import ColdStartRayCollectRunner
-    from dreamervla.runners.offline_seed import seed_replay_from_offline
-    from dreamervla.runners.online_replay import OnlineReplay
+    from dreamervla.runtime.offline_seed import seed_replay_from_offline
+    from dreamervla.runtime.online_replay import OnlineReplay
 
     if ray.is_initialized():
         ray.shutdown()
@@ -222,7 +222,7 @@ def test_fake_coldstart_50pct_success_seeds_cotrain_warmup(tmp_path, monkeypatch
     assert batch["obs_embedding"].shape == (4, 3, 4)
     assert batch["current_actions"].shape[-1] == 7
 
-    import dreamervla.runners.online_cotrain_pipeline_runner as pipeline
+    import dreamervla.runners.world_model_training_runner as pipeline
 
     calls = {"wm": 0, "cls": 0}
 
@@ -239,7 +239,7 @@ def test_fake_coldstart_50pct_success_seeds_cotrain_warmup(tmp_path, monkeypatch
     monkeypatch.setattr(pipeline, "world_model_pretrain_step", fake_wm_step)
     monkeypatch.setattr(pipeline, "online_classifier_update_step", fake_cls_step)
 
-    runner = pipeline.OnlineCotrainPipelineRunner.__new__(pipeline.OnlineCotrainPipelineRunner)
+    runner = pipeline.WorldModelTrainingRunner.__new__(pipeline.WorldModelTrainingRunner)
     runner.device = torch.device("cpu")
     runner.global_step = 0
     runner._build_wm_pretrain_batch = lambda sampled: {

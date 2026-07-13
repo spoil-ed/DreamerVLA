@@ -6,7 +6,7 @@ defaults:
   - _self_
   - /task: openvla_onetraj_coldstart_libero
 
-_target_: dreamervla.runners.CollectRolloutsRunner
+_target_: dreamervla.runners.RolloutCollectionRunner
 
 hydra:
   run:
@@ -21,6 +21,7 @@ training:
   resume: false
 
 collect:
+  backend: vectorized
   policy_mode: discrete
   num_images_in_input: ${task.openvla_oft.num_images_in_input}
   gpu_id: 0                # single-process device; ignored under torchrun

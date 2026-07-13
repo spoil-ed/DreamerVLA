@@ -6,7 +6,7 @@ from typing import Any
 
 import numpy as np
 
-from dreamervla.runners.vectorized_collect import build_step_record, proprio_from_record
+from dreamervla.runtime.vectorized_collect import build_step_record, proprio_from_record
 
 
 def build_dump_step(

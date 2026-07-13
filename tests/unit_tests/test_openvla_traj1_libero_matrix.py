@@ -24,17 +24,12 @@ MATRIX = [
 ]
 
 MAINLINE_ROUTES = (
-    ("collect_rollouts_onetraj", "coldstart", "dreamervla.runners.CollectRolloutsRunner"),
-    ("collect_rollouts_ray", "coldstart", "dreamervla.runners.ColdStartRayCollectRunner"),
-    (
-        "openvla_onetraj_libero_cotrain_noray",
-        "offline",
-        "dreamervla.runners.OnlineCotrainPipelineRunner",
-    ),
+    ("collect_rollouts_onetraj", "coldstart", "dreamervla.runners.RolloutCollectionRunner"),
+    ("collect_rollouts_ray", "coldstart", "dreamervla.runners.RolloutCollectionRunner"),
     (
         "openvla_onetraj_libero_cotrain_ray",
         "offline",
-        "dreamervla.runners.ManualCotrainRayRunner",
+        "dreamervla.runners.CotrainRunner",
     ),
 )
 
@@ -100,17 +95,6 @@ def test_every_mainline_route_suite_composition_has_exact_hidden_token_contract(
 ) -> None:
     task = coldstart_task if task_kind == "coldstart" else offline_task
     overrides = [f"experiment={experiment}", f"task={task}"]
-    if experiment.endswith("_noray"):
-        reward_dir = tmp_path / "reward"
-        hidden_dir = tmp_path / "hidden"
-        reward_dir.mkdir()
-        hidden_dir.mkdir()
-        overrides.extend(
-            [
-                f"offline_warmup.data_dir={reward_dir}",
-                f"offline_warmup.hidden_dir={hidden_dir}",
-            ]
-        )
     cfg = _compose(overrides)
 
     validate_cfg(cfg)
@@ -151,47 +135,6 @@ def test_every_mainline_route_suite_composition_has_exact_hidden_token_contract(
         assert cfg.env.wm.cfg.kwargs.token_dim == 4096
 
 
-def test_frozen_ray_reuses_mainline_rl_components_and_hidden_token_contract() -> None:
-    mainline = _compose(
-        [
-            "experiment=openvla_onetraj_libero_cotrain_ray",
-            "task=openvla_onetraj_libero",
-        ]
-    )
-    frozen = _compose(
-        [
-            "experiment=dreamervla_frozen_models_rl_ray",
-            "task=openvla_onetraj_libero",
-        ]
-    )
-
-    for cfg in (mainline, frozen):
-        assert cfg._target_ == "dreamervla.runners.ManualCotrainRayRunner"
-        assert cfg.env.wm.cfg.kwargs.token_count == 256
-        assert cfg.env.wm.cfg.kwargs.token_dim == 4096
-        assert cfg.env.wm.cfg.kwargs.latent_dim == 256 * 4096
-    assert mainline.ray_components.policy.target == (
-        "dreamervla.models.embodiment.OpenVLAOFTPolicy"
-    )
-    assert frozen.ray_components.policy.target == (
-        "dreamervla.algorithms.actor.LatentToOpenVLAHiddenStateActor"
-    )
-    assert OmegaConf.to_container(frozen.ray_components.policy, resolve=True) != (
-        OmegaConf.to_container(mainline.ray_components.policy, resolve=True)
-    )
-    assert (
-        OmegaConf.select(
-            mainline,
-            "manual_cotrain.learner_updates_enabled",
-            default=True,
-        )
-        is True
-    )
-    assert mainline.learner is not None
-    assert frozen.manual_cotrain.learner_updates_enabled is False
-    assert frozen.learner is None
-
-
 @pytest.mark.parametrize("offline_task,_coldstart_task,_suite", MATRIX)
 def test_openvla_traj1_hidden_token_dims_are_resolver_expressions(
     offline_task,
@@ -221,7 +164,7 @@ def test_openvla_traj1_hidden_token_dims_are_resolver_expressions(
 def test_standard_h1_classifier_experiment_composes() -> None:
     cfg = _compose(["experiment=latent_classifier_openvla_onetraj_libero_goal_h1"])
 
-    assert cfg._target_ == "dreamervla.runners.LatentClassifierRunner"
+    assert cfg._target_ == "dreamervla.runners.SuccessClassifierTrainingRunner"
     assert cfg.task.hdf5_dir.endswith(
         "data/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256"
     )
@@ -259,7 +202,7 @@ def test_standard_h1_classifier_experiment_composes() -> None:
 def test_wmpo_token_h1_classifier_experiment_composes() -> None:
     cfg = _compose(["experiment=wmpo_token_classifier_openvla_onetraj_libero_goal_h1"])
 
-    assert cfg._target_ == "dreamervla.runners.LatentClassifierRunner"
+    assert cfg._target_ == "dreamervla.runners.SuccessClassifierTrainingRunner"
     assert cfg.training.episode_eval_enabled is True
     assert cfg.training.lr == 3.0e-5
     assert cfg.classifier.head_type == "spatial_tf"
@@ -278,7 +221,7 @@ def test_wmpo_token_h1_classifier_experiment_composes() -> None:
 def test_openvla_onetraj_cotrain_noray_uses_wmpo_classifier_protocol() -> None:
     cfg = _compose(["experiment=openvla_onetraj_libero_cotrain_noray"])
 
-    assert cfg._target_ == "dreamervla.runners.OnlineCotrainPipelineRunner"
+    assert cfg._target_ == "dreamervla.runners.WorldModelTrainingRunner"
     assert cfg.classifier.output_dim == 1
     assert cfg.online_rollout.classifier_loss_type == "bce"
     assert cfg.online_rollout.classifier_sampling_protocol == "wmpo"
@@ -290,7 +233,7 @@ def test_openvla_onetraj_cotrain_noray_uses_wmpo_classifier_protocol() -> None:
 def test_openvla_onetraj_cotrain_ray_uses_wmpo_classifier_protocol() -> None:
     cfg = _compose(["experiment=openvla_onetraj_libero_cotrain_ray"])
 
-    assert cfg._target_ == "dreamervla.runners.ManualCotrainRayRunner"
+    assert cfg._target_ == "dreamervla.runners.CotrainRunner"
     assert cfg.ray_components.classifier.kwargs.output_dim == 1
     assert cfg.learner.train_cfg.classifier_loss_type == "bce"
     assert cfg.learner.train_cfg.classifier_sampling_protocol == "wmpo"

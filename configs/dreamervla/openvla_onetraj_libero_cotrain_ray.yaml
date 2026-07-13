@@ -7,7 +7,7 @@ defaults:
   - openvla_onetraj_libero_cotrain_ray_base
   - _self_
 
-_target_: dreamervla.runners.ManualCotrainRayRunner
+_target_: dreamervla.runners.CotrainRunner
 render_backend: osmesa
 
 cluster:
