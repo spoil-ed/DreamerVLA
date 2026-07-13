@@ -78,28 +78,29 @@ def test_num_images_accepts_only_one_image_history_one() -> None:
         _resolve_num_images_in_input(args)
 
 
-def test_hidden_token_sidecar_dims_accept_only_canonical_patch_tokens() -> None:
+def test_hidden_token_sidecar_dims_follow_loaded_backbone_geometry() -> None:
     class VisionBackbone:
         def get_num_patches(self) -> int:
-            return 256
+            return 128
 
     class VLA:
         vision_backbone = VisionBackbone()
+        token_dim = 1024
 
     token_count, flat_dim = _hidden_token_sidecar_dims(
         VLA(),
         image_keys=["agentview_rgb"],
-        token_dim=4096,
+        token_dim=1024,
     )
 
-    assert token_count == 256
-    assert flat_dim == 256 * 4096
+    assert token_count == 128
+    assert flat_dim == 128 * 1024
 
     with pytest.raises(ValueError, match="one agentview image"):
         _hidden_token_sidecar_dims(
             VLA(),
             image_keys=["agentview_rgb", "eye_in_hand_rgb"],
-            token_dim=4096,
+            token_dim=1024,
         )
 
 

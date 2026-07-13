@@ -933,6 +933,8 @@ class PretokenizeVLARunner(BaseRunner):
                 num_epochs=num_epochs,
                 total_episodes=total_episodes,
                 on_epoch_start=_on_epoch_start,
+                on_reset=getattr(self, "_on_libero_eval_reset", None),
+                on_chunk=getattr(self, "_on_libero_eval_chunk", None),
             )
         metrics = tally.summarize(episodes_per_task=num_episodes)
         avg_success = float(metrics["eval_success_rate"])
@@ -946,6 +948,18 @@ class PretokenizeVLARunner(BaseRunner):
         metrics["eval/env_action_step_per_s"] = (
             float(tally.env_action_steps) / run_dt if run_dt > 0 else 0.0
         )
+        finalize_observer = getattr(
+            self,
+            "_finalize_libero_eval_observer",
+            None,
+        )
+        if callable(finalize_observer):
+            observer_metrics = finalize_observer()
+            if not isinstance(observer_metrics, dict):
+                raise TypeError(
+                    "_finalize_libero_eval_observer() must return a mapping"
+                )
+            metrics.update(observer_metrics)
         print(
             f"  [Eval] Epoch {epoch} task-mean success rate: {avg_success:.1%} "
             f"(rlinf_chunk num_envs={n_envs}) total_time={run_dt:.1f}s "

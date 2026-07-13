@@ -68,6 +68,7 @@ class LearnerWorker(Worker):
         self.replay_client: ReplayClient | None = None
         self._cotrain_classifier_updates = 0
         self._cotrain_last_classifier_f1 = 0.0
+        self.classifier_threshold: float | None = None
         self._train_progress_path = self._resolve_progress_path()
         self._train_progress: dict[str, Any] = {
             "active": False,
@@ -109,6 +110,11 @@ class LearnerWorker(Worker):
             enabled=self.precision.use_grad_scaler,
         )
         self.replay_client = ReplayClient(self.replay)
+        self.classifier_threshold = float(
+            self.train_cfg.get("classifier_threshold")
+            if self.train_cfg.get("classifier_threshold") is not None
+            else self.init_ckpt.get("classifier_threshold", 0.5)
+        )
         if str(self.train_cfg.get("mode", "synthetic_ppo")) == "dreamervla_cotrain":
             self._validate_dreamervla_cotrain_components()
         phase_updater_cfg = self.train_cfg.get("phase_updater")
@@ -143,6 +149,66 @@ class LearnerWorker(Worker):
             return {f"train/{phase}_loss": 0.0}
         return self._synthetic_ppo_update(int(num_steps))
 
+    def update_current_step(
+        self,
+        phase: str,
+        num_steps: int,
+        patience: int,
+    ) -> dict[str, float]:
+        """Fit WM/CLS on the replaced step-local replay and recalibrate CLS."""
+
+        mode = str(self.train_cfg.get("mode", "synthetic_ppo"))
+        if mode not in {"wm_classifier_only", "dreamervla_cotrain"}:
+            raise ValueError(
+                "step-local staged updates require wm_classifier_only or "
+                f"dreamervla_cotrain mode, got {mode!r}"
+            )
+        requested = max(1, int(num_steps))
+        patience = max(1, int(patience))
+        min_delta = float(self.train_cfg.get("early_stop_min_delta", 0.0))
+        best_loss = float("inf")
+        stale_steps = 0
+        completed = 0
+        metrics: dict[str, float] = {}
+        for _index in range(requested):
+            if str(phase) == "wm":
+                step_metrics = self._dreamervla_wm_update_once()
+            elif str(phase) == "classifier":
+                step_metrics = self._dreamervla_classifier_update_once()
+            elif str(phase) == "cotrain":
+                step_metrics = {
+                    **self._dreamervla_wm_update_once(),
+                    **self._dreamervla_classifier_update_once(),
+                }
+            else:
+                raise ValueError(
+                    "step-local staged learner phase must be wm, classifier, "
+                    f"or cotrain; got {phase!r}"
+                )
+            metrics.update(step_metrics)
+            completed += 1
+            monitored = sum(
+                float(step_metrics[key]) for key in ("wm/loss", "cls/loss") if key in step_metrics
+            )
+            if monitored + min_delta < best_loss:
+                best_loss = monitored
+                stale_steps = 0
+            else:
+                stale_steps += 1
+                if stale_steps >= patience:
+                    break
+        if str(phase) in {"classifier", "cotrain"}:
+            metrics.update(self._calibrate_classifier_threshold())
+        metrics.update(
+            {
+                "learner/updates": float(completed),
+                "learner/requested_updates": float(requested),
+                "learner/early_stopped": float(completed < requested),
+                "learner/early_stop_patience": float(patience),
+            }
+        )
+        return metrics
+
     def sync_weights(self, what: str, version: int) -> None:
         name = str(what)
         if name not in self.components:
@@ -153,15 +219,12 @@ class LearnerWorker(Worker):
         """Return model states, adding optimizer states only for checkpoints."""
 
         state_dicts: dict[str, Any] = {
-            name: _cpu_state_dict(module)
-            for name, module in self.components.items()
+            name: _cpu_state_dict(module) for name, module in self.components.items()
         }
         state_dicts["classifier_threshold"] = float(self._classifier_threshold())
         if include_optimizers:
             for name, optimizer in self.optimizers.items():
-                state_dicts[f"{name}_optimizer"] = _cpu_tree(
-                    optimizer.state_dict()
-                )
+                state_dicts[f"{name}_optimizer"] = _cpu_tree(optimizer.state_dict())
         return state_dicts
 
     def _build_components(self) -> dict[str, nn.Module]:
@@ -171,24 +234,15 @@ class LearnerWorker(Worker):
                 continue
             module = _build_from_cfg(_as_plain_dict(cfg)).to(self.torch_device)
             if name in self.init_ckpt:
-                module.load_state_dict(
-                    _to_device_state(self.init_ckpt[name], self.torch_device)
-                )
+                module.load_state_dict(_to_device_state(self.init_ckpt[name], self.torch_device))
             if self.fsdp_manager is not None:
                 module = self.fsdp_manager.prepare_model(module)
             components[str(name)] = module
         mode = str(self.train_cfg.get("mode", "synthetic_ppo"))
         if mode == "wm_classifier_only":
-            missing = [
-                name
-                for name in ("world_model", "classifier")
-                if name not in components
-            ]
+            missing = [name for name in ("world_model", "classifier") if name not in components]
             if missing:
-                raise ValueError(
-                    "wm_classifier_only requires components: "
-                    f"{', '.join(missing)}"
-                )
+                raise ValueError(f"wm_classifier_only requires components: {', '.join(missing)}")
             unexpected = sorted(
                 name for name in components if name not in {"world_model", "classifier"}
             )
@@ -209,7 +263,9 @@ class LearnerWorker(Worker):
             if not params:
                 continue
             cfg = dict(optimizer_cfgs.get(name, {}))
-            lr = float(cfg.get("lr", self.train_cfg.get(f"{name}_lr", self.train_cfg.get("lr", 1e-3))))
+            lr = float(
+                cfg.get("lr", self.train_cfg.get(f"{name}_lr", self.train_cfg.get("lr", 1e-3)))
+            )
             weight_decay = float(cfg.get("weight_decay", 0.0))
             optimizers[name] = torch.optim.Adam(
                 params,
@@ -252,9 +308,7 @@ class LearnerWorker(Worker):
         wm_total_steps = steps_per_phase if "wm" in phases else 0
         cls_total_steps = steps_per_phase if "classifier" in phases else 0
         vlarl_steps_per_call = self._planned_vlarl_optimizer_steps()
-        vlarl_total_steps = (
-            steps_per_phase * vlarl_steps_per_call if "rl" in phases else 0
-        )
+        vlarl_total_steps = steps_per_phase * vlarl_steps_per_call if "rl" in phases else 0
         total_train_steps = wm_total_steps + cls_total_steps + vlarl_total_steps
         metrics: dict[str, float] = {}
         train_step = 0
@@ -299,9 +353,7 @@ class LearnerWorker(Worker):
                     else:
                         rl_metrics = self._dreamervla_rl_update_once()
                         metrics.update(rl_metrics)
-                        applied = bool(
-                            float(rl_metrics.get("rl/ppo_step_applied", 0.0)) > 0.0
-                        )
+                        applied = bool(float(rl_metrics.get("rl/ppo_step_applied", 0.0)) > 0.0)
                         completed = (
                             int(float(rl_metrics.get("rl/ppo_update_epochs", 0.0)))
                             if applied
@@ -356,8 +408,7 @@ class LearnerWorker(Worker):
             phases = (phase,)
         else:
             raise ValueError(
-                "wm_classifier_only supports only wm, classifier, cotrain; "
-                f"got {phase!r}"
+                f"wm_classifier_only supports only wm, classifier, cotrain; got {phase!r}"
             )
 
         metrics: dict[str, float] = {}
@@ -449,12 +500,8 @@ class LearnerWorker(Worker):
                 early_neg_stride=int(self.train_cfg.get("classifier_early_neg_stride", 8)),
                 grad_clip=float(self._optim_cfg().get("grad_clip_norm", 1.0)),
                 loss_type=self.train_cfg.get("classifier_loss_type", None),
-                sampling_protocol=str(
-                    self.train_cfg.get("classifier_sampling_protocol", "lumos")
-                ),
-                balance_batches=bool(
-                    self.train_cfg.get("classifier_balance_batches", False)
-                ),
+                sampling_protocol=str(self.train_cfg.get("classifier_sampling_protocol", "lumos")),
+                balance_batches=bool(self.train_cfg.get("classifier_balance_batches", False)),
             )
         if float(raw.get("updated", 1.0)) > 0.5:
             self._cotrain_classifier_updates += 1
@@ -465,9 +512,73 @@ class LearnerWorker(Worker):
             "cls/f1": float(raw.get("f1", 0.0)),
             "cls/updated": float(raw.get("updated", 1.0)),
             "cls/updates": float(self._cotrain_classifier_updates),
-            "cls/skipped_single_class_batch": float(
-                raw.get("skipped_single_class_batch", 0.0)
-            ),
+            "cls/skipped_single_class_batch": float(raw.get("skipped_single_class_batch", 0.0)),
+        }
+
+    def _calibrate_classifier_threshold(self) -> dict[str, float]:
+        classifier = self._required_module("classifier")
+        module = classifier
+        while hasattr(module, "module") and isinstance(module.module, nn.Module):
+            module = module.module
+        cfg = getattr(module, "cfg", None)
+        if cfg is None:
+            raise TypeError("classifier calibration requires classifier.cfg")
+        batch = self._replay_client().classifier_endpoint_windows(
+            window=int(cfg.window),
+            chunk_size=int(getattr(cfg, "chunk_size", 1)),
+            chunk_pool=str(getattr(cfg, "chunk_pool", "last")),
+        )
+        windows = torch.as_tensor(batch["windows"]).to(
+            self.torch_device,
+            non_blocking=True,
+        )
+        labels = torch.as_tensor(batch["labels"], dtype=torch.long).reshape(-1)
+        forward_kwargs: dict[str, Any] = {}
+        if bool(getattr(module, "supports_proprio_conditioning", False)):
+            if "proprio" not in batch:
+                raise ValueError("classifier calibration requires replay proprio sidecars")
+            forward_kwargs["proprio"] = torch.as_tensor(batch["proprio"]).to(
+                self.torch_device,
+                non_blocking=True,
+            )
+        if bool(getattr(module, "supports_language_conditioning", False)):
+            if "lang_emb" not in batch:
+                raise ValueError("classifier calibration requires replay language sidecars")
+            forward_kwargs["lang_emb"] = torch.as_tensor(batch["lang_emb"]).to(
+                self.torch_device,
+                non_blocking=True,
+            )
+        classifier.eval()
+        with torch.no_grad(), self._precision().context():
+            if bool(getattr(module, "supports_task_conditioning", False)):
+                logits = classifier(
+                    windows,
+                    task_ids=torch.as_tensor(batch["task_ids"], dtype=torch.long).to(
+                        self.torch_device,
+                        non_blocking=True,
+                    ),
+                    **forward_kwargs,
+                )
+            else:
+                logits = classifier(windows, **forward_kwargs)
+        logits = torch.as_tensor(logits).detach().float().cpu()
+        if int(logits.shape[-1]) == 1:
+            probabilities = torch.sigmoid(logits.reshape(-1))
+        else:
+            probabilities = torch.softmax(logits, dim=-1)[..., 1].reshape(-1)
+        if probabilities.numel() != labels.numel():
+            raise ValueError("classifier calibration logits and labels have different sizes")
+        threshold, metrics = _calibrate_binary_threshold(
+            labels=labels,
+            probabilities=probabilities,
+            previous_threshold=self._classifier_threshold(),
+        )
+        self.classifier_threshold = float(threshold)
+        return {
+            **metrics,
+            "cls/calibration_examples": float(labels.numel()),
+            "cls/calibration_positive_fraction": float(labels.float().mean().item()),
+            "cls/threshold": float(threshold),
         }
 
     def _dreamervla_rl_update_once(self) -> dict[str, float]:
@@ -485,9 +596,7 @@ class LearnerWorker(Worker):
         batch = self._sample_vlarl_batch(
             replay_batch_size,
             rollout_epoch=rollout_epoch,
-            staleness_threshold=(
-                None if staleness_threshold is None else int(staleness_threshold)
-            ),
+            staleness_threshold=(None if staleness_threshold is None else int(staleness_threshold)),
         )
         obs_for_update = {
             key: batch[key]
@@ -537,9 +646,7 @@ class LearnerWorker(Worker):
             "LUMOS/num_mixed_groups": float(raw.get("LUMOS/num_mixed_groups", 0.0)),
             "rl/rollout_epoch": float(rollout_epoch),
             "rl/replay_batch_size": float(replay_batch_size),
-            "rl/ppo_start_batch_size": float(
-                _first_batch_dim(obs_for_update, default=0)
-            ),
+            "rl/ppo_start_batch_size": float(_first_batch_dim(obs_for_update, default=0)),
             "rl/imagined_rollouts": float(
                 _estimated_imagined_rollouts(raw, obs_for_update, self._algorithm_cfg())
             ),
@@ -684,6 +791,8 @@ class LearnerWorker(Worker):
         return optimizer
 
     def _classifier_threshold(self) -> float:
+        if self.classifier_threshold is not None:
+            return float(self.classifier_threshold)
         value = self.train_cfg.get("classifier_threshold", None)
         if value is None:
             value = self.init_ckpt.get("classifier_threshold", 0.5)
@@ -691,19 +800,14 @@ class LearnerWorker(Worker):
 
     def _validate_dreamervla_cotrain_components(self) -> None:
         missing = [
-            name
-            for name in ("policy", "world_model", "classifier")
-            if name not in self.components
+            name for name in ("policy", "world_model", "classifier") if name not in self.components
         ]
         if missing:
             raise ValueError(
-                "dreamervla_cotrain LearnerWorker requires components: "
-                f"{', '.join(missing)}"
+                f"dreamervla_cotrain LearnerWorker requires components: {', '.join(missing)}"
             )
         missing_optimizers = [
-            name
-            for name in ("policy", "world_model", "classifier")
-            if name not in self.optimizers
+            name for name in ("policy", "world_model", "classifier") if name not in self.optimizers
         ]
         if missing_optimizers:
             raise ValueError(
@@ -741,9 +845,7 @@ class ReplayClient:
         # path stays a byte-identical 1-arg call and minimal replay backends
         # (e.g. test doubles) that don't know about staleness still work.
         kwargs = (
-            {}
-            if staleness_threshold is None
-            else {"staleness_threshold": int(staleness_threshold)}
+            {} if staleness_threshold is None else {"staleness_threshold": int(staleness_threshold)}
         )
         if include_images is not None:
             kwargs["include_images"] = bool(include_images)
@@ -780,6 +882,20 @@ class ReplayClient:
             )
         )
 
+    def classifier_endpoint_windows(
+        self,
+        *,
+        window: int,
+        chunk_size: int,
+        chunk_pool: str,
+    ) -> dict[str, Any]:
+        return self._call(
+            "classifier_endpoint_windows",
+            window=int(window),
+            chunk_size=int(chunk_size),
+            chunk_pool=str(chunk_pool),
+        )
+
     def _call(self, name: str, *args: Any, **kwargs: Any) -> Any:
         method = getattr(self.replay, name)
         remote = getattr(method, "remote", None)
@@ -793,9 +909,7 @@ def _concat_replay_batches(batches: list[dict[str, Any]]) -> dict[str, Any]:
 
     if not batches:
         raise ValueError("cannot concatenate an empty replay batch list")
-    common_keys = [
-        key for key in batches[0].keys() if all(key in batch for batch in batches)
-    ]
+    common_keys = [key for key in batches[0].keys() if all(key in batch for batch in batches)]
     return {
         str(key): _concat_replay_values([batch[key] for batch in batches], path=str(key))
         for key in common_keys
@@ -812,7 +926,9 @@ def _concat_replay_values(values: list[Any], *, path: str) -> Any:
         return torch.cat(values, dim=0)
     if isinstance(first, dict):
         common_keys = [
-            key for key in first.keys() if all(isinstance(value, dict) and key in value for value in values)
+            key
+            for key in first.keys()
+            if all(isinstance(value, dict) and key in value for value in values)
         ]
         return {
             str(key): _concat_replay_values(
@@ -1022,6 +1138,69 @@ def dino_lumos_step(**kwargs: Any) -> dict[str, float]:
     return _impl(**kwargs)
 
 
+def _calibrate_binary_threshold(
+    *,
+    labels: torch.Tensor,
+    probabilities: torch.Tensor,
+    previous_threshold: float,
+) -> tuple[float, dict[str, float]]:
+    """Select the current-step F1-optimal threshold, retaining single-class state."""
+
+    labels = torch.as_tensor(labels, dtype=torch.long).reshape(-1).cpu()
+    probabilities = (
+        torch.as_tensor(
+            probabilities,
+            dtype=torch.float32,
+        )
+        .reshape(-1)
+        .cpu()
+    )
+    if labels.numel() != probabilities.numel() or labels.numel() == 0:
+        raise ValueError("classifier calibration requires nonempty aligned vectors")
+    classes = torch.unique(labels)
+    if classes.numel() < 2:
+        return float(previous_threshold), {
+            "cls/calibration_updated": 0.0,
+            "cls/calibration_single_class": 1.0,
+            "cls/calibration_f1": 0.0,
+            "cls/calibration_precision": 0.0,
+            "cls/calibration_recall": 0.0,
+        }
+    candidates = sorted(
+        {float(value) for value in probabilities.tolist()} | {float(previous_threshold)}
+    )
+    best: tuple[float, float, float, float, float] | None = None
+    for threshold in candidates:
+        predicted = probabilities >= float(threshold)
+        positive = labels == 1
+        tp = float((predicted & positive).sum().item())
+        fp = float((predicted & ~positive).sum().item())
+        fn = float((~predicted & positive).sum().item())
+        precision = tp / max(1.0, tp + fp)
+        recall = tp / max(1.0, tp + fn)
+        f1 = 2.0 * precision * recall / (precision + recall) if precision + recall > 0.0 else 0.0
+        # Prefer best F1, then a threshold closest to the previous operating
+        # point, then the larger threshold (fewer false positives).
+        score = (
+            float(f1),
+            -abs(float(threshold) - float(previous_threshold)),
+            float(threshold),
+            float(precision),
+            float(recall),
+        )
+        if best is None or score[:3] > best[:3]:
+            best = score
+    assert best is not None
+    f1, _distance, threshold, precision, recall = best
+    return float(threshold), {
+        "cls/calibration_updated": 1.0,
+        "cls/calibration_single_class": 0.0,
+        "cls/calibration_f1": float(f1),
+        "cls/calibration_precision": float(precision),
+        "cls/calibration_recall": float(recall),
+    }
+
+
 def _cpu_state_dict(module: nn.Module) -> dict[str, torch.Tensor]:
     return {key: _independent_cpu(value) for key, value in module.state_dict().items()}
 
@@ -1040,6 +1219,8 @@ def _cpu_tree(value: Any) -> Any:
 
 def _to_device_state(state_dict: dict[str, Any], device: torch.device) -> dict[str, torch.Tensor]:
     return {
-        key: (value.detach() if isinstance(value, torch.Tensor) else torch.as_tensor(value)).to(device)
+        key: (value.detach() if isinstance(value, torch.Tensor) else torch.as_tensor(value)).to(
+            device
+        )
         for key, value in state_dict.items()
     }

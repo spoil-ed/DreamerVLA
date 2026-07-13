@@ -6,11 +6,13 @@ import importlib
 import importlib.util
 import time
 from contextlib import nullcontext
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from omegaconf import OmegaConf
 from torch import nn
 
@@ -21,6 +23,7 @@ from dreamervla.scheduler.channel import Channel
 from dreamervla.scheduler.worker import Worker
 from dreamervla.utils.progress import ProgressReporter
 from dreamervla.workers.cotrain.messages import (
+    RealTrajectoryBatch,
     StopMsg,
     TrajectoryBatch,
     TrajectoryShard,
@@ -64,6 +67,8 @@ class EmbodiedFSDPActor(Worker):
         self.global_step = 0
         self.policy: nn.Module | None = None
         self.optimizer: torch.optim.Optimizer | None = None
+        self.encoder_optimizer: torch.optim.Optimizer | None = None
+        self._encoder_parameter_ids: set[int] = set()
         self.fsdp_manager: FSDPModelManager | None = None
         self.syncer: PatchWeightSyncer | None = None
         self.trajectory_shards: list[TrajectoryShard] = []
@@ -72,6 +77,9 @@ class EmbodiedFSDPActor(Worker):
         self.advantages: torch.Tensor | None = None
         self.rollout_filter_mask: torch.Tensor | None = None
         self._advantage_metrics: dict[str, float] = {}
+        self._transaction_policy_state: dict[str, torch.Tensor] | None = None
+        self._transaction_policy_optimizer: dict[str, Any] | None = None
+        self._transaction_encoder_optimizer: dict[str, Any] | None = None
 
     def init(self) -> None:
         """Build policy, optional FSDP wrapper, and optimizer."""
@@ -81,9 +89,7 @@ class EmbodiedFSDPActor(Worker):
             raise TypeError("EmbodiedFSDPActor policy must be a torch.nn.Module")
         policy.to(self.torch_device)
         if "policy" in self.init_ckpt:
-            policy.load_state_dict(
-                _to_device_state(self.init_ckpt["policy"], self.torch_device)
-            )
+            policy.load_state_dict(_to_device_state(self.init_ckpt["policy"], self.torch_device))
 
         fsdp_cfg = self.train_cfg.get("fsdp")
         if fsdp_cfg is not None:
@@ -92,15 +98,326 @@ class EmbodiedFSDPActor(Worker):
             policy = self.fsdp_manager.prepare_model(policy)
 
         self.policy = policy
-        self.optimizer = self._build_optimizer()
+        encoder_params, actor_params = self._partition_trainable_parameters()
+        self._encoder_parameter_ids = {id(parameter) for parameter in encoder_params}
+        self.optimizer = self._build_optimizer("policy", actor_params)
+        if encoder_params:
+            self.encoder_optimizer = self._build_optimizer("encoder", encoder_params)
         optimizer_state = self.init_ckpt.get("policy_optimizer")
         if isinstance(optimizer_state, dict) and optimizer_state:
             self._load_optimizer_state_dict(optimizer_state)
+        encoder_optimizer_state = self.init_ckpt.get("encoder_optimizer")
+        if (
+            self.encoder_optimizer is not None
+            and isinstance(encoder_optimizer_state, dict)
+            and encoder_optimizer_state
+        ):
+            self._load_optimizer_state_dict(
+                encoder_optimizer_state,
+                optimizer=self.encoder_optimizer,
+            )
+        # Encoder parameters are opt-in only during encoder_sft(). Imagined PPO
+        # always updates the native action decoder/actor partition.
+        for parameter in self.policy.parameters():
+            if id(parameter) in self._encoder_parameter_ids:
+                parameter.requires_grad_(False)
 
     def set_global_step(self, global_step: int) -> None:
         """Set runner-visible global progress used by weight-sync versions."""
 
         self.global_step = int(global_step)
+
+    def encoder_sft(self, batch: RealTrajectoryBatch) -> dict[str, float]:
+        """SFT only the raw-input encoder on successful current-step episodes."""
+
+        successful = [trajectory for trajectory in batch.trajectories if trajectory.success]
+        decisions = [
+            dict(transition)
+            for trajectory in successful
+            for transition in trajectory.transitions
+            if bool(transition.get("policy_decision", False))
+            and "action_token_ids_chunk" in transition
+        ]
+        base_metrics = {
+            "actor/encoder_sft_trajectories": float(len(successful)),
+            "actor/encoder_sft_decisions": float(len(decisions)),
+        }
+        if not decisions:
+            return {
+                **base_metrics,
+                "actor/encoder_sft_skipped": 1.0,
+                "actor/encoder_sft_optimizer_steps": 0.0,
+                "actor/encoder_sft_loss": 0.0,
+                "actor/encoder_sft_kl": 0.0,
+            }
+        optimizer = self.encoder_optimizer
+        if optimizer is None:
+            raise RuntimeError(
+                "encoder SFT requires policy.encoder_parameter_names() and an encoder optimizer"
+            )
+        config = _as_plain_dict(self.train_cfg.get("encoder_sft", {}))
+        epochs = max(1, int(config.get("epochs", 1)))
+        batch_size = max(1, int(config.get("batch_size", 1)))
+        zero_grad_set_to_none = bool(config.get("zero_grad_set_to_none", True))
+        policy = self._policy()
+        original_training = bool(policy.training)
+        old_action_logprobs = self._encoder_sft_action_logprobs(
+            policy,
+            decisions,
+            batch_size=batch_size,
+        )
+        original_requires_grad = {
+            id(parameter): bool(parameter.requires_grad) for parameter in policy.parameters()
+        }
+        for parameter in policy.parameters():
+            parameter.requires_grad_(id(parameter) in self._encoder_parameter_ids)
+        policy.train()
+        loss_sum = 0.0
+        optimizer_steps = 0
+        try:
+            for _epoch in range(epochs):
+                for start in range(0, len(decisions), batch_size):
+                    records = decisions[start : start + batch_size]
+                    prepared = self._prepare_raw_batch(records)
+                    labels = torch.as_tensor(
+                        np.stack(
+                            [np.asarray(record["action_token_ids_chunk"]) for record in records],
+                            axis=0,
+                        ),
+                        dtype=torch.long,
+                        device=self.torch_device,
+                    ).reshape(len(records), -1)
+                    optimizer.zero_grad(set_to_none=zero_grad_set_to_none)
+                    loss, _unused, _extras = policy(
+                        {
+                            "mode": "encoder_sft",
+                            **prepared,
+                            "action_token_ids": labels,
+                        }
+                    )
+                    if not isinstance(loss, torch.Tensor) or loss.ndim != 0:
+                        raise TypeError("encoder_sft policy forward must return scalar loss")
+                    loss.backward()
+                    grad_clip = config.get("grad_clip_norm")
+                    if grad_clip is not None:
+                        torch.nn.utils.clip_grad_norm_(
+                            [
+                                parameter
+                                for parameter in policy.parameters()
+                                if id(parameter) in self._encoder_parameter_ids
+                            ],
+                            float(grad_clip),
+                        )
+                    optimizer.step()
+                    loss_sum += float(loss.detach().cpu().item())
+                    optimizer_steps += 1
+        finally:
+            for parameter in policy.parameters():
+                parameter.requires_grad_(original_requires_grad[id(parameter)])
+            policy.train(original_training)
+        new_action_logprobs = self._encoder_sft_action_logprobs(
+            policy,
+            decisions,
+            batch_size=batch_size,
+        )
+        encoder_kl = float(
+            F.kl_div(
+                new_action_logprobs,
+                old_action_logprobs.exp(),
+                reduction="batchmean",
+            )
+            .clamp_min(0.0)
+            .item()
+        )
+        return {
+            **base_metrics,
+            "actor/encoder_sft_skipped": 0.0,
+            "actor/encoder_sft_optimizer_steps": float(optimizer_steps),
+            "actor/encoder_sft_loss": loss_sum / float(max(1, optimizer_steps)),
+            "actor/encoder_sft_kl": encoder_kl,
+        }
+
+    def _encoder_sft_action_logprobs(
+        self,
+        policy: nn.Module,
+        decisions: list[dict[str, Any]],
+        *,
+        batch_size: int,
+    ) -> torch.Tensor:
+        original_training = bool(policy.training)
+        policy.eval()
+        values: list[torch.Tensor] = []
+        try:
+            with torch.no_grad():
+                for start in range(0, len(decisions), int(batch_size)):
+                    records = decisions[start : start + int(batch_size)]
+                    prepared = self._prepare_raw_batch(records)
+                    labels = torch.as_tensor(
+                        np.stack(
+                            [np.asarray(record["action_token_ids_chunk"]) for record in records],
+                            axis=0,
+                        ),
+                        dtype=torch.long,
+                        device=self.torch_device,
+                    ).reshape(len(records), -1)
+                    _loss, _unused, extras = policy(
+                        {
+                            "mode": "encoder_sft",
+                            **prepared,
+                            "action_token_ids": labels,
+                        }
+                    )
+                    logits = extras.get("action_logits")
+                    if not isinstance(logits, torch.Tensor):
+                        raise TypeError("encoder_sft policy must return action_logits")
+                    values.append(
+                        torch.log_softmax(logits.detach().float(), dim=-1)
+                        .reshape(-1, int(logits.shape[-1]))
+                        .cpu()
+                    )
+        finally:
+            policy.train(original_training)
+        return torch.cat(values, dim=0)
+
+    def begin_policy_transaction(self) -> dict[str, float]:
+        """Snapshot policy and optimizer state for a bounded-KL sub-transaction."""
+
+        if self._transaction_policy_state is not None:
+            raise RuntimeError("a policy KL transaction is already active")
+        self._transaction_policy_state = self.state_dict()
+        self._transaction_policy_optimizer = self.optimizer_state_dict()
+        self._transaction_encoder_optimizer = self.encoder_optimizer_state_dict()
+        return {"actor/kl_transaction_started": 1.0}
+
+    def finalize_policy_transaction(
+        self,
+        observed_kl: float,
+        max_kl: float,
+    ) -> dict[str, float]:
+        """Accept a sub-update or restore its exact pre-update state."""
+
+        if self._transaction_policy_state is None:
+            raise RuntimeError("no active policy KL transaction")
+        observed = max(0.0, float(observed_kl))
+        budget = float(max_kl)
+        accepted = observed <= max(0.0, budget)
+        if not accepted:
+            _load_policy_state_dict(
+                self._policy(),
+                self._transaction_policy_state,
+                rank=int(self.rank),
+            )
+            if self._transaction_policy_optimizer is not None:
+                self._load_optimizer_state_dict(
+                    self._transaction_policy_optimizer,
+                )
+            if (
+                self.encoder_optimizer is not None
+                and self._transaction_encoder_optimizer is not None
+            ):
+                self._load_optimizer_state_dict(
+                    self._transaction_encoder_optimizer,
+                    optimizer=self.encoder_optimizer,
+                )
+        self._transaction_policy_state = None
+        self._transaction_policy_optimizer = None
+        self._transaction_encoder_optimizer = None
+        return {
+            "actor/kl_transaction_observed": observed,
+            "actor/kl_transaction_budget": budget,
+            "actor/kl_transaction_accepted": float(accepted),
+            "actor/kl_transaction_rolled_back": float(not accepted),
+        }
+
+    def reencode_real_trajectories(
+        self,
+        batch: RealTrajectoryBatch,
+    ) -> RealTrajectoryBatch:
+        """Recompute current encoder tokens for every transition in ``batch``."""
+
+        config = _as_plain_dict(self.train_cfg.get("encoder_sft", {}))
+        batch_size = max(1, int(config.get("reencode_batch_size", config.get("batch_size", 1))))
+        flat: list[tuple[int, int, dict[str, Any]]] = [
+            (trajectory_index, transition_index, dict(transition))
+            for trajectory_index, trajectory in enumerate(batch.trajectories)
+            for transition_index, transition in enumerate(trajectory.transitions)
+        ]
+        replacements: dict[tuple[int, int], dict[str, Any]] = {}
+        policy = self._policy()
+        original_training = bool(policy.training)
+        policy.eval()
+        try:
+            with torch.no_grad():
+                for start in range(0, len(flat), batch_size):
+                    rows = flat[start : start + batch_size]
+                    prepared = self._prepare_raw_batch([row[2] for row in rows])
+                    _hidden, _unused, extras = policy({"mode": "encode_raw", **prepared})
+                    hidden = torch.as_tensor(extras["hidden"]).detach().float().cpu()
+                    lang = torch.as_tensor(extras["lang_emb"]).detach().float().cpu()
+                    if int(hidden.shape[0]) != len(rows) or int(lang.shape[0]) != len(rows):
+                        raise ValueError("raw re-encoding output batch size mismatch")
+                    for row_index, (trajectory_index, transition_index, transition) in enumerate(
+                        rows
+                    ):
+                        updated = dict(transition)
+                        updated["obs_embedding"] = hidden[row_index].numpy()
+                        updated["lang_emb"] = lang[row_index].numpy()
+                        updated["encoder_version"] = int(batch.global_step)
+                        replacements[(trajectory_index, transition_index)] = updated
+        finally:
+            policy.train(original_training)
+        trajectories = tuple(
+            replace(
+                trajectory,
+                transitions=tuple(
+                    replacements[(trajectory_index, transition_index)]
+                    for transition_index, _transition in enumerate(trajectory.transitions)
+                ),
+            )
+            for trajectory_index, trajectory in enumerate(batch.trajectories)
+        )
+        if int(self.rank) != 0:
+            # Every FSDP rank participates in the forwards, but only rank zero
+            # returns the very large sidecar batch to Ray's object store.
+            return RealTrajectoryBatch(
+                global_step=batch.global_step,
+                trajectories=(),
+            )
+        return RealTrajectoryBatch(global_step=batch.global_step, trajectories=trajectories)
+
+    def _prepare_raw_batch(self, transitions: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
+        module = _unwrap_policy_module(self._policy())
+        prepare = getattr(module, "prepare_raw_batch", None)
+        if not callable(prepare):
+            raise TypeError("staged VLA policy must implement prepare_raw_batch")
+        prepared = dict(prepare(transitions))
+        for key in ("input_ids", "attention_mask", "pixel_values"):
+            if key not in prepared:
+                raise KeyError(f"prepare_raw_batch must return {key!r}")
+            prepared[key] = torch.as_tensor(prepared[key]).to(self.torch_device)
+        return prepared
+
+    def _partition_trainable_parameters(
+        self,
+    ) -> tuple[list[nn.Parameter], list[nn.Parameter]]:
+        policy = self._policy()
+        module = _unwrap_policy_module(policy)
+        name_getter = getattr(module, "encoder_parameter_names", None)
+        declared = set(name_getter()) if callable(name_getter) else set()
+        encoder: list[nn.Parameter] = []
+        actor: list[nn.Parameter] = []
+        for name, parameter in policy.named_parameters():
+            if not parameter.requires_grad:
+                continue
+            normalized = str(name).removeprefix("_fsdp_wrapped_module.")
+            is_encoder = any(
+                normalized == declared_name or normalized.endswith(f".{declared_name}")
+                for declared_name in declared
+            )
+            (encoder if is_encoder else actor).append(parameter)
+        if not actor:
+            raise ValueError("EmbodiedFSDPActor policy has no trainable actor parameters")
+        return encoder, actor
 
     def load_trajectory_shards(self, shards: list[TrajectoryShard]) -> None:
         """Store and collate trajectory shards for the next PPO update."""
@@ -186,9 +503,7 @@ class EmbodiedFSDPActor(Worker):
             "actor/trajectory_count": float(trajectory_count),
             "actor/loss_mask_sum": float(loss_mask.detach().sum().cpu().item()),
             "actor/return_mean": float(returns.detach().mean().cpu().item()),
-            "actor/advantage_std": float(
-                advantages.detach().std(unbiased=False).cpu().item()
-            ),
+            "actor/advantage_std": float(advantages.detach().std(unbiased=False).cpu().item()),
             "actor/reward_filtered_rollouts": float(n_filtered),
         }
         return dict(self._advantage_metrics)
@@ -218,17 +533,11 @@ class EmbodiedFSDPActor(Worker):
         clip_low = float(algorithm_cfg.get("clip_ratio_low", 0.2))
         clip_high = float(algorithm_cfg.get("clip_ratio_high", 0.28))
         clip_ratio_c_value = algorithm_cfg.get("clip_ratio_c")
-        clip_ratio_c = (
-            None if clip_ratio_c_value is None else float(clip_ratio_c_value)
-        )
+        clip_ratio_c = None if clip_ratio_c_value is None else float(clip_ratio_c_value)
         clip_log_ratio_value = algorithm_cfg.get("clip_log_ratio", 20.0)
-        clip_log_ratio = (
-            None if clip_log_ratio_value is None else float(clip_log_ratio_value)
-        )
+        clip_log_ratio = None if clip_log_ratio_value is None else float(clip_log_ratio_value)
         entropy_coef = float(_entropy_coef(algorithm_cfg))
-        kl_coef = float(
-            algorithm_cfg.get("kl_coef", algorithm_cfg.get("kl_beta", 0.0))
-        )
+        kl_coef = float(algorithm_cfg.get("kl_coef", algorithm_cfg.get("kl_beta", 0.0)))
         zero_grad_set_to_none = bool(optim_cfg.get("zero_grad_set_to_none", True))
         logprob_type = str(algorithm_cfg.get("logprob_type", "")).lower()
         token_level_logprob = logprob_type == "token_level"
@@ -254,9 +563,7 @@ class EmbodiedFSDPActor(Worker):
         world_size = max(1, int(self.world_size))
         configured_global_batch = self.train_cfg.get("global_batch_size")
         global_batch_size = (
-            global_sample_count
-            if configured_global_batch is None
-            else int(configured_global_batch)
+            global_sample_count if configured_global_batch is None else int(configured_global_batch)
         )
         if global_batch_size <= 0 or global_batch_size % world_size != 0:
             raise ValueError(
@@ -285,28 +592,20 @@ class EmbodiedFSDPActor(Worker):
         global_batches_per_epoch = local_sample_count // local_global_batch_size
         micro_batches_per_global = local_global_batch_size // micro_batch_size
         optimizer_steps_total = update_epochs * global_batches_per_epoch
-        forward_backward_steps_total = (
-            optimizer_steps_total * micro_batches_per_global
-        )
+        forward_backward_steps_total = optimizer_steps_total * micro_batches_per_global
         progress_ops_total = optimizer_steps_total + forward_backward_steps_total
 
         loss_mask_cpu = batch.loss_mask.to(device="cpu", dtype=torch.bool)
         if self.rollout_filter_mask is not None:
             keep = self.rollout_filter_mask.detach().to(device="cpu") > 0.0
-            loss_mask_cpu = loss_mask_cpu & keep.reshape(
-                (1, -1) + (1,) * (loss_mask_cpu.ndim - 2)
-            )
-        local_flat_mask = _as_vector(
-            _flatten_time_batch(loss_mask_cpu)
-        ).to(dtype=torch.bool)
+            loss_mask_cpu = loss_mask_cpu & keep.reshape((1, -1) + (1,) * (loss_mask_cpu.ndim - 2))
+        local_flat_mask = _as_vector(_flatten_time_batch(loss_mask_cpu)).to(dtype=torch.bool)
         padded_flat_mask = torch.zeros(local_sample_count, dtype=torch.bool)
         padded_flat_mask[: int(local_flat_mask.numel())] = local_flat_mask
         local_valid_count = int(padded_flat_mask.sum().item())
         valid_count = _distributed_sum_int(local_valid_count, self.torch_device)
         logprob_tokens_per_sample = (
-            _trailing_numel(batch.prev_logprobs.shape[2:])
-            if token_level_logprob
-            else 1
+            _trailing_numel(batch.prev_logprobs.shape[2:]) if token_level_logprob else 1
         )
         local_logprob_token_count = local_valid_count * logprob_tokens_per_sample
         logprob_token_count = _distributed_sum_int(
@@ -347,18 +646,12 @@ class EmbodiedFSDPActor(Worker):
                 float(valid_count) / float(max(1, global_sample_count))
             ),
             "actor/kl_coef": float(kl_coef),
-            "actor/loss_normalization_per_rollout": (
-                1.0 if loss_norm == "per_rollout" else 0.0
-            ),
-            "actor/logprob_type_token_level": (
-                1.0 if token_level_logprob else 0.0
-            ),
+            "actor/loss_normalization_per_rollout": (1.0 if loss_norm == "per_rollout" else 0.0),
+            "actor/logprob_type_token_level": (1.0 if token_level_logprob else 0.0),
         }
         if valid_count <= 0:
             policy.train(False)
-            progress.set_status(
-                "phase=skipped reason=zero_valid_samples optimizer=0/0"
-            )
+            progress.set_status("phase=skipped reason=zero_valid_samples optimizer=0/0")
             progress.set(0, force=True)
             return {
                 **common_metrics,
@@ -392,9 +685,7 @@ class EmbodiedFSDPActor(Worker):
             .sum(dim=(0, 2))
             .clamp(min=1.0)
         )
-        inverse_per_rollout_count = per_rollout_count.reciprocal().to(
-            self.torch_device
-        )
+        inverse_per_rollout_count = per_rollout_count.reciprocal().to(self.torch_device)
         advantage_vector = _as_vector(self._advantages()).to(self.torch_device)
         flat_old_logprob = _flatten_time_batch(batch.prev_logprobs)
 
@@ -416,10 +707,7 @@ class EmbodiedFSDPActor(Worker):
             "entropy",
             "behavior_kl",
         )
-        metric_sums = {
-            name: torch.zeros((), device=self.torch_device)
-            for name in metric_names
-        }
+        metric_sums = {name: torch.zeros((), device=self.torch_device) for name in metric_names}
         grad_norms: list[float] = []
         optimizer_steps = 0
         forward_backward_steps = 0
@@ -463,9 +751,7 @@ class EmbodiedFSDPActor(Worker):
                         source_indices,
                     ).to(self.torch_device, dtype=torch.float32)
                     old_logprob = (
-                        old_logprob_raw
-                        if token_level_logprob
-                        else _as_vector(old_logprob_raw)
+                        old_logprob_raw if token_level_logprob else _as_vector(old_logprob_raw)
                     )
                     advantage = advantage_vector.index_select(
                         0,
@@ -473,9 +759,7 @@ class EmbodiedFSDPActor(Worker):
                     )
                     is_last_micro = micro_index == micro_batches_per_global - 1
                     backward_context = (
-                        policy.no_sync()
-                        if fsdp_policy and not is_last_micro
-                        else nullcontext()
+                        policy.no_sync() if fsdp_policy and not is_last_micro else nullcontext()
                     )
                     with backward_context:
                         new_logprob, entropy, _ = policy(eval_batch)
@@ -507,9 +791,7 @@ class EmbodiedFSDPActor(Worker):
                                 new_logprob,
                                 entropy,
                             )
-                            (
-                                zero_loss / float(micro_batches_per_global)
-                            ).backward()
+                            (zero_loss / float(micro_batches_per_global)).backward()
                             zero_loss_micro_batches += 1
                         else:
                             old_logprob = old_logprob[sample_mask]
@@ -533,9 +815,7 @@ class EmbodiedFSDPActor(Worker):
                             )
                             policy_loss1 = -advantage * ratio
                             policy_loss2 = -advantage * clipped_ratio
-                            clip_mask = (
-                                policy_loss1.detach() < policy_loss2.detach()
-                            )
+                            clip_mask = policy_loss1.detach() < policy_loss2.detach()
                             unclipped_policy_loss = torch.maximum(
                                 policy_loss1,
                                 policy_loss2,
@@ -546,12 +826,9 @@ class EmbodiedFSDPActor(Worker):
                                     dtype=torch.bool,
                                 )
                             else:
-                                dual_bound = (
-                                    float(clip_ratio_c) * advantage.abs()
-                                )
+                                dual_bound = float(clip_ratio_c) * advantage.abs()
                                 dual_clip_mask = (
-                                    dual_bound.detach()
-                                    < unclipped_policy_loss.detach()
+                                    dual_bound.detach() < unclipped_policy_loss.detach()
                                 )
                             ppo_clip = _ppo_clip_term(
                                 ratio,
@@ -565,29 +842,15 @@ class EmbodiedFSDPActor(Worker):
                                 old_logprob,
                                 clip_log_ratio=clip_log_ratio,
                             )
-                            if (
-                                loss_norm == "per_rollout"
-                                and not token_level_logprob
-                            ):
-                                weights = (
-                                    inverse_per_rollout_count.index_select(
-                                        0,
-                                        trajectory_indices.to(
-                                            self.torch_device
-                                        ),
-                                    )[sample_mask]
-                                )
+                            if loss_norm == "per_rollout" and not token_level_logprob:
+                                weights = inverse_per_rollout_count.index_select(
+                                    0,
+                                    trajectory_indices.to(self.torch_device),
+                                )[sample_mask]
                                 weight_denom = weights.sum().clamp_min(1.0e-8)
-                                policy_loss = (
-                                    (ppo_clip * weights).sum() / weight_denom
-                                )
-                                behavior_kl_mean = (
-                                    (behavior_kl * weights).sum()
-                                    / weight_denom
-                                )
-                                entropy_mean = (
-                                    (entropy * weights).sum() / weight_denom
-                                )
+                                policy_loss = (ppo_clip * weights).sum() / weight_denom
+                                behavior_kl_mean = (behavior_kl * weights).sum() / weight_denom
+                                entropy_mean = (entropy * weights).sum() / weight_denom
                             else:
                                 policy_loss = ppo_clip.mean()
                                 behavior_kl_mean = behavior_kl.mean()
@@ -597,33 +860,17 @@ class EmbodiedFSDPActor(Worker):
                                 + kl_coef * behavior_kl_mean
                                 - entropy_coef * entropy_mean
                             )
-                            (
-                                total_loss / float(micro_batches_per_global)
-                            ).backward()
-                            metric_sums["policy_loss"] += (
-                                policy_loss.detach()
-                            )
+                            (total_loss / float(micro_batches_per_global)).backward()
+                            metric_sums["policy_loss"] += policy_loss.detach()
                             metric_sums["total_loss"] += total_loss.detach()
                             metric_sums["ratio"] += ratio.detach().mean()
-                            metric_sums["ratio_abs"] += (
-                                ratio.detach() - 1.0
-                            ).abs().mean()
-                            metric_sums["clipped_ratio"] += (
-                                clipped_ratio.detach().mean()
-                            )
-                            metric_sums["approx_kl"] += (
-                                -raw_log_ratio.detach().mean()
-                            )
-                            metric_sums["clip_fraction"] += (
-                                clip_mask.float().mean()
-                            )
-                            metric_sums["dual_clip_fraction"] += (
-                                dual_clip_mask.float().mean()
-                            )
+                            metric_sums["ratio_abs"] += (ratio.detach() - 1.0).abs().mean()
+                            metric_sums["clipped_ratio"] += clipped_ratio.detach().mean()
+                            metric_sums["approx_kl"] += -raw_log_ratio.detach().mean()
+                            metric_sums["clip_fraction"] += clip_mask.float().mean()
+                            metric_sums["dual_clip_fraction"] += dual_clip_mask.float().mean()
                             metric_sums["entropy"] += entropy_mean.detach()
-                            metric_sums["behavior_kl"] += (
-                                behavior_kl_mean.detach()
-                            )
+                            metric_sums["behavior_kl"] += behavior_kl_mean.detach()
 
                     forward_backward_steps += 1
                     progress_ops += 1
@@ -659,21 +906,20 @@ class EmbodiedFSDPActor(Worker):
 
         policy.train(False)
         metric_divisor = float(max(1, forward_backward_steps))
-        scalar_values = torch.stack(
-            tuple(
-                metric_sums[name] / metric_divisor
-                for name in metric_names
-            )
-        ).detach().float().cpu().tolist()
+        scalar_values = (
+            torch.stack(tuple(metric_sums[name] / metric_divisor for name in metric_names))
+            .detach()
+            .float()
+            .cpu()
+            .tolist()
+        )
         scalars = dict(zip(metric_names, scalar_values, strict=True))
         mean_grad_norm = _mean(grad_norms)
         return {
             **common_metrics,
             "actor/ppo_updates": float(optimizer_steps),
             "actor/ppo_optimizer_steps": float(optimizer_steps),
-            "actor/ppo_forward_backward_steps": float(
-                forward_backward_steps
-            ),
+            "actor/ppo_forward_backward_steps": float(forward_backward_steps),
             "actor/ppo_progress_ops": float(progress_ops),
             "actor/policy_loss": float(scalars["policy_loss"]),
             "actor/loss": float(scalars["total_loss"]),
@@ -684,18 +930,14 @@ class EmbodiedFSDPActor(Worker):
             "actor/clipped_ratio": float(scalars["clipped_ratio"]),
             "actor/approx_kl": float(scalars["approx_kl"]),
             "actor/clip_fraction": float(scalars["clip_fraction"]),
-            "actor/dual_clip_fraction": float(
-                scalars["dual_clip_fraction"]
-            ),
+            "actor/dual_clip_fraction": float(scalars["dual_clip_fraction"]),
             "actor/entropy_mean": float(scalars["entropy"]),
             "actor/behavior_kl_mean": float(scalars["behavior_kl"]),
             "actor/policy_grad_norm": mean_grad_norm,
             "actor/grad_norm": mean_grad_norm,
             "actor/lr": _optimizer_lr(optimizer),
             "actor/zero_loss_steps": float(zero_loss_micro_batches),
-            "actor/zero_loss_micro_batches": float(
-                zero_loss_micro_batches
-            ),
+            "actor/zero_loss_micro_batches": float(zero_loss_micro_batches),
             "actor/skipped_zero_valid_update": 0.0,
         }
 
@@ -714,11 +956,7 @@ class EmbodiedFSDPActor(Worker):
         sync_dtype = dtype_from_precision(syncer_cfg.get("precision", "fp32"))
         if sync_dtype is not torch.float32:
             state = {
-                name: (
-                    value.to(dtype=sync_dtype)
-                    if value.is_floating_point()
-                    else value
-                )
+                name: (value.to(dtype=sync_dtype) if value.is_floating_point() else value)
                 for name, value in state.items()
             }
         push_s = 0.0
@@ -752,16 +990,25 @@ class EmbodiedFSDPActor(Worker):
         """Return a detached CPU copy of the policy state."""
 
         state = _export_policy_state_dict(self._policy())
-        return {
-            name: value.detach().cpu().clone()
-            for name, value in state.items()
-        }
+        return {name: value.detach().cpu().clone() for name, value in state.items()}
 
     def optimizer_state_dict(self) -> dict[str, Any]:
         """Export the full policy optimizer state on actor rank zero."""
 
+        return self._export_optimizer_state_dict(self._optimizer())
+
+    def encoder_optimizer_state_dict(self) -> dict[str, Any]:
+        """Export the encoder-SFT optimizer state on actor rank zero."""
+
+        if self.encoder_optimizer is None:
+            return {}
+        return self._export_optimizer_state_dict(self.encoder_optimizer)
+
+    def _export_optimizer_state_dict(
+        self,
+        optimizer: torch.optim.Optimizer,
+    ) -> dict[str, Any]:
         policy = self._policy()
-        optimizer = self._optimizer()
         if _is_fsdp_module(policy):
             from torch.distributed.fsdp import FullyShardedDataParallel
 
@@ -774,9 +1021,14 @@ class EmbodiedFSDPActor(Worker):
             state = optimizer.state_dict()
         return _to_cpu_tree(state)
 
-    def _load_optimizer_state_dict(self, state: dict[str, Any]) -> None:
+    def _load_optimizer_state_dict(
+        self,
+        state: dict[str, Any],
+        *,
+        optimizer: torch.optim.Optimizer | None = None,
+    ) -> None:
         policy = self._policy()
-        optimizer = self._optimizer()
+        resolved_optimizer = self._optimizer() if optimizer is None else optimizer
         if _is_fsdp_module(policy):
             from torch.distributed.fsdp import FullyShardedDataParallel
 
@@ -785,13 +1037,19 @@ class EmbodiedFSDPActor(Worker):
                 full_state,
                 policy,
             )
-            optimizer.load_state_dict(sharded)
+            resolved_optimizer.load_state_dict(sharded)
             return
-        optimizer.load_state_dict(state)
+        resolved_optimizer.load_state_dict(state)
 
-    def _build_optimizer(self) -> torch.optim.Optimizer:
+    def _build_optimizer(
+        self,
+        role: str,
+        params: list[nn.Parameter],
+    ) -> torch.optim.Optimizer:
         optimizer_cfgs = _as_plain_dict(self.train_cfg.get("optimizers", {}))
-        policy_optim_cfg = _as_plain_dict(optimizer_cfgs.get("policy", {}))
+        policy_optim_cfg = _as_plain_dict(
+            optimizer_cfgs.get(str(role), optimizer_cfgs.get("policy", {}))
+        )
         optimizer_name = str(policy_optim_cfg.get("name", "adam")).strip().lower()
         optimizer_cls = {
             "adam": torch.optim.Adam,
@@ -799,8 +1057,7 @@ class EmbodiedFSDPActor(Worker):
         }.get(optimizer_name)
         if optimizer_cls is None:
             raise ValueError(
-                "EmbodiedFSDPActor policy optimizer must be adam or adamw, "
-                f"got {optimizer_name!r}"
+                f"EmbodiedFSDPActor {role} optimizer must be adam or adamw, got {optimizer_name!r}"
             )
         lr = float(policy_optim_cfg.get("lr", self.train_cfg.get("lr", 1e-4)))
         raw_betas = policy_optim_cfg.get("betas", (0.9, 0.999))
@@ -809,9 +1066,8 @@ class EmbodiedFSDPActor(Worker):
         betas = (float(raw_betas[0]), float(raw_betas[1]))
         eps = float(policy_optim_cfg.get("eps", 1e-8))
         weight_decay = float(policy_optim_cfg.get("weight_decay", 0.0))
-        params = [param for param in self._policy().parameters() if param.requires_grad]
         if not params:
-            raise ValueError("EmbodiedFSDPActor policy has no trainable parameters")
+            raise ValueError(f"EmbodiedFSDPActor {role} has no trainable parameters")
         return optimizer_cls(
             params,
             lr=lr,
@@ -844,9 +1100,7 @@ class EmbodiedFSDPActor(Worker):
         }
         for key in _EXTRA_FORWARD_KEYS:
             if key in forward_inputs:
-                eval_batch[key] = forward_inputs[key][step][selected].to(
-                    self.torch_device
-                )
+                eval_batch[key] = forward_inputs[key][step][selected].to(self.torch_device)
         return eval_batch
 
     def _eval_inputs_for_flat_indices(
@@ -960,10 +1214,7 @@ def _as_plain_dict(value: Any) -> dict[str, Any]:
 
 
 def _to_device_state(value: Any, device: torch.device) -> dict[str, torch.Tensor]:
-    return {
-        str(name): torch.as_tensor(tensor).to(device)
-        for name, tensor in dict(value).items()
-    }
+    return {str(name): torch.as_tensor(tensor).to(device) for name, tensor in dict(value).items()}
 
 
 def _to_cpu_tree(value: Any) -> Any:
@@ -1040,11 +1291,7 @@ def _match_logprob_shape(
 ) -> torch.Tensor:
     if value.shape == logprob.shape:
         return value
-    if (
-        value.ndim == 1
-        and logprob.ndim > 1
-        and int(value.shape[0]) == int(logprob.shape[0])
-    ):
+    if value.ndim == 1 and logprob.ndim > 1 and int(value.shape[0]) == int(logprob.shape[0]):
         return _expand_batch_vector_as(value, logprob)
     raise ValueError(
         f"{name} shape must match log_prob shape; got "
@@ -1093,11 +1340,7 @@ def _as_tensor(value: Any) -> torch.Tensor:
 
 
 def _grad_norm(params: list[torch.nn.Parameter]) -> float:
-    norms = [
-        param.grad.detach().norm(2)
-        for param in params
-        if param.grad is not None
-    ]
+    norms = [param.grad.detach().norm(2) for param in params if param.grad is not None]
     if not norms:
         return 0.0
     total = torch.norm(torch.stack(norms), 2)
@@ -1127,10 +1370,7 @@ def _distributed_reduce_int(
     device: torch.device,
     op: Any,
 ) -> int:
-    if not (
-        torch.distributed.is_available()
-        and torch.distributed.is_initialized()
-    ):
+    if not (torch.distributed.is_available() and torch.distributed.is_initialized()):
         return int(value)
     backend = str(torch.distributed.get_backend()).lower()
     tensor_device = device if backend == "nccl" else torch.device("cpu")
@@ -1177,10 +1417,32 @@ def _export_policy_state_dict(policy: nn.Module) -> dict[str, torch.Tensor]:
             state = policy.state_dict()
     else:
         state = policy.state_dict()
-    return {
-        str(name): torch.as_tensor(value)
-        for name, value in dict(state).items()
-    }
+    return {str(name): torch.as_tensor(value) for name, value in dict(state).items()}
+
+
+def _load_policy_state_dict(
+    policy: nn.Module,
+    state: dict[str, torch.Tensor],
+    *,
+    rank: int,
+) -> None:
+    if _is_fsdp_module(policy):
+        from torch.distributed.fsdp import (
+            FullStateDictConfig,
+            FullyShardedDataParallel,
+            StateDictType,
+        )
+
+        cfg = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
+        payload = state if int(rank) == 0 else {}
+        with FullyShardedDataParallel.state_dict_type(
+            policy,
+            StateDictType.FULL_STATE_DICT,
+            cfg,
+        ):
+            policy.load_state_dict(payload)
+        return
+    policy.load_state_dict(_to_device_state(state, next(policy.parameters()).device))
 
 
 def _is_fsdp_module(policy: nn.Module) -> bool:
@@ -1189,6 +1451,14 @@ def _is_fsdp_module(policy: nn.Module) -> bool:
     except Exception:
         return False
     return isinstance(policy, FullyShardedDataParallel)
+
+
+def _unwrap_policy_module(policy: nn.Module) -> nn.Module:
+    """Return the user module while preserving FSDP as the forward boundary."""
+
+    if _is_fsdp_module(policy):
+        return policy.module
+    return policy
 
 
 def _mean(values: list[float]) -> float:
@@ -1228,6 +1498,8 @@ def _rollout_filter_mask(
     else:
         mask = torch.ones_like(returns)
     return mask, int((mask <= 0.0).sum().item())
+
+
 _ppo_clip_term = _GRPO_HELPERS._ppo_clip_term
 _ppo_ratio = _GRPO_HELPERS._ppo_ratio
 

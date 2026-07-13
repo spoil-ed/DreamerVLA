@@ -1054,7 +1054,9 @@ def test_reused_coldstart_output_validation_requires_sidecar_metadata(tmp_path) 
     assert validate_collected_outputs(reward_dir=reward_dir, hidden_dir=hidden_dir) == []
 
 
-def test_reused_coldstart_output_validation_rejects_56_token_sidecar(tmp_path) -> None:
+def test_reused_coldstart_output_validation_uses_selected_checkpoint_geometry(
+    tmp_path,
+) -> None:
     from dreamervla.launchers.coldstart_warmup_cotrain import validate_collected_outputs
 
     reward_dir = tmp_path / "reward"
@@ -1068,7 +1070,16 @@ def test_reused_coldstart_output_validation_rejects_56_token_sidecar(tmp_path) -
         token_count=56,
     )
 
-    errors = validate_collected_outputs(reward_dir=reward_dir, hidden_dir=hidden_dir)
+    assert validate_collected_outputs(
+        reward_dir=reward_dir,
+        hidden_dir=hidden_dir,
+    ) == []
+
+    errors = validate_collected_outputs(
+        reward_dir=reward_dir,
+        hidden_dir=hidden_dir,
+        expected_token_shape=(256, 4096),
+    )
 
     assert not any("obs_hidden_source" in error for error in errors)
     assert any("token_count" in error for error in errors)
@@ -2057,6 +2068,7 @@ def test_async_cotrain_phase_online_only_consolidates_missing_ray_init_ckpt(
             f"data_root={tmp_path}",
             "cotrain_engine=async",
             "cotrain_phase=online",
+            "eval.enabled=false",
             "skip_asset_check=false",
             "collect_num_tasks=1",
         ]
@@ -2104,6 +2116,7 @@ def test_launcher_main_restores_dvla_data_root_after_inline_call(
             f"data_root={inline_data}",
             "cotrain_engine=async",
             "cotrain_phase=online",
+            "eval.enabled=false",
             "skip_asset_check=false",
             "collect_num_tasks=1",
         ]
@@ -2242,15 +2255,21 @@ def test_async_eval_runs_segmented_post_step_libero_eval_and_writes_trend_summar
         if env is not None
     )
     assert all("experiment=eval_libero_vla" in call for call in eval_calls)
-    assert all("eval.ckpt_kind=dreamer" in call for call in eval_calls)
+    assert all("eval.ckpt_kind=vla_policy" in call for call in eval_calls)
+    assert all("eval.cotrain_diagnostics=true" in call for call in eval_calls)
+    assert all(
+        "eval.cotrain_expected_trajectories=100" in call
+        for call in eval_calls
+    )
+    assert all("eval.num_envs=10" in call for call in eval_calls)
     assert all("eval.action_postprocess=openvla_oft" in call for call in eval_calls)
     assert any(
         item.endswith("manual_cotrain_step_1/manual_cotrain.ckpt")
         for item in eval_calls[0]
     )
-    assert "+manual_cotrain.resume_ckpt" not in " ".join(train_calls[0])
+    assert "manual_cotrain.resume_ckpt" not in " ".join(train_calls[0])
     assert any(
-        item.startswith("+manual_cotrain.resume_ckpt=")
+        item.startswith("++manual_cotrain.resume_ckpt=")
         and item.endswith("manual_cotrain_step_1/manual_cotrain.ckpt")
         for item in train_calls[1]
     )
@@ -2289,6 +2308,30 @@ def test_debug_async_cotrain_enables_post_step_eval_each_global_step(tmp_path) -
 
     assert plan.eval_enabled is True
     assert plan.eval_interval_global_steps == 1
+
+
+def test_mainline_async_eval_defaults_to_every_step_fixed_100_protocol(
+    tmp_path,
+) -> None:
+    from dreamervla.launchers.coldstart_warmup_cotrain import build_pipeline_plan
+
+    cfg = _launcher_cfg()
+    cfg["cotrain_engine"] = "async"
+    plan = build_pipeline_plan(
+        mode="ray",
+        run_root=tmp_path,
+        python="python",
+        profile="multi_gpu",
+        ngpu=2,
+        launcher_cfg=cfg,
+        cotrain_overrides=["manual_cotrain.global_steps=2"],
+    )
+
+    assert plan.eval_enabled is True
+    assert plan.eval_interval_global_steps == 1
+    assert plan.eval_cfg["task_ids"] == list(range(10))
+    assert plan.eval_cfg["num_episodes_per_task"] == 10
+    assert plan.eval_cfg["num_envs"] == 10
 
 
 def test_post_step_eval_egl_device_defaults_to_last_eval_gpu_for_split_render() -> None:

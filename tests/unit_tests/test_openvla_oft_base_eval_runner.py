@@ -72,31 +72,45 @@ def test_openvla_oft_base_eval_generates_postprocessed_actions() -> None:
     assert actions[1][-1] == -1.0
 
 
-def test_openvla_oft_vla_policy_eval_uses_hidden_tokens_and_actor_actions() -> None:
-    class _Actor:
+def test_openvla_oft_vla_policy_eval_uses_full_checkpoint_raw_path() -> None:
+    class _Extractor:
         def __init__(self) -> None:
-            self.last_batch = None
+            self.calls = []
 
-        def __call__(self, batch):
-            self.last_batch = batch
-            action_chunk = torch.zeros((1, 2, 7), dtype=torch.float32)
-            action_chunk[0, 1, -1] = 1.0
-            return action_chunk, torch.zeros((1, 2, 7)), {}
+        def reset(self) -> None:
+            return None
 
-    actor = _Actor()
+        def step(self, obs, task):
+            self.calls.append((obs, task))
+            return SimpleNamespace(
+                action_chunk=[
+                    np.zeros((7,), dtype=np.float32),
+                    np.array([0, 0, 0, 0, 0, 0, 1], dtype=np.float32),
+                ],
+                hidden_state=torch.zeros((256, 4096), dtype=torch.float16),
+            )
+
+    extractor = _Extractor()
+
+    class _Policy:
+        def __init__(self) -> None:
+            self.make_extractor_calls = 0
+
+        def make_extractor(self):
+            self.make_extractor_calls += 1
+            return extractor
+
+        def __call__(self, _batch):
+            raise AssertionError(
+                "VLA-policy eval must not re-decode fixed-base hidden tokens"
+            )
+
+    policy = _Policy()
     runner = object.__new__(EmbodiedEvalRunner)
     runner.cfg = OmegaConf.create({})
     runner.device = torch.device("cpu")
-    runner._vla_policy_eval_policy = actor
-    runner._base_oft_extractor = SimpleNamespace(
-        reset=lambda: None,
-        step=lambda obs, task: SimpleNamespace(
-            action_chunk=[],
-            hidden_state=torch.zeros((256, 4096), dtype=torch.float16),
-            obs=obs,
-            task=task,
-        ),
-    )
+    runner._vla_policy_eval_policy = policy
+    runner._base_oft_extractor = extractor
     runner._libero_current_raw_obs = {
         "agentview_image": np.zeros((2, 2, 3), dtype=np.uint8),
         "robot0_eye_in_hand_image": np.ones((2, 2, 3), dtype=np.uint8),
@@ -111,12 +125,15 @@ def test_openvla_oft_vla_policy_eval_uses_hidden_tokens_and_actor_actions() -> N
         action_steps=2,
     )
 
-    assert actor.last_batch["deterministic"] is True
-    assert actor.last_batch["return_chunk"] is True
-    assert tuple(actor.last_batch["hidden"].shape) == (1, 256, 4096)
+    assert len(extractor.calls) == 1
+    assert extractor.calls[0][1] == "open the drawer"
     assert len(actions) == 2
     assert actions[0][-1] == 1.0
     assert actions[1][-1] == -1.0
+
+    slot_extractor = runner._make_parallel_oft_slot_extractor()
+    assert slot_extractor is extractor
+    assert policy.make_extractor_calls == 1
 
 
 def test_vla_policy_checkpoint_kind_dispatches_without_world_model(
@@ -156,3 +173,57 @@ def test_vla_policy_checkpoint_kind_dispatches_without_world_model(
     assert metrics == [{"eval_success_rate": 0.5}]
     assert called[0][1] == str(checkpoint.resolve())
     assert called[0][2] is payload
+
+
+def test_cotrain_eval_observer_loads_checkpoint_models_and_fixed_threshold() -> None:
+    runner = object.__new__(EmbodiedEvalRunner)
+    runner.device = torch.device("cpu")
+    runner.distributed = SimpleNamespace(is_main_process=False)
+    built = [torch.nn.Linear(1, 1), torch.nn.Linear(1, 1)]
+    runner._build_from_target_cfg = lambda _cfg: built.pop(0)
+    loaded: list[tuple[str, dict]] = []
+    runner._load_module_state = (
+        lambda _module, state, name: loaded.append((name, state))
+    )
+    cfg = OmegaConf.create(
+        {
+            "eval": {
+                "cotrain_diagnostics": True,
+                "cotrain_expected_trajectories": 100,
+                "cotrain_encode_batch_size": 4,
+            },
+            "learner": {
+                "model_cfg": {
+                    "world_model": {"target": "test.WorldModel"},
+                    "classifier": {"target": "test.Classifier"},
+                },
+                "train_cfg": {"precision": "fp32"},
+            },
+        }
+    )
+    policy = torch.nn.Linear(1, 1)
+
+    runner._setup_cotrain_eval_observer(
+        cfg=cfg,
+        payload={
+            "classifier_threshold": 0.43,
+            "state_dicts": {
+                "world_model": {"wm": torch.ones(1)},
+                "classifier": {"cls": torch.ones(1)},
+                "world_model_optimizer": {"state": {}},
+            },
+        },
+        policy=policy,
+    )
+
+    observer = runner._cotrain_eval_observer
+    assert [name for name, _state in loaded] == ["world_model", "classifier"]
+    assert observer.accumulator.classifier_threshold == 0.43
+    assert observer.accumulator.threshold_source == "checkpoint"
+    assert observer.expected_trajectories == 100
+    assert observer.policy is policy
+    assert all(
+        not parameter.requires_grad
+        for module in (observer.world_model, observer.classifier)
+        for parameter in module.parameters()
+    )

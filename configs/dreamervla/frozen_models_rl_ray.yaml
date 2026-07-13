@@ -31,8 +31,12 @@ optim:
 manual_cotrain:
   ngpu: 8
   global_steps: 20000
+  staged_policy_update: false
   learner_update_step: null
   learner_update_phase: null
+  learner_updates_per_global_step: null
+  learner_early_stop_patience: null
+  max_policy_kl: null
   checkpoint_every: 500
   resume_ckpt: null
   save_replay_state: false
@@ -62,6 +66,32 @@ manual_cotrain:
 
 # Frozen mode deliberately has no trainable learner or real environment group.
 learner: null
+
+# The isolated pre-mainline feasibility test intentionally retains its legacy
+# replacement bridge.  The trainable mainline above uses the full OpenVLA policy.
+ray_components:
+  policy:
+    target: dreamervla.algorithms.actor.LatentToOpenVLAHiddenStateActor
+    kwargs:
+      hidden_dim: null
+      source_token_count: ${task.openvla_oft.hidden_token.token_count}
+      source_token_dim: ${task.openvla_oft.hidden_token.token_dim}
+      hidden_state_dim: ${task.openvla_oft.hidden_token.hidden_state_dim}
+      action_dim: ${task.action_dim}
+      time_horizon: ${task.openvla_oft.hidden_token.chunk_size}
+      head_type: oft_discrete_token
+      adapter_type: ${task.openvla_oft.actor_adapter_type}
+      adapter_hidden_dim: ${task.openvla_oft.actor_adapter_hidden_dim}
+      freeze_lm_head: ${task.openvla_oft.actor_freeze_lm_head}
+      init_lm_head_ckpt: ${task.openvla_oft.ckpt_path}
+      vocab_size: ${task.openvla_oft.vocab_size}
+      action_token_bins: ${task.openvla_oft.action_token_bins}
+      min_action: ${task.openvla_oft.min_action}
+      max_action: ${task.openvla_oft.max_action}
+      bridge_hidden_dim: 1024
+      num_bridge_layers: 2
+      num_bridge_heads: 8
+      bridge_dropout: 0.1
 
 env:
   real: null
@@ -98,9 +128,15 @@ rollout:
   policy_cfg: ${ray_components.policy}
   encoder_cfg: null
 
+frozen_actor_optimizers:
+  policy: ${ray_actor_optimizer}
+
 actor:
   policy_cfg: ${ray_components.policy}
   train_cfg:
+    # Replace the inherited staged-policy optimizer mapping wholesale. The
+    # isolated frozen feasibility actor has no trainable OpenVLA encoder.
+    optimizers: ${frozen_actor_optimizers}
     fsdp:
       sync_module_states: true
     algorithm_cfg:

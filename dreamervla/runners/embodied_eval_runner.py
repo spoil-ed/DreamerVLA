@@ -36,6 +36,7 @@ from PIL import Image
 from transformers import GenerationConfig
 
 from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
+from dreamervla.diagnostics.eval_cotrain_transaction import CotrainEvalObserver
 from dreamervla.runners import _embodied_eval_helpers as _eh
 from dreamervla.runners._embodied_eval_action_mixin import EmbodiedEvalActionMixin
 from dreamervla.runners._embodied_eval_export_mixin import EmbodiedEvalExportMixin
@@ -62,10 +63,7 @@ def normalize_dreamer_actor_input_source(source: Any) -> str:
     if value == "rssm":
         return "latent"
     if value not in {"latent", "encoder"}:
-        raise ValueError(
-            "eval.dreamer_actor_input_source must be one of: "
-            "latent, encoder"
-        )
+        raise ValueError("eval.dreamer_actor_input_source must be one of: latent, encoder")
     return value
 
 
@@ -75,9 +73,7 @@ def normalize_dreamer_rollout_mode(mode: Any) -> str:
     if value == "online_rssm":
         return "online_latent"
     if value not in {"stateless", "online_latent"}:
-        raise ValueError(
-            "eval.dreamer_rollout_mode must be one of: stateless, online_latent"
-        )
+        raise ValueError("eval.dreamer_rollout_mode must be one of: stateless, online_latent")
     return value
 
 
@@ -85,17 +81,11 @@ def evaluation_protocol_metadata(cfg: DictConfig) -> dict[str, Any]:
     """Serialize the real-LIBERO protocol fields used for matched A/B checks."""
 
     raw_task_ids = OmegaConf.select(cfg, "eval.task_ids", default=None)
-    task_ids = (
-        None
-        if raw_task_ids is None
-        else [int(task_id) for task_id in raw_task_ids]
-    )
+    task_ids = None if raw_task_ids is None else [int(task_id) for task_id in raw_task_ids]
     raw_max_tasks = OmegaConf.select(cfg, "eval.max_tasks", default=None)
     raw_max_steps = OmegaConf.select(cfg, "eval.max_steps", default=None)
     return {
-        "task_suite": str(
-            OmegaConf.select(cfg, "eval.task_suite_name", default="libero_goal")
-        ),
+        "task_suite": str(OmegaConf.select(cfg, "eval.task_suite_name", default="libero_goal")),
         "num_episodes_per_task": int(
             OmegaConf.select(cfg, "eval.num_episodes_per_task", default=3)
         ),
@@ -107,12 +97,8 @@ def evaluation_protocol_metadata(cfg: DictConfig) -> dict[str, Any]:
                 default=OmegaConf.select(cfg, "seed", default=0),
             )
         ),
-        "num_steps_wait": int(
-            OmegaConf.select(cfg, "eval.num_steps_wait", default=10)
-        ),
-        "action_steps": int(
-            OmegaConf.select(cfg, "eval.action_steps", default=10)
-        ),
+        "num_steps_wait": int(OmegaConf.select(cfg, "eval.num_steps_wait", default=10)),
+        "action_steps": int(OmegaConf.select(cfg, "eval.action_steps", default=10)),
         "task_ids": task_ids,
         "task_start": int(OmegaConf.select(cfg, "eval.task_start", default=0)),
         "max_tasks": None if raw_max_tasks is None else int(raw_max_tasks),
@@ -128,15 +114,9 @@ def evaluation_protocol_metadata(cfg: DictConfig) -> dict[str, Any]:
         "reconfigure_per_episode": bool(
             OmegaConf.select(cfg, "eval.reconfigure_per_episode", default=False)
         ),
-        "history_length": int(
-            OmegaConf.select(cfg, "eval.history_length", default=1)
-        ),
-        "action_postprocess": str(
-            OmegaConf.select(cfg, "eval.action_postprocess", default="none")
-        ),
-        "render_backend": str(
-            OmegaConf.select(cfg, "eval.render_backend", default="osmesa")
-        ),
+        "history_length": int(OmegaConf.select(cfg, "eval.history_length", default=1)),
+        "action_postprocess": str(OmegaConf.select(cfg, "eval.action_postprocess", default="none")),
+        "render_backend": str(OmegaConf.select(cfg, "eval.render_backend", default="osmesa")),
     }
 
 
@@ -166,6 +146,115 @@ class EmbodiedEvalRunner(
     runner_name = "libero_eval"
     runner_status = "current"
     runner_family = "eval"
+
+    def _setup_cotrain_eval_observer(
+        self,
+        *,
+        cfg: DictConfig,
+        payload: dict[str, Any],
+        policy: torch.nn.Module,
+    ) -> None:
+        """Build checkpoint WM/CLS only for fixed, read-only causal diagnostics."""
+
+        self._cotrain_eval_observer = None
+        if not bool(OmegaConf.select(cfg, "eval.cotrain_diagnostics", default=False)):
+            return
+        expected = OmegaConf.select(
+            cfg,
+            "eval.cotrain_expected_trajectories",
+            default=None,
+        )
+        if expected is None or int(expected) <= 0:
+            raise ValueError(
+                "eval.cotrain_diagnostics requires a positive eval.cotrain_expected_trajectories"
+            )
+        state_dicts = payload.get("state_dicts", {})
+        if not isinstance(state_dicts, Mapping):
+            raise TypeError("cotrain diagnostic checkpoint state_dicts must be a mapping")
+        world_model_state = state_dicts.get("world_model")
+        classifier_state = state_dicts.get("classifier")
+        if not isinstance(world_model_state, Mapping) or not world_model_state:
+            raise RuntimeError("cotrain diagnostics require checkpoint world_model state")
+        if not isinstance(classifier_state, Mapping) or not classifier_state:
+            raise RuntimeError("cotrain diagnostics require checkpoint classifier state")
+        world_model_cfg = OmegaConf.select(
+            cfg,
+            "learner.model_cfg.world_model",
+            default=None,
+        )
+        classifier_cfg = OmegaConf.select(
+            cfg,
+            "learner.model_cfg.classifier",
+            default=None,
+        )
+        if world_model_cfg is None or classifier_cfg is None:
+            raise ValueError(
+                "cotrain checkpoint cfg must define learner.model_cfg world_model and classifier"
+            )
+        world_model = self._build_from_target_cfg(world_model_cfg)
+        classifier = self._build_from_target_cfg(classifier_cfg)
+        if not isinstance(world_model, torch.nn.Module) or not isinstance(
+            classifier, torch.nn.Module
+        ):
+            raise TypeError("cotrain diagnostic WM/CLS targets must be torch modules")
+        precision = str(
+            OmegaConf.select(cfg, "learner.train_cfg.precision", default="bf16")
+        ).lower()
+        dtype = {
+            "bf16": torch.bfloat16,
+            "fp16": torch.float16,
+            "fp32": torch.float32,
+        }.get(precision)
+        if dtype is None:
+            raise ValueError("cotrain diagnostic precision must be bf16, fp16 or fp32")
+        world_model.to(device=self.device, dtype=dtype)
+        classifier.to(device=self.device, dtype=dtype)
+        self._load_module_state(
+            world_model,
+            dict(world_model_state),
+            "world_model",
+        )
+        self._load_module_state(
+            classifier,
+            dict(classifier_state),
+            "classifier",
+        )
+        freeze_module(world_model)
+        freeze_module(classifier)
+        world_model.eval()
+        classifier.eval()
+        threshold = payload.get("classifier_threshold")
+        if threshold is None:
+            raise RuntimeError("cotrain diagnostics require checkpoint classifier_threshold")
+        self._cotrain_eval_observer = CotrainEvalObserver(
+            policy=policy,
+            world_model=world_model,
+            classifier=classifier,
+            classifier_threshold=float(threshold),
+            expected_trajectories=int(expected),
+            encode_batch_size=int(
+                OmegaConf.select(
+                    cfg,
+                    "eval.cotrain_encode_batch_size",
+                    default=4,
+                )
+            ),
+            device=self.device,
+        )
+
+    def _on_libero_eval_reset(self, **kwargs: Any) -> None:
+        observer = getattr(self, "_cotrain_eval_observer", None)
+        if observer is not None:
+            observer.on_reset(**kwargs)
+
+    def _on_libero_eval_chunk(self, **kwargs: Any) -> None:
+        observer = getattr(self, "_cotrain_eval_observer", None)
+        if observer is not None:
+            observer.on_chunk(**kwargs)
+
+    def _finalize_libero_eval_observer(self) -> dict[str, Any]:
+        observer = getattr(self, "_cotrain_eval_observer", None)
+        return {} if observer is None else observer.finalize_metrics()
 
     @property
     def default_output_dir(self) -> str:
@@ -206,9 +295,7 @@ class EmbodiedEvalRunner(
         ckpt_kind: str,
         ckpt_is_hf_vla: bool,
     ) -> bool:
-        target = str(
-            OmegaConf.select(cfg, "task.openvla_oft.sft_policy_target", default="")
-        )
+        target = str(OmegaConf.select(cfg, "task.openvla_oft.sft_policy_target", default=""))
         return (
             str(ckpt_kind).lower() == "vla"
             and bool(ckpt_is_hf_vla)
@@ -221,9 +308,7 @@ class EmbodiedEvalRunner(
         state: np.ndarray,
     ) -> dict[str, Any]:
         third = raw_obs.get("agentview_rgb", raw_obs.get("agentview_image"))
-        wrist = raw_obs.get(
-            "eye_in_hand_rgb", raw_obs.get("robot0_eye_in_hand_image")
-        )
+        wrist = raw_obs.get("eye_in_hand_rgb", raw_obs.get("robot0_eye_in_hand_image"))
         if third is None or wrist is None:
             raise KeyError("OFT base eval requires LIBERO agentview and wrist images")
         state_arr = np.asarray(state, dtype=np.float32).reshape(-1)
@@ -254,9 +339,7 @@ class EmbodiedEvalRunner(
             unnorm_key=str(policy_cfg["unnorm_key"]),
             image_keys=image_keys,
             history=int(
-                OmegaConf.select(
-                    cfg, "task.openvla_oft.hidden_token.expected_history", default=1
-                )
+                OmegaConf.select(cfg, "task.openvla_oft.hidden_token.expected_history", default=1)
             ),
             rotate_images_180=bool(
                 OmegaConf.select(
@@ -265,9 +348,7 @@ class EmbodiedEvalRunner(
                     default=True,
                 )
             ),
-            center_crop=bool(
-                OmegaConf.select(cfg, "task.openvla_oft.center_crop", default=True)
-            ),
+            center_crop=bool(OmegaConf.select(cfg, "task.openvla_oft.center_crop", default=True)),
             obs_hidden_source=str(
                 OmegaConf.select(
                     cfg,
@@ -287,6 +368,15 @@ class EmbodiedEvalRunner(
         return _OFTBaseEvalAdapter(extractor)
 
     def _make_parallel_oft_slot_extractor(self) -> Any:
+        policy = getattr(self, "_vla_policy_eval_policy", None)
+        make_extractor = getattr(policy, "make_extractor", None)
+        if callable(make_extractor):
+            # A learned VLA-policy checkpoint owns both halves of the policy:
+            # raw input -> projected visual tokens -> native OFT actions.  Its
+            # extractor must therefore come from that exact restored module.
+            # Falling back to the fixed HF bundle here silently evaluates the
+            # updated decoder on stale base-encoder tokens.
+            return make_extractor()
         bundle = getattr(self, "_oft_eval_bundle", None)
         if bundle is None:
             return None
@@ -296,9 +386,7 @@ class EmbodiedEvalRunner(
     def _action_token_id(self) -> int:
         """Action-token id used for all token insertions (X-03; adjustable)."""
         return int(
-            OmegaConf.select(
-                self.cfg, "eval.target_token_id", default=DEFAULT_ACTION_TOKEN_ID
-            )
+            OmegaConf.select(self.cfg, "eval.target_token_id", default=DEFAULT_ACTION_TOKEN_ID)
         )
 
     @staticmethod
@@ -335,17 +423,11 @@ class EmbodiedEvalRunner(
             )
 
         ckpt_path = OmegaConf.select(cfg, "eval.ckpt_path", default=None)
-        ckpt_path = (
-            str(pathlib.Path(str(ckpt_path)).expanduser().resolve())
-            if ckpt_path
-            else None
-        )
+        ckpt_path = str(pathlib.Path(str(ckpt_path)).expanduser().resolve()) if ckpt_path else None
         payload = None
         ckpt_kind = str(OmegaConf.select(cfg, "eval.ckpt_kind", default="auto")).lower()
         if ckpt_kind not in {"auto", "vla", "vla_policy", "dreamer"}:
-            raise ValueError(
-                "eval.ckpt_kind must be one of: auto, vla, vla_policy, dreamer"
-            )
+            raise ValueError("eval.ckpt_kind must be one of: auto, vla, vla_policy, dreamer")
         ckpt_is_hf_vla = bool(ckpt_path and is_hf_checkpoint(ckpt_path))
         if ckpt_is_hf_vla and ckpt_kind in {"dreamer", "vla_policy"}:
             raise RuntimeError(
@@ -358,9 +440,7 @@ class EmbodiedEvalRunner(
             payload = self._load_checkpoint_payload(ckpt_path)
             policy_state = payload.get("state_dicts", {}).get("policy")
             if not isinstance(policy_state, Mapping) or not policy_state:
-                raise RuntimeError(
-                    f"{ckpt_path} has no non-empty state_dicts.policy"
-                )
+                raise RuntimeError(f"{ckpt_path} has no non-empty state_dicts.policy")
             return self._run_vla_policy_eval(cfg, ckpt_path, payload)
         if ckpt_path and not ckpt_is_hf_vla and ckpt_kind in {"auto", "dreamer"}:
             payload = self._load_checkpoint_payload(ckpt_path)
@@ -418,9 +498,7 @@ class EmbodiedEvalRunner(
         # ── rollout ──────────────────────────────────────────────────────────
         os.makedirs(self.output_dir, exist_ok=True)
         self._init_policy_trace(cfg)
-        task_suite_name = str(
-            OmegaConf.select(cfg, "eval.task_suite_name", default="libero_goal")
-        )
+        task_suite_name = str(OmegaConf.select(cfg, "eval.task_suite_name", default="libero_goal"))
         self.console_banner("EVALUATION", subtitle=f"suite={task_suite_name}")
         metrics = self.evaluate_libero(epoch=-1)
         eval_rate = float(metrics.get("eval_success_rate", 0.0))
@@ -431,15 +509,11 @@ class EmbodiedEvalRunner(
                 "eval/episodes": float(metrics.get("eval_total_episodes", 0.0)),
                 "eval/successes": float(metrics.get("eval_total_successes", 0.0)),
                 "eval/tasks": float(metrics.get("eval_tasks", 0.0)),
-                "eval/episodes_per_task": float(
-                    metrics.get("eval_episodes_per_task", 0.0)
-                ),
+                "eval/episodes_per_task": float(metrics.get("eval_episodes_per_task", 0.0)),
             },
             force=True,
         )
-        self.console_banner(
-            "EVALUATION", done=True, subtitle=f"succ {eval_rate:.3f}"
-        )
+        self.console_banner("EVALUATION", done=True, subtitle=f"succ {eval_rate:.3f}")
 
         # ── dump metrics ─────────────────────────────────────────────────────
         if self.distributed.is_main_process:
@@ -475,11 +549,12 @@ class EmbodiedEvalRunner(
         ckpt_path: str,
         payload: dict[str, Any],
     ) -> list[dict[str, Any]]:
-        """Evaluate a saved PPO actor through the canonical OpenVLA-OFT path.
+        """Evaluate the complete restored OpenVLA policy on raw LIBERO input.
 
-        The base VLA produces the same projected hidden tokens used by manual
-        cotrain's RolloutGroup. Only the small ActorGroup policy is restored
-        from ``state_dicts.policy``; WM and classifier are not constructed.
+        ``state_dicts.policy`` contains the trainable input encoder and native
+        projected-token-to-action decoder.  Evaluation must use the extractor
+        created by this restored policy; using a separately loaded base VLA
+        encoder would put the actor in a stale hidden-token space.
         """
 
         state_dicts = payload.get("state_dicts", {})
@@ -516,7 +591,6 @@ class EmbodiedEvalRunner(
 
         self._dreamer_eval = False
         self._vla_policy_eval_policy = None
-        self.encoder = self._build_oft_base_eval_adapter(train_cfg, base_vla_ckpt)
 
         raw_policy_cfg = OmegaConf.select(
             train_cfg,
@@ -528,12 +602,8 @@ class EmbodiedEvalRunner(
             ),
         )
         policy_cfg = self._target_kwargs_to_hydra_cfg(raw_policy_cfg)
-        if policy_cfg is None or OmegaConf.select(
-            policy_cfg, "_target_", default=None
-        ) is None:
-            raise ValueError(
-                "VLA-policy checkpoint cfg must define actor.policy_cfg"
-            )
+        if policy_cfg is None or OmegaConf.select(policy_cfg, "_target_", default=None) is None:
+            raise ValueError("VLA-policy checkpoint cfg must define actor.policy_cfg")
         with open_dict(policy_cfg):
             if OmegaConf.select(policy_cfg, "init_lm_head_ckpt", default=None) is not None:
                 policy_cfg.init_lm_head_ckpt = base_vla_ckpt
@@ -556,6 +626,29 @@ class EmbodiedEvalRunner(
         self._load_module_state(policy, dict(policy_state), "policy")
         policy.eval()
         self._vla_policy_eval_policy = policy
+        make_extractor = getattr(policy, "make_extractor", None)
+        if not callable(make_extractor):
+            raise TypeError("VLA-policy checkpoint module must implement make_extractor()")
+        extractor = make_extractor()
+        self._base_oft_extractor = extractor
+        self._oft_eval_bundle = None
+        self.encoder = _OFTBaseEvalAdapter(extractor)
+        self._setup_cotrain_eval_observer(
+            cfg=train_cfg,
+            payload=payload,
+            policy=policy,
+        )
+        # Standalone evaluation never restores optimizers. Releasing their CPU
+        # payloads here avoids retaining several full training-state copies for
+        # the 100-trajectory rollout.
+        for name in (
+            "policy_optimizer",
+            "encoder_optimizer",
+            "world_model_optimizer",
+            "classifier_optimizer",
+        ):
+            state_dicts.pop(name, None)
+        gc.collect()
 
         os.makedirs(self.output_dir, exist_ok=True)
         self._init_policy_trace(train_cfg)
@@ -575,9 +668,7 @@ class EmbodiedEvalRunner(
                 "eval/episodes": float(metrics.get("eval_total_episodes", 0.0)),
                 "eval/successes": float(metrics.get("eval_total_successes", 0.0)),
                 "eval/tasks": float(metrics.get("eval_tasks", 0.0)),
-                "eval/episodes_per_task": float(
-                    metrics.get("eval_episodes_per_task", 0.0)
-                ),
+                "eval/episodes_per_task": float(metrics.get("eval_episodes_per_task", 0.0)),
             },
             force=True,
         )
@@ -591,9 +682,7 @@ class EmbodiedEvalRunner(
                 "ckpt_path": ckpt_path,
                 "ckpt_kind": "vla_policy",
                 "base_vla_ckpt": base_vla_ckpt,
-                "checkpoint_state_hashes": {
-                    "policy": state_dict_sha256(policy_state)
-                },
+                "checkpoint_state_hashes": {"policy": state_dict_sha256(policy_state)},
                 **evaluation_protocol_metadata(train_cfg),
                 **metrics,
             }
@@ -610,9 +699,7 @@ class EmbodiedEvalRunner(
         payload: dict[str, Any],
     ) -> list[dict[str, Any]]:
         if self.distributed.is_main_process:
-            print(
-                "  [Eval] detected Dreamer checkpoint; using world_model + policy rollout."
-            )
+            print("  [Eval] detected Dreamer checkpoint; using world_model + policy rollout.")
 
         state_dicts = payload.get("state_dicts", {})
         if not isinstance(state_dicts, Mapping):
@@ -626,9 +713,7 @@ class EmbodiedEvalRunner(
         )
         required_hash_components = ("world_model", "classifier", "policy")
         if strict_component_load:
-            missing = [
-                name for name in required_hash_components if name not in state_dicts
-            ]
+            missing = [name for name in required_hash_components if name not in state_dicts]
             if missing:
                 raise RuntimeError(
                     f"strict Dreamer checkpoint load is missing components: {missing}"
@@ -657,9 +742,7 @@ class EmbodiedEvalRunner(
             # Dreamer checkpoints may carry a stale init/encoder path when the
             # training launch overrode it from the shell.  Let eval-time
             # overrides rebuild the frozen VLA backbone/action-head correctly.
-            eval_vla_path = OmegaConf.select(
-                eval_cfg_root, "init.vla_ckpt_path", default=None
-            )
+            eval_vla_path = OmegaConf.select(eval_cfg_root, "init.vla_ckpt_path", default=None)
             if eval_vla_path is not None:
                 train_cfg.init.vla_ckpt_path = eval_vla_path
                 if OmegaConf.select(train_cfg, "encoder", default=None) is not None:
@@ -671,17 +754,13 @@ class EmbodiedEvalRunner(
                         default=None,
                     )
                     if policy_model_path is not None:
-                        train_cfg.rollout.encoder_cfg.kwargs.policy_cfg.model_path = (
-                            eval_vla_path
-                        )
+                        train_cfg.rollout.encoder_cfg.kwargs.policy_cfg.model_path = eval_vla_path
             eval_encoder_ckpt = OmegaConf.select(
                 eval_cfg_root, "init.encoder_state_ckpt", default=None
             )
             if eval_encoder_ckpt is not None:
                 train_cfg.init.encoder_state_ckpt = eval_encoder_ckpt
-            eval_horizon = OmegaConf.select(
-                eval_cfg_root, "encoder.time_horizon", default=None
-            )
+            eval_horizon = OmegaConf.select(eval_cfg_root, "encoder.time_horizon", default=None)
             if (
                 eval_horizon is not None
                 and OmegaConf.select(train_cfg, "encoder", default=None) is not None
@@ -716,9 +795,7 @@ class EmbodiedEvalRunner(
             OmegaConf.select(train_cfg, "eval.dreamer_clip_actions", default=True)
         )
         self._dreamer_rollout_mode = normalize_dreamer_rollout_mode(
-            OmegaConf.select(
-                train_cfg, "eval.dreamer_rollout_mode", default="stateless"
-            )
+            OmegaConf.select(train_cfg, "eval.dreamer_rollout_mode", default="stateless")
         )
         OmegaConf.update(
             train_cfg,
@@ -727,9 +804,7 @@ class EmbodiedEvalRunner(
             force_add=True,
         )
         self._dreamer_actor_input_source = normalize_dreamer_actor_input_source(
-            OmegaConf.select(
-                train_cfg, "eval.dreamer_actor_input_source", default="latent"
-            )
+            OmegaConf.select(train_cfg, "eval.dreamer_actor_input_source", default="latent")
         )
         self._dreamer_policy_source = str(
             OmegaConf.select(train_cfg, "eval.dreamer_policy_source", default="ckpt")
@@ -740,14 +815,10 @@ class EmbodiedEvalRunner(
             OmegaConf.select(train_cfg, "eval.tdmpc_mpc.enabled", default=False)
         )
         self._tdmpc_mpc_use_target_critic = bool(
-            OmegaConf.select(
-                train_cfg, "eval.tdmpc_mpc.use_target_critic", default=True
-            )
+            OmegaConf.select(train_cfg, "eval.tdmpc_mpc.use_target_critic", default=True)
         )
         self._tdmpc_mpc_planner = (
-            self._build_tdmpc_mpc_planner(train_cfg)
-            if self._tdmpc_mpc_enabled
-            else None
+            self._build_tdmpc_mpc_planner(train_cfg) if self._tdmpc_mpc_enabled else None
         )
         self._hidden_noise_std = float(
             OmegaConf.select(train_cfg, "eval.hidden_noise_std", default=0.0)
@@ -806,15 +877,11 @@ class EmbodiedEvalRunner(
                 "eval/episodes": float(metrics.get("eval_total_episodes", 0.0)),
                 "eval/successes": float(metrics.get("eval_total_successes", 0.0)),
                 "eval/tasks": float(metrics.get("eval_tasks", 0.0)),
-                "eval/episodes_per_task": float(
-                    metrics.get("eval_episodes_per_task", 0.0)
-                ),
+                "eval/episodes_per_task": float(metrics.get("eval_episodes_per_task", 0.0)),
             },
             force=True,
         )
-        self.console_banner(
-            "EVALUATION", done=True, subtitle=f"succ {dreamer_eval_rate:.3f}"
-        )
+        self.console_banner("EVALUATION", done=True, subtitle=f"succ {dreamer_eval_rate:.3f}")
         if bool(getattr(self, "_real_relabel_enabled", False)):
             self._write_real_relabel_summary()
             metrics.update(
@@ -842,10 +909,7 @@ class EmbodiedEvalRunner(
             compare_summary = self._hidden_action_compare_summary()
             metrics = dict(metrics)
             metrics.update(
-                {
-                    f"hidden_action_compare_{key}": value
-                    for key, value in compare_summary.items()
-                }
+                {f"hidden_action_compare_{key}": value for key, value in compare_summary.items()}
             )
             if self.distributed.is_main_process:
                 with open(self._hidden_action_compare_summary_path, "w") as f:
@@ -880,14 +944,10 @@ class EmbodiedEvalRunner(
                 "dreamer_policy_source": str(self._dreamer_policy_source),
                 "tdmpc_mpc_enabled": bool(getattr(self, "_tdmpc_mpc_enabled", False)),
                 "dreamer_wm_history_length": int(
-                    OmegaConf.select(
-                        train_cfg, "eval.dreamer_wm_history_length", default=1
-                    )
+                    OmegaConf.select(train_cfg, "eval.dreamer_wm_history_length", default=1)
                 ),
                 "dreamer_wm_rotate_images": bool(
-                    OmegaConf.select(
-                        train_cfg, "eval.dreamer_wm_rotate_images", default=False
-                    )
+                    OmegaConf.select(train_cfg, "eval.dreamer_wm_rotate_images", default=False)
                 ),
                 "hidden_noise_std": float(self._hidden_noise_std),
                 "hidden_noise_seed": int(self._hidden_noise_seed),
@@ -900,14 +960,11 @@ class EmbodiedEvalRunner(
         return [metrics]
 
     def evaluate_libero(self, epoch: int) -> dict[str, float]:
-        if (
-            getattr(self, "_dreamer_eval", False)
-            and getattr(self, "_dreamer_rollout_mode", "stateless")
-            in {"stateless", "online_latent"}
-        ):
+        if getattr(self, "_dreamer_eval", False) and getattr(
+            self, "_dreamer_rollout_mode", "stateless"
+        ) in {"stateless", "online_latent"}:
             return self._evaluate_libero_online_latent(epoch)
         return super().evaluate_libero(epoch)
-
 
     @staticmethod
     def _target_to_hydra_path(target: str) -> str:
@@ -953,9 +1010,7 @@ class EmbodiedEvalRunner(
             for src_path in src_paths:
                 src = OmegaConf.select(cfg, src_path, default=None)
                 converted = cls._target_kwargs_to_hydra_cfg(src)
-                if converted is not None and OmegaConf.select(
-                    converted, "_target_", default=None
-                ):
+                if converted is not None and OmegaConf.select(converted, "_target_", default=None):
                     OmegaConf.update(cfg, dst_path, converted, force_add=True)
                     return
 
@@ -966,30 +1021,17 @@ class EmbodiedEvalRunner(
         if cls._uses_oft_rollout_encoder_cfg(cfg):
             OmegaConf.update(cfg, "encoder", None, force_add=True)
             if OmegaConf.select(cfg, "eval.dreamer_rollout_mode", default=None) is None:
-                OmegaConf.update(
-                    cfg, "eval.dreamer_rollout_mode", "stateless", force_add=True
-                )
-            if (
-                OmegaConf.select(
-                    cfg, "eval.dreamer_actor_input_source", default=None
-                )
-                is None
-            ):
-                OmegaConf.update(
-                    cfg, "eval.dreamer_actor_input_source", "latent", force_add=True
-                )
+                OmegaConf.update(cfg, "eval.dreamer_rollout_mode", "stateless", force_add=True)
+            if OmegaConf.select(cfg, "eval.dreamer_actor_input_source", default=None) is None:
+                OmegaConf.update(cfg, "eval.dreamer_actor_input_source", "latent", force_add=True)
             source = OmegaConf.select(
                 cfg,
                 "task.openvla_oft.hidden_token.expected_obs_hidden_source",
                 default=None,
             )
-            current = str(
-                OmegaConf.select(cfg, "eval.obs_hidden_source", default="auto")
-            ).lower()
+            current = str(OmegaConf.select(cfg, "eval.obs_hidden_source", default="auto")).lower()
             if source is not None and current == "auto":
-                OmegaConf.update(
-                    cfg, "eval.obs_hidden_source", str(source), force_add=True
-                )
+                OmegaConf.update(cfg, "eval.obs_hidden_source", str(source), force_add=True)
 
     @staticmethod
     def _uses_oft_rollout_encoder_cfg(cfg: DictConfig) -> bool:
@@ -1072,26 +1114,6 @@ class EmbodiedEvalRunner(
             latent["proprio"] = obs_embedding["proprio"]
         return latent
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     def _build_dreamer_modules(self, cfg: DictConfig, payload: dict[str, Any]) -> None:
         state_dicts = payload.get("state_dicts", {})
 
@@ -1101,14 +1123,10 @@ class EmbodiedEvalRunner(
             self.encoder = _OFTBaseEvalAdapter(self._dreamer_oft_extractor)
         else:
             encoder_cfg = self._build_frozen_encoder_cfg(cfg)
-            encoder_init_ckpt = OmegaConf.select(
-                cfg, "init.encoder_state_ckpt", default=None
-            )
+            encoder_init_ckpt = OmegaConf.select(cfg, "init.encoder_state_ckpt", default=None)
             if encoder_init_ckpt and is_hf_checkpoint(encoder_init_ckpt):
                 with open_dict(encoder_cfg):
-                    encoder_cfg.model_path = str(
-                        resolve_hf_checkpoint_dir(encoder_init_ckpt)
-                    )
+                    encoder_cfg.model_path = str(resolve_hf_checkpoint_dir(encoder_init_ckpt))
             self.encoder = hydra.utils.instantiate(encoder_cfg).to(self.device)
             freeze_module(self.encoder)
             if "encoder" in state_dicts:
@@ -1118,9 +1136,7 @@ class EmbodiedEvalRunner(
                     encoder_payload = self._load_checkpoint_payload(str(encoder_init_ckpt))
                     encoder_sd = encoder_payload.get("state_dicts", {}).get("encoder")
                     if encoder_sd is None:
-                        raise RuntimeError(
-                            f"{encoder_init_ckpt} has no state_dicts.encoder"
-                        )
+                        raise RuntimeError(f"{encoder_init_ckpt} has no state_dicts.encoder")
                     self._load_module_state(self.encoder, encoder_sd, "encoder")
                     del encoder_payload
             self.encoder.eval()
@@ -1130,31 +1146,24 @@ class EmbodiedEvalRunner(
             raise ValueError("Dreamer eval requires `world_model` in the saved cfg.")
         instantiate_kwargs: dict[str, Any] = {}
         if (
-            str(OmegaConf.select(world_model_cfg, "io_mode", default="hidden"))
-            == "token"
+            str(OmegaConf.select(world_model_cfg, "io_mode", default="hidden")) == "token"
             and OmegaConf.select(world_model_cfg, "num_image_tokens_vocab") is None
         ):
             vocab_mapping = self.encoder.backbone.model.vocabulary_mapping
             instantiate_kwargs["num_image_tokens_vocab"] = len(vocab_mapping.bpe2img)
-        self.world_model = hydra.utils.instantiate(
-            world_model_cfg, **instantiate_kwargs
-        ).to(self.device)
-        fsdp_precision = str(
-            OmegaConf.select(cfg, "training.fsdp_mixed_precision", default="bf16")
+        self.world_model = hydra.utils.instantiate(world_model_cfg, **instantiate_kwargs).to(
+            self.device
         )
+        fsdp_precision = str(OmegaConf.select(cfg, "training.fsdp_mixed_precision", default="bf16"))
         dtype_map = {
             "bf16": torch.bfloat16,
             "fp16": torch.float16,
             "fp32": torch.float32,
         }
-        self.world_model = self.world_model.to(
-            dtype=dtype_map.get(fsdp_precision, torch.bfloat16)
-        )
+        self.world_model = self.world_model.to(dtype=dtype_map.get(fsdp_precision, torch.bfloat16))
         self._unwrapped_world_model = self.world_model
         self._attach_image_token_mapping()
-        self._load_module_state(
-            self.world_model, state_dicts["world_model"], "world_model"
-        )
+        self._load_module_state(self.world_model, state_dicts["world_model"], "world_model")
         self.world_model.eval()
 
         policy_cfg = OmegaConf.select(cfg, "policy")
@@ -1175,17 +1184,13 @@ class EmbodiedEvalRunner(
             critic_cfg = OmegaConf.select(cfg, "critic")
             if critic_cfg is None or critic_state is None:
                 if self.distributed.is_main_process:
-                    print(
-                        "  [Eval][tdmpc-mpc] target critic unavailable; using reward-only MPC."
-                    )
+                    print("  [Eval][tdmpc-mpc] target critic unavailable; using reward-only MPC.")
             else:
                 planner_value_mode = str(
                     OmegaConf.select(cfg, "eval.tdmpc_mpc.value_mode", default="state")
                 ).lower()
                 if planner_value_mode in {"state_action", "q", "q_za", "q(z,a)"}:
-                    critic_cfg = OmegaConf.create(
-                        OmegaConf.to_container(critic_cfg, resolve=True)
-                    )
+                    critic_cfg = OmegaConf.create(OmegaConf.to_container(critic_cfg, resolve=True))
                     critic_action_dim = int(
                         OmegaConf.select(
                             cfg,
@@ -1195,13 +1200,9 @@ class EmbodiedEvalRunner(
                             ),
                         )
                     )
-                    critic_cfg.hidden_dim = (
-                        int(critic_cfg.hidden_dim) + critic_action_dim
-                    )
+                    critic_cfg.hidden_dim = int(critic_cfg.hidden_dim) + critic_action_dim
                 self.target_critic = hydra.utils.instantiate(critic_cfg).to(self.device)
-                self._load_module_state(
-                    self.target_critic, critic_state, "target_critic"
-                )
+                self._load_module_state(self.target_critic, critic_state, "target_critic")
                 freeze_module(self.target_critic)
                 self.target_critic.eval()
 
@@ -1216,9 +1217,7 @@ class EmbodiedEvalRunner(
             state_dicts.pop(key, None)
         gc.collect()
 
-    def _load_module_state(
-        self, module: Any, state_dict: dict[str, Any], name: str
-    ) -> None:
+    def _load_module_state(self, module: Any, state_dict: dict[str, Any], name: str) -> None:
         target_dtype = next(module.parameters()).dtype
         converted = {
             self._strip_wrapping_prefix(key): (
@@ -1235,9 +1234,7 @@ class EmbodiedEvalRunner(
                 if key.startswith("reward_head.net.") and not key.startswith(
                     "reward_head.net.net."
                 ):
-                    candidate = key.replace(
-                        "reward_head.net.", "reward_head.net.net.", 1
-                    )
+                    candidate = key.replace("reward_head.net.", "reward_head.net.net.", 1)
                     if candidate in model_sd:
                         key = candidate
                 remapped[key] = value
@@ -1266,26 +1263,7 @@ class EmbodiedEvalRunner(
 
     _strip_wrapping_prefix = staticmethod(_eh.strip_wrapping_prefix)
 
-
-
-
-
-
-
-
-
-
-
-
-
     _resize_hwc_uint8 = staticmethod(_eh.resize_hwc_uint8)
-
-
-
-
-
-
-
 
     def _evaluate_libero_online_latent(self, epoch: int) -> dict[str, float]:
         if not self.distributed.is_main_process:
@@ -1322,12 +1300,8 @@ class EmbodiedEvalRunner(
         seed = int(protocol["seed"])
         num_steps_wait = int(protocol["num_steps_wait"])
         np.random.seed(seed)
-        task_suite_name = str(
-            OmegaConf.select(eval_cfg, "task_suite_name", default="libero_goal")
-        )
-        num_episodes = int(
-            OmegaConf.select(eval_cfg, "num_episodes_per_task", default=3)
-        )
+        task_suite_name = str(OmegaConf.select(eval_cfg, "task_suite_name", default="libero_goal"))
+        num_episodes = int(OmegaConf.select(eval_cfg, "num_episodes_per_task", default=3))
         enumerate_all_init_states = bool(
             OmegaConf.select(eval_cfg, "enumerate_all_init_states", default=False)
         )
@@ -1335,9 +1309,7 @@ class EmbodiedEvalRunner(
         resolution = int(OmegaConf.select(self.cfg, "encoder.resolution", default=256))
         history_length = int(OmegaConf.select(eval_cfg, "history_length", default=2))
         save_video = bool(OmegaConf.select(eval_cfg, "save_video", default=False))
-        video_max_episodes = int(
-            OmegaConf.select(eval_cfg, "video_max_episodes", default=1)
-        )
+        video_max_episodes = int(OmegaConf.select(eval_cfg, "video_max_episodes", default=1))
         video_dir = os.path.join(self.output_dir, "videos")
 
         item_processor = (
@@ -1355,9 +1327,7 @@ class EmbodiedEvalRunner(
             task_start = int(OmegaConf.select(eval_cfg, "task_start", default=0))
             max_tasks = OmegaConf.select(eval_cfg, "max_tasks", default=None)
             task_stop = (
-                total_tasks
-                if max_tasks is None
-                else min(total_tasks, task_start + int(max_tasks))
+                total_tasks if max_tasks is None else min(total_tasks, task_start + int(max_tasks))
             )
             task_ids = list(range(task_start, task_stop))
         if not task_ids:
@@ -1366,9 +1336,7 @@ class EmbodiedEvalRunner(
             )
         max_steps_cfg = OmegaConf.select(eval_cfg, "max_steps", default=None)
         max_steps = int(
-            max_steps_cfg
-            if max_steps_cfg is not None
-            else TASK_MAX_STEPS.get(task_suite_name, 300)
+            max_steps_cfg if max_steps_cfg is not None else TASK_MAX_STEPS.get(task_suite_name, 300)
         )
         print(
             f"  [Eval][online_latent] suite='{task_suite_name}' tasks={task_ids} "
@@ -1434,9 +1402,7 @@ class EmbodiedEvalRunner(
 
                 for step_idx in range(max_steps):
                     img = get_libero_image(obs, resolution)
-                    wrist_img = get_libero_image(
-                        obs, resolution, "robot0_eye_in_hand_image"
-                    )
+                    wrist_img = get_libero_image(obs, resolution, "robot0_eye_in_hand_image")
                     if should_record:
                         rollout_images.append(img)
                     state = np.concatenate(
@@ -1456,28 +1422,19 @@ class EmbodiedEvalRunner(
                     ) + frame_history
 
                     self._libero_current_raw_obs = obs
-                    obs_embedding, input_ids = (
-                        self._dreamer_obs_embedding_from_eval_inputs(
-                            item_processor,
-                            padded,
-                            state,
-                            task_description,
-                        )
+                    obs_embedding, input_ids = self._dreamer_obs_embedding_from_eval_inputs(
+                        item_processor,
+                        padded,
+                        state,
+                        task_description,
                     )
                     with torch.no_grad():
                         latent = self._dreamer_online_update_latent(obs_embedding)
                         if bool(getattr(self, "_real_relabel_enabled", False)):
                             try:
-                                reward_pred = self.world_model(
-                                    {"mode": "reward", "latent": latent}
-                                )
+                                reward_pred = self.world_model({"mode": "reward", "latent": latent})
                                 wm_reward_trace.append(
-                                    float(
-                                        reward_pred.detach()
-                                        .float()
-                                        .reshape(-1)[0]
-                                        .cpu()
-                                    )
+                                    float(reward_pred.detach().float().reshape(-1)[0].cpu())
                                 )
                             except Exception:
                                 wm_reward_trace.append(float("nan"))
@@ -1508,9 +1465,7 @@ class EmbodiedEvalRunner(
                                     )
                                 )
                             if bool(getattr(self, "_real_relabel_enabled", False)):
-                                trace_item = getattr(
-                                    self, "_last_real_relabel_actor_step", None
-                                )
+                                trace_item = getattr(self, "_last_real_relabel_actor_step", None)
                                 if isinstance(trace_item, dict):
                                     actor_input = trace_item.get("actor_input")
                                     raw_action = trace_item.get("raw_action")
@@ -1526,14 +1481,10 @@ class EmbodiedEvalRunner(
                         break
                     action = env_actions_buffer.pop(0)
                     latent_action = (
-                        latent_actions_buffer.pop(0)
-                        if latent_actions_buffer
-                        else action
+                        latent_actions_buffer.pop(0) if latent_actions_buffer else action
                     )
                     if bool(
-                        OmegaConf.select(
-                            self.cfg, "eval.empty_cuda_cache_each_step", default=False
-                        )
+                        OmegaConf.select(self.cfg, "eval.empty_cuda_cache_each_step", default=False)
                     ):
                         gc.collect()
                         if torch.cuda.is_available():
@@ -1563,21 +1514,15 @@ class EmbodiedEvalRunner(
                     )
                 total_episodes += 1
                 self.console_record_success(bool(done))
-                self.console_progress(
-                    total_episodes, len(task_ids) * num_episodes, "eval"
-                )
+                self.console_progress(total_episodes, len(task_ids) * num_episodes, "eval")
                 if bool(getattr(self, "_real_relabel_enabled", False)):
-                    finite_rewards = [
-                        float(x) for x in wm_reward_trace if np.isfinite(float(x))
-                    ]
+                    finite_rewards = [float(x) for x in wm_reward_trace if np.isfinite(float(x))]
                     policy_mode = (
                         "deterministic"
                         if bool(getattr(self, "_dreamer_deterministic", True))
                         else "sample"
                     )
-                    prompt_key = (
-                        f"task{int(task_id):02d}_ep{int(episode_idx):03d}_{policy_mode}"
-                    )
+                    prompt_key = f"task{int(task_id):02d}_ep{int(episode_idx):03d}_{policy_mode}"
                     trajectory_id = f"{prompt_key}_sample000"
                     first_ge_08 = next(
                         (
@@ -1614,9 +1559,7 @@ class EmbodiedEvalRunner(
                             "max": float(np.max(finite_rewards))
                             if finite_rewards
                             else float("nan"),
-                            "last": float(finite_rewards[-1])
-                            if finite_rewards
-                            else float("nan"),
+                            "last": float(finite_rewards[-1]) if finite_rewards else float("nan"),
                             "first_ge_0p8_step": int(first_ge_08),
                             "trace": wm_reward_trace,
                         },
@@ -1682,11 +1625,7 @@ class EmbodiedEvalRunner(
         img_c: list[Image.Image] = []
         for third_pil, wrist_pil in frame_history:
             img_c.extend([third_pil, wrist_pil])
-        human_val = (
-            f"Finish the task: {task_description}."
-            + "<|state|>"
-            + "<|image|>" * len(img_c)
-        )
+        human_val = f"Finish the task: {task_description}." + "<|state|>" + "<|image|>" * len(img_c)
         conv = {
             "conversations": [{"from": "human", "value": human_val}],
             "image": img_c,
@@ -1697,9 +1636,7 @@ class EmbodiedEvalRunner(
         if isinstance(tokens, tuple):
             tokens = tokens[0]
         tokens = [int(tok) for tok in tokens]
-        input_ids = torch.tensor(
-            tokens, dtype=torch.int64, device=self.device
-        ).unsqueeze(0)
+        input_ids = torch.tensor(tokens, dtype=torch.int64, device=self.device).unsqueeze(0)
 
         generation_config = GenerationConfig(
             max_new_tokens=1,
@@ -1725,9 +1662,7 @@ class EmbodiedEvalRunner(
             if action_chunk_raw.ndim == 1:
                 action_chunk_raw = action_chunk_raw.reshape(1, -1)
             else:
-                action_chunk_raw = action_chunk_raw.reshape(
-                    -1, action_chunk_raw.shape[-1]
-                )
+                action_chunk_raw = action_chunk_raw.reshape(-1, action_chunk_raw.shape[-1])
             action_chunk_env = self._unnorm_actions(action_chunk_raw)
 
             self._write_policy_trace(
@@ -1767,49 +1702,21 @@ class EmbodiedEvalRunner(
             if not isinstance(raw_obs, dict):
                 raise RuntimeError("OFT base eval requires current LIBERO raw obs")
             context = getattr(self, "_libero_current_eval_context", {}) or {}
-            if int(context.get("env_step", 0)) == 0 and hasattr(
-                oft_extractor, "reset"
-            ):
+            if int(context.get("env_step", 0)) == 0 and hasattr(oft_extractor, "reset"):
                 oft_extractor.reset()
             obs = self._oft_base_eval_obs_from_libero_raw(raw_obs, state)
             decoded = oft_extractor.step(obs, task_description)
             vla_policy = getattr(self, "_vla_policy_eval_policy", None)
             if vla_policy is not None:
-                hidden = getattr(decoded, "hidden_state", None)
-                if not isinstance(hidden, torch.Tensor):
-                    try:
-                        hidden = decoded[1]
-                    except (TypeError, IndexError) as exc:
-                        raise ValueError(
-                            "OFT VLA-policy eval requires decoded hidden tokens"
-                        ) from exc
-                if hidden.ndim == 2:
-                    hidden = hidden.unsqueeze(0)
-                try:
-                    policy_dtype = next(vla_policy.parameters()).dtype
-                except (AttributeError, StopIteration):
-                    policy_dtype = torch.float32
-                with torch.no_grad():
-                    policy_chunk, _log_prob, _extra = vla_policy(
-                        {
-                            "mode": "sample",
-                            "hidden": hidden.to(
-                                device=self.device,
-                                dtype=policy_dtype,
-                            ),
-                            "return_chunk": True,
-                            "deterministic": True,
-                            "logprob_type": "token_level",
-                        }
-                    )
+                # ``oft_extractor`` is minted by the restored policy itself in
+                # the vla_policy route, so this action already traversed the
+                # updated encoder and updated native actor exactly once.
                 action_chunk = (
-                    policy_chunk.detach().float().cpu().numpy()[0]
+                    decoded.action_chunk if hasattr(decoded, "action_chunk") else decoded[0]
                 )
             else:
                 action_chunk = (
-                    decoded.action_chunk
-                    if hasattr(decoded, "action_chunk")
-                    else decoded[0]
+                    decoded.action_chunk if hasattr(decoded, "action_chunk") else decoded[0]
                 )
             from dreamervla.runners.oft_collect_common import process_action
 
@@ -1866,16 +1773,12 @@ class EmbodiedEvalRunner(
                 feat = feat.float()
                 feat = self._maybe_add_hidden_noise(feat)
             else:
-                latent = self.world_model(
-                    {"mode": "encode_latent", "hidden": hidden_tensor}
-                )
+                latent = self.world_model({"mode": "encode_latent", "hidden": hidden_tensor})
                 latent = self._latent_with_eval_sidecars(latent, obs_embedding)
                 if bool(getattr(self, "_tdmpc_mpc_enabled", False)):
-                    env_actions, _latent_actions = (
-                        self._tdmpc_mpc_action_chunk_from_latent(
-                            latent,
-                            action_steps=action_steps,
-                        )
+                    env_actions, _latent_actions = self._tdmpc_mpc_action_chunk_from_latent(
+                        latent,
+                        action_steps=action_steps,
                     )
                     return env_actions
                 if hasattr(self.world_model, "actor_input"):
@@ -1887,9 +1790,7 @@ class EmbodiedEvalRunner(
                 {
                     "mode": "sample",
                     "hidden": feat,
-                    "deterministic": bool(
-                        getattr(self, "_dreamer_deterministic", True)
-                    ),
+                    "deterministic": bool(getattr(self, "_dreamer_deterministic", True)),
                     "return_chunk": True,
                 }
             )
@@ -1910,9 +1811,7 @@ class EmbodiedEvalRunner(
         )
         if bool(OmegaConf.select(self.cfg, "eval.log_action_stats", default=False)):
             count = int(getattr(self, "_dreamer_eval_action_log_count", 0))
-            limit = int(
-                OmegaConf.select(self.cfg, "eval.log_action_stats_limit", default=8)
-            )
+            limit = int(OmegaConf.select(self.cfg, "eval.log_action_stats_limit", default=8))
             if count < limit:
                 print(
                     "  [Eval][action] "
@@ -1924,9 +1823,9 @@ class EmbodiedEvalRunner(
                 )
             self._dreamer_eval_action_log_count = count + 1
         env_actions = [
-            self._dreamer_policy_raw_to_env_action(
-                np.asarray(row[:7], dtype=np.float32)
-            ).astype(np.float32)
+            self._dreamer_policy_raw_to_env_action(np.asarray(row[:7], dtype=np.float32)).astype(
+                np.float32
+            )
             for row in action_chunk_np[: max(int(action_steps), 1)]
         ]
         if not env_actions:

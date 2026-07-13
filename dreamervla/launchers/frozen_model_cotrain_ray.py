@@ -258,7 +258,7 @@ def build_launch(argv: list[str]) -> FrozenRayLaunch:
             [
                 "training.resume=true",
                 f"training.resume_dir={_hydra_string(out_dir)}",
-                f"manual_cotrain.resume_ckpt={_hydra_string(resume_ckpt)}",
+                f"++manual_cotrain.resume_ckpt={_hydra_string(resume_ckpt)}",
             ]
         )
     command.extend(hydra_overrides)

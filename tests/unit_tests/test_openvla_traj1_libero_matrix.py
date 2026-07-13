@@ -137,8 +137,15 @@ def test_every_mainline_route_suite_composition_has_exact_hidden_token_contract(
         assert cfg.ray_components.world_model.kwargs.obs_dim == 1_048_576
         assert cfg.ray_components.classifier.kwargs.token_count == 256
         assert cfg.ray_components.classifier.kwargs.token_dim == 4096
-        assert cfg.ray_components.policy.kwargs.source_token_count == 256
-        assert cfg.ray_components.policy.kwargs.source_token_dim == 4096
+        assert (
+            cfg.ray_components.policy.target
+            == "dreamervla.models.embodiment.OpenVLAOFTPolicy"
+        )
+        assert cfg.ray_components.policy.kwargs.model_path == cfg.task.openvla_oft.ckpt_path
+        assert cfg.ray_components.policy.kwargs.num_images_in_input == 1
+        assert cfg.ray_components.policy.kwargs.use_lora is False
+        assert "source_token_count" not in cfg.ray_components.policy.kwargs
+        assert cfg.rollout.encoder_cfg is None
         assert cfg.env.wm.cfg.kwargs.token_count == 256
         assert cfg.env.wm.cfg.kwargs.token_dim == 4096
 
@@ -162,18 +169,15 @@ def test_frozen_ray_reuses_mainline_rl_components_and_hidden_token_contract() ->
         assert cfg.env.wm.cfg.kwargs.token_count == 256
         assert cfg.env.wm.cfg.kwargs.token_dim == 4096
         assert cfg.env.wm.cfg.kwargs.latent_dim == 256 * 4096
-    assert OmegaConf.to_container(
-        frozen.ray_components.policy,
-        resolve=True,
-    ) == OmegaConf.to_container(mainline.ray_components.policy, resolve=True)
-    assert OmegaConf.to_container(
-        frozen.actor.policy_cfg,
-        resolve=True,
-    ) == OmegaConf.to_container(mainline.actor.policy_cfg, resolve=True)
-    assert OmegaConf.to_container(
-        frozen.rollout.policy_cfg,
-        resolve=True,
-    ) == OmegaConf.to_container(mainline.rollout.policy_cfg, resolve=True)
+    assert mainline.ray_components.policy.target == (
+        "dreamervla.models.embodiment.OpenVLAOFTPolicy"
+    )
+    assert frozen.ray_components.policy.target == (
+        "dreamervla.algorithms.actor.LatentToOpenVLAHiddenStateActor"
+    )
+    assert OmegaConf.to_container(frozen.ray_components.policy, resolve=True) != (
+        OmegaConf.to_container(mainline.ray_components.policy, resolve=True)
+    )
     assert (
         OmegaConf.select(
             mainline,

@@ -170,30 +170,40 @@ def test_hidden_token_sidecar_rejects_flat_storage_even_when_flat_dim_matches(tm
             require_preprocess_config=True,
         )
     except ValueError as exc:
-        assert "must be [T,256,4096]" in str(exc)
+        assert "must be tokenized [T,N,D]" in str(exc)
     else:
         raise AssertionError("flat hidden-token sidecar storage must be rejected")
 
 
-def test_hidden_token_sidecar_rejects_token_count_decomposition_mismatch(tmp_path) -> None:
+def test_hidden_token_sidecar_accepts_metadata_defined_token_geometry(tmp_path) -> None:
     _write_sidecar_fixture(tmp_path, token_count=255)
 
     dataset = PixelHiddenSequenceDataset.__new__(PixelHiddenSequenceDataset)
     dataset.hidden_dir = tmp_path
 
-    try:
-        dataset._validate_hidden_sidecar(
-            expected_model_path=None,
-            expected_encoder_state_ckpt=None,
-            expected_time_horizon=None,
-            expected_action_head_type="oft_discrete_token",
-            expected_obs_hidden_source="hidden_token",
-            require_preprocess_config=True,
+    config = dataset._validate_hidden_sidecar(
+        expected_model_path=None,
+        expected_encoder_state_ckpt=None,
+        expected_time_horizon=None,
+        expected_action_head_type="oft_discrete_token",
+        expected_obs_hidden_source="hidden_token",
+        require_preprocess_config=True,
+    )
+
+    assert config["token_count"] == 255
+    assert config["obs_embedding_shape"] == [255, 4096]
+
+
+def test_hidden_token_sidecar_rejects_dataset_metadata_geometry_mismatch(tmp_path) -> None:
+    _write_sidecar_fixture(tmp_path, token_count=255)
+    with h5py.File(tmp_path / "shard.hdf5", "a") as handle:
+        del handle["data/demo_0/obs_embedding"]
+        handle["data/demo_0"].create_dataset(
+            "obs_embedding", shape=(2, 256, 4096), dtype="float16"
         )
-    except ValueError as exc:
-        assert "token_count=255, expected 256" in str(exc)
-    else:
-        raise AssertionError("bad token_count decomposition must be rejected")
+
+    with pytest.raises(ValueError, match=r"expected trailing shape \(255, 4096\)"):
+        validate_hidden_token_sidecar_dir(tmp_path)
 
 
 def test_sidecar_identity_does_not_alias_ckpts_and_checkpoints_paths() -> None:

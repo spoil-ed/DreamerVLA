@@ -11,6 +11,7 @@ import sys
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import cache
 from math import gcd
 from pathlib import Path
 from typing import Any, Literal
@@ -78,6 +79,36 @@ class PipelinePlan:
     eval_cfg: dict[str, Any] = field(default_factory=dict)
     task_suite: str = ""
     vla_ckpt_path: Path | None = None
+    hidden_token_shape: tuple[int, int] | None = None
+
+
+@cache
+def _configured_hidden_token_shape(hydra_task: str) -> tuple[int, int]:
+    """Resolve the selected checkpoint recipe's projected-token geometry.
+
+    The launcher must not decide that geometry itself.  It composes the same
+    task config used by the collector; the loaded OpenVLA policy subsequently
+    validates these expected values against its actual vision backbone and
+    projector.
+    """
+
+    register_dreamervla_resolvers()
+    with initialize_config_dir(
+        config_dir=str(PROJECT_ROOT / "configs"),
+        job_name="coldstart_hidden_token_geometry",
+        version_base=None,
+    ):
+        cfg = compose(
+            config_name="train",
+            overrides=[f"task={str(hydra_task)}"],
+        )
+    shape = (
+        int(cfg.task.openvla_oft.hidden_token.token_count),
+        int(cfg.task.openvla_oft.hidden_token.token_dim),
+    )
+    if any(value <= 0 for value in shape):
+        raise ValueError(f"hidden-token geometry must be positive, got {shape}")
+    return shape
 
 
 def _normalize_mode(mode: str) -> PipelineMode:
@@ -1345,6 +1376,9 @@ def build_pipeline_plan(
         eval_cfg=eval_cfg,
         task_suite=str(task_spec["suite"]),
         vla_ckpt_path=Path(str(task_spec["ckpt_path"])),
+        hidden_token_shape=_configured_hidden_token_shape(
+            str(task_spec["hydra_task"])
+        ),
     )
 
 
@@ -1385,7 +1419,12 @@ def validate_input_assets(
     return errors
 
 
-def validate_collected_outputs(*, reward_dir: str | Path, hidden_dir: str | Path) -> list[str]:
+def validate_collected_outputs(
+    *,
+    reward_dir: str | Path,
+    hidden_dir: str | Path,
+    expected_token_shape: Sequence[int] | None = None,
+) -> list[str]:
     """Validate reusable cold-start shards against the OpenVLA hidden-token schema."""
 
     from dreamervla.preprocess.sidecar_schema import validate_hidden_token_sidecar_dir
@@ -1416,13 +1455,33 @@ def validate_collected_outputs(*, reward_dir: str | Path, hidden_dir: str | Path
                     + ", ".join(extras)
                 )
             try:
-                validate_hidden_token_sidecar_dir(
+                config = validate_hidden_token_sidecar_dir(
                     hidden,
                     expected_filenames=reward_names,
                     reference_dir=reward,
                     require_reference_complete=True,
                     require_sparse_rewards=True,
                 )
+                if expected_token_shape is not None:
+                    expected = tuple(int(value) for value in expected_token_shape)
+                    if len(expected) != 2 or any(value <= 0 for value in expected):
+                        raise ValueError(
+                            "expected_token_shape must contain positive [N,D], "
+                            f"got {expected!r}"
+                        )
+                    actual = (
+                        int(config["token_count"]),
+                        int(config["token_dim"]),
+                    )
+                    if actual != expected:
+                        raise ValueError(
+                            "cold-start hidden-token geometry does not match the "
+                            "selected VLA checkpoint recipe: "
+                            f"token_count={actual[0]}, token_dim={actual[1]}, "
+                            f"obs_embedding_shape={list(actual)!r}; expected "
+                            f"token_count={expected[0]}, token_dim={expected[1]}, "
+                            f"obs_embedding_shape={list(expected)!r}"
+                        )
             except (FileNotFoundError, OSError, ValueError) as exc:
                 errors.append(str(exc))
     return errors
@@ -1585,7 +1644,7 @@ def _manual_cotrain_segment_cmd(
         ckpt = str(resume_ckpt)
         values.update(
             {
-                "+manual_cotrain.resume_ckpt": ckpt,
+                "++manual_cotrain.resume_ckpt": ckpt,
                 "+actor.init_ckpt.path": ckpt,
                 "+actor.init_ckpt.components": "[policy]",
                 "learner.init_ckpt.path": ckpt,
@@ -1625,22 +1684,49 @@ def _post_step_eval_cmd(
         f"out_dir={out_dir}",
         f"gpus={eval_cfg.get('gpus', '0')}",
         f"eval.ckpt_path={ckpt_path}",
-        "eval.ckpt_kind=dreamer",
+        "eval.ckpt_kind=vla_policy",
         f"eval.task_suite_name={eval_cfg.get('task_suite_name', plan.task_suite)}",
+        "eval.scheme=rlinf_chunk",
+        "eval.enumerate_all_init_states=false",
+        "eval.reconfigure_per_episode=true",
+        "eval.require_strict_component_load=true",
+        "eval.cotrain_diagnostics=true",
+        f"eval.render_backend={eval_cfg.get('render_backend', 'osmesa')}",
     ]
     if plan.vla_ckpt_path is not None:
         cmd.append(f"init.vla_ckpt_path={plan.vla_ckpt_path}")
     for source_key, target_key in (
         ("num_episodes_per_task", "eval.num_episodes_per_task"),
+        ("num_envs", "eval.num_envs"),
         ("task_ids", "eval.task_ids"),
         ("max_tasks", "eval.max_tasks"),
         ("max_steps", "eval.max_steps"),
+        ("action_steps", "eval.action_steps"),
+        ("history_length", "eval.history_length"),
         ("action_postprocess", "eval.action_postprocess"),
         ("seed", "eval.seed"),
     ):
         value = eval_cfg.get(source_key)
         if value is not None:
             cmd.append(f"{target_key}={_format_hydra_value(value)}")
+    task_ids = eval_cfg.get("task_ids")
+    episodes = eval_cfg.get("num_episodes_per_task")
+    if not isinstance(task_ids, Sequence) or isinstance(task_ids, str) or not task_ids:
+        raise ValueError(
+            "staged cotrain eval requires explicit eval.task_ids for fixed "
+            "trajectory accounting"
+        )
+    if episodes is None or int(episodes) <= 0:
+        raise ValueError(
+            "staged cotrain eval requires positive eval.num_episodes_per_task"
+        )
+    cmd.extend(
+        [
+            "eval.cotrain_expected_trajectories="
+            f"{len(task_ids) * int(episodes)}",
+            "eval.cotrain_encode_batch_size=4",
+        ]
+    )
     return cmd
 
 
@@ -1829,6 +1915,7 @@ def collect_resume(
         schema_errors = validate_collected_outputs(
             reward_dir=plan.reward_dir,
             hidden_dir=plan.hidden_dir,
+            expected_token_shape=plan.hidden_token_shape,
         )
         if schema_errors:
             joined = "\n  - ".join(schema_errors)
@@ -1873,6 +1960,7 @@ def collect_resume(
     schema_errors = validate_collected_outputs(
         reward_dir=plan.reward_dir,
         hidden_dir=plan.hidden_dir,
+        expected_token_shape=plan.hidden_token_shape,
     )
     if schema_errors:
         joined = "\n  - ".join(schema_errors)
@@ -1967,6 +2055,7 @@ def _run_pipeline_main(cfg: dict[str, Any], overrides: Sequence[str]) -> int:
             errors = validate_collected_outputs(
                 reward_dir=plan.reward_dir,
                 hidden_dir=plan.hidden_dir,
+                expected_token_shape=plan.hidden_token_shape,
             )
         else:
             errors = validate_input_assets(

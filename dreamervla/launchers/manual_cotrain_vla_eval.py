@@ -171,7 +171,7 @@ def periodic_eval_steps(
 
 
 def _override_key(item: str) -> str | None:
-    if "=" not in item or item.startswith("-"):
+    if item.startswith("-"):
         return None
     return item.split("=", 1)[0].lstrip("+~")
 
@@ -197,7 +197,7 @@ def _replace_overrides(
     command: Sequence[str],
     values: Mapping[str, str],
 ) -> list[str]:
-    keys = set(values)
+    keys = {_override_key(str(key)) for key in values}
     out = [item for item in command if _override_key(str(item)) not in keys]
     out.extend(f"{key}={value}" for key, value in values.items())
     return out
@@ -227,7 +227,7 @@ def segment_train_command(
             {
                 "training.resume": "true",
                 "training.resume_dir": _hydra_string(run_root),
-                "manual_cotrain.resume_ckpt": _hydra_string(resume_ckpt),
+                "++manual_cotrain.resume_ckpt": _hydra_string(resume_ckpt),
             }
         )
         if learner_updates_enabled:
@@ -270,7 +270,7 @@ def vla_eval_command(
     ckpt_path = spec.base_vla_ckpt if is_baseline else policy_ckpt
     if ckpt_path is None:
         raise ValueError("post-update VLA policy eval requires a policy checkpoint")
-    return [
+    command = [
         str(python),
         "-m",
         "dreamervla.launchers.train",
@@ -296,6 +296,16 @@ def vla_eval_command(
         "eval.require_strict_component_load=true",
         f"eval.render_backend={spec.render_backend}",
     ]
+    if not is_baseline and bool(spec.learner_updates_enabled):
+        command.extend(
+            [
+                "eval.cotrain_diagnostics=true",
+                "eval.cotrain_expected_trajectories="
+                f"{len(spec.task_ids) * spec.num_episodes_per_task}",
+                "eval.cotrain_encode_batch_size=4",
+            ]
+        )
+    return command
 
 
 def _eval_env(base_env: Mapping[str, str], spec: PeriodicVLAEvalSpec) -> dict[str, str]:

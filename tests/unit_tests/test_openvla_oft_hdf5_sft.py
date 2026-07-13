@@ -213,7 +213,6 @@ def test_openvla_oft_lm_head_mode_computes_token_loss_without_action_head() -> N
         ({"use_l1_regression": True}, "L1/action-query"),
         ({"use_proprio": True}, "does not include proprio"),
         ({"use_film": True}, "does not use FiLM"),
-        ({"num_images_in_input": 2}, "num_images_in_input=1"),
     ],
 )
 def test_openvla_oft_policy_constructor_rejects_removed_routes(
@@ -277,17 +276,18 @@ def test_openvla_oft_from_modules_rejects_removed_components(
 
 
 @pytest.mark.parametrize(
-    ("vla", "num_patches", "match"),
+    ("vla", "num_patches", "token_dim", "match"),
     [
-        (_TinyForwardVLA(), 56, "num_patches=256"),
-        (_TinyForwardVLA(patches=56), 256, "patches=56"),
-        (_TinyForwardVLA(token_dim=1024), 256, "token_dim=1024"),
-        (_TinyForwardVLA(images=2), 256, "num_images_in_input=2"),
+        (_TinyForwardVLA(), 56, None, "token_count expected=56 loaded=256"),
+        (_TinyForwardVLA(patches=56), 256, None, "token_count expected=256 loaded=56"),
+        (_TinyForwardVLA(token_dim=1024), 256, 4096, "token_dim expected=4096 loaded=1024"),
+        (_TinyForwardVLA(images=2), 256, None, "token_count expected=256 loaded=512"),
     ],
 )
-def test_openvla_oft_from_modules_rejects_noncanonical_loaded_geometry(
+def test_openvla_oft_from_modules_rejects_metadata_geometry_mismatch(
     vla: nn.Module,
     num_patches: int,
+    token_dim: int | None,
     match: str,
 ) -> None:
     from dreamervla.models.embodiment.openvla_oft_policy import OpenVLAOFTPolicy
@@ -298,4 +298,31 @@ def test_openvla_oft_from_modules_rejects_noncanonical_loaded_geometry(
             action_head=None,
             action_tokenizer=_TinyActionTokenizer(),
             num_patches=num_patches,
+            token_dim=token_dim,
         )
+
+
+@pytest.mark.parametrize(
+    ("vla", "token_count", "token_dim"),
+    [
+        (_TinyForwardVLA(patches=56, token_dim=1024), 56, 1024),
+        (_TinyForwardVLA(images=2), 512, 4096),
+    ],
+)
+def test_openvla_oft_from_modules_accepts_loaded_backbone_geometry(
+    vla: nn.Module,
+    token_count: int,
+    token_dim: int,
+) -> None:
+    from dreamervla.models.embodiment.openvla_oft_policy import OpenVLAOFTPolicy
+
+    policy = OpenVLAOFTPolicy.from_modules(
+        vla=vla,
+        action_head=None,
+        action_tokenizer=_TinyActionTokenizer(),
+        num_patches=token_count,
+        token_dim=token_dim,
+    )
+
+    assert policy.token_count == token_count
+    assert policy.token_dim == token_dim

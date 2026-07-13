@@ -160,7 +160,6 @@ class NoSidecarTrainEnv(CounterEnv):
             "episode_id": int(obs.get("episode_id", self.episode_id)),
             "step": int(obs["step"]),
             "task_description": str(obs["task_description"]),
-            "success": bool(info.get("success", False)),
         }
 
     def _obs(self, *, is_first: bool) -> dict[str, Any]:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -94,7 +95,15 @@ def test_frozen_ray_launcher_quotes_hydra_checkpoint_paths_containing_equals(
     assert values["training.out_dir"] == str((tmp_path / "run=quoted").resolve())
 
 
-def test_frozen_ray_launcher_resume_is_one_command_with_policy_checkpoint(
+@pytest.mark.parametrize(
+    "experiment",
+    [
+        "dreamervla_frozen_models_rl_ray_eval",
+        "dreamervla_wmcls_cotrain_ray_eval",
+    ],
+)
+def test_frozen_ray_launcher_resume_is_one_composable_command_with_policy_checkpoint(
+    experiment: str,
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -111,15 +120,17 @@ def test_frozen_ray_launcher_resume_is_one_command_with_policy_checkpoint(
     monkeypatch.setenv("CLASSIFIER_CKPT", str(classifier))
     monkeypatch.setenv("COTRAIN_RESUME_CKPT", str(resume))
 
-    launch = build_launch([])
+    launch = build_launch([f"experiment={experiment}"])
+    cfg = launcher._compose_training_config(launch.command)
 
     assert launch.resume is True
     assert launch.out_dir == run_root.resolve()
     assert (
-        f"manual_cotrain.resume_ckpt={json.dumps(str(resume.resolve()))}"
+        f"++manual_cotrain.resume_ckpt={json.dumps(str(resume.resolve()))}"
         in launch.command
     )
     assert "training.resume=true" in launch.command
+    assert str(cfg.manual_cotrain.resume_ckpt) == str(resume.resolve())
 
 
 def test_frozen_ray_launcher_resume_infers_checkpoint_run_even_if_run_root_env_is_set(
@@ -414,14 +425,100 @@ def test_frozen_ray_periodic_eval_commands_use_base_vla_then_policy_checkpoint(
     assert all("eval.num_episodes_per_task=10" in call for call in eval_calls)
     assert all("eval.num_envs=10" in call for call in eval_calls)
     assert all("eval.task_ids=[0,1,2,3,4,5,6,7,8,9]" in call for call in eval_calls)
+    assert all("eval.cotrain_diagnostics=true" not in call for call in eval_calls)
     assert any(
-        item.startswith("manual_cotrain.resume_ckpt=")
+        item.startswith("++manual_cotrain.resume_ckpt=")
         and "manual_cotrain_step_10" in item
         for item in train_calls[1]
     )
     summary = json.loads((run_root / "eval/eval_summary.json").read_text())
     assert [record["global_step"] for record in summary["records"]] == [0, 10, 20]
     assert all(record["eval_total_episodes"] == 100 for record in summary["records"])
+
+
+def test_learned_wmcls_policy_eval_enables_fixed_read_only_diagnostics(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    wm = tmp_path / "wm.ckpt"
+    classifier = tmp_path / "classifier.ckpt"
+    wm.touch()
+    _save_classifier_checkpoint(classifier)
+    monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm))
+    monkeypatch.setenv("CLASSIFIER_CKPT", str(classifier))
+    launch = build_launch([])
+    spec = replace(launch.periodic_eval, learner_updates_enabled=True)
+
+    learned = periodic_eval.vla_eval_command(
+        "python",
+        spec,
+        global_step=1,
+        policy_ckpt=tmp_path / "manual_cotrain.ckpt",
+        out_dir=tmp_path / "eval",
+    )
+    baseline = periodic_eval.vla_eval_command(
+        "python",
+        spec,
+        global_step=0,
+        policy_ckpt=None,
+        out_dir=tmp_path / "eval0",
+    )
+
+    assert "eval.cotrain_diagnostics=true" in learned
+    assert "eval.cotrain_expected_trajectories=100" in learned
+    assert "eval.cotrain_diagnostics=true" not in baseline
+
+
+@pytest.mark.parametrize(
+    "experiment",
+    [
+        "dreamervla_wmcls_cotrain_ray_eval",
+        "dreamervla_frozen_models_rl_ray_eval",
+    ],
+)
+def test_periodic_eval_resume_segment_composes_for_supported_recipe_schemas(
+    experiment: str,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("COTRAIN_RESUME_CKPT", raising=False)
+    wm = tmp_path / "wm.ckpt"
+    classifier = tmp_path / "classifier.ckpt"
+    run_root = tmp_path / "run"
+    resume_ckpt = (
+        run_root
+        / "checkpoints"
+        / "manual_cotrain_step_10"
+        / "manual_cotrain.ckpt"
+    )
+    wm.touch()
+    _save_classifier_checkpoint(classifier)
+    monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm))
+    monkeypatch.setenv("CLASSIFIER_CKPT", str(classifier))
+    monkeypatch.setenv("COTRAIN_RUN_ROOT", str(run_root))
+    launch = build_launch(
+        [
+            f"experiment={experiment}",
+            "manual_cotrain.global_steps=20",
+        ]
+    )
+
+    segment = periodic_eval.segment_train_command(
+        launch.command,
+        target_step=20,
+        checkpoint_every=10,
+        run_root=run_root,
+        resume_ckpt=resume_ckpt,
+        learner_updates_enabled=launch.periodic_eval.learner_updates_enabled,
+    )
+    cfg = launcher._compose_training_config(segment)
+
+    assert str(cfg.manual_cotrain.resume_ckpt) == str(resume_ckpt)
+    assert sum(
+        item.startswith("++manual_cotrain.resume_ckpt=") for item in segment
+    ) == 1
 
 
 def test_wmcls_eval_recipe_enables_learner_and_uses_same_eval_protocol(
@@ -448,6 +545,10 @@ def test_wmcls_eval_recipe_enables_learner_and_uses_same_eval_protocol(
     assert launch.periodic_eval.interval_global_steps == 10
     assert launch.periodic_eval.include_initial is True
     assert cfg.manual_cotrain.learner_updates_enabled is True
-    assert cfg.manual_cotrain.real_env_enabled is False
+    assert cfg.manual_cotrain.staged_policy_update is True
+    assert cfg.manual_cotrain.real_env_enabled is True
+    assert cfg.manual_cotrain.real_env_workers == 1
+    assert cfg.manual_cotrain.real_rollout_target_trajectories == 32
+    assert cfg.replay.seed is None
     assert cfg.manual_cotrain.env_rollout_timeout_s == 5400
     assert cfg.learner is not None

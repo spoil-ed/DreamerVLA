@@ -38,6 +38,12 @@ eval:
   # Optional generic fail-closed load contract. The pre-mainline proof enables
   # this for both sides; existing evaluation recipes retain permissive loading.
   require_strict_component_load: false
+  # Post-update manual-cotrain evaluation can load the checkpoint's WM/CLS and
+  # score the same fixed real trajectories without replay, optimizer or threshold
+  # recalibration. Baseline HF-VLA evaluation leaves this disabled.
+  cotrain_diagnostics: false
+  cotrain_expected_trajectories: null
+  cotrain_encode_batch_size: 4
   seed: ${seed}
   task_suite_name: libero_goal
   num_episodes_per_task: 3

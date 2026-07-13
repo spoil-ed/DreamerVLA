@@ -1,5 +1,5 @@
 # @package _global_
-# Offline-warmup cotrain pipeline for OpenVLA-OFT query-before hidden states.
+# Offline-warmup cotrain pipeline for native OpenVLA-OFT projected visual tokens.
 defaults:
   - _self_
 
@@ -76,6 +76,8 @@ encoder:
   model_path: ${task.openvla_oft.ckpt_path}
   torch_dtype: bf16
   num_images_in_input: ${task.openvla_oft.num_images_in_input}
+  token_count: ${task.openvla_oft.hidden_token.token_count}
+  token_dim: ${task.openvla_oft.hidden_token.token_dim}
   use_lora: false
   use_l1_regression: ${task.openvla_oft.use_l1_regression}
   use_diffusion: false

@@ -290,6 +290,7 @@ def test_runner_launches_ray_actors_with_formal_worker_names(monkeypatch) -> Non
     }
     cfg.actor.policy_cfg = {"target": "test:Policy"}
     cfg.actor.train_cfg.device = "cpu"
+    cfg.manual_cotrain.staged_policy_update = True
     cfg.learner = {
         "model_cfg": {
             "world_model": {"target": "test:WorldModel"},
@@ -298,6 +299,12 @@ def test_runner_launches_ray_actors_with_formal_worker_names(monkeypatch) -> Non
         "train_cfg": {"mode": "wm_classifier_only", "device": "cpu"},
     }
     runner = manual_runner.ManualCotrainRayRunner(cfg)
+    initialized_policy_groups: list[str] = []
+    monkeypatch.setattr(
+        runner,
+        "_initialize_policy_hashes",
+        lambda group: initialized_policy_groups.append(group.worker_cls.__name__),
+    )
 
     runner._build_groups(cluster=object())
 
@@ -310,6 +317,7 @@ def test_runner_launches_ray_actors_with_formal_worker_names(monkeypatch) -> Non
         ("LearnerWorker", "LearnerWorker"),
     ]
     assert all(name is None or not name.startswith("Manual") for _, name in launched)
+    assert initialized_policy_groups == ["EmbodiedFSDPActor"]
 
 
 def test_frozen_runner_launches_no_real_env_or_learner(monkeypatch) -> None:
@@ -645,6 +653,16 @@ def test_runner_scales_wm_rollout_budget_independently_from_real_env() -> None:
 
     assert runner._max_steps_per_rollout_epoch() == 2
     assert runner._wm_max_steps_per_rollout_epoch() == 8
+
+
+def test_real_env_replay_write_is_disabled_only_for_staged_reencode_route() -> None:
+    legacy = runners.ManualCotrainRayRunner(_cfg())
+    staged_cfg = _cfg()
+    staged_cfg.manual_cotrain.staged_policy_update = True
+    staged = runners.ManualCotrainRayRunner(staged_cfg)
+
+    assert legacy._real_env_write_replay() is True
+    assert staged._real_env_write_replay() is False
 
 
 def test_runner_uses_independent_wm_env_slots_when_configured() -> None:
@@ -1065,6 +1083,9 @@ def test_manual_cotrain_oft_backbone_experiment_composes() -> None:
     assert cfg.manual_cotrain.real_rollout_epoch == 1
     assert cfg.manual_cotrain.wm_rollout_epoch == 16
     assert cfg.manual_cotrain.real_rollout_target_trajectories == 32
+    assert cfg.manual_cotrain.staged_policy_update is True
+    assert cfg.manual_cotrain.learner_updates_per_global_step == 128
+    assert cfg.manual_cotrain.max_policy_kl == pytest.approx(0.1)
     assert cfg.manual_cotrain.wm_rollout_target_trajectories == 1024
     assert cfg.manual_cotrain.wm_rollout_lease_epochs == 1
     assert cfg.manual_cotrain.max_steps_per_rollout_epoch == 512
@@ -1087,10 +1108,10 @@ def test_manual_cotrain_oft_backbone_experiment_composes() -> None:
     assert cfg.actor.train_cfg.algorithm_cfg.entropy_type == "token_level"
     assert cfg.actor.train_cfg.algorithm_cfg.loss_type == "actor"
     assert cfg.actor.train_cfg.algorithm_cfg.loss_agg_func == "token-mean"
-    assert cfg.algorithm.kl_beta == 0.0
+    assert cfg.algorithm.kl_beta == pytest.approx(0.01)
     assert cfg.actor.train_cfg.lr == 5.0e-7
     assert cfg.actor.train_cfg.optimizers.policy.lr == 5.0e-7
-    assert cfg.actor.train_cfg.algorithm_cfg.kl_beta == 0.0
+    assert cfg.actor.train_cfg.algorithm_cfg.kl_beta == pytest.approx(0.01)
     assert "kl_coef" not in cfg.actor.train_cfg.algorithm_cfg
     assert cfg.actor.train_cfg.algorithm_cfg.clip_log_ratio is None
     assert cfg.actor.train_cfg.algorithm_cfg.loss_normalization == "token_mean"
@@ -1107,7 +1128,8 @@ def test_manual_cotrain_oft_rollout_carries_checkpoint_num_images() -> None:
     OmegaConf.resolve(cfg)
 
     assert cfg.task.openvla_oft.num_images_in_input == 1
-    assert cfg.rollout.encoder_cfg.kwargs.policy_cfg.num_images_in_input == 1
+    assert cfg.rollout.encoder_cfg is None
+    assert cfg.rollout.policy_cfg.kwargs.num_images_in_input == 1
 
 
 def test_manual_cotrain_oft_wm_env_num_envs_tracks_wm_envs_per_worker() -> None:
@@ -1143,14 +1165,13 @@ def test_manual_cotrain_oft_real_rollout_uses_oft_encoder_and_action_postprocess
         "task=openvla_onetraj_coldstart_libero",
     )
 
-    assert cfg.rollout.encoder_cfg.target.endswith("oft_rollout:OFTRolloutBundle")
-    assert cfg.rollout.encoder_cfg.kwargs.unnorm_key == cfg.task.openvla_oft.dataset_statistics_key
-    assert cfg.rollout.encoder_cfg.kwargs.image_keys == cfg.task.image_keys
-    assert cfg.rollout.encoder_cfg.kwargs.history == cfg.task.openvla_oft.hidden_token.expected_history
-    assert (
-        cfg.rollout.encoder_cfg.kwargs.obs_hidden_source
-        == cfg.task.openvla_oft.hidden_token.expected_obs_hidden_source
+    assert cfg.rollout.encoder_cfg is None
+    assert cfg.rollout.policy_cfg.target == (
+        "dreamervla.models.embodiment.OpenVLAOFTPolicy"
     )
+    assert cfg.rollout.policy_cfg.kwargs.unnorm_key == cfg.task.openvla_oft.dataset_statistics_key
+    assert cfg.rollout.policy_cfg.kwargs.image_keys == cfg.task.image_keys
+    assert cfg.rollout.policy_cfg.kwargs.history == cfg.task.openvla_oft.hidden_token.expected_history
     assert cfg.env.real.cfg.action_postprocess == "openvla_oft"
     assert cfg.env.real.cfg.render_backend == cfg.render_backend
     assert cfg.env.wm.cfg.action_postprocess == "openvla_oft"

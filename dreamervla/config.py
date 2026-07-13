@@ -12,9 +12,6 @@ from dreamervla.algorithms.registry import get_actor_update_route
 from dreamervla.models.registry import validate_model_type
 from dreamervla.preprocess.sidecar_schema import (
     HIDDEN_TOKEN_ACTION_HEAD,
-    HIDDEN_TOKEN_COUNT,
-    HIDDEN_TOKEN_DIM,
-    HIDDEN_TOKEN_HIDDEN_DIM,
     HIDDEN_TOKEN_SOURCE,
 )
 from dreamervla.utils.metric_logger import MetricLogger
@@ -235,7 +232,7 @@ def _validate_removed_observation_routes(cfg: DictConfig) -> None:
 
 
 def _validate_mainline_hidden_token_contract(cfg: DictConfig) -> None:
-    """Pin every official OpenVLA route to one external observation schema."""
+    """Validate task-derived OpenVLA token geometry across active components."""
 
     if OmegaConf.select(cfg, "task.openvla_oft", default=None) is None:
         return
@@ -254,15 +251,54 @@ def _validate_mainline_hidden_token_contract(cfg: DictConfig) -> None:
         "task.openvla_oft.hidden_token.expected_history": 1,
         "task.openvla_oft.hidden_token.expected_include_state": False,
         "task.openvla_oft.hidden_token.num_images_in_input": 1,
-        "task.openvla_oft.hidden_token.patches_per_image": HIDDEN_TOKEN_COUNT,
-        "task.openvla_oft.hidden_token.token_count": HIDDEN_TOKEN_COUNT,
-        "task.openvla_oft.hidden_token.token_dim": HIDDEN_TOKEN_DIM,
-        "task.openvla_oft.hidden_token.wm_obs_dim": HIDDEN_TOKEN_HIDDEN_DIM,
     }
     for key, expected in exact_values.items():
         got = OmegaConf.select(cfg, key, default=None)
         if got != expected:
             raise ValueError(f"{key} must be {expected!r}, got {got!r}")
+
+    geometry_root = "task.openvla_oft.hidden_token"
+    patches_per_image = _select_int(cfg, f"{geometry_root}.patches_per_image")
+    token_count = _select_int(cfg, f"{geometry_root}.token_count")
+    token_dim = _select_int(cfg, f"{geometry_root}.token_dim")
+    wm_obs_dim = _select_int(cfg, f"{geometry_root}.wm_obs_dim")
+    num_images = _select_int(cfg, f"{geometry_root}.num_images_in_input")
+    geometry = {
+        "patches_per_image": patches_per_image,
+        "token_count": token_count,
+        "token_dim": token_dim,
+        "wm_obs_dim": wm_obs_dim,
+        "num_images_in_input": num_images,
+    }
+    missing = [name for name, value in geometry.items() if value is None]
+    if missing:
+        raise ValueError(f"{geometry_root} is missing geometry fields: {missing!r}")
+    non_positive = [name for name, value in geometry.items() if int(value) <= 0]
+    if non_positive:
+        raise ValueError(f"{geometry_root} geometry must be positive: {non_positive!r}")
+    assert patches_per_image is not None
+    assert token_count is not None
+    assert token_dim is not None
+    assert wm_obs_dim is not None
+    assert num_images is not None
+    expected_token_count = patches_per_image * num_images
+    if token_count != expected_token_count:
+        raise ValueError(
+            f"{geometry_root}.token_count must equal patches_per_image * "
+            f"num_images_in_input ({expected_token_count}), got {token_count}"
+        )
+    expected_obs_dim = token_count * token_dim
+    if wm_obs_dim != expected_obs_dim:
+        raise ValueError(
+            f"{geometry_root}.wm_obs_dim must equal token_count * token_dim "
+            f"({expected_obs_dim}), got {wm_obs_dim}"
+        )
+    task_num_images = _select_int(cfg, "task.openvla_oft.num_images_in_input")
+    if task_num_images != num_images:
+        raise ValueError(
+            "task.openvla_oft.num_images_in_input must match hidden-token metadata: "
+            f"task={task_num_images}, hidden_token={num_images}"
+        )
 
     hidden_token_dir = _select_str(cfg, "task.openvla_oft.hidden_token_dir")
     if hidden_token_dir is None or "hidden_token" not in hidden_token_dir:
@@ -284,21 +320,23 @@ def _validate_mainline_hidden_token_contract(cfg: DictConfig) -> None:
     for key, obs_dim_field in component_specs:
         if OmegaConf.select(cfg, key, default=None) is None:
             continue
-        token_count = _select_int(cfg, f"{key}.token_count")
-        token_dim = _select_int(cfg, f"{key}.token_dim")
-        if token_count is not None and token_count != HIDDEN_TOKEN_COUNT:
+        component_token_count = _select_int(cfg, f"{key}.token_count")
+        component_token_dim = _select_int(cfg, f"{key}.token_dim")
+        if component_token_count is not None and component_token_count != token_count:
             raise ValueError(
-                f"{key}.token_count must be {HIDDEN_TOKEN_COUNT}, got {token_count}"
+                f"{key}.token_count must match task metadata {token_count}, "
+                f"got {component_token_count}"
             )
-        if token_dim is not None and token_dim != HIDDEN_TOKEN_DIM:
+        if component_token_dim is not None and component_token_dim != token_dim:
             raise ValueError(
-                f"{key}.token_dim must be {HIDDEN_TOKEN_DIM}, got {token_dim}"
+                f"{key}.token_dim must match task metadata {token_dim}, "
+                f"got {component_token_dim}"
             )
         if obs_dim_field is not None:
             obs_dim = _select_int(cfg, f"{key}.{obs_dim_field}")
-            if obs_dim is not None and obs_dim != HIDDEN_TOKEN_HIDDEN_DIM:
+            if obs_dim is not None and obs_dim != wm_obs_dim:
                 raise ValueError(
-                    f"{key}.{obs_dim_field} must be {HIDDEN_TOKEN_HIDDEN_DIM}, "
+                    f"{key}.{obs_dim_field} must match task metadata {wm_obs_dim}, "
                     f"got {obs_dim}"
                 )
 
@@ -308,16 +346,16 @@ def _validate_mainline_hidden_token_contract(cfg: DictConfig) -> None:
         "actor.policy_cfg.kwargs.source_token_count",
     ):
         value = _select_int(cfg, key)
-        if value is not None and value != HIDDEN_TOKEN_COUNT:
-            raise ValueError(f"{key} must be {HIDDEN_TOKEN_COUNT}, got {value}")
+        if value is not None and value != token_count:
+            raise ValueError(f"{key} must match task metadata {token_count}, got {value}")
     for key in (
         "policy.source_token_dim",
         "ray_components.policy.kwargs.source_token_dim",
         "actor.policy_cfg.kwargs.source_token_dim",
     ):
         value = _select_int(cfg, key)
-        if value is not None and value != HIDDEN_TOKEN_DIM:
-            raise ValueError(f"{key} must be {HIDDEN_TOKEN_DIM}, got {value}")
+        if value is not None and value != token_dim:
+            raise ValueError(f"{key} must match task metadata {token_dim}, got {value}")
 
     for key in (
         "collect.policy_mode",
@@ -1463,6 +1501,15 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
     _require_non_negative_int_if_present(cfg, "manual_cotrain.checkpoint_every")
     _require_positive_if_present(cfg, "manual_cotrain.global_steps")
     _require_positive_if_present(cfg, "manual_cotrain.learner_update_step")
+    _require_positive_if_present(
+        cfg,
+        "manual_cotrain.learner_updates_per_global_step",
+    )
+    _require_positive_if_present(
+        cfg,
+        "manual_cotrain.learner_early_stop_patience",
+    )
+    _require_positive_if_present(cfg, "manual_cotrain.max_policy_kl")
     _require_positive_if_present(cfg, "manual_cotrain.sync_every")
     _require_positive_if_present(cfg, "manual_cotrain.rollout_epoch")
     _require_positive_if_present(cfg, "manual_cotrain.real_rollout_epoch")
@@ -1473,6 +1520,10 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
     )
     _require_positive_int_if_present(cfg, "manual_cotrain.wm_rollout_lease_epochs")
     _require_positive_if_present(cfg, "manual_cotrain.max_steps_per_rollout_epoch")
+    _require_positive_if_present(
+        cfg,
+        "manual_cotrain.real_max_steps_per_rollout_epoch",
+    )
     _require_positive_if_present(cfg, "manual_cotrain.wm_rollout_multiplier")
     _require_positive_if_present(cfg, "manual_cotrain.num_action_chunks")
     _require_positive_if_present(cfg, "manual_cotrain.envs_per_worker")
@@ -1491,10 +1542,56 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
                 "manual_cotrain.max_steps_per_rollout_epoch must be divisible by "
                 "manual_cotrain.num_action_chunks"
             )
+    real_max_steps = OmegaConf.select(
+        cfg,
+        "manual_cotrain.real_max_steps_per_rollout_epoch",
+        default=None,
+    )
+    if real_max_steps is not None and chunk is not None:
+        if int(real_max_steps) % int(chunk) != 0:
+            raise ValueError(
+                "manual_cotrain.real_max_steps_per_rollout_epoch must be divisible "
+                "by manual_cotrain.num_action_chunks"
+            )
     _validate_manual_cotrain_group_geometry(cfg)
     _validate_manual_actor_ppo_batches(cfg)
     _validate_manual_cotrain_replay_window(cfg)
     _validate_manual_cotrain_classifier_window(cfg)
+
+    if bool(
+        OmegaConf.select(
+            cfg,
+            "manual_cotrain.staged_policy_update",
+            default=False,
+        )
+    ):
+        if not bool(
+            OmegaConf.select(
+                cfg,
+                "manual_cotrain.real_env_enabled",
+                default=True,
+            )
+        ):
+            raise ValueError(
+                "manual_cotrain.staged_policy_update requires real_env_enabled=true"
+            )
+        if not bool(
+            OmegaConf.select(
+                cfg,
+                "manual_cotrain.learner_updates_enabled",
+                default=True,
+            )
+        ):
+            raise ValueError(
+                "manual_cotrain.staged_policy_update requires "
+                "learner_updates_enabled=true"
+            )
+        if int(
+            OmegaConf.select(cfg, "manual_cotrain.sync_every", default=1)
+        ) != 1:
+            raise ValueError(
+                "manual_cotrain.staged_policy_update requires sync_every=1"
+            )
 
     precision = OmegaConf.select(cfg, "learner.train_cfg.precision", default=None)
     if precision is not None:
@@ -2039,7 +2136,7 @@ def _require_positive_if_present(cfg: DictConfig, key: str) -> None:
     value = OmegaConf.select(cfg, key, default=None)
     if value is None:
         return
-    if int(value) <= 0:
+    if float(value) <= 0:
         raise ValueError(f"{key} must be > 0, got {value!r}")
 
 

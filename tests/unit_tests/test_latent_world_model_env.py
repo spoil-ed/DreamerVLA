@@ -37,6 +37,44 @@ class _ChunkWM(torch.nn.Module):
         }
 
 
+class _StatefulChunkWM(torch.nn.Module):
+    """WM double whose second prediction depends on exact returned histories."""
+
+    num_hist = 3
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.inputs: list[dict[str, torch.Tensor]] = []
+
+    def forward(self, batch):
+        latent = batch["latent"]
+        assert isinstance(latent, dict)
+        self.inputs.append(
+            {
+                key: value.detach().cpu().clone()
+                for key, value in latent.items()
+                if isinstance(value, torch.Tensor)
+            }
+        )
+        hidden = latent["hidden"].reshape(batch["actions"].shape[0], -1)
+        increments = batch["actions"][..., : hidden.shape[-1]].cumsum(dim=1)
+        hidden_seq = hidden[:, None] + increments
+        returned_history = torch.stack(
+            [hidden_seq[:, -1] + offset for offset in (10.0, 20.0, 30.0)],
+            dim=1,
+        )
+        returned_actions = torch.stack(
+            [batch["actions"][:, -1] + offset for offset in (1.0, 2.0, 3.0)],
+            dim=1,
+        )
+        return {
+            "hidden": hidden_seq[:, -1],
+            "hidden_seq": hidden_seq,
+            "history": returned_history,
+            "actions": returned_actions,
+        }
+
+
 class _AutocastAwareChunkWM(_ChunkWM):
     def __init__(self) -> None:
         super().__init__()
@@ -286,6 +324,39 @@ def test_latent_world_model_env_chunk_step_batch_uses_one_wm_call() -> None:
     assert infos[0]["slot_id"] == 0
     assert infos[1]["slot_id"] == 1
     assert env.get_metrics()["wm_forward_calls"] == 1.0
+
+
+def test_chunk_step_batch_carries_returned_wm_history_across_chunks() -> None:
+    wm = _StatefulChunkWM()
+    env = LatentWorldModelEnv(
+        world_model=wm,
+        classifier=None,
+        latent_dim=2,
+        action_dim=2,
+        success_threshold=99.0,
+        num_envs=1,
+    )
+    env.reset_slot(0, task_id=0, episode_id=0)
+    first_actions = np.array([[[1.0, 0.0], [0.0, 2.0]]], dtype=np.float32)
+    env.chunk_step_batch(first_actions, env_ids=[0])
+
+    returned_history = torch.stack(
+        [torch.tensor([[1.0, 2.0]]) + offset for offset in (10.0, 20.0, 30.0)],
+        dim=1,
+    )
+    returned_actions = torch.stack(
+        [torch.tensor([[0.0, 2.0]]) + offset for offset in (1.0, 2.0, 3.0)],
+        dim=1,
+    )
+    env.chunk_step_batch(
+        np.array([[[3.0, 4.0], [5.0, 6.0]]], dtype=np.float32),
+        env_ids=[0],
+    )
+
+    assert len(wm.inputs) == 2
+    torch.testing.assert_close(wm.inputs[1]["history"], returned_history)
+    torch.testing.assert_close(wm.inputs[1]["actions"], returned_actions)
+    torch.testing.assert_close(wm.inputs[1]["hidden"], returned_history[:, -1] - 30.0)
 
 
 def test_latent_world_model_env_chunk_classifier_uses_rolling_history() -> None:

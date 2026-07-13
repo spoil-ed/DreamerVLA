@@ -55,6 +55,25 @@ Shell launchers expose a small set of convenience keys and pass remaining
 | `online_rollout.num_envs` | vector env count for sync path |
 | `online_rollout.buffer_size` | replay capacity |
 
+### Manual Ray staged cotrain
+
+| Key | Meaning |
+| --- | --- |
+| `manual_cotrain.staged_policy_update` | enable `real -> encoder SFT -> WM/CLS -> imagined PPO` barriers |
+| `manual_cotrain.real_rollout_target_trajectories` | exact completed real trajectories drained per global step; mainline is `32` |
+| `manual_cotrain.learner_updates_per_global_step` | maximum step-local WM and classifier optimizer iterations |
+| `manual_cotrain.learner_early_stop_patience` | no-improvement iterations before stopping the current WM/CLS fit |
+| `manual_cotrain.max_policy_kl` | one cumulative KL allowance shared by encoder SFT and actor PPO |
+| `manual_cotrain.wm_rollout_target_trajectories` | imagined trajectories used by actor PPO |
+| `manual_cotrain.wm_env_write_replay` | whether imagined episodes enter replay; staged mainline keeps this `false` |
+| `manual_cotrain.checkpoint_every` | completed global-step checkpoint cadence; segmented eval forces its boundary checkpoint |
+| `manual_cotrain.resume_ckpt` | full manual checkpoint to resume; launcher-injected optional keys use `++` |
+| `actor.train_cfg.encoder_sft.epochs` | successful-real encoder-only SFT epochs |
+| `actor.train_cfg.encoder_sft.batch_size` | raw decision batch for SFT and action-distribution KL measurement |
+| `actor.train_cfg.encoder_sft.reencode_batch_size` | batch for re-encoding all current-step real trajectories |
+| `actor.train_cfg.optimizers.encoder.lr` | vision backbone/projector SFT LR |
+| `actor.train_cfg.optimizers.policy.lr` | original LM/OFT actor PPO LR |
+
 ## OpenVLA-OFT Token Contract
 
 The current cotrain path reads token metadata from
@@ -68,8 +87,8 @@ The current cotrain path reads token metadata from
 | `expected_history` | image/history count encoded by the sidecar |
 | `expected_include_state` | whether VLA-side state was included |
 | `expected_rotate_images_180` | image-rotation contract |
-| `token_count` | token count per frame |
-| `token_dim` | token embedding dim |
+| `token_count` | projected visual-token count per frame; checkpoint/sidecar derived, currently `256` |
+| `token_dim` | projected visual-token width; checkpoint/sidecar derived, currently `4096` |
 | `wm_obs_dim` | flattened WM observation dim |
 | `chunk_size` | action chunk size |
 | `proprio_dim` | replay proprio dimension |
@@ -90,6 +109,7 @@ The current cotrain path reads token metadata from
 | `world_model.reward_loss_scale` | reward loss weight |
 | `world_model.chunk_rollout_chunks` | rollout-loss depth |
 | `world_model.chunk_rollout_loss_scale` | rollout-loss weight |
+| `world_model.cosine_loss_scale` | optional cosine contribution to the WM train loss; cosine is reported even when its weight is zero |
 | `world_model.proprio_reconstruction_loss_scale` | proprio reconstruction weight |
 
 ## Optimizers
@@ -108,11 +128,19 @@ The current cotrain path reads token metadata from
 | Key | Meaning |
 | --- | --- |
 | `eval.ckpt_path` | checkpoint to evaluate |
-| `eval.ckpt_kind` | `auto`, `vla`, or `dreamer` |
+| `eval.ckpt_kind` | `auto`, base `vla`, complete learned `vla_policy`, or legacy `dreamer` |
 | `eval.task_suite_name` | LIBERO suite |
 | `eval.num_episodes_per_task` | rollouts per task |
 | `eval.num_steps_wait` | settle steps before first action |
 | `eval.save_video` | dump rollout videos |
+| `eval.cotrain_diagnostics` | attach read-only WM/CLS causal diagnostics to a `vla_policy` eval |
+| `eval.cotrain_expected_trajectories` | exact trajectory count required before diagnostics are accepted; mainline fixed protocol is `100` |
+| `eval.cotrain_encode_batch_size` | raw-policy encoding batch used by the streaming diagnostic observer |
+
+For the staged mainline, diagnostic trajectories never enter replay, optimizers, or
+classifier threshold calibration. WM evaluation seeds only its configured real history
+and then recursively carries the model-returned hidden/action histories across every
+complete action chunk.
 
 ## Environment Variables
 

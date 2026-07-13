@@ -132,6 +132,31 @@ def test_driver_records_env_chunk_and_action_step_units():
     assert tally.env_action_steps == 12
 
 
+def test_driver_exposes_read_only_reset_and_chunk_observer_events():
+    env = _ScriptedChunkEnv(num_envs=2, auto_reset=False)
+    resets = []
+    chunks = []
+
+    tally = run_rlinf_chunk_eval(
+        env,
+        _policy,
+        n_chunk_steps=2,
+        num_epochs=1,
+        total_episodes=2,
+        on_reset=lambda **event: resets.append(event),
+        on_chunk=lambda **event: chunks.append(event),
+    )
+
+    assert tally.num_episodes == 2
+    assert len(resets) == 1
+    assert resets[0]["env"] is env
+    assert len(chunks) == 1
+    assert chunks[0]["env"] is env
+    assert chunks[0]["chunk_actions"].shape == (2, 2, 7)
+    assert chunks[0]["newly_done"].tolist() == [True, True]
+    assert chunks[0]["episode_info"]["reset_state_id"].tolist() == [0, 1]
+
+
 def test_libero_env_ordered_reset_ids_tile_to_requested_num_envs():
     cfg = OmegaConf.create(
         {
@@ -201,7 +226,11 @@ def test_runner_rlinf_chunk_uses_configured_num_envs_without_episode_cap(monkeyp
     )
     runner._make_parallel_oft_slot_extractor = lambda: None
 
-    runner._evaluate_libero_rlinf_chunk(
+    runner._finalize_libero_eval_observer = lambda: {
+        "eval/cotrain_trajectory_count": 100.0
+    }
+
+    metrics = runner._evaluate_libero_rlinf_chunk(
         epoch=-1,
         eval_cfg=OmegaConf.create(
             {
@@ -229,6 +258,7 @@ def test_runner_rlinf_chunk_uses_configured_num_envs_without_episode_cap(monkeyp
     )
 
     assert created["num_envs"] == 64
+    assert metrics["eval/cotrain_trajectory_count"] == 100.0
 
 
 def test_build_libero_env_cfg_maps_eval_knobs():

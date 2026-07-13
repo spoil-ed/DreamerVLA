@@ -44,7 +44,7 @@ from dreamervla.utils.frozen_components import (
 from dreamervla.workers.actor.embodied_fsdp_actor import EmbodiedFSDPActor
 from dreamervla.workers.actor.learner_worker import LearnerWorker
 from dreamervla.workers.cotrain.handshake_trace import trace as _hs_trace
-from dreamervla.workers.cotrain.messages import StopMsg
+from dreamervla.workers.cotrain.messages import RealTrajectoryBatch, StopMsg
 from dreamervla.workers.cotrain.placement import (
     ManualCotrainPlacementPlan,
     build_manual_cotrain_placement,
@@ -98,16 +98,13 @@ class ManualCotrainRayRunner(BaseRunner):
             resume_step = 0
             if resume_payload is not None:
                 resume_step = int(resume_payload.get("global_step", 0))
-                _hs_trace(
-                    f"[manual-cotrain] restore resume state start step={resume_step}"
-                )
+                _hs_trace(f"[manual-cotrain] restore resume state start step={resume_step}")
                 self._restore_manual_resume_state(groups, resume_payload)
                 _hs_trace("[manual-cotrain] restore resume state done")
             else:
                 _hs_trace("[manual-cotrain] no resume payload")
             print(
-                "[manual-cotrain] groups="
-                + ",".join(self._target_group_names()),
+                "[manual-cotrain] groups=" + ",".join(self._target_group_names()),
                 flush=True,
             )
             metrics: dict[str, float | int] = {}
@@ -138,9 +135,7 @@ class ManualCotrainRayRunner(BaseRunner):
     def _placement_plan(self) -> ManualCotrainPlacementPlan:
         return build_manual_cotrain_placement(
             self._ngpu(),
-            real_env_workers=(
-                self._real_env_workers() if self._real_env_enabled() else 0
-            ),
+            real_env_workers=(self._real_env_workers() if self._real_env_enabled() else 0),
             include_learner=self._learner_updates_enabled(),
             component_gpu_groups=self._component_gpu_groups(),
         )
@@ -161,8 +156,7 @@ class ManualCotrainRayRunner(BaseRunner):
                 continue
             resolved = placement.get_strategy(component).get_placement(cluster)
             groups[component] = [
-                [int(gpu) for gpu in item.visible_accelerators]
-                for item in resolved
+                [int(gpu) for gpu in item.visible_accelerators] for item in resolved
             ]
         return groups or None
 
@@ -179,6 +173,25 @@ class ManualCotrainRayRunner(BaseRunner):
         return names
 
     def _global_step_operation_names(self) -> list[str]:
+        if self._staged_policy_update_enabled():
+            return [
+                "set_global_step",
+                "sync_step_start_policy",
+                "collect_real_trajectories",
+                "drain_real_trajectories",
+                "encoder_sft",
+                "reencode_real_trajectories",
+                "replace_step_local_replay",
+                "learner_update_wm_classifier",
+                "learner_to_wm_env_sync",
+                "refresh_wm_initial_conditions",
+                "sync_post_sft_policy",
+                "collect_imagined_trajectories",
+                "actor_recv_trajectories",
+                "actor_compute_advantages_and_returns",
+                "actor_run_training",
+                "checkpoint_and_metrics",
+            ]
         return [
             "set_global_step",
             "actor_to_rollout_sync",
@@ -216,9 +229,7 @@ class ManualCotrainRayRunner(BaseRunner):
         if group is None:
             return
         progress_dir.mkdir(parents=True, exist_ok=True)
-        interval = float(
-            OmegaConf.select(self.cfg, "console.progress_every_s", default=5.0)
-        )
+        interval = float(OmegaConf.select(self.cfg, "console.progress_every_s", default=5.0))
         group.configure_progress(str(progress_dir), min_interval_s=interval).wait()
 
     def _build_groups(self, cluster: Cluster) -> dict[str, Any]:
@@ -259,11 +270,7 @@ class ManualCotrainRayRunner(BaseRunner):
             elif replay_seed_cfg is not None:
                 _hs_trace("[build_groups] seed ReplayWorker start")
                 replay_seed_metrics = _merge_metric_lists(
-                    [
-                        replay_group.seed_from_offline(
-                            self._cfg_dict("replay.seed")
-                        ).wait()
-                    ]
+                    [replay_group.seed_from_offline(self._cfg_dict("replay.seed")).wait()]
                 )
                 _hs_trace("[build_groups] seed ReplayWorker done")
             resume_sampling_state = (
@@ -272,9 +279,7 @@ class ManualCotrainRayRunner(BaseRunner):
                 else None
             )
             if resume_sampling_state is not None:
-                replay_group.load_sampling_state_dict(
-                    dict(resume_sampling_state)
-                ).wait()
+                replay_group.load_sampling_state_dict(dict(resume_sampling_state)).wait()
                 replay_resume_restored = True
 
         real_specs = [spec for spec in plan.env_specs if spec.role == "real_env"]
@@ -293,22 +298,26 @@ class ManualCotrainRayRunner(BaseRunner):
                 self._real_env_cfg(),
                 self._envs_per_worker(),
                 initial_real_rollout_epoch,
-                self._max_steps_per_rollout_epoch(),
+                self._real_max_steps_per_rollout_epoch(),
                 self._num_action_chunks(),
                 task_id=self._task_id(),
+                task_ids=self._real_task_ids(),
                 replay=replay,
                 dump=None,
                 rank_offset=0,
                 request_final_bootstrap=self._requires_bootstrap_value(),
+                # Staged cotrain installs the post-SFT, re-encoded real batch
+                # through replace_real_trajectories().  Legacy/manual routes
+                # still rely on RealEnvWorker writing completed episodes into
+                # replay for LearnerWorker sampling.
+                replay_write_enabled=self._real_env_write_replay(),
             ).launch(
                 cluster,
                 self._resource_map_for_specs(real_specs),
                 name="RealEnvWorker",
             )
             for rank, rollout_epoch in enumerate(real_rollout_epochs):
-                real_env_group.execute_on(rank).configure_rollout_epoch(
-                    rollout_epoch
-                ).wait()
+                real_env_group.execute_on(rank).configure_rollout_epoch(rollout_epoch).wait()
             _hs_trace("[build_groups] launch RealEnvWorker done")
         wm_specs = [spec for spec in plan.env_specs if spec.role == "wm_env"]
         wm_env_group = None
@@ -354,15 +363,11 @@ class ManualCotrainRayRunner(BaseRunner):
                     ]
                 )
                 self._frozen_state_hashes = dict(frozen["frozen_state_hashes"])
-                self._frozen_source_checkpoints = dict(
-                    frozen["source_checkpoints"]
-                )
+                self._frozen_source_checkpoints = dict(frozen["source_checkpoints"])
                 self._frozen_classifier_threshold = float(
                     frozen["component_states"]["classifier_threshold"]
                 )
-                self._assert_frozen_component_hashes(
-                    {"WMEnvGroup": wm_env_group}
-                )
+                self._assert_frozen_component_hashes({"WMEnvGroup": wm_env_group})
                 frozen_hashes_verified = True
         elif not self._real_env_enabled():
             raise ValueError("frozen manual cotrain requires at least one WMEnvWorker")
@@ -397,15 +402,13 @@ class ManualCotrainRayRunner(BaseRunner):
             name="EmbodiedFSDPActor",
         )
         _hs_trace("[build_groups] launch EmbodiedFSDPActor done")
-        if not self._learner_updates_enabled():
+        if self._staged_policy_update_enabled() or not self._learner_updates_enabled():
             self._initialize_policy_hashes(actor_group)
 
         learner_group = None
         if self._learner_updates_enabled():
             if plan.learner_spec is None:
-                raise ValueError(
-                    "manual cotrain learner updates require a learner placement"
-                )
+                raise ValueError("manual cotrain learner updates require a learner placement")
             _hs_trace("[build_groups] launch LearnerWorker start")
             learner_group = WorkerGroup(
                 LearnerWorker,
@@ -472,8 +475,7 @@ class ManualCotrainRayRunner(BaseRunner):
         classifier_path = self._init_ckpt_path("init.classifier_state_ckpt")
         if wm_path is None or classifier_path is None:
             raise ValueError(
-                "frozen manual cotrain requires explicit world-model and classifier "
-                "checkpoints"
+                "frozen manual cotrain requires explicit world-model and classifier checkpoints"
             )
         loaded_wm = load_frozen_component(wm_path, "world_model")
         loaded_classifier = load_frozen_component(classifier_path, "classifier")
@@ -512,11 +514,7 @@ class ManualCotrainRayRunner(BaseRunner):
         )
         threshold = resolve_classifier_threshold(
             loaded_classifier.metadata,
-            configured=(
-                None
-                if configured_threshold is None
-                else float(configured_threshold)
-            ),
+            configured=(None if configured_threshold is None else float(configured_threshold)),
         )
         return {
             "component_states": {
@@ -590,11 +588,7 @@ class ManualCotrainRayRunner(BaseRunner):
         )
         threshold = resolve_classifier_threshold(
             loaded_classifier.metadata,
-            configured=(
-                None
-                if configured_threshold is None
-                else float(configured_threshold)
-            ),
+            configured=(None if configured_threshold is None else float(configured_threshold)),
         )
         return {
             "world_model": loaded_wm.state_dict,
@@ -606,19 +600,16 @@ class ManualCotrainRayRunner(BaseRunner):
         payload = self._pending_manual_resume_payload
         if payload is not None:
             state_dicts = payload.get("state_dicts", {})
-            policy_state = (
-                state_dicts.get("policy")
-                if isinstance(state_dicts, dict)
-                else None
-            )
+            policy_state = state_dicts.get("policy") if isinstance(state_dicts, dict) else None
             if not isinstance(policy_state, dict) or not policy_state:
-                raise RuntimeError(
-                    "manual cotrain resume checkpoint has no non-empty policy state"
-                )
+                raise RuntimeError("manual cotrain resume checkpoint has no non-empty policy state")
             init_state = {"policy": dict(policy_state)}
             optimizer_state = state_dicts.get("policy_optimizer")
             if isinstance(optimizer_state, dict) and optimizer_state:
                 init_state["policy_optimizer"] = dict(optimizer_state)
+            encoder_optimizer_state = state_dicts.get("encoder_optimizer")
+            if isinstance(encoder_optimizer_state, dict) and encoder_optimizer_state:
+                init_state["encoder_optimizer"] = dict(encoder_optimizer_state)
             return init_state
         return self._load_init_ckpt("actor.init_ckpt")
 
@@ -633,16 +624,12 @@ class ManualCotrainRayRunner(BaseRunner):
             return
         expected_current = str(payload.get("policy_final_hash", "") or "")
         if expected_current and expected_current != current_hash:
-            raise RuntimeError(
-                "resume policy state hash differs from checkpoint metadata"
-            )
+            raise RuntimeError("resume policy state hash differs from checkpoint metadata")
         self._policy_initial_hash = str(
             payload.get("policy_initial_hash", current_hash) or current_hash
         )
         self._policy_final_hash = current_hash
-        self._applied_policy_steps = int(
-            payload.get("applied_policy_steps", 0) or 0
-        )
+        self._applied_policy_steps = int(payload.get("applied_policy_steps", 0) or 0)
 
     def _assert_frozen_component_hashes(self, groups: dict[str, Any]) -> None:
         expected = dict(self._frozen_state_hashes)
@@ -664,6 +651,9 @@ class ManualCotrainRayRunner(BaseRunner):
                 )
 
     def _run_global_step(self, groups: dict[str, Any], global_step: int) -> dict[str, float]:
+        if self._staged_policy_update_enabled():
+            return self._run_staged_global_step(groups, global_step)
+
         global_step_start = time.perf_counter()
         actor = groups["ActorGroup"]
         rollout = groups["RolloutGroup"]
@@ -678,9 +668,7 @@ class ManualCotrainRayRunner(BaseRunner):
         sync_metrics: dict[str, float] = {}
 
         def mark_stage(name: str, started_at: float) -> float:
-            stage_times[f"time/manual_cotrain/{name}_s"] = float(
-                time.perf_counter() - started_at
-            )
+            stage_times[f"time/manual_cotrain/{name}_s"] = float(time.perf_counter() - started_at)
             return time.perf_counter()
 
         stage_start = time.perf_counter()
@@ -699,8 +687,7 @@ class ManualCotrainRayRunner(BaseRunner):
             desc=f"manual-cotrain-env/{int(global_step):08d}",
         )
         dynamic_wm_leases = (
-            wm_env is not None
-            and self._wm_rollout_target_trajectories() is not None
+            wm_env is not None and self._wm_rollout_target_trajectories() is not None
         )
         if not dynamic_wm_leases:
             progress_monitor.report(force=True)
@@ -809,10 +796,7 @@ class ManualCotrainRayRunner(BaseRunner):
             raise ValueError(
                 "manual cotrain learner updates are enabled but LearnerGroup is absent"
             )
-        if (
-            self._learner_updates_enabled()
-            and global_step % self._learner_update_step() == 0
-        ):
+        if self._learner_updates_enabled() and global_step % self._learner_update_step() == 0:
             learner_metrics = _with_train_learner_aliases(
                 _merge_metric_lists([learner.update(self._learner_update_phase(), 1).wait()])
             )
@@ -822,13 +806,9 @@ class ManualCotrainRayRunner(BaseRunner):
             if self._publish_learner_weights():
                 if sync_world_model_to_env:
                     learner.sync_weights("world_model", global_step).wait()
-                    sync_metrics[
-                        "sync/world_model_publish_skipped_classifier_not_updated"
-                    ] = 0.0
+                    sync_metrics["sync/world_model_publish_skipped_classifier_not_updated"] = 0.0
                 else:
-                    sync_metrics[
-                        "sync/world_model_publish_skipped_classifier_not_updated"
-                    ] = 1.0
+                    sync_metrics["sync/world_model_publish_skipped_classifier_not_updated"] = 1.0
                 learner.sync_weights("classifier", global_step).wait()
             stage_start = mark_stage("learner_update_wm_classifier", stage_start)
             if wm_env is not None:
@@ -848,16 +828,10 @@ class ManualCotrainRayRunner(BaseRunner):
                         state_dicts["classifier_threshold"]
                     )
                 if sync_world_model_to_env:
-                    component_states["world_model"] = dict(
-                        state_dicts.get("world_model", {})
-                    )
-                    sync_metrics[
-                        "sync/wm_env_world_model_skipped_classifier_not_updated"
-                    ] = 0.0
+                    component_states["world_model"] = dict(state_dicts.get("world_model", {}))
+                    sync_metrics["sync/wm_env_world_model_skipped_classifier_not_updated"] = 0.0
                 else:
-                    sync_metrics[
-                        "sync/wm_env_world_model_skipped_classifier_not_updated"
-                    ] = 1.0
+                    sync_metrics["sync/wm_env_world_model_skipped_classifier_not_updated"] = 1.0
                 share_start = time.perf_counter()
                 shared_component_states = _share_ray_value(
                     component_states,
@@ -883,9 +857,7 @@ class ManualCotrainRayRunner(BaseRunner):
         replay_group = groups.get("ReplayGroup")
         replay_metrics: dict[str, float] = {}
         if replay_group is not None:
-            replay_metrics["replay_buffer/size"] = float(
-                replay_group.size().wait()[0]
-            )
+            replay_metrics["replay_buffer/size"] = float(replay_group.size().wait()[0])
             replay_metrics["replay_buffer/transitions"] = float(
                 replay_group.num_transitions().wait()[0]
             )
@@ -916,6 +888,374 @@ class ManualCotrainRayRunner(BaseRunner):
             time.perf_counter() - global_step_start
         )
         return metrics
+
+    def _run_staged_global_step(
+        self,
+        groups: dict[str, Any],
+        global_step: int,
+    ) -> dict[str, float]:
+        """Run one causally ordered real-SFT/WM+CLS/imagined-PPO step."""
+
+        global_step_start = time.perf_counter()
+        actor = groups["ActorGroup"]
+        rollout = groups["RolloutGroup"]
+        learner = groups.get("LearnerGroup")
+        real_env = groups.get("RealEnvGroup")
+        wm_env = groups.get("WMEnvGroup")
+        replay_group = groups.get("ReplayGroup")
+        if learner is None or real_env is None or wm_env is None or replay_group is None:
+            raise ValueError(
+                "staged manual cotrain requires LearnerGroup, RealEnvGroup, "
+                "WMEnvGroup, and ReplayGroup"
+            )
+
+        env_channel_name = str(groups["env_channel_name"])
+        rollout_channel_name = str(groups["rollout_channel_name"])
+        actor_channel_name = str(groups["actor_channel_name"])
+        stage_times: dict[str, float] = {}
+        sync_metrics: dict[str, float] = {}
+
+        def mark_stage(name: str, started_at: float) -> float:
+            stage_times[f"time/manual_cotrain/{name}_s"] = float(time.perf_counter() - started_at)
+            return time.perf_counter()
+
+        stage_start = time.perf_counter()
+        actor.set_global_step(global_step).wait()
+        rollout.set_global_step(global_step).wait()
+        real_env.set_global_step(global_step).wait()
+        wm_env.set_global_step(global_step).wait()
+        progress_dir = self._manual_cotrain_progress_dir(global_step)
+        self._configure_env_progress(real_env, progress_dir)
+        self._configure_env_progress(wm_env, progress_dir)
+        progress_monitor = _ManualCotrainEnvProgressMonitor(
+            progress_dir,
+            self.console_progress,
+            desc=f"manual-cotrain-env/{int(global_step):08d}",
+        )
+        stage_start = mark_stage("set_global_step", stage_start)
+
+        real_reset_metrics = _merge_metric_lists(
+            [real_env.begin_step_local_real_collection(global_step).wait()]
+        )
+        stage_start = mark_stage("reset_step_local_real_collection", stage_start)
+
+        # pi_old for this transaction is exactly the actor state at step entry.
+        old_sync_version = self._staged_policy_sync_version(global_step, post_sft=False)
+        sync_metrics.update(self._sync_policy_groups(actor, rollout, version=old_sync_version))
+        replay_group.set_policy_version(global_step).wait()
+        stage_start = mark_stage("sync_step_start_policy", stage_start)
+
+        real_env_result = real_env.interact(
+            env_channel_name,
+            rollout_channel_name,
+            actor_channel_name,
+        )
+        real_rollout_result = rollout.generate(
+            env_channel_name,
+            rollout_channel_name,
+            self._envs_per_worker(),
+        )
+        real_env_metrics = _wait_env_metrics_with_rollout_guard(
+            [real_env_result],
+            real_rollout_result,
+            timeout_s=self._env_rollout_timeout_s(),
+            progress=progress_monitor,
+        )
+        self._stop_rollout_workers(groups)
+        real_rollout_metrics = _sum_metric_lists([real_rollout_result.wait()])
+        stage_start = mark_stage("collect_real_trajectories", stage_start)
+
+        drained = real_env.drain_real_trajectories(global_step).wait()
+        real_batch = _merge_real_trajectory_batches(drained, global_step=global_step)
+        expected_real = self._real_rollout_target_trajectories()
+        if expected_real is not None and real_batch.num_trajectories != expected_real:
+            raise RuntimeError(
+                "real rollout did not produce the configured completed-trajectory "
+                f"budget: got {real_batch.num_trajectories}, expected {expected_real}"
+            )
+        real_batch_metrics = {
+            "env/real_env/drained_trajectories": float(real_batch.num_trajectories),
+            "env/real_env/drained_successes": float(real_batch.num_successes),
+        }
+        stage_start = mark_stage("drain_real_trajectories", stage_start)
+
+        shared_real_batch = _share_ray_value(
+            real_batch,
+            cluster=groups.get("cluster"),
+        )
+        max_policy_kl = self._max_policy_kl()
+        if max_policy_kl is not None:
+            actor.begin_policy_transaction().wait()
+        encoder_sft_metrics = _aggregate_actor_metric_lists(
+            [actor.encoder_sft(shared_real_batch).wait()]
+        )
+        encoder_kl_attempted = max(
+            0.0,
+            float(encoder_sft_metrics.get("actor/encoder_sft_kl", 0.0)),
+        )
+        encoder_kl_effective = encoder_kl_attempted
+        if max_policy_kl is not None:
+            encoder_transaction_metrics = _aggregate_actor_metric_lists(
+                [
+                    actor.finalize_policy_transaction(
+                        encoder_kl_attempted,
+                        max_policy_kl,
+                    ).wait()
+                ]
+            )
+            encoder_rolled_back = bool(
+                encoder_transaction_metrics.get(
+                    "actor/kl_transaction_rolled_back",
+                    0.0,
+                )
+                > 0.5
+            )
+            if encoder_rolled_back:
+                encoder_kl_effective = 0.0
+            encoder_sft_metrics.update(
+                {
+                    f"actor/encoder_{key.removeprefix('actor/')}": value
+                    for key, value in encoder_transaction_metrics.items()
+                }
+            )
+        encoder_sft_metrics["actor/encoder_sft_kl_effective"] = encoder_kl_effective
+        stage_start = mark_stage("encoder_sft", stage_start)
+
+        reencoded_results = actor.reencode_real_trajectories(shared_real_batch).wait()
+        reencoded_batch = _first_real_trajectory_batch(reencoded_results)
+        _validate_reencoded_batch(
+            reencoded_batch,
+            expected_step=global_step,
+            expected_trajectories=real_batch.num_trajectories,
+        )
+        stage_start = mark_stage("reencode_real_trajectories", stage_start)
+
+        shared_reencoded_batch = _share_ray_value(
+            reencoded_batch,
+            cluster=groups.get("cluster"),
+        )
+        replay_metrics = _merge_metric_lists(
+            [replay_group.replace_real_trajectories(shared_reencoded_batch).wait()]
+        )
+        stage_start = mark_stage("replace_step_local_replay", stage_start)
+
+        learner_metrics = _with_train_learner_aliases(
+            _merge_metric_lists(
+                [
+                    learner.update_current_step(
+                        self._learner_update_phase(),
+                        self._learner_updates_per_global_step(),
+                        self._learner_early_stop_patience(),
+                    ).wait()
+                ]
+            )
+        )
+        stage_start = mark_stage("learner_update_wm_classifier", stage_start)
+
+        state_start = time.perf_counter()
+        state_dicts = _first_result(learner.state_dicts().wait())
+        sync_metrics["sync/learner_state_dicts_s"] = float(time.perf_counter() - state_start)
+        if not isinstance(state_dicts, dict):
+            raise TypeError("LearnerGroup.state_dicts() must return a mapping")
+        component_states = {
+            "world_model": dict(state_dicts.get("world_model", {})),
+            "classifier": dict(state_dicts.get("classifier", {})),
+            "classifier_threshold": float(state_dicts.get("classifier_threshold", 0.5)),
+        }
+        shared_component_states = _share_ray_value(
+            component_states,
+            cluster=groups.get("cluster"),
+        )
+        load_metrics = wm_env.load_component_states(
+            shared_component_states,
+            global_step,
+        ).wait()
+        sync_metrics.update(_aggregate_sync_metric_lists([load_metrics]))
+        stage_start = mark_stage("learner_to_wm_env_sync", stage_start)
+
+        refresh_metrics = _merge_metric_lists([wm_env.refresh_wm_initial_conditions().wait()])
+        stage_start = mark_stage("refresh_wm_initial_conditions", stage_start)
+
+        # Encoder SFT changed projected-token space, so RolloutGroup must pull the
+        # post-SFT policy before any imagined action is sampled.
+        post_sft_version = self._staged_policy_sync_version(global_step, post_sft=True)
+        sync_metrics.update(self._sync_policy_groups(actor, rollout, version=post_sft_version))
+        stage_start = mark_stage("sync_post_sft_policy", stage_start)
+
+        if max_policy_kl is not None:
+            actor.begin_policy_transaction().wait()
+
+        dynamic_wm_leases = self._wm_rollout_target_trajectories() is not None
+        if dynamic_wm_leases:
+            wm_rollout_result = rollout.generate(
+                env_channel_name,
+                rollout_channel_name,
+                self._rollout_num_slots(),
+            )
+            wm_env_metrics = self._wait_env_metrics_with_dynamic_wm_leases(
+                real_env_results=[],
+                wm_env=wm_env,
+                rollout_result=wm_rollout_result,
+                env_channel_name=env_channel_name,
+                rollout_channel_name=rollout_channel_name,
+                actor_channel_name=actor_channel_name,
+                timeout_s=self._env_rollout_timeout_s(),
+                progress=progress_monitor,
+            )
+        else:
+            wm_env_result = wm_env.interact(
+                env_channel_name,
+                rollout_channel_name,
+                actor_channel_name,
+            )
+            wm_rollout_result = rollout.generate(
+                env_channel_name,
+                rollout_channel_name,
+                self._wm_envs_per_worker(),
+            )
+            wm_env_metrics = _wait_env_metrics_with_rollout_guard(
+                [wm_env_result],
+                wm_rollout_result,
+                timeout_s=self._env_rollout_timeout_s(),
+                progress=progress_monitor,
+            )
+        self._stop_rollout_workers(groups)
+        wm_rollout_metrics = _sum_metric_lists([wm_rollout_result.wait()])
+        stage_start = mark_stage("collect_imagined_trajectories", stage_start)
+
+        env_metrics = _sum_metric_lists([real_env_metrics, wm_env_metrics])
+        rollout_metrics = _sum_metric_lists([real_rollout_metrics, wm_rollout_metrics])
+        expected_shards = int(
+            wm_env_metrics.get(
+                "env/wm_env/trajectory_shards",
+                wm_env_metrics.get("env/trajectory_shards", 0.0),
+            )
+        )
+        actor_recv_metrics = self._receive_actor_trajectories(
+            groups,
+            expected_shards=expected_shards,
+            env_metrics=wm_env_metrics,
+            actor_channel_name=actor_channel_name,
+            stage_times=stage_times,
+        )
+        stage_start = mark_stage("actor_recv_trajectories", stage_start)
+        advantage_metrics = _aggregate_actor_metric_lists(
+            [actor.compute_advantages_and_returns().wait()]
+        )
+        stage_start = mark_stage(
+            "actor_compute_advantages_and_returns",
+            stage_start,
+        )
+        train_metrics = _aggregate_actor_metric_lists([actor.run_training().wait()])
+        actor_kl_attempted = max(
+            0.0,
+            float(
+                train_metrics.get(
+                    "actor/behavior_kl_mean",
+                    train_metrics.get("actor/approx_kl", 0.0),
+                )
+            ),
+        )
+        actor_kl_effective = actor_kl_attempted
+        actor_committed = True
+        if max_policy_kl is not None:
+            actor_transaction_metrics = _aggregate_actor_metric_lists(
+                [
+                    actor.finalize_policy_transaction(
+                        actor_kl_attempted,
+                        max(0.0, max_policy_kl - encoder_kl_effective),
+                    ).wait()
+                ]
+            )
+            actor_committed = not bool(
+                actor_transaction_metrics.get(
+                    "actor/kl_transaction_rolled_back",
+                    0.0,
+                )
+                > 0.5
+            )
+            if not actor_committed:
+                actor_kl_effective = 0.0
+            train_metrics.update(
+                {
+                    f"actor/ppo_{key.removeprefix('actor/')}": value
+                    for key, value in actor_transaction_metrics.items()
+                }
+            )
+        train_metrics.update(
+            {
+                "actor/ppo_update_committed": float(actor_committed),
+                "actor/policy_kl_encoder": float(encoder_kl_effective),
+                "actor/policy_kl_actor": float(actor_kl_effective),
+                "actor/policy_kl_total": float(encoder_kl_effective + actor_kl_effective),
+                "actor/policy_kl_budget": float(max_policy_kl or 0.0),
+            }
+        )
+        if actor_committed:
+            self._applied_policy_steps += int(
+                max(
+                    0.0,
+                    float(
+                        train_metrics.get(
+                            "actor/ppo_optimizer_steps",
+                            train_metrics.get("actor/ppo_updates", 0.0),
+                        )
+                    ),
+                )
+            )
+        stage_start = mark_stage("actor_run_training", stage_start)
+
+        replay_metrics["replay_buffer/size"] = float(replay_group.size().wait()[0])
+        replay_metrics["replay_buffer/transitions"] = float(
+            replay_group.num_transitions().wait()[0]
+        )
+        metrics = {
+            "global_step": float(global_step),
+            **env_metrics,
+            **self._real_env_success_rate_metrics(
+                real_env_metrics,
+                global_step=global_step,
+            ),
+            **real_reset_metrics,
+            **real_batch_metrics,
+            **rollout_metrics,
+            **encoder_sft_metrics,
+            **replay_metrics,
+            **learner_metrics,
+            **refresh_metrics,
+            **actor_recv_metrics,
+            **advantage_metrics,
+            **train_metrics,
+            **sync_metrics,
+            **stage_times,
+        }
+        if global_step == 1:
+            metrics.update(groups.get("replay_seed_metrics", {}))
+            metrics.update(groups.get("frozen_component_load_metrics", {}))
+        metrics = _with_train_learner_aliases(metrics)
+        checkpoint_start = time.perf_counter()
+        self._maybe_save_manual_checkpoint(groups, global_step, metrics)
+        metrics["time/manual_cotrain/checkpoint_and_metrics_s"] = float(
+            time.perf_counter() - checkpoint_start
+        )
+        metrics["time/manual_cotrain/global_step_s"] = float(
+            time.perf_counter() - global_step_start
+        )
+        return metrics
+
+    @staticmethod
+    def _sync_policy_groups(actor: Any, rollout: Any, *, version: int) -> dict[str, float]:
+        actor_sync = actor.sync_model_to_rollout("policy", int(version)).wait()
+        rollout_sync = rollout.sync_model_from_actor("policy").wait()
+        return _aggregate_sync_metric_lists([actor_sync, rollout_sync])
+
+    @staticmethod
+    def _stop_rollout_workers(groups: dict[str, Any]) -> None:
+        for rollout_rank, _worker in enumerate(groups["RolloutGroup"].workers):
+            groups["env_channel"].put(
+                StopMsg(reason="global_step_complete"),
+                key=str(int(rollout_rank)),
+            )
 
     def _report_global_step_progress(
         self,
@@ -1006,9 +1346,7 @@ class ManualCotrainRayRunner(BaseRunner):
             else 0.0
         )
         step_success_rate = (
-            float(step_successes) / float(step_episodes)
-            if step_episodes > 0
-            else 0.0
+            float(step_successes) / float(step_episodes) if step_episodes > 0 else 0.0
         )
         metrics = {
             "rollout/episodes": float(self._real_rollout_episodes),
@@ -1092,10 +1430,7 @@ class ManualCotrainRayRunner(BaseRunner):
         minimum = 1 if self._real_env_enabled() else 0
         if value < minimum:
             relation = "positive" if minimum == 1 else "nonnegative"
-            raise ValueError(
-                "manual_cotrain.real_env_workers must be "
-                f"{relation}, got {value}"
-            )
+            raise ValueError(f"manual_cotrain.real_env_workers must be {relation}, got {value}")
         return value
 
     def _real_env_enabled(self) -> bool:
@@ -1116,6 +1451,46 @@ class ManualCotrainRayRunner(BaseRunner):
             )
         )
 
+    def _staged_policy_update_enabled(self) -> bool:
+        return bool(
+            OmegaConf.select(
+                self.cfg,
+                "manual_cotrain.staged_policy_update",
+                default=False,
+            )
+        )
+
+    def _learner_updates_per_global_step(self) -> int:
+        return self._positive_manual_int(
+            "learner_updates_per_global_step",
+            default=1,
+        )
+
+    def _learner_early_stop_patience(self) -> int:
+        return self._positive_manual_int(
+            "learner_early_stop_patience",
+            default=self._learner_updates_per_global_step(),
+        )
+
+    def _max_policy_kl(self) -> float | None:
+        value = OmegaConf.select(
+            self.cfg,
+            "manual_cotrain.max_policy_kl",
+            default=None,
+        )
+        if value is None:
+            return None
+        resolved = float(value)
+        if resolved <= 0.0:
+            raise ValueError("manual_cotrain.max_policy_kl must be positive")
+        return resolved
+
+    @staticmethod
+    def _staged_policy_sync_version(global_step: int, *, post_sft: bool) -> int:
+        # Two causally distinct policy snapshots are published in every staged
+        # global step. PatchWeightSyncer requires strictly increasing versions.
+        return 2 * int(global_step) - (0 if post_sft else 1)
+
     def _real_rollout_target_trajectories(self) -> int | None:
         value = OmegaConf.select(
             self.cfg,
@@ -1127,8 +1502,7 @@ class ManualCotrainRayRunner(BaseRunner):
         target = int(value)
         if target <= 0:
             raise ValueError(
-                "manual_cotrain.real_rollout_target_trajectories must be positive, "
-                f"got {target}"
+                f"manual_cotrain.real_rollout_target_trajectories must be positive, got {target}"
             )
         return target
 
@@ -1144,6 +1518,20 @@ class ManualCotrainRayRunner(BaseRunner):
             envs_name="manual_cotrain.envs_per_worker",
             role_name="real",
         )
+
+    def _real_max_steps_per_rollout_epoch(self) -> int:
+        value = OmegaConf.select(
+            self.cfg,
+            "manual_cotrain.real_max_steps_per_rollout_epoch",
+            default=self._max_steps_per_rollout_epoch(),
+        )
+        resolved = int(value)
+        if resolved <= 0 or resolved % self._num_action_chunks() != 0:
+            raise ValueError(
+                "manual_cotrain.real_max_steps_per_rollout_epoch must be positive "
+                "and divisible by manual_cotrain.num_action_chunks"
+            )
+        return resolved
 
     def _wm_rollout_epoch(self) -> int:
         return self._positive_manual_int(
@@ -1174,8 +1562,7 @@ class ManualCotrainRayRunner(BaseRunner):
         target = int(value)
         if target <= 0:
             raise ValueError(
-                "manual_cotrain.wm_rollout_target_trajectories must be positive, "
-                f"got {target}"
+                f"manual_cotrain.wm_rollout_target_trajectories must be positive, got {target}"
             )
         return target
 
@@ -1210,8 +1597,7 @@ class ManualCotrainRayRunner(BaseRunner):
         envs = int(envs_per_worker)
         if target % envs != 0:
             raise ValueError(
-                f"{target_name} must be divisible by {envs_name}; "
-                f"got {target} and {envs}"
+                f"{target_name} must be divisible by {envs_name}; got {target} and {envs}"
             )
         total_worker_epochs = target // envs
         if total_worker_epochs < workers:
@@ -1249,6 +1635,22 @@ class ManualCotrainRayRunner(BaseRunner):
 
     def _task_id(self) -> int:
         return int(OmegaConf.select(self.cfg, "manual_cotrain.task_id", default=0))
+
+    def _real_task_ids(self) -> tuple[int, ...]:
+        value = OmegaConf.select(
+            self.cfg,
+            "manual_cotrain.real_task_ids",
+            default=None,
+        )
+        if value is None:
+            return (self._task_id(),)
+        plain = OmegaConf.to_container(value, resolve=True) if OmegaConf.is_config(value) else value
+        task_ids = tuple(int(task_id) for task_id in plain)
+        if not task_ids:
+            raise ValueError("manual_cotrain.real_task_ids must not be empty")
+        if len(set(task_ids)) != len(task_ids):
+            raise ValueError("manual_cotrain.real_task_ids must not contain duplicates")
+        return task_ids
 
     def _positive_manual_int(self, field: str, *, default: int) -> int:
         path = f"manual_cotrain.{field}"
@@ -1341,6 +1743,11 @@ class ManualCotrainRayRunner(BaseRunner):
             )
         )
 
+    def _real_env_write_replay(self) -> bool:
+        """Keep direct real replay writes only on the legacy manual route."""
+
+        return not self._staged_policy_update_enabled()
+
     def _save_replay_state(self) -> bool:
         return bool(
             OmegaConf.select(
@@ -1395,9 +1802,7 @@ class ManualCotrainRayRunner(BaseRunner):
             if self._real_env_enabled() and self._ngpu() > 0
             else (1 if self._real_env_enabled() else 0)
         )
-        real_worker_epochs = self._real_rollout_epochs_by_worker(
-            int(configured_real_workers)
-        )
+        real_worker_epochs = self._real_rollout_epochs_by_worker(int(configured_real_workers))
         real_total_chunks = (
             sum(real_worker_epochs)
             * self._envs_per_worker()
@@ -1500,20 +1905,13 @@ class ManualCotrainRayRunner(BaseRunner):
                 parts.append(f"global_step={next(iter(global_steps))}")
             elif global_steps:
                 parts.append(f"global_steps={min(global_steps)}-{max(global_steps)}")
-            running_wm_epochs = sum(
-                int(lease) for _result, lease in active_wm.values()
-            )
-            if (
-                int(completed_wm_epochs)
-                + int(running_wm_epochs)
-                + int(remaining_wm_epochs)
-                != int(total_wm_epochs)
+            running_wm_epochs = sum(int(lease) for _result, lease in active_wm.values())
+            if int(completed_wm_epochs) + int(running_wm_epochs) + int(remaining_wm_epochs) != int(
+                total_wm_epochs
             ):
                 raise RuntimeError("dynamic WM lease accounting is not conserved")
             if real_total_chunks > 0:
-                parts.append(
-                    f"real_chunks={int(real_done)}/{int(real_total_chunks)}"
-                )
+                parts.append(f"real_chunks={int(real_done)}/{int(real_total_chunks)}")
             parts.extend(
                 [
                     f"wm_chunks={int(wm_done)}/{int(wm_total_chunks)}",
@@ -1530,9 +1928,8 @@ class ManualCotrainRayRunner(BaseRunner):
                 )
             )
             has_real_role = real_total_chunks > 0
-            finished = (
-                int(has_real_role and real_done >= real_total_chunks)
-                + int(wm_done >= wm_total_chunks)
+            finished = int(has_real_role and real_done >= real_total_chunks) + int(
+                wm_done >= wm_total_chunks
             )
             return _ManualCotrainProgressSnapshot(
                 done=done,
@@ -1542,7 +1939,9 @@ class ManualCotrainRayRunner(BaseRunner):
                 finished_count=finished,
             )
 
-        def report_central_progress(*, force: bool = False) -> _ManualCotrainProgressSnapshot | None:
+        def report_central_progress(
+            *, force: bool = False
+        ) -> _ManualCotrainProgressSnapshot | None:
             if progress is None:
                 return None
             snapshot = central_progress_snapshot()
@@ -1621,9 +2020,7 @@ class ManualCotrainRayRunner(BaseRunner):
     ) -> dict[str, float]:
         if started_receivers is not None:
             wait_start = time.perf_counter()
-            metrics = _sum_metric_lists(
-                [result.wait() for result in started_receivers["results"]]
-            )
+            metrics = _sum_metric_lists([result.wait() for result in started_receivers["results"]])
             finished_at = time.perf_counter()
             stage_times["time/manual_cotrain/actor_recv_rollout_trajectories_s"] = float(
                 finished_at - wait_start
@@ -1668,9 +2065,9 @@ class ManualCotrainRayRunner(BaseRunner):
                     metrics["actor/channel_get_batch_s"]
                 )
             if "actor/load_trajectory_shards_s" in metrics:
-                stage_times[
-                    "time/manual_cotrain/actor_load_trajectory_shards_s"
-                ] = float(metrics["actor/load_trajectory_shards_s"])
+                stage_times["time/manual_cotrain/actor_load_trajectory_shards_s"] = float(
+                    metrics["actor/load_trajectory_shards_s"]
+                )
             stage_times["time/manual_cotrain/actor_recv_rollout_trajectories_s"] = float(
                 time.perf_counter() - recv_stage_start
             )
@@ -1821,9 +2218,7 @@ class ManualCotrainRayRunner(BaseRunner):
                 0,
                 int(count),
             )
-        expected_by_key = {
-            key: count for key, count in expected_by_key.items() if count > 0
-        }
+        expected_by_key = {key: count for key, count in expected_by_key.items() if count > 0}
         if not expected_by_key:
             return {}
         qsize = getattr(actor_channel, "qsize", None)
@@ -1853,18 +2248,20 @@ class ManualCotrainRayRunner(BaseRunner):
             time.sleep(max(0.0, float(poll_s)))
 
     def _configured_expected_trajectory_shards(self, groups: dict[str, Any]) -> int:
-        return int(
-            sum(count for _key, count in self._configured_actor_shard_role_counts(groups))
-        )
+        return int(sum(count for _key, count in self._configured_actor_shard_role_counts(groups)))
 
     def _render_backend(self) -> str:
-        return str(
-            OmegaConf.select(
-                self.cfg,
-                "render_backend",
-                default=OmegaConf.select(self.cfg, "env.render_backend", default="osmesa"),
+        return (
+            str(
+                OmegaConf.select(
+                    self.cfg,
+                    "render_backend",
+                    default=OmegaConf.select(self.cfg, "env.render_backend", default="osmesa"),
+                )
             )
-        ).strip().lower()
+            .strip()
+            .lower()
+        )
 
     def _real_render_backend(self) -> str | None:
         value = OmegaConf.select(
@@ -1893,20 +2290,14 @@ class ManualCotrainRayRunner(BaseRunner):
             if parse_device_ids(cfg.get(key)):
                 return
 
-        real_specs = [
-            spec for spec in self._placement_plan().env_specs if spec.role == "real_env"
-        ]
+        real_specs = [spec for spec in self._placement_plan().env_specs if spec.role == "real_env"]
         devices = cuda_visible_devices_from_env()
         if devices:
             limit = max(1, len(real_specs))
             cfg["gpu_pool"] = devices[:limit]
             return
 
-        placement_devices = [
-            int(gpu)
-            for spec in real_specs
-            for gpu in spec.gpu_ids
-        ]
+        placement_devices = [int(gpu) for spec in real_specs for gpu in spec.gpu_ids]
         if not placement_devices:
             raise ValueError(_ZERO_GPU_EGL_ERROR)
         cfg["gpu_pool"] = placement_devices
@@ -2003,15 +2394,12 @@ class ManualCotrainRayRunner(BaseRunner):
             replay_group = groups.get("ReplayGroup")
             if replay_group is None:
                 raise ValueError(
-                    "manual checkpoint contains replay state but active config has no "
-                    "ReplayGroup"
+                    "manual checkpoint contains replay state but active config has no ReplayGroup"
                 )
             if replay_state is not None:
                 replay_group.load_state_dict(dict(replay_state)).wait()
             if replay_sampling_state is not None:
-                replay_group.load_sampling_state_dict(
-                    dict(replay_sampling_state)
-                ).wait()
+                replay_group.load_sampling_state_dict(dict(replay_sampling_state)).wait()
 
         wm_env = groups.get("WMEnvGroup")
         state_dicts = payload.get("state_dicts", {})
@@ -2049,9 +2437,7 @@ class ManualCotrainRayRunner(BaseRunner):
                 if isinstance(state_dicts.get(name), dict)
             }
             if "classifier_threshold" in payload:
-                component_states["classifier_threshold"] = float(
-                    payload["classifier_threshold"]
-                )
+                component_states["classifier_threshold"] = float(payload["classifier_threshold"])
             if component_states:
                 shared_component_states = _share_ray_value(
                     component_states,
@@ -2082,15 +2468,12 @@ class ManualCotrainRayRunner(BaseRunner):
             return None
         if not self._learner_updates_enabled():
             self._assert_frozen_component_hashes(groups)
-        ckpt_dir = (
-            self.get_checkpoint_dir() / f"manual_cotrain_step_{int(global_step)}"
-        )
+        ckpt_dir = self.get_checkpoint_dir() / f"manual_cotrain_step_{int(global_step)}"
         ckpt_dir.mkdir(parents=True, exist_ok=True)
         actor_state = _first_nonempty_mapping(groups["ActorGroup"].state_dict().wait())
-        if not self._learner_updates_enabled():
-            self._policy_final_hash = state_dict_sha256(actor_state)
-            if not self._policy_initial_hash:
-                self._policy_initial_hash = self._policy_final_hash
+        self._policy_final_hash = state_dict_sha256(actor_state)
+        if not self._policy_initial_hash:
+            self._policy_initial_hash = self._policy_final_hash
         learner_group = groups.get("LearnerGroup")
         learner_states: dict[str, Any] = {}
         if learner_group is not None:
@@ -2102,13 +2485,9 @@ class ManualCotrainRayRunner(BaseRunner):
         replay_state = None
         replay_sampling_state = None
         if replay_group is not None:
-            replay_sampling_state = _first_result(
-                replay_group.sampling_state_dict().wait()
-            )
+            replay_sampling_state = _first_result(replay_group.sampling_state_dict().wait())
             if not isinstance(replay_sampling_state, dict):
-                raise TypeError(
-                    "ReplayGroup.sampling_state_dict() must return a mapping"
-                )
+                raise TypeError("ReplayGroup.sampling_state_dict() must return a mapping")
         if replay_group is not None and self._save_replay_state():
             replay_state = replay_group.state_dict().wait()[0]
         ckpt_path = ckpt_dir / "manual_cotrain.ckpt"
@@ -2119,6 +2498,22 @@ class ManualCotrainRayRunner(BaseRunner):
         if not optimizer_state:
             raise RuntimeError("manual cotrain policy checkpoint has no optimizer state")
         state_dicts["policy_optimizer"] = optimizer_state
+        if (
+            OmegaConf.select(
+                self.cfg,
+                "actor.train_cfg.optimizers.encoder",
+                default=None,
+            )
+            is not None
+        ):
+            encoder_optimizer_state = _first_nonempty_mapping(
+                groups["ActorGroup"].encoder_optimizer_state_dict().wait()
+            )
+            if not encoder_optimizer_state:
+                raise RuntimeError(
+                    "manual cotrain policy checkpoint has no encoder optimizer state"
+                )
+            state_dicts["encoder_optimizer"] = encoder_optimizer_state
         if learner_group is not None:
             for name in (
                 "world_model",
@@ -2141,15 +2536,13 @@ class ManualCotrainRayRunner(BaseRunner):
             "state_dicts": state_dicts,
             "replay": replay_state,
             "replay_sampling_state": replay_sampling_state,
+            "policy_initial_hash": str(self._policy_initial_hash),
+            "policy_final_hash": str(self._policy_final_hash),
+            "applied_policy_steps": int(self._applied_policy_steps),
         }
         if not self._learner_updates_enabled():
             payload["frozen_state_hashes"] = dict(self._frozen_state_hashes)
-            payload["source_checkpoints"] = dict(
-                self._frozen_source_checkpoints
-            )
-            payload["policy_initial_hash"] = str(self._policy_initial_hash)
-            payload["policy_final_hash"] = str(self._policy_final_hash)
-            payload["applied_policy_steps"] = int(self._applied_policy_steps)
+            payload["source_checkpoints"] = dict(self._frozen_source_checkpoints)
         if classifier_threshold is not None:
             payload["classifier_threshold"] = classifier_threshold
         torch.save(
@@ -2274,14 +2667,18 @@ class ManualCotrainRayRunner(BaseRunner):
         )
 
     @staticmethod
-    def _placement_for_gpus(gpu_ids: list[int]) -> NodePlacementStrategy | ResourceMapPlacementStrategy:
+    def _placement_for_gpus(
+        gpu_ids: list[int],
+    ) -> NodePlacementStrategy | ResourceMapPlacementStrategy:
         ids = [int(gpu) for gpu in gpu_ids]
         if not ids:
             return NodePlacementStrategy(1)
         return ResourceMapPlacementStrategy(",".join(str(gpu) for gpu in ids))
 
     @staticmethod
-    def _resource_map_for_specs(specs: list[Any]) -> NodePlacementStrategy | ResourceMapPlacementStrategy:
+    def _resource_map_for_specs(
+        specs: list[Any],
+    ) -> NodePlacementStrategy | ResourceMapPlacementStrategy:
         if not specs or not specs[0].gpu_ids:
             return NodePlacementStrategy(max(1, len(specs)))
         segments: list[str] = []
@@ -2306,9 +2703,7 @@ def _format_resource_group(gpu_ids: tuple[int, ...]) -> str:
     if len(gpu_ids) == 1:
         return str(gpu_ids[0])
     if any(right != left + 1 for left, right in zip(gpu_ids, gpu_ids[1:], strict=False)):
-        raise ValueError(
-            f"manual cotrain resource groups must be contiguous, got {list(gpu_ids)}"
-        )
+        raise ValueError(f"manual cotrain resource groups must be contiguous, got {list(gpu_ids)}")
     return f"{gpu_ids[0]}-{gpu_ids[-1]}"
 
 
@@ -2366,9 +2761,7 @@ def _sum_metric_lists(items: list[Any]) -> dict[str, float]:
     for key, values in values_by_key.items():
         if key.endswith("/batch_size_avg"):
             continue
-        if key.endswith("/score_mean") or key.endswith("/score_p50") or key.endswith(
-            "/score_p90"
-        ):
+        if key.endswith("/score_mean") or key.endswith("/score_p50") or key.endswith("/score_p90"):
             continue
         if key.endswith("/classifier_success_rate") or key.endswith(
             "/classifier_trajectory_success_rate"
@@ -2411,11 +2804,7 @@ def _sum_metric_lists(items: list[Any]) -> dict[str, float]:
                 # samples; count-weighted values keep the debug metric bounded.
                 total = float(sum(counts))
                 summed[key] = float(
-                    sum(
-                        value * count
-                        for value, count in zip(values, counts, strict=True)
-                    )
-                    / total
+                    sum(value * count for value, count in zip(values, counts, strict=True)) / total
                 )
             else:
                 summed[key] = float(max(values))
@@ -2430,8 +2819,7 @@ def _derive_classifier_rate_metrics(metrics: dict[str, float]) -> None:
         prefix = key[: -len("classifier_total_chunks")]
         if total_chunks > 0.0:
             metrics[f"{prefix}classifier_success_rate"] = float(
-                metrics.get(f"{prefix}classifier_success_chunks", 0.0)
-                / float(total_chunks)
+                metrics.get(f"{prefix}classifier_success_chunks", 0.0) / float(total_chunks)
             )
     for key, total_trajectories in list(metrics.items()):
         if not key.endswith("/classifier_total_trajectories"):
@@ -2769,26 +3157,21 @@ def _classifier_progress_status_parts(
         return 0
 
     success_chunks = sum(
-        max(0, int(record.get("classifier_success_chunks", 0) or 0))
-        for record in records
+        max(0, int(record.get("classifier_success_chunks", 0) or 0)) for record in records
     ) + metric_counter("classifier_success_chunks")
     total_chunks = sum(
-        max(0, int(record.get("classifier_total_chunks", 0) or 0))
-        for record in records
+        max(0, int(record.get("classifier_total_chunks", 0) or 0)) for record in records
     ) + metric_counter("classifier_total_chunks")
     success_trajectories = sum(
-        max(0, int(record.get("classifier_success_trajectories", 0) or 0))
-        for record in records
+        max(0, int(record.get("classifier_success_trajectories", 0) or 0)) for record in records
     ) + metric_counter("classifier_success_trajectories")
     total_trajectories = sum(
-        max(0, int(record.get("classifier_total_trajectories", 0) or 0))
-        for record in records
+        max(0, int(record.get("classifier_total_trajectories", 0) or 0)) for record in records
     ) + metric_counter("classifier_total_trajectories")
     parts: list[str] = []
     if total_chunks > 0:
         parts.append(
-            "wm_cls_chunk_positive_rate="
-            f"{float(success_chunks) / float(total_chunks):.3f}"
+            f"wm_cls_chunk_positive_rate={float(success_chunks) / float(total_chunks):.3f}"
         )
     if total_trajectories > 0:
         parts.append(
@@ -2816,8 +3199,7 @@ def _wait_env_metrics_with_rollout_guard(
         if ready:
             values = rollout_result.wait_refs(ready)
             raise RuntimeError(
-                "RolloutGroup.generate completed before EnvGroup.interact; "
-                f"ready_result={values!r}"
+                f"RolloutGroup.generate completed before EnvGroup.interact; ready_result={values!r}"
             )
         if timeout_s > 0 and (time.monotonic() - start) > float(timeout_s):
             snapshot = progress.report(force=True) if progress is not None else None
@@ -2848,6 +3230,89 @@ def _first_result(values: Any) -> Any:
     if isinstance(values, list):
         return values[0] if values else None
     return values
+
+
+def _merge_real_trajectory_batches(
+    values: Any,
+    *,
+    global_step: int,
+) -> RealTrajectoryBatch:
+    """Flatten per-worker drain results into one deterministic step-local batch."""
+
+    pending = list(values) if isinstance(values, (list, tuple)) else [values]
+    batches: list[RealTrajectoryBatch] = []
+    while pending:
+        value = pending.pop(0)
+        if isinstance(value, (list, tuple)):
+            pending[0:0] = list(value)
+        elif isinstance(value, RealTrajectoryBatch):
+            batches.append(value)
+        elif value is not None:
+            raise TypeError(
+                "RealEnvGroup.drain_real_trajectories() must return "
+                f"RealTrajectoryBatch values, got {type(value).__name__}"
+            )
+    trajectories = []
+    seen: set[tuple[int, int, int]] = set()
+    for batch in batches:
+        if int(batch.global_step) != int(global_step):
+            raise ValueError(
+                "drained real trajectory batch global_step mismatch: "
+                f"got {batch.global_step}, expected {global_step}"
+            )
+        for trajectory in batch.trajectories:
+            if int(trajectory.global_step) != int(global_step):
+                raise ValueError("drained real trajectory has a stale global_step")
+            key = (
+                int(trajectory.env_rank),
+                int(trajectory.slot_id),
+                int(trajectory.episode_id),
+            )
+            if key in seen:
+                raise ValueError(f"duplicate drained real trajectory identity: {key}")
+            seen.add(key)
+            trajectories.append(trajectory)
+    trajectories.sort(
+        key=lambda item: (int(item.env_rank), int(item.slot_id), int(item.episode_id))
+    )
+    return RealTrajectoryBatch(
+        global_step=int(global_step),
+        trajectories=tuple(trajectories),
+    )
+
+
+def _first_real_trajectory_batch(values: Any) -> RealTrajectoryBatch:
+    pending = list(values) if isinstance(values, (list, tuple)) else [values]
+    batches: list[RealTrajectoryBatch] = []
+    while pending:
+        value = pending.pop(0)
+        if isinstance(value, (list, tuple)):
+            pending[0:0] = list(value)
+        elif isinstance(value, RealTrajectoryBatch):
+            batches.append(value)
+    if not batches:
+        raise TypeError("ActorGroup.reencode_real_trajectories() returned no batch")
+    return max(batches, key=lambda batch: batch.num_trajectories)
+
+
+def _validate_reencoded_batch(
+    batch: RealTrajectoryBatch,
+    *,
+    expected_step: int,
+    expected_trajectories: int,
+) -> None:
+    if int(batch.global_step) != int(expected_step):
+        raise ValueError("re-encoded batch global_step mismatch")
+    if batch.num_trajectories != int(expected_trajectories):
+        raise ValueError("re-encoding changed the real trajectory count")
+    for trajectory in batch.trajectories:
+        for transition in trajectory.transitions:
+            if int(transition.get("encoder_version", -1)) != int(expected_step):
+                raise ValueError(
+                    "every re-encoded transition must carry the current encoder_version"
+                )
+            if "obs_embedding" not in transition or "lang_emb" not in transition:
+                raise ValueError("re-encoded transition is missing WM/CLS sidecars")
 
 
 def _first_nonempty_mapping(values: Any) -> dict[str, Any]:
@@ -2907,15 +3372,9 @@ def _manual_checkpoint_manifest(
     run: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     policy_version = int(metrics.get("sync/policy_version", global_step))
-    rollout_policy_version = int(
-        metrics.get("sync/rollout_policy_version", policy_version)
-    )
-    world_model_version = int(
-        metrics.get("sync/world_model_version", global_step)
-    )
-    classifier_version = int(
-        metrics.get("sync/classifier_version", global_step)
-    )
+    rollout_policy_version = int(metrics.get("sync/rollout_policy_version", policy_version))
+    world_model_version = int(metrics.get("sync/world_model_version", global_step))
+    classifier_version = int(metrics.get("sync/classifier_version", global_step))
     versions = {
         "global_step": int(global_step),
         "policy_version": policy_version,
@@ -2985,15 +3444,11 @@ def _load_manual_resume_payload(
         return None
     if "global_step" not in payload:
         if required:
-            raise ValueError(
-                "manual cotrain resume checkpoint must include global_step"
-            )
+            raise ValueError("manual cotrain resume checkpoint must include global_step")
         return None
     if "state_dicts" not in payload:
         if required:
-            raise ValueError(
-                "manual cotrain resume checkpoint must include state_dicts"
-            )
+            raise ValueError("manual cotrain resume checkpoint must include state_dicts")
         return None
     return payload
 
@@ -3012,13 +3467,10 @@ def _load_runner_state_dicts(
         raise RuntimeError(f"{path} has no runner-format state_dicts mapping")
     names = list(state_dicts) if components is None else list(components)
     missing = [name for name in names if name not in state_dicts]
-    missing_required = [
-        name for name in missing if not str(name).endswith("_optimizer")
-    ]
+    missing_required = [name for name in missing if not str(name).endswith("_optimizer")]
     if missing_required:
         raise RuntimeError(
-            f"{path} missing state_dicts for requested component(s): "
-            f"{missing_required}"
+            f"{path} missing state_dicts for requested component(s): {missing_required}"
         )
     loaded = {name: state_dicts[name] for name in names if name in state_dicts}
     if (

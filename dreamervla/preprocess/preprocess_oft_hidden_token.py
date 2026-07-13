@@ -18,8 +18,6 @@ from PIL import Image
 
 from dreamervla.preprocess.artifact_utils import plan_hdf5_preprocess_tasks
 from dreamervla.preprocess.sidecar_schema import (
-    HIDDEN_TOKEN_COUNT,
-    HIDDEN_TOKEN_DIM,
     SIDECAR_SCHEMA_VERSION,
     required_demo_datasets,
     validate_hidden_token_preprocess_config,
@@ -217,6 +215,7 @@ def _load_oft_components(args: SimpleNamespace, device: torch.device) -> dict[st
 
     if bool(args.fake_oft_components):
         vla = SimpleNamespace(
+            token_dim=int(args.token_dim),
             vision_backbone=_FakeVisionBackbone(
                 num_patches=int(args.fake_num_patches),
                 num_images_in_input=_resolve_num_images_in_input(args),
@@ -292,12 +291,36 @@ def _hidden_token_sidecar_dims(
             "OpenVLA-OFT hidden-token mainline requires one agentview image, "
             f"got {keys!r}"
         )
-    if per_image_patches != HIDDEN_TOKEN_COUNT or int(token_dim) != HIDDEN_TOKEN_DIM:
+    resolved_token_dim = _loaded_token_dim(vla)
+    if per_image_patches <= 0 or int(token_dim) <= 0:
         raise ValueError(
-            "OpenVLA-OFT hidden-token sidecars require 256 patches with token_dim=4096, "
+            "OpenVLA-OFT hidden-token geometry must be positive, "
             f"got patches={per_image_patches}, token_dim={int(token_dim)}"
         )
-    return HIDDEN_TOKEN_COUNT, HIDDEN_TOKEN_COUNT * HIDDEN_TOKEN_DIM
+    if int(token_dim) != resolved_token_dim:
+        raise ValueError(
+            "OpenVLA-OFT token_dim metadata does not match the loaded backbone: "
+            f"config={int(token_dim)}, loaded={resolved_token_dim}"
+        )
+    return per_image_patches, per_image_patches * resolved_token_dim
+
+
+def _loaded_token_dim(vla: Any) -> int:
+    for path in (
+        ("token_dim",),
+        ("hidden_size",),
+        ("config", "hidden_size"),
+        ("language_model", "config", "hidden_size"),
+        ("llm_backbone", "llm", "config", "hidden_size"),
+    ):
+        value = vla
+        for attribute in path:
+            value = getattr(value, attribute, None)
+            if value is None:
+                break
+        if value is not None:
+            return int(value)
+    raise ValueError("could not derive token_dim from loaded OpenVLA-OFT policy")
 
 
 def _predict_hidden_token_chunk(
@@ -630,14 +653,8 @@ def main() -> None:
             "OpenVLA-OFT preprocessing requires history=1 and "
             "num_images_in_input=1"
         )
-    if int(args.patches_per_image) != HIDDEN_TOKEN_COUNT:
-        raise SystemExit(
-            f"OpenVLA-OFT preprocessing requires patches_per_image={HIDDEN_TOKEN_COUNT}"
-        )
-    if int(args.token_dim) != HIDDEN_TOKEN_DIM:
-        raise SystemExit(
-            f"OpenVLA-OFT preprocessing requires token_dim={HIDDEN_TOKEN_DIM}"
-        )
+    if int(args.patches_per_image) <= 0 or int(args.token_dim) <= 0:
+        raise SystemExit("OpenVLA-OFT patches_per_image and token_dim must be positive")
 
     hdf5_dir = _project_path(args.hdf5_dir)
     out_hidden_token_dir = _project_path(args.out_hidden_token_dir)
@@ -697,6 +714,12 @@ def main() -> None:
         raise ValueError(
             "OpenVLA-OFT patches_per_image mismatch: "
             f"model={actual_patches}, config={int(args.patches_per_image)}"
+        )
+    actual_token_dim = _loaded_token_dim(components["vla"])
+    if actual_token_dim != int(args.token_dim):
+        raise ValueError(
+            "OpenVLA-OFT token_dim mismatch: "
+            f"model={actual_token_dim}, config={int(args.token_dim)}"
         )
     total_demos = 0
     total_frames = 0

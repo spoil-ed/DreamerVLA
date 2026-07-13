@@ -19,7 +19,7 @@ Schema (reward HDF5, per demo at data/demo_<i>/):
     data group attrs: env meta
 
     Sidecar (same filename, separate dir):
-        data/demo_<i>/obs_embedding  (T, 256, 4096) hidden_token float16
+        data/demo_<i>/obs_embedding  (T, N, D) hidden_token float16
         data/demo_<i>/lang_emb       (D_lang,) optional demo-level float16
 
 preprocess_config.json is written once to hidden_dir/preprocess_config.json.
@@ -161,15 +161,25 @@ class RolloutDumpWriter:
         )  # (T, S)
         obs_embedding = np.stack(
             [np.asarray(s["obs_embedding"], dtype=np.float16) for s in steps], axis=0
-        )  # (T, 256, 4096)
+        )  # (T, token_count, token_dim)
         if obs_embedding.ndim != 3:
             raise ValueError(
-                "rollout obs_embedding must be tokenized [T,256,4096], "
+                "rollout obs_embedding must be tokenized [T,N,D], "
                 f"got {obs_embedding.shape}"
             )
         validate_hidden_token_array_shape(
             obs_embedding.shape,
             context="rollout obs_embedding",
+            token_count=(
+                int(preprocess_config["token_count"])
+                if preprocess_config is not None
+                else None
+            ),
+            token_dim=(
+                int(preprocess_config["token_dim"])
+                if preprocess_config is not None
+                else None
+            ),
         )
         lang_emb = None
         if steps[0].get("lang_emb") is not None:

@@ -29,11 +29,11 @@ def test_oft_collect_policy_device_accepts_cpu_sentinel() -> None:
     assert _policy_device_from_id("cuda:2") == torch.device("cuda:2")
 
 
-def test_vla_hidden_token_spec_accepts_only_canonical_policy() -> None:
+def test_vla_hidden_token_spec_derives_loaded_policy_geometry() -> None:
     from dreamervla.runners.oft_collect_common import vla_hidden_token_spec
 
     class _VisionBackbone:
-        per_image = 256
+        per_image = 128
         views = 1
 
         def get_num_patches(self) -> int:
@@ -44,7 +44,7 @@ def test_vla_hidden_token_spec_accepts_only_canonical_policy() -> None:
 
     class _VLA:
         vision_backbone = _VisionBackbone()
-        token_dim = 4096
+        token_dim = 1024
 
     spec = vla_hidden_token_spec(_VLA(), ["agentview_rgb"])
     assert spec["per_image"] == _VisionBackbone.per_image

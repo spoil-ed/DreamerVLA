@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 import torch
@@ -820,6 +819,49 @@ class ChunkAwareWorldModel(WorldModel):
             out["proprio"] = cur["proprio"]
             out["proprio_seq"] = torch.stack(proprio_preds, dim=1)
         return out
+
+    def initial_imagination_state(
+        self,
+        hidden: torch.Tensor,
+        *,
+        lang_emb: torch.Tensor | None = None,
+        proprio: torch.Tensor | None = None,
+    ) -> dict[str, torch.Tensor]:
+        """Build the canonical rolling state used by chunked WM inference."""
+
+        visual = self._obs_tokens_from_obs(hidden)
+        if visual.shape[1] >= self.num_hist:
+            history = visual[:, -self.num_hist :]
+        else:
+            pad = visual[:, :1].expand(
+                -1, self.num_hist - visual.shape[1], -1, -1
+            )
+            history = torch.cat([pad, visual], dim=1)
+        if proprio is not None and self.proprio_condition_dim > 0:
+            history = self._observation_tokens(
+                history,
+                self._proprio_for_steps(proprio, self.num_hist),
+            )
+        state = {
+            "hidden": history[:, -1],
+            "history": history,
+            "actions": torch.zeros(
+                history.shape[0],
+                self.num_hist,
+                self.action_dim,
+                device=history.device,
+                dtype=history.dtype,
+            ),
+        }
+        if lang_emb is not None:
+            state["lang"] = lang_emb.to(
+                device=history.device, dtype=history.dtype
+            )
+        if proprio is not None:
+            state["proprio"] = proprio.to(
+                device=history.device, dtype=history.dtype
+            )
+        return state
 
     # ------------------------------------------------------------------ #
     # Chunk-objective training loss                                      #

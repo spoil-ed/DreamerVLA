@@ -113,6 +113,35 @@ class TrajectoryBatch:
 
 
 @dataclass(frozen=True)
+class RealTrajectory:
+    """One completed step-local real episode retained for staged cotrain."""
+
+    env_rank: int
+    slot_id: int
+    task_id: int
+    episode_id: int
+    global_step: int
+    success: bool
+    transitions: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class RealTrajectoryBatch:
+    """Exactly-once drain result for one real-collection global step."""
+
+    global_step: int
+    trajectories: tuple[RealTrajectory, ...]
+
+    @property
+    def num_trajectories(self) -> int:
+        return len(self.trajectories)
+
+    @property
+    def num_successes(self) -> int:
+        return sum(int(trajectory.success) for trajectory in self.trajectories)
+
+
+@dataclass(frozen=True)
 class StopMsg:
     """Control message used to stop cotrain worker loops."""
 

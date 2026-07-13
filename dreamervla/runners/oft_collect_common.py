@@ -13,10 +13,6 @@ import torch
 from omegaconf import OmegaConf
 
 from dreamervla.preprocess.sidecar_schema import (
-    HIDDEN_TOKEN_COUNT,
-    HIDDEN_TOKEN_DIM,
-    HIDDEN_TOKEN_HIDDEN_DIM,
-    HIDDEN_TOKEN_SHAPE,
     SIDECAR_SCHEMA_VERSION,
     required_demo_datasets,
     validate_hidden_token_preprocess_config,
@@ -151,7 +147,7 @@ def _resolve_token_dim(vla: Any) -> int:
 
 
 def vla_hidden_token_spec(vla: Any, image_keys: list[str]) -> dict[str, int]:
-    """Validate the loaded VLA against the exact hidden-token contract."""
+    """Derive hidden-token geometry from the loaded VLA input backbone."""
 
     token_dim = _resolve_token_dim(vla)
     patches_per_image = int(vla.vision_backbone.get_num_patches())
@@ -162,24 +158,26 @@ def vla_hidden_token_spec(vla: Any, image_keys: list[str]) -> dict[str, int]:
             "OpenVLA-OFT hidden-token mainline requires image_keys=['agentview_rgb'], "
             f"got {keys!r}"
         )
-    if (
-        patches_per_image != HIDDEN_TOKEN_COUNT
-        or token_dim != HIDDEN_TOKEN_DIM
-        or num_images_in_input != 1
-    ):
+    if patches_per_image <= 0 or token_dim <= 0 or num_images_in_input <= 0:
         raise ValueError(
-            "loaded VLA does not satisfy hidden-token contract: "
+            "loaded VLA exposes non-positive hidden-token geometry: "
             f"patches={patches_per_image}, token_dim={token_dim}, "
             f"num_images_in_input={num_images_in_input}"
         )
+    if num_images_in_input != len(keys):
+        raise ValueError(
+            "loaded VLA image count does not match collection image_keys: "
+            f"num_images_in_input={num_images_in_input}, image_keys={keys!r}"
+        )
+    token_count = patches_per_image * num_images_in_input
     return {
-        "per_image": HIDDEN_TOKEN_COUNT,
-        "patches_per_image": HIDDEN_TOKEN_COUNT,
-        "views": 1,
-        "num_images_in_input": 1,
-        "token_dim": HIDDEN_TOKEN_DIM,
-        "token_count": HIDDEN_TOKEN_COUNT,
-        "flat_dim": HIDDEN_TOKEN_HIDDEN_DIM,
+        "per_image": patches_per_image,
+        "patches_per_image": patches_per_image,
+        "views": num_images_in_input,
+        "num_images_in_input": num_images_in_input,
+        "token_dim": token_dim,
+        "token_count": token_count,
+        "flat_dim": token_count * token_dim,
     }
 
 
@@ -309,14 +307,23 @@ def make_preprocess_config(cfg: dict[str, Any]) -> dict[str, Any]:
     config["hidden_storage_format"] = "tokenized"
     config["sidecar_schema_version"] = SIDECAR_SCHEMA_VERSION
     config["required_demo_datasets"] = required_demo_datasets()
-    if token_count != HIDDEN_TOKEN_COUNT or int(cfg["token_dim"]) != HIDDEN_TOKEN_DIM:
+    token_dim = int(cfg["token_dim"])
+    num_images = int(cfg["num_images_in_input"])
+    if token_count <= 0 or token_dim <= 0 or patches_per_image <= 0 or num_images <= 0:
         raise ValueError(
-            "OpenVLA-OFT collection requires hidden_token shape "
-            f"{HIDDEN_TOKEN_SHAPE}; got ({token_count}, {int(cfg['token_dim'])})"
+            "OpenVLA-OFT collection token geometry must be positive: "
+            f"token_count={token_count}, token_dim={token_dim}, "
+            f"patches_per_image={patches_per_image}, num_images_in_input={num_images}"
         )
-    if hidden_dim != HIDDEN_TOKEN_HIDDEN_DIM:
+    if token_count != patches_per_image * num_images:
         raise ValueError(
-            f"hidden_dim must be {HIDDEN_TOKEN_HIDDEN_DIM}, got {hidden_dim}"
+            "token_count must equal patches_per_image * num_images_in_input: "
+            f"{token_count} != {patches_per_image} * {num_images}"
+        )
+    if hidden_dim != token_count * token_dim:
+        raise ValueError(
+            f"hidden_dim must be token_count * token_dim ({token_count * token_dim}), "
+            f"got {hidden_dim}"
         )
     validate_hidden_token_preprocess_config(
         config,

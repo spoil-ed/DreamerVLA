@@ -265,11 +265,40 @@ def test_validate_cfg_rejects_removed_oft_component_fields_even_when_null(
         validate_cfg(cfg)
 
 
-def test_validate_cfg_rejects_noncanonical_oft_hidden_token_patch_count() -> None:
-    cfg = _compose_mainline()
+def test_validate_cfg_accepts_dynamic_oft_hidden_geometry_from_task_metadata() -> None:
+    composed = _compose_mainline()
+    task = OmegaConf.create(
+        {
+            "task": {
+                "openvla_oft": OmegaConf.to_container(
+                    composed.task.openvla_oft, resolve=True
+                )
+            }
+        }
+    )
+    hidden = task.task.openvla_oft.hidden_token
+    hidden.patches_per_image = 128
+    hidden.token_count = 128
+    hidden.token_dim = 1024
+    hidden.wm_obs_dim = 128 * 1024
+
+    validate_cfg(task)
+
+
+def test_validate_cfg_rejects_inconsistent_oft_hidden_geometry() -> None:
+    composed = _compose_mainline()
+    cfg = OmegaConf.create(
+        {
+            "task": {
+                "openvla_oft": OmegaConf.to_container(
+                    composed.task.openvla_oft, resolve=True
+                )
+            }
+        }
+    )
     cfg.task.openvla_oft.hidden_token.patches_per_image = 128
 
-    with pytest.raises(ValueError, match="patches_per_image must be 256"):
+    with pytest.raises(ValueError, match="token_count must equal"):
         validate_cfg(cfg)
 
 

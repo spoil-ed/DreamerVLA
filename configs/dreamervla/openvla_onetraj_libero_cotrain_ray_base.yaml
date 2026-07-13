@@ -2,9 +2,8 @@
 # Single-node Ray async online cotrain route for OpenVLA-OFT hidden tokens.
 #
 # This is the WM-style OpenVLA-OFT hidden-token route: the WM consumes
-# current-frame projected vision patch tokens from
-# task.openvla_oft.hidden_token, and the actor bridges those predicted latents
-# back to discrete OpenVLA action-token slots.
+# current-frame projected vision patch tokens from task.openvla_oft.hidden_token,
+# while the actor remains the original OpenVLA multimodal LM/action decoder.
 defaults:
   - _self_
 
@@ -50,9 +49,9 @@ task_conditioning:
   num_tasks: 10
   embedding_dim: 64
 
-# OFT query-before structural components. These shapes do not match the old
-# hidden-token warmup checkpoints; keep init.warmup_ckpt_path explicit/null unless
-# the checkpoint was trained with this route.
+# Native OpenVLA-OFT components. The policy preserves the checkpoint path
+# raw input -> projected visual tokens -> original LM/action-token decoder; no
+# replacement Transformer bridge or learned action-query bank is constructed.
 ray_components:
   world_model:
     target: ${task.openvla_oft.wm_target}
@@ -98,27 +97,26 @@ ray_components:
       freeze_backbone: true
       task_conditioning: ${task_conditioning}
   policy:
-    target: dreamervla.algorithms.actor.LatentToOpenVLAHiddenStateActor
+    target: dreamervla.models.embodiment.OpenVLAOFTPolicy
     kwargs:
-      hidden_dim: null
-      source_token_count: ${task.openvla_oft.hidden_token.token_count}
-      source_token_dim: ${task.openvla_oft.hidden_token.token_dim}
-      hidden_state_dim: ${task.openvla_oft.hidden_token.hidden_state_dim}
+      model_path: ${task.openvla_oft.ckpt_path}
+      torch_dtype: bf16
+      num_images_in_input: ${task.openvla_oft.num_images_in_input}
+      token_count: ${task.openvla_oft.hidden_token.token_count}
+      token_dim: ${task.openvla_oft.hidden_token.token_dim}
+      use_lora: false
+      use_l1_regression: false
+      use_diffusion: false
+      use_proprio: ${task.openvla_oft.use_proprio}
+      use_film: false
+      freeze_vla_backbone: false
+      unnorm_key: ${task.openvla_oft.dataset_statistics_key}
       action_dim: ${task.action_dim}
       time_horizon: ${task.openvla_oft.hidden_token.chunk_size}
-      head_type: oft_discrete_token
-      adapter_type: ${task.openvla_oft.actor_adapter_type}
-      adapter_hidden_dim: ${task.openvla_oft.actor_adapter_hidden_dim}
-      freeze_lm_head: ${task.openvla_oft.actor_freeze_lm_head}
-      init_lm_head_ckpt: ${task.openvla_oft.ckpt_path}
-      vocab_size: ${task.openvla_oft.vocab_size}
-      action_token_bins: ${task.openvla_oft.action_token_bins}
-      min_action: ${task.openvla_oft.min_action}
-      max_action: ${task.openvla_oft.max_action}
-      bridge_hidden_dim: 1024
-      num_bridge_layers: 2
-      num_bridge_heads: 8
-      bridge_dropout: 0.1
+      image_keys: ${task.image_keys}
+      history: ${task.openvla_oft.hidden_token.expected_history}
+      rotate_images_180: ${task.openvla_oft.hidden_token.expected_rotate_images_180}
+      center_crop: true
   classifier:
     target: dreamervla.algorithms.critic.latent_success_classifier.LatentSuccessClassifier
     kwargs:

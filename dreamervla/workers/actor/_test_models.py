@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import ray
 import torch
+import torch.nn.functional as F
 from torch import nn
 
 
@@ -75,6 +76,58 @@ class TinyLumosPolicy(nn.Module):
             entropy = torch.ones_like(log_prob) * 0.5
             return log_prob, entropy, {}
         raise ValueError(f"unknown TinyLumosPolicy mode {mode!r}")
+
+
+class TinyStagedVLAPolicy(nn.Module):
+    """Tiny raw-encoder/native-actor policy for staged cotrain unit tests."""
+
+    def __init__(self, num_bins: int = 3) -> None:
+        super().__init__()
+        self.encoder = nn.Linear(1, 2, bias=False)
+        self.actor = nn.Linear(2, int(num_bins), bias=False)
+        nn.init.constant_(self.encoder.weight, 0.25)
+        nn.init.constant_(self.actor.weight, 0.1)
+
+    def encoder_parameter_names(self) -> tuple[str, ...]:
+        return tuple(
+            name for name, _ in self.named_parameters() if name.startswith("encoder.")
+        )
+
+    def prepare_raw_batch(self, transitions: list[dict]) -> dict[str, torch.Tensor]:
+        values = [float(torch.as_tensor(item["image"]).float().mean()) for item in transitions]
+        return {
+            "pixel_values": torch.tensor(values, dtype=torch.float32).reshape(-1, 1),
+            "input_ids": torch.ones(len(values), 1, dtype=torch.long),
+            "attention_mask": torch.ones(len(values), 1, dtype=torch.long),
+        }
+
+    def forward(self, batch):  # type: ignore[override]
+        mode = str(batch.get("mode", "sample"))
+        if mode in {"encoder_sft", "encode_raw"}:
+            hidden = self.encoder(batch["pixel_values"].float())
+            extras = {
+                "hidden": hidden.unsqueeze(1),
+                "lang_emb": torch.zeros(hidden.shape[0], 1, device=hidden.device),
+            }
+            if mode == "encode_raw":
+                return hidden.unsqueeze(1), torch.zeros((), device=hidden.device), extras
+            logits = self.actor(hidden).unsqueeze(1)
+            labels = batch["action_token_ids"].long().reshape(hidden.shape[0], -1)
+            if int(labels.shape[1]) != 1:
+                raise ValueError("TinyStagedVLAPolicy expects one action token")
+            loss = F.cross_entropy(logits.reshape(-1, logits.shape[-1]), labels.reshape(-1))
+            extras["action_label_logprobs"] = torch.log_softmax(
+                logits,
+                dim=-1,
+            ).gather(-1, labels.unsqueeze(-1)).squeeze(-1)
+            extras["action_logits"] = logits
+            return loss, torch.zeros((), device=hidden.device), extras
+        hidden = batch["hidden"].float()
+        if hidden.ndim == 3:
+            hidden = hidden[:, 0]
+        logits = self.actor(hidden)
+        logprob = torch.log_softmax(logits, dim=-1)[:, 0]
+        return logprob, torch.zeros_like(logprob), {}
 
 
 class CountingTinyLumosPolicy(TinyLumosPolicy):

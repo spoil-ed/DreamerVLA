@@ -82,6 +82,8 @@ def run_rlinf_chunk_eval(
     num_epochs: int,
     total_episodes: int,
     on_epoch_start: Callable[[], None] | None = None,
+    on_reset: Callable[..., None] | None = None,
+    on_chunk: Callable[..., None] | None = None,
 ) -> ChunkEvalTally:
     tally = ChunkEvalTally()
     for _epoch in range(int(num_epochs)):
@@ -92,10 +94,13 @@ def run_rlinf_chunk_eval(
         env.is_start = True
         prev_done = np.zeros(env.num_envs, dtype=bool)
         obs, _infos = env.reset()
+        if on_reset is not None:
+            on_reset(env=env, obs=obs, infos=_infos, epoch=int(_epoch))
         for _chunk in range(int(n_chunk_steps)):
+            obs_before = obs
             chunk_actions = policy_fn(obs)
             tally.record_chunk_step(chunk_actions)
-            obs_list, _rewards, terms, truncs, infos_list = env.chunk_step(
+            obs_list, rewards, terms, truncs, infos_list = env.chunk_step(
                 chunk_actions
             )
             obs = obs_list[-1]
@@ -106,6 +111,7 @@ def run_rlinf_chunk_eval(
             else:
                 newly_done = current_dones & ~prev_done
                 prev_done = prev_done | current_dones
+            episode_info = None
             if newly_done.any():
                 episode_info = (
                     infos["final_info"]["episode"]
@@ -113,6 +119,21 @@ def run_rlinf_chunk_eval(
                     else infos["episode"]
                 )
                 tally.add(episode_info, newly_done)
+            if on_chunk is not None:
+                on_chunk(
+                    env=env,
+                    obs_before=obs_before,
+                    chunk_actions=chunk_actions,
+                    obs_list=obs_list,
+                    rewards=rewards,
+                    terms=terms,
+                    truncs=truncs,
+                    infos_list=infos_list,
+                    newly_done=newly_done,
+                    episode_info=episode_info,
+                    epoch=int(_epoch),
+                    chunk_index=int(_chunk),
+                )
             if not env.auto_reset and prev_done.all():
                 break
             if tally.num_episodes >= total_episodes:

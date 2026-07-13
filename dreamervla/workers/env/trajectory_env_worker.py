@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import copy
 import importlib
 import json
 import multiprocessing as mp
 import os
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,8 @@ from dreamervla.workers.cotrain.handshake_trace import trace as _hs_trace
 from dreamervla.workers.cotrain.messages import (
     ObservationBatchMsg,
     ObservationMsg,
+    RealTrajectory,
+    RealTrajectoryBatch,
     RolloutResultBatchMsg,
     RolloutResultMsg,
     TrajectoryShard,
@@ -790,9 +793,39 @@ def _transition_sidecars_from_rollout(result: RolloutResultMsg) -> dict[str, Any
         sidecars["obs_embedding"] = _transition_value(forward_inputs["hidden"])
     if "lang_emb" in forward_inputs:
         sidecars["lang_emb"] = _transition_value(forward_inputs["lang_emb"])
+    if "action_token_ids" in forward_inputs:
+        sidecars["action_token_ids_chunk"] = _transition_value(
+            forward_inputs["action_token_ids"]
+        )
+    for key in ("input_ids", "attention_mask"):
+        if key in forward_inputs:
+            sidecars[key] = _transition_value(forward_inputs[key])
     for name, value in dict(result.versions).items():
         sidecars[_version_sidecar_key(str(name))] = _transition_version(value)
     return sidecars
+
+
+def _transition_sidecars_for_action(
+    sidecars: Mapping[str, Any],
+    action_index: int,
+) -> dict[str, Any]:
+    """Return decision conditioning only on the first action in a chunk.
+
+    One policy call emits an action chunk.  Its prompt, projected visual token,
+    and token labels therefore describe one decision rather than every physical
+    environment step in that chunk.  Version sidecars still belong on every
+    physical transition so downstream provenance remains complete.
+    """
+
+    if int(action_index) == 0:
+        return {**dict(sidecars), "policy_decision": True}
+    return {
+        key: value
+        for key, value in dict(sidecars).items()
+        if key == "global_step"
+        or key == "policy_version"
+        or str(key).endswith("_version")
+    } | {"policy_decision": False}
 
 
 def _merge_transition_sidecars(
@@ -806,6 +839,12 @@ def _merge_transition_sidecars(
             transition.setdefault(key, np.asarray(value, dtype=np.float32))
         elif key == "proprio":
             transition.setdefault(key, np.asarray(value, dtype=np.float32).reshape(-1))
+        elif key in {"agentview_rgb", "eye_in_hand_rgb", "third_image", "wrist_image"}:
+            transition.setdefault(key, np.asarray(value, dtype=np.uint8))
+        elif key in {"action_token_ids_chunk", "input_ids", "attention_mask"}:
+            transition.setdefault(key, np.asarray(value))
+        elif key == "policy_decision":
+            transition.setdefault(key, bool(value))
         elif key == "global_step" or key == "policy_version" or key.endswith("_version"):
             transition.setdefault(key, int(value))
     if "proprio" not in transition:
@@ -876,11 +915,12 @@ def _make_env_transition(
     info: dict[str, Any],
 ) -> dict[str, Any]:
     if hasattr(env, "make_transition"):
-        transition = env.make_transition(
+        transition = dict(env.make_transition(
             obs, action, reward, terminated, truncated, info
-        )
-        return _merge_transition_sidecars(dict(transition), obs)
-    return _merge_transition_sidecars({
+        ))
+        transition.setdefault("success", bool(info.get("success", False)))
+        return _merge_transition_sidecars(transition, obs)
+    transition = _merge_transition_sidecars({
         "obs": dict(obs),
         "next_obs": dict(next_obs),
         "action": np.asarray(action, dtype=np.float32),
@@ -890,6 +930,8 @@ def _make_env_transition(
         "is_last": bool(terminated or truncated),
         "info": dict(info or {}),
     }, obs)
+    transition.setdefault("success", bool(info.get("success", False)))
+    return transition
 
 
 def _wm_classifier_step_success(
@@ -991,6 +1033,7 @@ class BaseTrajectoryEnvWorker(Worker):
         max_steps_per_rollout_epoch: int,
         num_action_chunks: int,
         task_id: int = 0,
+        task_ids: Sequence[int] | None = None,
         replay: Any | None = None,
         dump: Any | None = None,
         rank_offset: int = 0,
@@ -1008,6 +1051,16 @@ class BaseTrajectoryEnvWorker(Worker):
         self.max_steps_per_rollout_epoch = int(max_steps_per_rollout_epoch)
         self.num_action_chunks = int(num_action_chunks)
         self.task_id = int(task_id)
+        if task_ids is None:
+            self._task_cycle = (self.task_id,)
+        else:
+            self._task_cycle = tuple(int(value) for value in task_ids)
+            if not self._task_cycle:
+                raise ValueError("task_ids must contain at least one task")
+            if any(value < 0 for value in self._task_cycle):
+                raise ValueError("task_ids must be non-negative")
+            if len(set(self._task_cycle)) != len(self._task_cycle):
+                raise ValueError("task_ids must not contain duplicates")
         self.replay = replay
         self.dump = dump
         self.rank_offset = int(rank_offset)
@@ -1030,12 +1083,14 @@ class BaseTrajectoryEnvWorker(Worker):
         self._episodes_by_slot: list[list[dict[str, Any]]] = [
             [] for _ in range(self.num_slots)
         ]
+        self._completed_real_trajectories: dict[int, list[RealTrajectory]] = {}
         self._actor_shards_by_slot: list[list[TrajectoryShard | _TrajectoryChunk]] = [
             [] for _ in range(self.num_slots)
         ]
         self._episode_ids_by_slot: list[int] = [0 for _ in range(self.num_slots)]
         self._task_ids_by_slot: list[int] = [
-            self.task_id for _ in range(self.num_slots)
+            self._scheduled_task_id(slot_id, episode_id=0)
+            for slot_id in range(self.num_slots)
         ]
         self._model_versions: dict[str, int] = {}
         self.global_step = 0
@@ -1063,6 +1118,87 @@ class BaseTrajectoryEnvWorker(Worker):
         """Set runner-visible progress metadata for observations and replay."""
 
         self.global_step = int(global_step)
+
+    def begin_step_local_real_collection(
+        self,
+        global_step: int | None = None,
+    ) -> dict[str, float]:
+        """Reset real slots at a policy-step boundary and discard partial data.
+
+        A real trajectory may only contain decisions from one step-entry policy.
+        This barrier runs after ``set_global_step`` and before RolloutGroup sees
+        the corresponding ``pi_old``.  It deliberately does not flush partial
+        episodes into the training batch: those transitions were generated by
+        the previous policy snapshot and are therefore unusable after the
+        encoder or actor changes.
+        """
+
+        if self.role != "real_env":
+            raise RuntimeError(
+                "step-local collection reset is only defined for RealEnvWorker"
+            )
+        self._ensure_initialized()
+        step = self.global_step if global_step is None else int(global_step)
+        if step != int(self.global_step):
+            raise ValueError(
+                "step-local collection reset must match the worker global step: "
+                f"{step} != {int(self.global_step)}"
+            )
+        if self._pending_step:
+            raise RuntimeError(
+                "cannot reset real collection while spawned env steps are pending"
+            )
+        if any(self._completed_real_trajectories.values()):
+            raise RuntimeError(
+                "completed real trajectories must be drained before starting "
+                "the next policy step"
+            )
+
+        discarded_transitions = sum(
+            len(episode) for episode in self._episodes_by_slot
+        )
+        discarded_episodes = sum(bool(episode) for episode in self._episodes_by_slot)
+        discarded_actor_chunks = sum(
+            len(chunks) for chunks in self._actor_shards_by_slot
+        )
+        for slot_id, episode in enumerate(self._episodes_by_slot):
+            if episode:
+                self._episode_ids_by_slot[slot_id] += 1
+        self._episodes_by_slot = [[] for _ in range(self.num_slots)]
+        self._actor_shards_by_slot = [[] for _ in range(self.num_slots)]
+
+        # Cache this reset as interact()'s bootstrap so it cannot reset a second
+        # time between the boundary and the first policy observation.
+        self._prefetched_bootstrap = None
+        self._prefetched_bootstrap = self.bootstrap_obs()
+        return {
+            "env/real_env/step_local_reset_slots": float(self.num_slots),
+            "env/real_env/discarded_partial_episodes": float(discarded_episodes),
+            "env/real_env/discarded_partial_transitions": float(
+                discarded_transitions
+            ),
+            "env/real_env/discarded_actor_chunks": float(discarded_actor_chunks),
+        }
+
+    def _scheduled_task_id(
+        self,
+        slot_id: int,
+        *,
+        episode_id: int | None = None,
+    ) -> int:
+        """Assign real trajectories round-robin over the selected task suite."""
+
+        slot = int(slot_id)
+        if not 0 <= slot < self.num_slots:
+            raise ValueError(f"slot_id {slot} is out of range")
+        episode = (
+            int(self._episode_ids_by_slot[slot])
+            if episode_id is None
+            else int(episode_id)
+        )
+        global_slots = max(1, int(self.world_size)) * int(self.num_slots)
+        index = int(self.rank) * int(self.num_slots) + slot + episode * global_slots
+        return int(self._task_cycle[index % len(self._task_cycle)])
 
     def configure_progress(
         self,
@@ -1100,6 +1236,16 @@ class BaseTrajectoryEnvWorker(Worker):
             "env/rollout_epoch": float(value),
             f"env/{self.role}/rollout_epoch": float(value),
         }
+
+    def drain_real_trajectories(
+        self,
+        global_step: int | None = None,
+    ) -> RealTrajectoryBatch:
+        """Drain completed real episodes once without exposing prior-step data."""
+
+        step = self.global_step if global_step is None else int(global_step)
+        trajectories = tuple(self._completed_real_trajectories.pop(step, []))
+        return RealTrajectoryBatch(global_step=step, trajectories=trajectories)
 
     def init(self) -> None:
         """Build all local env slots."""
@@ -1196,6 +1342,11 @@ class BaseTrajectoryEnvWorker(Worker):
             env = self.envs[0]
             reset_batch = getattr(env, "reset_batch", None)
             if callable(reset_batch):
+                if self.role == "real_env":
+                    self._task_ids_by_slot = [
+                        self._scheduled_task_id(slot_id)
+                        for slot_id in range(self.num_slots)
+                    ]
                 task_ids = [int(value) for value in self._task_ids_by_slot]
                 episode_ids = [int(value) for value in self._episode_ids_by_slot]
                 output = reset_batch(task_ids, episode_ids)
@@ -1257,7 +1408,10 @@ class BaseTrajectoryEnvWorker(Worker):
             _, reward, done, info = self._step_slot(
                 slot_id,
                 action,
-                transition_sidecars=accum.transition_sidecars,
+                transition_sidecars=_transition_sidecars_for_action(
+                    accum.transition_sidecars,
+                    index,
+                ),
             )
             if self._accumulate_step(accum, index, reward, done, info, slot_id):
                 break
@@ -1379,7 +1533,10 @@ class BaseTrajectoryEnvWorker(Worker):
                 self._send_step_slot(
                     slot_id,
                     accum.actions[index],
-                    transition_sidecars=accum.transition_sidecars,
+                    transition_sidecars=_transition_sidecars_for_action(
+                        accum.transition_sidecars,
+                        index,
+                    ),
                 )
             for slot_id, accum in active:
                 _, reward, done, info = self._recv_step_slot(slot_id)
@@ -1843,6 +2000,15 @@ class BaseTrajectoryEnvWorker(Worker):
                     metrics["env/env_respawns"] += float(
                         self._last_apply_env_respawns
                     )
+                    if (
+                        self._one_trajectory_per_rollout_epoch()
+                        and self._last_apply_completed_episodes > 0
+                    ):
+                        # The configured real trajectory budget is expressed as
+                        # slots * rollout_epoch.  Once a slot finishes its one
+                        # episode, do not let an early LIBERO success start a
+                        # second trajectory inside the same epoch.
+                        chunk_steps_by_slot[slot_id] = target_chunk_steps
                     self._write_interact_progress(
                         done=int(metrics["env/chunk_steps"]),
                         total=progress_total,
@@ -2377,7 +2543,12 @@ class BaseTrajectoryEnvWorker(Worker):
                 if collect_transitions:
                     transition_obs = dict(obs)
                     transition_obs.update(self._model_version_sidecars())
-                    transition_obs.update(dict(item["sidecars"]))
+                    transition_obs.update(
+                        _transition_sidecars_for_action(
+                            item["sidecars"],
+                            action_index,
+                        )
+                    )
                     transition = self._make_transition(
                         env,
                         transition_obs,
@@ -2727,6 +2898,8 @@ class BaseTrajectoryEnvWorker(Worker):
     def _reset_slot(self, slot_id: int) -> dict[str, Any]:
         self._validate_slot(slot_id)
         env = self._env_for_slot(slot_id)
+        if self.role == "real_env":
+            self._task_ids_by_slot[slot_id] = self._scheduled_task_id(slot_id)
         task_id = int(self._task_ids_by_slot[slot_id])
         episode_id = int(self._episode_ids_by_slot[slot_id])
         if self._batched_env:
@@ -2853,6 +3026,10 @@ class BaseTrajectoryEnvWorker(Worker):
                 bool(truncated),
                 info,
             )
+            transition.setdefault("env_rank", int(self.rank) + int(self.rank_offset))
+            transition.setdefault("slot_id", int(slot_id))
+            transition.setdefault("episode_id", int(self._episode_ids_by_slot[slot_id]))
+            transition.setdefault("global_step", int(self.global_step))
             self._episodes_by_slot[slot_id].append(transition)
         if done:
             if collect_transitions:
@@ -3023,6 +3200,8 @@ class BaseTrajectoryEnvWorker(Worker):
         return 1
 
     def _collect_episode_transitions(self) -> bool:
+        if self.role == "real_env":
+            return True
         if self.dump is not None:
             return True
         if self.replay is None:
@@ -3030,6 +3209,12 @@ class BaseTrajectoryEnvWorker(Worker):
         if self.role == "wm_env" and not self.replay_write_enabled:
             return False
         return True
+
+    def _one_trajectory_per_rollout_epoch(self) -> bool:
+        if self.role != "real_env":
+            return False
+        raw = self.env_cfg.get("one_trajectory_per_rollout_epoch", False)
+        return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
     def _emit_actor_trajectories(self) -> bool:
         override = self.env_cfg.get("emit_actor_trajectories")
@@ -3232,6 +3417,23 @@ class BaseTrajectoryEnvWorker(Worker):
                 add_episode(list(episode), source=str(source))
 
     def _push_replay_episode(self, episode: list[dict[str, Any]]) -> None:
+        if self.role == "real_env" and episode:
+            first = episode[0]
+            step = int(first.get("global_step", self.global_step))
+            success = any(
+                bool(transition.get("success", False))
+                for transition in episode
+            )
+            trajectory = RealTrajectory(
+                env_rank=int(first.get("env_rank", int(self.rank) + int(self.rank_offset))),
+                slot_id=int(first.get("slot_id", 0)),
+                task_id=int(first.get("task_id", self.task_id)),
+                episode_id=int(first.get("episode_id", 0)),
+                global_step=step,
+                success=bool(success),
+                transitions=tuple(copy.deepcopy(transition) for transition in episode),
+            )
+            self._completed_real_trajectories.setdefault(step, []).append(trajectory)
         if not self.replay_write_enabled:
             return
         if self.role == "wm_env":
@@ -3416,6 +3618,7 @@ class RealEnvWorker(BaseTrajectoryEnvWorker):
         max_steps_per_rollout_epoch: int,
         num_action_chunks: int,
         task_id: int = 0,
+        task_ids: Sequence[int] | None = None,
         replay: Any | None = None,
         dump: Any | None = None,
         rank_offset: int = 0,
@@ -3430,6 +3633,7 @@ class RealEnvWorker(BaseTrajectoryEnvWorker):
             max_steps_per_rollout_epoch,
             num_action_chunks,
             task_id=task_id,
+            task_ids=task_ids,
             replay=replay,
             dump=dump,
             rank_offset=rank_offset,

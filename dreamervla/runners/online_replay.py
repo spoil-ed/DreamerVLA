@@ -289,6 +289,33 @@ class OnlineReplay:
             self._pending_latest_online_episode_ids.add(int(episode_id))
         return record
 
+    def replace_episodes(
+        self,
+        episodes: list[list[dict[str, Any]]],
+        *,
+        policy_version: int,
+        source: str = "online",
+    ) -> int:
+        """Atomically replace replay contents with one current-step dataset."""
+
+        copied = [copy.deepcopy(list(episode)) for episode in episodes]
+        self.episodes_by_task = {}
+        self._transitions_by_task = Counter()
+        self._next_episode_id = 0
+        self._next_collection_index = 0
+        self._next_task_episode_index = Counter()
+        self._task_sample_cursor = 0
+        self._initial_condition_cursor = 0
+        self._pending_latest_online_episode_ids.clear()
+        self._classifier_pending_windows.clear()
+        self._classifier_pending_key = None
+        self.set_policy_version(int(policy_version))
+        added = 0
+        for episode in copied:
+            if self.add_episode(episode, source=str(source)) is not None:
+                added += 1
+        return int(added)
+
     def sample_initial_obs_embeddings(
         self,
         batch_size: int,
@@ -1037,6 +1064,121 @@ class OnlineReplay:
             for record in self._valid_records()
             if int(record.get("finish_step", len(record["episode"]))) >= window_env
         )
+
+    def classifier_endpoint_windows(
+        self,
+        *,
+        window: int,
+        chunk_size: int,
+        chunk_pool: str,
+    ) -> dict[str, torch.Tensor]:
+        """Return one deterministic terminal window for every current episode."""
+
+        window = int(window)
+        chunk_size = int(chunk_size)
+        window_env = window * chunk_size
+        records = [
+            record
+            for record in self._valid_records()
+            if int(record.get("finish_step", len(record["episode"]))) >= window_env
+        ]
+        if not records:
+            raise RuntimeError(
+                "online replay has no classifier endpoint windows with "
+                f"finish_step >= {window_env}"
+            )
+
+        windows: list[np.ndarray] = []
+        labels: list[int] = []
+        task_ids: list[int] = []
+        episode_ids: list[int] = []
+        proprio_windows: list[np.ndarray] = []
+        lang_embs: list[np.ndarray] = []
+        all_have_proprio = True
+        all_have_language = True
+        for record in sorted(records, key=lambda item: int(item["episode_id"])):
+            episode = record["episode"]
+            end = int(record.get("finish_step", len(episode)))
+            selected = episode[end - window_env : end]
+            env_window = np.stack(
+                [step["obs_embedding"] for step in selected],
+                axis=0,
+            ).astype(np.float32, copy=False)
+            windows.append(
+                np.ascontiguousarray(
+                    _pool_classifier_steps(
+                        env_window,
+                        window=window,
+                        chunk_size=chunk_size,
+                        chunk_pool=str(chunk_pool),
+                    ),
+                    dtype=np.float32,
+                )
+            )
+            labels.append(int(bool(record["success"])))
+            task_ids.append(int(record["task_id"]))
+            episode_ids.append(int(record["episode_id"]))
+
+            if all("proprio" in step for step in selected):
+                proprio = np.stack(
+                    [
+                        np.asarray(step["proprio"], dtype=np.float32).reshape(-1)
+                        for step in selected
+                    ],
+                    axis=0,
+                )
+                proprio_windows.append(
+                    np.ascontiguousarray(
+                        _pool_classifier_steps(
+                            proprio,
+                            window=window,
+                            chunk_size=chunk_size,
+                            chunk_pool=str(chunk_pool),
+                        ),
+                        dtype=np.float32,
+                    )
+                )
+            else:
+                all_have_proprio = False
+            if all("lang_emb" in step for step in selected):
+                lang_embs.append(
+                    np.asarray(selected[0]["lang_emb"], dtype=np.float32).reshape(-1)
+                )
+            else:
+                all_have_language = False
+
+        batch = {
+            "windows": torch.from_numpy(np.stack(windows, axis=0)).float(),
+            "labels": torch.tensor(labels, dtype=torch.long),
+            "task_ids": torch.tensor(task_ids, dtype=torch.long),
+            "episode_ids": torch.tensor(episode_ids, dtype=torch.long),
+        }
+        if all_have_proprio and len(proprio_windows) == len(windows):
+            batch["proprio"] = torch.from_numpy(
+                np.stack(proprio_windows, axis=0)
+            ).float()
+        if all_have_language and len(lang_embs) == len(windows):
+            batch["lang_emb"] = torch.from_numpy(np.stack(lang_embs, axis=0)).float()
+        return batch
+
+
+def _pool_classifier_steps(
+    values: np.ndarray,
+    *,
+    window: int,
+    chunk_size: int,
+    chunk_pool: str,
+) -> np.ndarray:
+    if int(chunk_size) == 1:
+        return values
+    reshaped = values.reshape(int(window), int(chunk_size), *values.shape[1:])
+    if str(chunk_pool) == "last":
+        return reshaped[:, -1]
+    if str(chunk_pool) == "first":
+        return reshaped[:, 0]
+    if str(chunk_pool) == "mean":
+        return reshaped.mean(axis=1)
+    raise ValueError(f"unknown chunk_pool={chunk_pool!r}")
 
 
 def _step_reward(step: Mapping[str, Any]) -> float:

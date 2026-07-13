@@ -34,7 +34,6 @@ from dreamervla.algorithms.dreamervla import (
 )
 from dreamervla.algorithms.registry import get_actor_update_route
 from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
-from dreamervla.preprocess.sidecar_schema import HIDDEN_TOKEN_SHAPE
 from dreamervla.runners.action_chunk_queue import ActionChunkQueue
 from dreamervla.runners.classifier_update import online_classifier_update_step
 from dreamervla.runners.distributed import unwrap_module as _unwrap
@@ -583,11 +582,48 @@ class OnlineCotrainRunner(DreamerVLARunner):
         hidden = hidden_state.to(self.device).float()
         if hidden.ndim == 2:
             hidden = hidden.unsqueeze(0)
-        if hidden.ndim != 3 or tuple(hidden.shape[-2:]) != HIDDEN_TOKEN_SHAPE:
+        if hidden.ndim != 3 or any(int(dim) <= 0 for dim in hidden.shape[-2:]):
             raise ValueError(
-                "hidden-token extractor must return [256,4096] or "
-                f"[B,256,4096], got {tuple(hidden.shape)}"
+                "hidden-token extractor must return positive tokenized [B,N,D], "
+                f"got {tuple(hidden.shape)}"
             )
+
+        expected_shapes: list[tuple[int, int]] = []
+        extractor = getattr(self, "_oft_hidden_token_extractor", None)
+        for owner in (
+            getattr(extractor, "_policy", None),
+            getattr(self, "policy", None),
+        ):
+            token_count = getattr(owner, "token_count", None)
+            token_dim = getattr(owner, "token_dim", None)
+            if token_count is not None and token_dim is not None:
+                expected_shapes.append((int(token_count), int(token_dim)))
+
+        cfg = getattr(self, "cfg", None)
+        token_cfg = (
+            OmegaConf.select(cfg, "task.openvla_oft.hidden_token", default=None)
+            if isinstance(cfg, DictConfig)
+            else None
+        )
+        if token_cfg is not None:
+            expected_shapes.append(
+                (int(token_cfg.token_count), int(token_cfg.token_dim))
+            )
+
+        unique_shapes = set(expected_shapes)
+        if len(unique_shapes) > 1:
+            raise ValueError(
+                "loaded OpenVLA hidden-token geometry disagrees with Hydra: "
+                f"{sorted(unique_shapes)!r}"
+            )
+        if unique_shapes:
+            expected_shape = next(iter(unique_shapes))
+            if tuple(int(dim) for dim in hidden.shape[-2:]) != expected_shape:
+                raise ValueError(
+                    f"hidden-token extractor must return {expected_shape} or "
+                    f"[B,{expected_shape[0]},{expected_shape[1]}], "
+                    f"got {tuple(hidden.shape)}"
+                )
         return hidden
 
     def _rollout_action(self, world_model, policy, processor, obs, latent, prev_action, target_token_id):

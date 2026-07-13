@@ -93,6 +93,69 @@ class _InspectTokenGridPolicy(torch.nn.Module):
         return action, log_prob, {"action_chunk": action}
 
 
+class _NativeExtractor:
+    def __init__(self) -> None:
+        self.reset_count = 0
+
+    def reset(self) -> None:
+        self.reset_count += 1
+
+    def prepare(self, obs, task_description):
+        token = int(obs["seed"])
+        return {
+            "input_ids": torch.tensor([[1, token]], dtype=torch.long),
+            "attention_mask": torch.ones(1, 2, dtype=torch.long),
+            "pixel_values": torch.full((1, 3, 2, 2), float(token)),
+        }
+
+
+class _NativeFullPolicy(torch.nn.Module):
+    """Tiny contract double for the full raw/latent OpenVLA policy."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.anchor = torch.nn.Parameter(torch.zeros(()))
+        self.seen_batches: list[dict[str, torch.Tensor]] = []
+        self.created_extractors: list[_NativeExtractor] = []
+
+    def make_extractor(self):
+        extractor = _NativeExtractor()
+        self.created_extractors.append(extractor)
+        return extractor
+
+    def prepare_prompt_batch(self, task_descriptions):
+        batch = len(task_descriptions)
+        return {
+            "input_ids": torch.tensor([[1, 9]] * batch, dtype=torch.long),
+            "attention_mask": torch.ones(batch, 2, dtype=torch.long),
+        }
+
+    def forward(self, batch):  # type: ignore[override]
+        self.seen_batches.append(
+            {
+                key: value.detach().clone()
+                for key, value in batch.items()
+                if isinstance(value, torch.Tensor)
+            }
+        )
+        if "pixel_values" in batch:
+            values = batch["pixel_values"].float().mean(dim=(1, 2, 3))
+            hidden = values[:, None, None].expand(-1, 2, 3).contiguous()
+        else:
+            hidden = batch["hidden"]
+        batch_size = int(hidden.shape[0])
+        action = torch.zeros(batch_size, 2, 3)
+        log_prob = torch.zeros(batch_size, 1)
+        token_ids = torch.arange(6).reshape(1, 2, 3).expand(batch_size, -1, -1)
+        return action, log_prob, {
+            "hidden": hidden,
+            "lang_emb": torch.ones(batch_size, 4),
+            "action_token_ids": token_ids,
+            "input_ids": batch["input_ids"],
+            "attention_mask": batch["attention_mask"],
+        }
+
+
 def _real_obs(step: int = 0, *, is_first: bool = False, seed: int = 5) -> ObservationMsg:
     return ObservationMsg(
         env_rank=0,
@@ -392,6 +455,65 @@ def test_generate_once_encodes_real_env_observation_without_obs_embedding() -> N
     assert out.forward_inputs["lang_emb"].tolist() == [5.5, 5.5]
     assert out.forward_inputs["action"].shape == (1, 2, 3)
     assert out.versions["policy"] == 0
+
+
+def test_full_policy_encodes_raw_observation_without_separate_encoder() -> None:
+    worker = MultiStepRolloutWorker(
+        policy_cfg=_policy_cfg(),
+        encoder_cfg=None,
+        init_ckpt={},
+        train_cfg={"device": "cpu"},
+    )
+    worker.init()
+    policy = _NativeFullPolicy()
+    worker.policy = policy
+
+    out = worker.generate_once(_real_obs(is_first=True, seed=5))
+
+    assert "pixel_values" in policy.seen_batches[0]
+    assert "hidden" not in policy.seen_batches[0]
+    assert out.forward_inputs["hidden"].shape == (1, 2, 3)
+    assert out.forward_inputs["hidden"].unique().tolist() == [5.0]
+    assert out.forward_inputs["lang_emb"].shape == (4,)
+    assert out.forward_inputs["action_token_ids"].shape == (1, 2, 3)
+    assert out.forward_inputs["input_ids"].tolist() == [[1, 5]]
+    assert policy.created_extractors[0].reset_count == 1
+
+
+def test_full_policy_decodes_wm_latent_with_task_prompt() -> None:
+    worker = MultiStepRolloutWorker(
+        policy_cfg=_policy_cfg(),
+        encoder_cfg=None,
+        init_ckpt={},
+        train_cfg={"device": "cpu"},
+    )
+    worker.init()
+    policy = _NativeFullPolicy()
+    worker.policy = policy
+    hidden = np.arange(12, dtype=np.float32).reshape(2, 2, 3)
+    observations = [
+        ObservationMsg(
+            env_rank=0,
+            slot_id=index,
+            task_id=index,
+            episode_id=index,
+            step=0,
+            obs={"task_description": f"task {index}"},
+            versions={"policy": 0},
+        )
+        for index in range(2)
+    ]
+
+    batch = worker.generate_result_batch(
+        observations,
+        batched_obs={"obs_embedding": hidden},
+    )
+
+    assert policy.seen_batches[0]["hidden"].shape == (2, 2, 3)
+    assert policy.seen_batches[0]["input_ids"].tolist() == [[1, 9], [1, 9]]
+    assert "hidden" not in batch.forward_inputs
+    assert batch.forward_inputs["input_ids"].shape == (2, 2)
+    assert batch.forward_inputs["action_token_ids"].shape == (2, 2, 3)
 
 
 def test_oft_rollout_rejects_non_mainline_image_counts() -> None:

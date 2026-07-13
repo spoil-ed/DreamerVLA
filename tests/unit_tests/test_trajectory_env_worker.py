@@ -853,6 +853,43 @@ def test_real_env_interact_routes_observations_and_replay_without_actor_trajecto
         worker.close()
 
 
+def test_real_env_exact_budget_stops_slot_after_first_trajectory(monkeypatch) -> None:
+    replay = _MemoryReplay()
+    env_cfg = _short_horizon_counter_env_cfg()
+    env_cfg["one_trajectory_per_rollout_epoch"] = True
+    worker = RealEnvWorker(
+        env_cfg=env_cfg,
+        num_slots=1,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=4,
+        num_action_chunks=2,
+        task_id=0,
+        replay=replay,
+        request_final_bootstrap=False,
+    )
+    channels = {
+        "env": _MemoryChannel(),
+        "rollout": _MemoryChannel([_rollout_batch(_rollout_result())]),
+        "actor": _MemoryChannel(),
+    }
+    monkeypatch.setattr(
+        trajectory_env_worker.Channel,
+        "connect",
+        staticmethod(lambda name: channels[str(name)]),
+    )
+
+    try:
+        worker.init()
+        metrics = worker.interact("env", "rollout", "actor")
+
+        assert metrics["env/chunk_steps"] == 1.0
+        assert metrics["env/episodes_completed"] == 1.0
+        assert len(replay.episodes) == 1
+        assert channels["rollout"].gets == ["0"]
+    finally:
+        worker.close()
+
+
 def test_real_env_interact_can_emit_actor_trajectory_when_configured(
     monkeypatch,
 ) -> None:

@@ -56,6 +56,9 @@ class OFTDecodeOutput:
     action_chunk: list[Any]
     hidden_state: torch.Tensor
     lang_emb: torch.Tensor | None = None
+    action_token_ids: torch.Tensor | None = None
+    input_ids: torch.Tensor | None = None
+    attention_mask: torch.Tensor | None = None
 
     def __iter__(self):
         yield self.action_chunk
@@ -394,6 +397,7 @@ class OFTBatchedDecoder:
         from prismatic.vla.constants import ACTION_DIM, IGNORE_INDEX, NUM_ACTIONS_CHUNK
 
         self._model = policy.vla
+        self._policy = policy
         if policy.action_head is not None:
             raise ValueError("L1/action-query checkpoints are closed")
         if getattr(policy, "proprio_projector", None) is not None:
@@ -458,7 +462,7 @@ class OFTBatchedDecoder:
         pixel_values = torch.cat([p["pixel_values"] for p in preps], dim=0)
         if any(p["proprio"] is not None for p in preps):
             raise ValueError("OpenVLA-OFT hidden-token mainline does not include proprio")
-        actions, hidden, lang_emb = self._forward(
+        actions, hidden, lang_emb, action_token_ids = self._forward(
             input_ids, attention_mask, pixel_values, None
         )
         out: list[OFTDecodeOutput] = []
@@ -466,7 +470,16 @@ class OFTBatchedDecoder:
             action_chunk = [actions[i, j] for j in range(actions.shape[1])]
             hidden_state = hidden[i].detach().cpu().to(torch.float16)
             lang_state = lang_emb[i].detach().cpu().to(torch.float16)
-            out.append(OFTDecodeOutput(action_chunk, hidden_state, lang_state))
+            out.append(
+                OFTDecodeOutput(
+                    action_chunk,
+                    hidden_state,
+                    lang_state,
+                    action_token_ids=action_token_ids[i].detach().cpu(),
+                    input_ids=input_ids[i].detach().cpu(),
+                    attention_mask=attention_mask[i].detach().cpu(),
+                )
+            )
         return out
 
     def _forward(
@@ -475,82 +488,43 @@ class OFTBatchedDecoder:
         attention_mask: torch.Tensor,
         pixel_values: torch.Tensor,
         proprio: np.ndarray | None,
-    ) -> tuple[np.ndarray, torch.Tensor, torch.Tensor]:
+    ) -> tuple[np.ndarray, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Batched replica of ``predict_action`` + ``_regression_or_discrete_prediction``."""
         model = self._model
         if proprio is not None:
             raise ValueError("OpenVLA-OFT hidden-token mainline does not include proprio")
 
-        # FIX1: batched trailing-29871 ('') append (upstream cats a [1,1] token -> B==1 only)
-        if not torch.all(input_ids[:, -1] == 29871):
-            pad = torch.full(
-                (input_ids.shape[0], 1), 29871, dtype=input_ids.dtype, device=input_ids.device
-            )
-            input_ids = torch.cat([input_ids, pad], dim=1)
-            attention_mask = torch.cat(
-                [attention_mask, torch.ones_like(pad, dtype=attention_mask.dtype)], dim=1
-            )
-
-        labels = input_ids.clone()
-        labels[:] = self._ignore_index
-        num_prompt_tokens = input_ids.shape[-1] - 1
-        input_ids, attention_mask = model._prepare_input_for_action_prediction(
-            input_ids, attention_mask
-        )
-        labels = model._prepare_labels_for_action_prediction(labels, input_ids)
-
-        # Wrap the whole forward (incl. the action head) in inference_mode, matching how the
-        # single-obs path wrapped predict_action; otherwise the head's layer_norm tries to
-        # save inference tensors for backward.
         with torch.inference_mode():
-            input_embeddings = model.get_input_embeddings()(input_ids)
-            all_actions_mask = model._process_action_masks(labels)
-            language_embeddings = input_embeddings[~all_actions_mask].reshape(
-                input_embeddings.shape[0], -1, input_embeddings.shape[2]
-            )
-            lang_emb = language_embeddings.mean(dim=1).float()
-            projected = model._process_vision_features(
-                pixel_values, language_embeddings, use_film=False
+            native = self._policy.forward_action_tokens(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                pixel_values=pixel_values,
             )
             hidden_token = hidden_token_from_projected(
-                projected,
+                native.projected_tokens,
                 image_keys=self._image_keys,
                 patches_per_image=int(model.vision_backbone.get_num_patches()),
             )
-            num_patches = (
-                model.vision_backbone.get_num_patches()
-                * model.vision_backbone.get_num_images_in_input()
+            action_classes = native.action_logits.argmax(dim=-1)
+            token_ids = native.action_token_ids.index_select(
+                0, action_classes.reshape(-1)
+            ).reshape_as(action_classes)
+            centers = torch.as_tensor(
+                np.asarray(model.bin_centers),
+                device=action_classes.device,
+                dtype=torch.float32,
             )
-
-            input_embeddings = input_embeddings * ~all_actions_mask.unsqueeze(-1)
-            multimodal_embeddings, multimodal_attention_mask = model._build_multimodal_attention(
-                input_embeddings, projected, attention_mask
+            normalized = centers.index_select(
+                0, action_classes.reshape(-1)
+            ).reshape(
+                input_ids.shape[0], self._num_chunks, self._action_dim
             )
-            # Left-padded (mixed-task) batches: position_ids must skip pad tokens so real
-            # tokens get their standalone positions.  No padding (same-task) -> None keeps
-            # the forward byte-identical to the un-padded path.
-            position_ids = None
-            if multimodal_attention_mask is not None and bool(
-                (multimodal_attention_mask == 0).any()
-            ):
-                position_ids = (multimodal_attention_mask.long().cumsum(-1) - 1).clamp_(min=0)
-            lm_out = model.language_model(
-                input_ids=None,
-                attention_mask=multimodal_attention_mask,
-                position_ids=position_ids,
-                past_key_values=None,
-                inputs_embeds=multimodal_embeddings,
-                labels=None,
-                use_cache=None,
-                output_attentions=False,
-                output_hidden_states=True,
-                return_dict=True,
-            )
-            last_hidden = lm_out.hidden_states[-1]
-            start = num_patches + num_prompt_tokens
-            normalized = self._decode(lm_out, start, input_ids.shape[0])
-        actions = model._unnormalize_actions(normalized, self._unnorm_key)
-        return actions, hidden_token, lang_emb
+        actions = model._unnormalize_actions(
+            normalized.detach().cpu().numpy(), self._unnorm_key
+        )
+        return actions, hidden_token, native.language_embedding, token_ids.reshape(
+            input_ids.shape[0], self._num_chunks, self._action_dim
+        )
 
     def _decode(
         self,

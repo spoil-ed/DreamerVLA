@@ -1,4 +1,4 @@
-"""Exact schema for the only supported OpenVLA-OFT observation sidecar."""
+"""Schema and relationship validation for OpenVLA-OFT token sidecars."""
 
 from __future__ import annotations
 
@@ -81,12 +81,8 @@ def _hidden_token_contract_errors(config: Mapping[str, Any]) -> list[str]:
         "obs_hidden_source": HIDDEN_TOKEN_SOURCE,
         "action_head_type": HIDDEN_TOKEN_ACTION_HEAD,
         "hidden_key": DEFAULT_HIDDEN_KEY,
-        "token_count": HIDDEN_TOKEN_COUNT,
-        "token_dim": HIDDEN_TOKEN_DIM,
-        "hidden_dim": HIDDEN_TOKEN_HIDDEN_DIM,
         "hidden_storage_format": HIDDEN_TOKEN_STORAGE_FORMAT,
         "num_images_in_input": 1,
-        "patches_per_image": HIDDEN_TOKEN_COUNT,
         "history": 1,
         "include_state": False,
         "sidecar_schema_version": SIDECAR_SCHEMA_VERSION,
@@ -97,9 +93,46 @@ def _hidden_token_contract_errors(config: Mapping[str, Any]) -> list[str]:
         got = config.get(key)
         if got != wanted:
             errors.append(f"{key}={got!r}, expected {wanted!r}")
+    geometry: dict[str, int] = {}
+    for key in ("token_count", "token_dim", "hidden_dim", "patches_per_image"):
+        value = config.get(key)
+        if type(value) is not int or value <= 0:
+            errors.append(f"{key}={value!r}, expected a positive integer")
+            continue
+        geometry[key] = int(value)
+    token_count = geometry.get("token_count")
+    token_dim = geometry.get("token_dim")
+    hidden_dim = geometry.get("hidden_dim")
+    patches_per_image = geometry.get("patches_per_image")
+    num_images = config.get("num_images_in_input")
+    if (
+        token_count is not None
+        and patches_per_image is not None
+        and type(num_images) is int
+        and token_count != patches_per_image * num_images
+    ):
+        errors.append(
+            "token_count must equal patches_per_image * num_images_in_input: "
+            f"{token_count} != {patches_per_image} * {num_images}"
+        )
+    if (
+        token_count is not None
+        and token_dim is not None
+        and hidden_dim is not None
+        and hidden_dim != token_count * token_dim
+    ):
+        errors.append(
+            "hidden_dim must equal token_count * token_dim: "
+            f"{hidden_dim} != {token_count} * {token_dim}"
+        )
     shape = config.get("obs_embedding_shape")
-    if not isinstance(shape, (list, tuple)) or list(shape) != list(HIDDEN_TOKEN_SHAPE):
-        errors.append(f"obs_embedding_shape={shape!r}, expected {list(HIDDEN_TOKEN_SHAPE)!r}")
+    expected_shape = (
+        [token_count, token_dim]
+        if token_count is not None and token_dim is not None
+        else None
+    )
+    if expected_shape is None or not isinstance(shape, (list, tuple)) or list(shape) != expected_shape:
+        errors.append(f"obs_embedding_shape={shape!r}, expected {expected_shape!r}")
     present_removed = [key for key in REMOVED_SIDECAR_FIELDS if key in config]
     if present_removed:
         errors.append(f"removed sidecar fields are present: {present_removed!r}")
@@ -110,14 +143,26 @@ def validate_hidden_token_array_shape(
     shape: Sequence[int],
     *,
     context: str,
+    token_count: int | None = None,
+    token_dim: int | None = None,
 ) -> None:
-    """Reject every external observation shape except ``[...,256,4096]``."""
+    """Validate tokenized storage against optional sidecar geometry metadata."""
 
     trailing = tuple(int(dim) for dim in shape[-2:]) if len(shape) >= 2 else tuple(shape)
-    if trailing != HIDDEN_TOKEN_SHAPE:
+    if len(trailing) != 2 or any(dim <= 0 for dim in trailing):
         raise ValueError(
-            f"{context} must use {HIDDEN_TOKEN_SOURCE} trailing shape "
-            f"{HIDDEN_TOKEN_SHAPE}, got {tuple(int(dim) for dim in shape)}"
+            f"{context} must use a positive tokenized trailing shape [N,D], "
+            f"got {tuple(int(dim) for dim in shape)}"
+        )
+    if (token_count is None) != (token_dim is None):
+        raise ValueError("token_count and token_dim must be provided together")
+    if token_count is None:
+        return
+    expected_shape = (int(token_count), int(token_dim))
+    if trailing != expected_shape:
+        raise ValueError(
+            f"{context} expected trailing shape {expected_shape}, "
+            f"got {tuple(int(dim) for dim in shape)}"
         )
 
 
@@ -319,12 +364,14 @@ def validate_hidden_token_sidecar_dir(
                     if not isinstance(dataset, h5py.Dataset) or dataset.ndim != 3:
                         raise ValueError(
                             f"{path}:data/{demo_key}/{DEFAULT_HIDDEN_KEY} must be "
-                            f"[T,{HIDDEN_TOKEN_COUNT},{HIDDEN_TOKEN_DIM}], got "
+                            "tokenized [T,N,D], got "
                             f"{getattr(dataset, 'shape', None)!r}"
                         )
                     validate_hidden_token_array_shape(
                         dataset.shape,
                         context=f"{path}:data/{demo_key}/{DEFAULT_HIDDEN_KEY}",
+                        token_count=int(config["token_count"]),
+                        token_dim=int(config["token_dim"]),
                     )
                     hidden_length = int(dataset.shape[0])
                     if hidden_length <= 0:
@@ -408,13 +455,13 @@ def validate_hidden_token_sidecar_dir(
 
 
 def required_demo_datasets() -> list[str]:
-    """Return the fixed per-demo dataset list for the canonical sidecar."""
+    """Return the fixed per-demo dataset list for a token sidecar."""
 
     return [DEFAULT_HIDDEN_KEY]
 
 
 def required_demo_datasets_from_config(config: Mapping[str, Any]) -> list[str]:
-    """Validate the exact metadata contract and return its fixed dataset key."""
+    """Validate metadata relationships and return the required dataset key."""
 
     validate_hidden_token_preprocess_config(
         config,

@@ -19,8 +19,15 @@ cluster:
 manual_cotrain:
   ngpu: 1
   global_steps: 1000  # cotrain epochs
+  # Causal mainline order: real -> encoder SFT -> re-encode -> WM/CLS ->
+  # imagined PPO. The frozen feasibility recipe deliberately leaves this off.
+  staged_policy_update: true
   learner_update_step: 1
   learner_update_phase: cotrain
+  learner_updates_per_global_step: 128
+  learner_early_stop_patience: 16
+  # One old->new trust region shared by encoder SFT and imagined actor PPO.
+  max_policy_kl: 0.10
   checkpoint_every: 0
   # One 1024x512 rollout step can exceed ten minutes. 5400s still catches an
   # actual stuck handshake without killing a progressing production step.
@@ -31,9 +38,14 @@ manual_cotrain:
   wm_env_write_replay: false
   rollout_epoch: ${algorithm.rollout_epoch}
   real_env_workers: 1
+  real_task_ids: ${ray_data.task_ids}
   real_render_backend: null
   real_rollout_epoch: 1
   real_rollout_target_trajectories: 32
+  # One completed LIBERO episode (300 steps) per slot/epoch, rounded to an
+  # OFT-chunk multiple. Four epochs x eight slots therefore yields exactly 32
+  # completed trajectories without carrying partial episodes between epochs.
+  real_max_steps_per_rollout_epoch: 304
   wm_rollout_epoch: ${manual_cotrain.rollout_epoch}
   # RLinf LIBERO geometry: 64 env slots * 16 rollout epochs = 1024
   # trajectories.  Each trajectory spans 512 physical steps (64 OFT chunks).
@@ -48,9 +60,9 @@ manual_cotrain:
   debug_eval_interval_global_steps: 0
   eval_initial_global_step: false
   eval_protocol:
-    # Standalone real-LIBERO evaluation. It uses the fixed OFT checkpoint as
-    # the visual/language VLA and, after PPO starts, replaces only the policy
-    # head with the saved ActorGroup state.
+    # Standalone real-LIBERO evaluation. Step 0 uses the base OFT checkpoint;
+    # learned steps restore the complete ActorGroup VLA, including the updated
+    # vision backbone/projector and native LM/OFT action decoder.
     base_vla_ckpt: ${task.openvla_oft.ckpt_path}
     task_suite_name: ${task.suite}
     task_ids: ${ray_data.task_ids}
@@ -84,7 +96,7 @@ algorithm:
   rewards_upper_bound: 4.5
   gamma: 0.99
   gae_lambda: 0.95
-  kl_beta: 0.0
+  kl_beta: 0.01
   entropy_bonus: 0.0
 
 # Shared by the trainable-WM/CLS mainline and the frozen-WM/CLS Ray test.
@@ -96,6 +108,13 @@ ray_actor_optimizer:
   weight_decay: 0.0
   grad_clip_norm: 1.0
   zero_grad_set_to_none: true
+
+ray_encoder_optimizer:
+  name: adamw
+  lr: 1.0e-7
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+  weight_decay: 0.0
 
 actor:
   policy_cfg: ${ray_components.policy}
@@ -122,6 +141,13 @@ actor:
       use_orig_params: true
     optimizers:
       policy: ${ray_actor_optimizer}
+      encoder: ${ray_encoder_optimizer}
+    encoder_sft:
+      epochs: 2
+      batch_size: 4
+      reencode_batch_size: 4
+      grad_clip_norm: 1.0
+      zero_grad_set_to_none: true
     algorithm_cfg:
       group_size: ${algorithm.group_size}
       ppo_update_epochs: 1
@@ -146,23 +172,7 @@ actor:
 
 rollout:
   policy_cfg: ${ray_components.policy}
-  encoder_cfg:
-    target: dreamervla.workers.inference.oft_rollout:OFTRolloutBundle
-    kwargs:
-      policy_cfg:
-        model_path: ${task.openvla_oft.ckpt_path}
-        policy_mode: discrete
-        num_images_in_input: ${task.openvla_oft.num_images_in_input}
-        unnorm_key: ${task.openvla_oft.dataset_statistics_key}
-      unnorm_key: ${task.openvla_oft.dataset_statistics_key}
-      image_keys: ${task.image_keys}
-      history: ${task.openvla_oft.hidden_token.expected_history}
-      rotate_images_180: ${task.openvla_oft.hidden_token.expected_rotate_images_180}
-      center_crop: true
-      obs_hidden_source: ${task.openvla_oft.hidden_token.expected_obs_hidden_source}
-      expected_action_head_type: ${task.openvla_oft.hidden_token.expected_action_head_type}
-      expected_include_state: ${task.openvla_oft.hidden_token.expected_include_state}
-      device: cuda
+  encoder_cfg: null
   init_ckpt: {}
   train_cfg:
     device: auto
@@ -214,6 +224,10 @@ env:
   cfg:
     action_postprocess: openvla_oft
     render_backend: ${render_backend}
+    # The exact real budget is slots * rollout_epoch. Early LIBERO success may
+    # terminate before 300 steps, but must not start a second trajectory inside
+    # the same epoch.
+    one_trajectory_per_rollout_epoch: true
   real:
     cfg: ${env.cfg}
   wm:

@@ -8,6 +8,7 @@ from typing import Any
 
 from dreamervla.runners.offline_seed import seed_replay_from_offline
 from dreamervla.scheduler.worker import Worker
+from dreamervla.workers.cotrain.messages import RealTrajectoryBatch
 
 
 def _online_replay_cls() -> type:
@@ -39,6 +40,43 @@ class ReplayWorker(Worker):
     def set_policy_version(self, version: int) -> None:
         self._replay().set_policy_version(int(version))
 
+    def replace_real_trajectories(
+        self,
+        batch: RealTrajectoryBatch,
+    ) -> dict[str, float]:
+        """Replace replay with one re-encoded global-step real batch."""
+
+        expected = int(batch.global_step)
+        episodes: list[list[dict[str, Any]]] = []
+        for trajectory in batch.trajectories:
+            if int(trajectory.global_step) != expected:
+                raise ValueError(
+                    "step-local trajectory global_step does not match batch"
+                )
+            episode = [dict(transition) for transition in trajectory.transitions]
+            versions = {
+                int(transition.get("encoder_version", -1))
+                for transition in episode
+            }
+            if versions != {expected}:
+                raise ValueError(
+                    "step-local replay requires every transition encoder_version "
+                    f"to equal {expected}; got {sorted(versions)}"
+                )
+            episodes.append(episode)
+        added = self._replay().replace_episodes(
+            episodes,
+            policy_version=expected,
+            source="online",
+        )
+        return {
+            "replay_buffer/step_local_trajectories": float(added),
+            "replay_buffer/step_local_transitions": float(
+                self._replay().num_transitions
+            ),
+            "replay_buffer/step_local_encoder_version": float(expected),
+        }
+
     def sample(
         self,
         batch_size: int,
@@ -49,6 +87,21 @@ class ReplayWorker(Worker):
             int(batch_size),
             staleness_threshold=staleness_threshold,
             include_images=bool(include_images),
+        )
+
+    def classifier_endpoint_windows(
+        self,
+        *,
+        window: int,
+        chunk_size: int,
+        chunk_pool: str,
+    ) -> dict[str, Any]:
+        """Return deterministic current-step endpoint windows for calibration."""
+
+        return self._replay().classifier_endpoint_windows(
+            window=int(window),
+            chunk_size=int(chunk_size),
+            chunk_pool=str(chunk_pool),
         )
 
     def sample_initial_obs_embeddings(

@@ -34,6 +34,14 @@ _EXTRA_FORWARD_KEYS = (
 )
 
 
+def _is_native_full_policy(policy: nn.Module) -> bool:
+    """Return whether policy owns both raw encoding and native latent decoding."""
+
+    return callable(getattr(policy, "make_extractor", None)) and callable(
+        getattr(policy, "prepare_prompt_batch", None)
+    )
+
+
 class MultiStepRolloutWorker(Worker):
     """Non-FSDP no-grad policy copy used by the target RolloutGroup."""
 
@@ -123,7 +131,10 @@ class MultiStepRolloutWorker(Worker):
         for obs_msg in obs_msgs:
             if int(obs_msg.env_rank) != env_rank:
                 raise ValueError("generate_result_batch requires one env_rank")
+        policy = self._policy()
+        native_full_policy = _is_native_full_policy(policy)
         encoder_extras: list[dict[str, Any]] = []
+        raw_policy_inputs: dict[str, torch.Tensor] | None = None
         batched_hidden = _batched_hidden_from_obs(batched_obs)
         if batched_hidden is not None:
             hidden_t = _to_device_float_tensor(
@@ -137,21 +148,55 @@ class MultiStepRolloutWorker(Worker):
                 )
             encoder_extras = [{} for _ in obs_msgs]
         else:
-            hidden_values: list[Any] = []
+            direct_hidden: list[Any] = []
+            all_have_hidden = True
             for obs_msg in obs_msgs:
-                hidden, encoder_extra = self._hidden_and_encoder_extra(obs_msg)
-                hidden_values.append(hidden)
-                encoder_extras.append(dict(encoder_extra))
-            hidden_t = _to_device_float_batch(hidden_values, self.torch_device)
+                try:
+                    direct_hidden.append(_hidden_from_obs(obs_msg.obs))
+                except ValueError:
+                    all_have_hidden = False
+                    break
+            if native_full_policy and not all_have_hidden:
+                raw_policy_inputs = self._prepare_native_raw_batch(obs_msgs, policy)
+                hidden_t = None
+                encoder_extras = [{} for _ in obs_msgs]
+            else:
+                hidden_values: list[Any] = []
+                if all_have_hidden:
+                    hidden_values = direct_hidden
+                    encoder_extras = [{} for _ in obs_msgs]
+                else:
+                    for obs_msg in obs_msgs:
+                        hidden, encoder_extra = self._hidden_and_encoder_extra(obs_msg)
+                        hidden_values.append(hidden)
+                        encoder_extras.append(dict(encoder_extra))
+                hidden_t = _to_device_float_batch(hidden_values, self.torch_device)
 
-        policy = self._policy()
         logprob_type = self.train_cfg.get("logprob_type", None)
         sample_batch = {
             "mode": "sample",
-            "hidden": hidden_t,
             "return_chunk": True,
             "deterministic": bool(self.train_cfg.get("deterministic", False)),
         }
+        if raw_policy_inputs is not None:
+            sample_batch.update(raw_policy_inputs)
+        else:
+            assert hidden_t is not None
+            sample_batch["hidden"] = hidden_t
+            if native_full_policy:
+                sample_batch.update(
+                    policy.prepare_prompt_batch(
+                        [
+                            str(
+                                obs_msg.obs.get(
+                                    "task_description",
+                                    obs_msg.obs.get("language", ""),
+                                )
+                            )
+                            for obs_msg in obs_msgs
+                        ]
+                    )
+                )
         if logprob_type is not None:
             sample_batch["logprob_type"] = str(logprob_type)
         action, log_prob, extra = policy(sample_batch)
@@ -162,17 +207,35 @@ class MultiStepRolloutWorker(Worker):
         extra = extra if isinstance(extra, dict) else {}
 
         forward_inputs: dict[str, Any] = {"action": action_cpu}
-        if batched_hidden is None:
+        if raw_policy_inputs is not None:
+            policy_hidden = extra.get("hidden")
+            if policy_hidden is None:
+                raise ValueError(
+                    "native full policy must return encoder hidden tokens for raw input"
+                )
+            forward_inputs["hidden"] = _batch_extra_forward_value(
+                policy_hidden,
+                batch_size=len(obs_msgs),
+            )
+        elif batched_hidden is None:
             # Encoder-derived hidden only exists here; obs-provided hidden is
             # already held by the env worker, so echoing it back would just
             # duplicate the largest tensor on the rollout->env channel.
+            assert hidden_t is not None
             forward_inputs["hidden"] = hidden_t.detach().cpu()
-        lang_emb = _batched_forward_input(
-            obs_msgs,
-            batched_obs=batched_obs,
-            encoder_extras=encoder_extras,
-            key="lang_emb",
-        )
+        lang_emb = extra.get("lang_emb")
+        if lang_emb is not None:
+            lang_emb = _batch_extra_forward_value(
+                lang_emb,
+                batch_size=len(obs_msgs),
+            )
+        else:
+            lang_emb = _batched_forward_input(
+                obs_msgs,
+                batched_obs=batched_obs,
+                encoder_extras=encoder_extras,
+                key="lang_emb",
+            )
         if lang_emb is not None:
             forward_inputs["lang_emb"] = lang_emb
         for key in _EXTRA_FORWARD_KEYS:
@@ -514,6 +577,83 @@ class MultiStepRolloutWorker(Worker):
             if self.encoder is None:
                 raise
         return self._encode_observation(obs_msg)
+
+    def _prepare_native_raw_batch(
+        self,
+        obs_msgs: list[ObservationMsg],
+        policy: nn.Module,
+    ) -> dict[str, torch.Tensor]:
+        """Prepare raw observations for one batched full-policy forward."""
+
+        preps: list[dict[str, Any]] = []
+        for obs_msg in obs_msgs:
+            extractor = self._policy_extractor_for(obs_msg, policy)
+            obs = dict(obs_msg.obs)
+            if bool(obs.get("is_first", False)):
+                reset = getattr(extractor, "reset", None)
+                if reset is not None:
+                    reset()
+            prepare = getattr(extractor, "prepare", None)
+            if prepare is None:
+                raise TypeError(
+                    "native full policy extractor must expose prepare(obs, task)"
+                )
+            task_description = str(
+                obs.get("task_description", obs.get("language", ""))
+            )
+            preps.append(dict(prepare(obs, task_description)))
+
+        from dreamervla.runners.rollout_hidden_extractor import _left_pad_batch
+
+        tokenizer = getattr(getattr(policy, "processor", None), "tokenizer", None)
+        if tokenizer is None:
+            # Contract doubles and alternate full policies may already emit a
+            # uniform prompt batch without exposing the HF processor.
+            lengths = {int(prep["input_ids"].shape[-1]) for prep in preps}
+            if len(lengths) != 1:
+                raise ValueError(
+                    "native policy without processor must emit uniform prompt lengths"
+                )
+            input_ids = torch.cat([prep["input_ids"] for prep in preps], dim=0)
+            attention_mask = torch.cat(
+                [prep["attention_mask"] for prep in preps], dim=0
+            )
+        else:
+            pad_id = tokenizer.pad_token_id
+            if pad_id is None:
+                pad_id = (
+                    tokenizer.eos_token_id
+                    if tokenizer.eos_token_id is not None
+                    else 0
+                )
+            bos_id = tokenizer.bos_token_id if tokenizer.bos_token_id is not None else 1
+            input_ids, attention_mask = _left_pad_batch(
+                [prep["input_ids"] for prep in preps],
+                [prep["attention_mask"] for prep in preps],
+                int(pad_id),
+                int(bos_id),
+            )
+        pixel_values = torch.cat(
+            [prep["pixel_values"] for prep in preps], dim=0
+        )
+        return {
+            "input_ids": input_ids.to(self.torch_device),
+            "attention_mask": attention_mask.to(self.torch_device),
+            "pixel_values": pixel_values.to(self.torch_device),
+        }
+
+    def _policy_extractor_for(
+        self,
+        obs_msg: ObservationMsg,
+        policy: nn.Module,
+    ) -> Any:
+        key = obs_msg.key
+        if key not in self.extractors:
+            make_extractor = getattr(policy, "make_extractor", None)
+            if make_extractor is None:
+                raise TypeError("native full policy must expose make_extractor()")
+            self.extractors[key] = make_extractor()
+        return self.extractors[key]
 
     def _encode_observation(self, obs_msg: ObservationMsg) -> tuple[Any, dict[str, Any]]:
         encoder = self._encoder()

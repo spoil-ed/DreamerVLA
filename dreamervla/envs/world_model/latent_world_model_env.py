@@ -159,6 +159,10 @@ class LatentWorldModelEnv:
         self._score_samples: list[np.ndarray] = []
         self._chunk_fallback_warned = False
         self.world_model.to(self.device).eval()
+        self._stateful_chunk_history = hasattr(self.world_model, "num_hist")
+        self._wm_latent_states: list[dict[str, torch.Tensor] | None] = [
+            None for _ in range(self.num_envs)
+        ]
         if self.classifier is not None:
             self.classifier.to(self.device).eval()
         if self.freeze_components:
@@ -247,6 +251,7 @@ class LatentWorldModelEnv:
             self._lang_emb[slot] = self._initial_lang_for_slot(slot).detach()
         if self.proprio_dim > 0:
             self._proprio[slot] = self._initial_proprio_for_slot(slot).detach()
+        self._reset_wm_latent_state(slot)
         self._reset_classifier_history(slot)
         return {
             "slot_id": slot,
@@ -510,11 +515,16 @@ class LatentWorldModelEnv:
         chunk_len = int(action_t.shape[1])
         if chunk_len <= 0:
             raise ValueError("actions must include at least one chunk step")
+        latent_input: torch.Tensor | dict[str, torch.Tensor]
+        if self._stateful_chunk_history:
+            latent_input = self._batched_wm_latent_state(slots)
+        else:
+            latent_input = self._token_grid(
+                self._latent[slots].reshape(batch_size, self.latent_dim)
+            )
         batch = {
             "mode": "predict_next_chunk",
-            "latent": self._token_grid(
-                self._latent[slots].reshape(batch_size, self.latent_dim)
-            ),
+            "latent": latent_input,
             "actions": action_t,
         }
         if self.lang_dim > 0:
@@ -568,6 +578,13 @@ class LatentWorldModelEnv:
             else latent_seq[:, -1]
         )
         self._latent[slots] = final_latent.detach()
+        if self._stateful_chunk_history:
+            self._commit_wm_latent_state(
+                slots=slots,
+                wm_out=wm_out,
+                latent_seq=hidden_seq,
+                action_chunk=action_t,
+            )
 
         lang_seq = self._chunk_sidecar_sequence(
             wm_out,
@@ -698,6 +715,160 @@ class LatentWorldModelEnv:
             }
             infos.append(info)
         return observations, rewards, terminations, truncations, infos
+
+    def _reset_wm_latent_state(self, slot_id: int) -> None:
+        """Initialize one slot's WM state from its real encoded start."""
+
+        slot = int(slot_id)
+        if not self._stateful_chunk_history:
+            self._wm_latent_states[slot] = None
+            return
+        hidden = torch.as_tensor(
+            self._token_grid(self._latent[slot : slot + 1]),
+            dtype=torch.float32,
+            device=self.device,
+        )
+        lang = (
+            self._lang_emb[slot : slot + 1]
+            if self.lang_dim > 0
+            else None
+        )
+        proprio = (
+            self._proprio[slot : slot + 1]
+            if self.proprio_dim > 0
+            else None
+        )
+        initializer = getattr(self.world_model, "initial_imagination_state", None)
+        if callable(initializer):
+            initialized = initializer(
+                hidden,
+                lang_emb=lang,
+                proprio=proprio,
+            )
+            if not isinstance(initialized, dict):
+                raise TypeError("initial_imagination_state must return a mapping")
+            state = {
+                str(key): value.detach()
+                for key, value in initialized.items()
+                if isinstance(value, torch.Tensor)
+            }
+        else:
+            history_size = max(1, int(getattr(self.world_model, "num_hist", 1)))
+            history = hidden[:, None].expand(
+                -1, history_size, *hidden.shape[1:]
+            ).clone()
+            state = {
+                "hidden": hidden,
+                "history": history,
+                "actions": torch.zeros(
+                    (1, history_size, self.action_dim),
+                    dtype=hidden.dtype,
+                    device=self.device,
+                ),
+            }
+            if lang is not None:
+                state["lang"] = lang.detach()
+            if proprio is not None:
+                state["proprio"] = proprio.detach()
+        for required in ("hidden", "history", "actions"):
+            if required not in state:
+                raise ValueError(
+                    "WM imagination state must include hidden, history, and actions"
+                )
+        self._wm_latent_states[slot] = state
+
+    def _batched_wm_latent_state(
+        self, slots: Sequence[int]
+    ) -> dict[str, torch.Tensor]:
+        states: list[dict[str, torch.Tensor]] = []
+        for slot_id in slots:
+            state = self._wm_latent_states[int(slot_id)]
+            if state is None:
+                self._reset_wm_latent_state(int(slot_id))
+                state = self._wm_latent_states[int(slot_id)]
+            if state is None:
+                raise RuntimeError("failed to initialize WM imagination state")
+            states.append(state)
+        keys = set(states[0])
+        if any(set(state) != keys for state in states[1:]):
+            raise ValueError("WM slot states must share sidecar keys for batching")
+        batched: dict[str, torch.Tensor] = {}
+        for key in sorted(keys):
+            values = [state[key] for state in states]
+            shape = tuple(values[0].shape[1:])
+            if any(tuple(value.shape[1:]) != shape for value in values[1:]):
+                raise ValueError(
+                    f"WM slot state {key!r} shapes diverged across active slots"
+                )
+            batched[key] = torch.cat(values, dim=0)
+        return batched
+
+    def _commit_wm_latent_state(
+        self,
+        *,
+        slots: Sequence[int],
+        wm_out: dict[str, Any],
+        latent_seq: torch.Tensor,
+        action_chunk: torch.Tensor,
+    ) -> None:
+        """Persist the exact history returned by a chunk-aware WM."""
+
+        batch_size = len(slots)
+        current = self._batched_wm_latent_state(slots)
+        hidden = torch.as_tensor(
+            wm_out.get("hidden", latent_seq[:, -1]),
+            device=self.device,
+        )
+        history_raw = wm_out.get("history")
+        actions_raw = wm_out.get("actions")
+        if isinstance(history_raw, torch.Tensor):
+            history = history_raw.to(device=self.device)
+        else:
+            combined = torch.cat([current["history"], latent_seq], dim=1)
+            history = combined[:, -current["history"].shape[1] :]
+        if isinstance(actions_raw, torch.Tensor):
+            action_history = actions_raw.to(device=self.device)
+        else:
+            action_history = current["actions"].clone()
+            for index in range(int(action_chunk.shape[1])):
+                action_history[:, -1] = action_chunk[:, index].to(
+                    dtype=action_history.dtype
+                )
+                action_history = torch.cat(
+                    [
+                        action_history[:, 1:],
+                        action_history.new_zeros(
+                            batch_size, 1, self.action_dim
+                        ),
+                    ],
+                    dim=1,
+                )
+        next_state: dict[str, torch.Tensor] = {
+            "hidden": hidden.detach(),
+            "history": history.detach(),
+            "actions": action_history.detach(),
+        }
+        for state_key, output_keys in (
+            ("lang", ("lang", "lang_emb")),
+            ("proprio", ("proprio", "state")),
+        ):
+            value = next(
+                (
+                    wm_out[key]
+                    for key in output_keys
+                    if isinstance(wm_out.get(key), torch.Tensor)
+                ),
+                current.get(state_key),
+            )
+            if isinstance(value, torch.Tensor):
+                if value.ndim >= 3:
+                    value = value[:, -1]
+                next_state[state_key] = value.to(device=self.device).detach()
+        for index, slot_id in enumerate(slots):
+            self._wm_latent_states[int(slot_id)] = {
+                key: value[index : index + 1].detach()
+                for key, value in next_state.items()
+            }
 
     def _chunk_step_batch_fallback(
         self,
