@@ -2,23 +2,12 @@
 
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
 from typing import Any
 
 from dreamervla.runtime.offline_seed import seed_replay_from_offline
+from dreamervla.runtime.online_replay import OnlineReplay
 from dreamervla.scheduler.worker import Worker
 from dreamervla.workers.cotrain.messages import RealTrajectoryBatch
-
-
-def _online_replay_cls() -> type:
-    path = Path(__file__).resolve().parents[2] / "runners" / "online_replay.py"
-    spec = importlib.util.spec_from_file_location("dreamervla_online_replay_for_ray", path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load OnlineReplay from {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.OnlineReplay
 
 
 class ReplayWorker(Worker):
@@ -30,7 +19,7 @@ class ReplayWorker(Worker):
         self.replay: Any | None = None
 
     def init(self) -> None:
-        self.replay = _online_replay_cls()(**self.replay_cfg)
+        self.replay = OnlineReplay(**self.replay_cfg)
 
     def add_episode(
         self, episode: list[dict[str, Any]], source: str = "online"
