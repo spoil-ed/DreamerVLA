@@ -7,9 +7,12 @@ import os
 import shlex
 import subprocess
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
+import torch
 from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 
@@ -107,6 +110,93 @@ def _runtime_overrides(values: list[str]) -> None:
     values.append(f"{key}={global_steps}")
 
 
+def _nested_output_dim(value: Any) -> int | None:
+    if not isinstance(value, Mapping):
+        return None
+    direct = value.get("output_dim")
+    if direct is not None:
+        try:
+            output_dim = int(direct)
+        except (TypeError, ValueError):
+            output_dim = 0
+        if output_dim in {1, 2}:
+            return output_dim
+    for key in ("init_args", "classifier", "config"):
+        inferred = _nested_output_dim(value.get(key))
+        if inferred is not None:
+            return inferred
+    return None
+
+
+def _classifier_checkpoint_output_dim(path: str | Path) -> int | None:
+    """Read the binary-head contract without constructing the classifier."""
+
+    checkpoint_path = Path(path).expanduser().resolve()
+    if checkpoint_path.is_dir():
+        config_path = checkpoint_path / "config.json"
+        if not config_path.is_file():
+            return None
+        with config_path.open(encoding="utf-8") as handle:
+            return _nested_output_dim(json.load(handle))
+    if not checkpoint_path.is_file() or checkpoint_path.stat().st_size == 0:
+        return None
+    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    if not isinstance(payload, Mapping):
+        return None
+    state_dicts = payload.get("state_dicts")
+    state = payload.get("classifier")
+    if state is None and isinstance(state_dicts, Mapping):
+        state = state_dicts.get("classifier", state_dicts.get("model"))
+    if state is None:
+        state = payload.get("model")
+    if not isinstance(state, Mapping):
+        return _nested_output_dim(payload)
+    for name, tensor in state.items():
+        if (
+            isinstance(name, str)
+            and (name == "head.weight" or name.endswith(".head.weight"))
+            and isinstance(tensor, torch.Tensor)
+            and tensor.ndim == 2
+            and int(tensor.shape[0]) in {1, 2}
+        ):
+            return int(tensor.shape[0])
+    return _nested_output_dim(payload)
+
+
+def _classifier_contract_overrides(values: list[str], cfg: DictConfig) -> bool:
+    checkpoint = OmegaConf.select(cfg, "init.classifier_state_ckpt", default=None)
+    if checkpoint in {None, ""}:
+        return False
+    output_dim = _classifier_checkpoint_output_dim(str(checkpoint))
+    if output_dim is None:
+        return False
+
+    output_key = "ray_components.classifier.kwargs.output_dim"
+    loss_key = "learner.train_cfg.classifier_loss_type"
+    configured_output = int(OmegaConf.select(cfg, output_key))
+    configured_loss = str(OmegaConf.select(cfg, loss_key)).lower()
+    expected_loss = "bce" if output_dim == 1 else "ce"
+    if _has_override(values, output_key) and configured_output != output_dim:
+        raise ValueError(
+            f"classifier checkpoint has output_dim={output_dim}, but {output_key}="
+            f"{configured_output} was explicitly requested"
+        )
+    if _has_override(values, loss_key) and configured_loss != expected_loss:
+        raise ValueError(
+            f"classifier checkpoint output_dim={output_dim} requires {loss_key}="
+            f"{expected_loss}, got {configured_loss}"
+        )
+
+    changed = False
+    if not _has_override(values, output_key) and configured_output != output_dim:
+        values.append(f"{output_key}={output_dim}")
+        changed = True
+    if not _has_override(values, loss_key) and configured_loss != expected_loss:
+        values.append(f"{loss_key}={expected_loss}")
+        changed = True
+    return changed
+
+
 def _compose(values: list[str]) -> DictConfig:
     register_dreamervla_resolvers()
     with initialize_config_dir(
@@ -158,6 +248,8 @@ def build_launch(argv: list[str]) -> CotrainLaunch:
     _component_overrides(values)
     _runtime_overrides(values)
     cfg = _compose(values)
+    if _classifier_contract_overrides(values, cfg):
+        cfg = _compose(values)
     command = (sys.executable, "-m", "dreamervla.train", *values)
     return CotrainLaunch(command=command, env=_process_env(cfg), cfg=cfg)
 

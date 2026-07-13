@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+import torch
 
 from dreamervla.launchers.cotrain import build_launch
 
@@ -50,6 +51,33 @@ def test_cotrain_launcher_accepts_atomic_warm_start_pair(
     assert launch.env["LIBERO_CONFIG_PATH"] == str(
         (Path(launch.env["DVLA_DATA_ROOT"]) / ".libero").resolve()
     )
+
+
+def test_cotrain_launcher_matches_classifier_head_to_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wm = tmp_path / "wm.ckpt"
+    classifier = tmp_path / "classifier.ckpt"
+    wm.touch()
+    torch.save(
+        {
+            "classifier": {
+                "head.weight": torch.zeros(2, 1024),
+                "head.bias": torch.zeros(2),
+            }
+        },
+        classifier,
+    )
+    monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm))
+    monkeypatch.setenv("CLASSIFIER_CKPT", str(classifier))
+
+    launch = build_launch([])
+
+    assert launch.cfg.ray_components.classifier.kwargs.output_dim == 2
+    assert launch.cfg.learner.train_cfg.classifier_loss_type == "ce"
+    assert "ray_components.classifier.kwargs.output_dim=2" in launch.command
+    assert "learner.train_cfg.classifier_loss_type=ce" in launch.command
 
 
 def test_cotrain_launcher_reads_global_steps_environment_override(
