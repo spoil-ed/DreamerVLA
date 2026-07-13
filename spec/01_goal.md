@@ -29,8 +29,8 @@ python -m dreamervla.launchers.coldstart_warmup_cotrain mode=ray task=goal
 常用 shell 包装：
 
 ```bash
-bash scripts/e2e_coldstart_warmup_cotrain_ray.sh task=goal
-bash scripts/e2e_coldstart_warmup_cotrain_noray.sh task=goal
+python -m dreamervla.launchers.coldstart_warmup_cotrain mode=ray task=goal
+python -m dreamervla.launchers.coldstart_warmup_cotrain mode=noray task=goal
 ```
 
 ## Main Runner Targets

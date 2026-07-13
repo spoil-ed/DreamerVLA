@@ -28,7 +28,7 @@ collect -> seed replay + warmup world model/classifier -> online cotrain -> eval
 
 ## 预主线因果测试（不是主线）
 
-`scripts/e2e_frozen_model_pre_mainline.sh` 执行一条独立门禁：
+`python -m dreamervla.launchers.frozen_model_pre_mainline` 执行一条独立门禁：
 
 ```
 official LIBERO -> WM upper bound + classifier upper bound

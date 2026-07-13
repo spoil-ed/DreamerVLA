@@ -1405,8 +1405,7 @@ class DreamerVLARunner(BaseRunner):
             raise ValueError(
                 "This DreamerVLA config reuses the VLA action head, so it needs a "
                 "matching goal VLA checkpoint. Pass one with "
-                "`init.encoder_state_ckpt=data/outputs/vla/<run>/checkpoints/latest.ckpt` or "
-                "`VLA_STATE_CKPT=data/outputs/vla/<run>/checkpoints/latest.ckpt bash scripts/train_dreamervla.sh`."
+                "`init.encoder_state_ckpt=data/outputs/vla/<run>/checkpoints/latest.ckpt`."
             )
         policy_module = hydra.utils.instantiate(policy_cfg).to(self.device)
         algorithm_cfg_for_ref = OmegaConf.select(cfg, "algorithm", default={})

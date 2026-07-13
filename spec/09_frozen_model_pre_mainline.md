@@ -239,7 +239,8 @@ Hydra threshold of `0.5`.
 ```bash
 WORLD_MODEL_CKPT=/path/to/world_model/run \
 CLASSIFIER_CKPT=/path/to/classifier/run \
-  bash scripts/e2e_frozen_model_cotrain.sh
+  python -m dreamervla.launchers.frozen_model_cotrain_ray \
+  experiment=dreamervla_frozen_models_rl_ray
 ```
 
 Resume requires the same two immutable sources plus the Ray policy checkpoint:
@@ -248,7 +249,8 @@ Resume requires the same two immutable sources plus the Ray policy checkpoint:
 WORLD_MODEL_CKPT=/path/to/world_model/run \
 CLASSIFIER_CKPT=/path/to/classifier/run \
 COTRAIN_RESUME_CKPT=/path/to/frozen_cotrain_run/checkpoints/manual_cotrain_step_500/manual_cotrain.ckpt \
-  bash scripts/e2e_frozen_model_cotrain.sh
+  python -m dreamervla.launchers.frozen_model_cotrain_ray \
+  experiment=dreamervla_frozen_models_rl_ray
 ```
 
 The launcher infers the original run root from the checkpoint path; assign

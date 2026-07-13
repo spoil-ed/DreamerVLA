@@ -1,0 +1,26 @@
+# @package _global_
+defaults:
+  - eval_libero_vla
+  - _self_
+
+training:
+  out_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/eval/cotrain/${now:%Y%m%d_%H%M%S}
+
+eval:
+  ckpt_path: null
+  ckpt_kind: vla_policy
+  require_strict_component_load: true
+  cotrain_diagnostics: true
+  cotrain_expected_trajectories: 100
+  cotrain_encode_batch_size: 4
+  task_suite_name: libero_goal
+  task_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  num_episodes_per_task: 10
+  num_envs: 25
+  action_steps: 8
+  history_length: 1
+  scheme: rlinf_chunk
+  enumerate_all_init_states: false
+  reconfigure_per_episode: true
+  action_postprocess: openvla_oft
+  render_backend: osmesa

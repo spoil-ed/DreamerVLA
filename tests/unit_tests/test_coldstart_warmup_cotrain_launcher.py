@@ -1179,32 +1179,6 @@ def test_collected_validation_rejects_56x1024_in_later_demo(tmp_path) -> None:
     assert any("(1, 56, 1024)" in error for error in errors)
 
 
-def test_e2e_shell_scripts_select_expected_modes() -> None:
-    root = Path(__file__).resolve().parents[2]
-    ray = root / "scripts" / "e2e_coldstart_warmup_cotrain_ray.sh"
-    noray = root / "scripts" / "e2e_coldstart_warmup_cotrain_noray.sh"
-
-    assert ray.is_file()
-    assert noray.is_file()
-    ray_text = ray.read_text(encoding="utf-8")
-    noray_text = noray.read_text(encoding="utf-8")
-    assert "--mode" not in ray_text
-    assert "--mode" not in noray_text
-    assert "mode=ray" in ray_text
-    assert "mode=noray" in noray_text
-    assert "profile=multi_gpu" in ray_text
-    # ngpu is derived from CUDA_VISIBLE_DEVICES (so 8-GPU runs without a manual
-    # override) with a 6-GPU fallback when the variable is unset.
-    assert 'ngpu="${_DVLA_NGPU}"' in ray_text
-    assert "CUDA_VISIBLE_DEVICES" in ray_text
-    assert "_DVLA_NGPU=6" in ray_text
-    assert "cotrain_engine=async" in ray_text
-    assert 'CONDA_ENV_NAME="${DVLA_CONDA_ENV:-dreamervla}"' in ray_text
-    assert 'CONDA_ENV_NAME="${DVLA_CONDA_ENV:-dreamervla}"' in noray_text
-    assert 'conda activate "${CONDA_ENV_NAME}"' in ray_text
-    assert 'conda activate "${CONDA_ENV_NAME}"' in noray_text
-
-
 def test_coldstart_launcher_has_no_argparse_cli() -> None:
     root = Path(__file__).resolve().parents[2]
     text = (root / "dreamervla" / "launchers" / "coldstart_warmup_cotrain.py").read_text(

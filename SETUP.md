@@ -109,16 +109,15 @@ warms up the world model and classifier, then optionally continues online:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-  bash scripts/e2e_coldstart_warmup_cotrain_ray.sh \
-  task=goal ngpu=8 profile=multi_gpu render_backend=osmesa
+  bash scripts/experiments/cotrain/train.sh
 ```
 
-The sync launcher uses the same warmup code path without Ray collection:
+The older collect/warmup pipeline remains available as a Python launcher:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-  bash scripts/e2e_coldstart_warmup_cotrain_noray.sh \
-  task=goal ngpu=8 profile=multi_gpu render_backend=osmesa
+  python -m dreamervla.launchers.coldstart_warmup_cotrain \
+  mode=noray task=goal ngpu=8 profile=multi_gpu render_backend=osmesa
 ```
 
 Common task shorthands are `goal`, `object`, `spatial`, and `10`. The launcher
@@ -131,25 +130,21 @@ For offline WM analysis on the full collected replay:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-  GPU_COUNT=8 \
   DVLA_DATA_ROOT=/path/to/data \
   bash scripts/experiments/world_model_training/train.sh
 ```
 
 The shell file intentionally exposes one command. Batch size, LR, sequence
-length, rollout depth, checkpoint cadence, and profiling knobs are owned by
-Hydra config and the script-level defaults in
-`scripts/experiments/world_model_training/train.sh`.
+length, rollout depth, checkpoint cadence, and profiling knobs are owned only by
+Hydra config.
 
 ## Evaluation
 
 Evaluate a VLA or Dreamer checkpoint with:
 
 ```bash
-bash scripts/eval_libero_vla.sh \
-  gpus=0 \
+bash scripts/experiments/cotrain/eval.sh \
   eval.ckpt_path=/path/to/checkpoint \
-  eval.ckpt_kind=auto \
   eval.task_suite_name=libero_goal
 ```
 

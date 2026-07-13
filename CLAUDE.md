@@ -12,8 +12,9 @@ from AGENTS.md.
 
 - Launch the grouped Hydra entry with
   `python -m dreamervla.train experiment=<name> task=<suite>`.
-- `scripts/train_dreamervla.sh` and the two cold-start e2e launchers forward
-  ordinary `key=value` overrides to grouped Hydra entrypoints.
+- `scripts/experiments/cotrain/train.sh` and
+  `scripts/experiments/cotrain/eval.sh` forward ordinary `key=value`
+  overrides to grouped Hydra entrypoints.
 - Config groups are `experiment/`, `VLA/`, `worldmodel/`, `classifier/`,
   `dreamervla/`, `evaluation/`, `task/`, and `logger/`.
 - Mainline training defaults to `logger=tensorboard_wandb`; add

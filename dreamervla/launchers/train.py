@@ -33,6 +33,7 @@ _LAUNCHER_KEYS = {
     "out_dir",
     "print_config",
     "python",
+    "required_target_values",
     "experiment",
     "route",
     "run_tag",
@@ -137,6 +138,30 @@ def _has_path(cfg: Mapping[str, Any], dotted: str) -> bool:
             return False
         node = node[part]
     return True
+
+
+def _select_path(cfg: Mapping[str, Any], dotted: str) -> Any:
+    node: Any = cfg
+    for part in dotted.split("."):
+        if not isinstance(node, Mapping) or part not in node:
+            return None
+        node = node[part]
+    return node
+
+
+def _missing_required_target_values(
+    cfg: Mapping[str, Any],
+    experiment_overrides: Sequence[str],
+) -> list[str]:
+    required = [str(key) for key in cfg.get("required_target_values", [])]
+    if not required:
+        return []
+    target_cfg = _compose_train_config(str(cfg["experiment"]), experiment_overrides)
+    return [
+        key
+        for key in required
+        if _select_path(target_cfg, key) in (None, "", "???")
+    ]
 
 
 def _compose_train_config(
@@ -257,6 +282,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         _write_libero_config(data_root)
 
     overrides = _experiment_overrides(cfg, trailing)
+    missing = _missing_required_target_values(cfg, overrides)
+    if missing:
+        rendered = ", ".join(f"{key}=<value>" for key in missing)
+        print(
+            f"[train:{cfg.get('name')}] missing required Hydra override(s): {rendered}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 2
     command = _command(cfg, overrides)
     env = _build_env(cfg)
     print(

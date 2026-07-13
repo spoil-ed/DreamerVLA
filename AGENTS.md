@@ -18,7 +18,7 @@ Architecture source documents live under [spec/](spec/), with
 guidance. Keep this file as the repository brief.
 
 The separate **pre-mainline feasibility test** is
-`scripts/e2e_frozen_model_pre_mainline.sh`: train WM and classifier from official
+`python -m dreamervla.launchers.frozen_model_pre_mainline`: train WM and classifier from official
 LIBERO data, freeze both, run policy-only imagined RL with
 `dreamervla_frozen_models_rl`, then compare the base VLA and learned policy with a
 matched real-LIBERO protocol. Its first route is canonical `libero_goal` only. It
@@ -64,7 +64,7 @@ collect/warmup/online-cotrain flow.
   - `configs/experiment/` selects complete recipes.
   - `configs/task/` carries LIBERO suite, checkpoint, image/history, and sidecar metadata.
 - **`scripts/`** - thin shell launchers. Implementation belongs in `dreamervla/` and
-  runs via `python -m`.
+  runs via `python -m`; defaults belong to Hydra, not shell variables.
 - **`tests/`** - `unit_tests/` for contracts and focused behavior; `e2e_tests/` for
   subprocess, Ray, GPU, or real-environment coverage.
 - **`data/`** - runtime data root when `DVLA_DATA_ROOT` is not set:
@@ -76,20 +76,19 @@ collect/warmup/online-cotrain flow.
 
 ## Mainline Flow
 
-Use one of the e2e wrappers:
+The retained shell surface exposes train and eval separately:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
-  bash scripts/e2e_coldstart_warmup_cotrain_noray.sh \
-  task=goal ngpu=6 profile=multi_gpu render_backend=osmesa
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+  bash scripts/experiments/cotrain/train.sh
 
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 \
-  bash scripts/e2e_coldstart_warmup_cotrain_ray.sh \
-  task=goal ngpu=6 profile=multi_gpu render_backend=osmesa
+bash scripts/experiments/cotrain/eval.sh \
+  eval.ckpt_path=/path/to/manual_cotrain.ckpt
 ```
 
-Both scripts set `DVLA_ROOT`, default `DVLA_DATA_ROOT`, activate the `dreamervla`
-conda env when available, set `NCCL_NVLS_ENABLE=0`, and call
+These scripts contain no training defaults. The train route selects
+`experiment=dreamervla_wmcls_cotrain_ray`; eval selects `eval_cotrain`.
+The older collect/warmup pipeline remains available directly through
 `python -m dreamervla.launchers.coldstart_warmup_cotrain`.
 
 The launcher composes `configs/scripts/coldstart_warmup_cotrain.yaml`:
@@ -125,7 +124,7 @@ Run the complete causal test with:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-  bash scripts/e2e_frozen_model_pre_mainline.sh \
+  python -m dreamervla.launchers.frozen_model_pre_mainline \
   task=goal ngpu=8
 ```
 
@@ -222,8 +221,8 @@ sub-roots under `RUN_ROOT`; do not scatter extra artifacts elsewhere.
   `${RUN_ROOT}/cotrain/ckpt/classifier_warmup.ckpt`.
 - Use `BaseRunner.get_global_step_checkpoint_dir` and component checkpoint helpers
   instead of hand-built paths.
-- LIBERO Dreamer/OpenVLA evaluation goes through `scripts/eval_libero_vla.sh` and
-  `configs/scripts/eval_libero_vla.yaml`.
+- Cotrain evaluation goes through `scripts/experiments/cotrain/eval.sh`,
+  `configs/scripts/cotrain_eval.yaml`, and `configs/experiment/eval_cotrain.yaml`.
 
 ---
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Train the official-data success classifier through Hydra.
+# Evaluate one explicit manual-cotrain policy checkpoint through Hydra.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 cd "$(cd "${SCRIPT_DIR}/../../.." && pwd -P)"
 
 exec python -m dreamervla.launchers.train \
-  --config-name classifier_training \
+  --config-name cotrain_eval \
   "$@"
