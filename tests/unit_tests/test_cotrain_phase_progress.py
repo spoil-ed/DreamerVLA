@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from dreamervla.runners.cotrain_runner import (
+    _EvaluationProgressMonitor,
     _read_manual_cotrain_progress_snapshot,
 )
 from dreamervla.workers.actor.learner_worker import LearnerWorker
@@ -70,3 +71,35 @@ def test_step_local_wmcls_update_persists_monotonic_progress(tmp_path) -> None:
     assert payload["total_train_steps"] == 3
     assert payload["wm_step"] == 3
     assert payload["cls_step"] == 3
+
+
+def test_eval_progress_rate_uses_completed_episodes(tmp_path) -> None:
+    (tmp_path / "eval.json").write_text(
+        json.dumps(
+            {
+                "role": "eval_env",
+                "env_rank": 0,
+                "done": 570,
+                "total": 3800,
+                "episodes_completed": 17,
+                "episodes_successful": 16,
+                "finished": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    reports: list[tuple[int, int, str]] = []
+
+    monitor = _EvaluationProgressMonitor(
+        tmp_path,
+        lambda done, total, _desc, **kwargs: reports.append(
+            (done, total, str(kwargs["status"]))
+        ),
+        desc="eval/00000000",
+        total_episodes=100,
+    )
+    monitor.report(force=True)
+
+    assert reports == [
+        (15, 100, "completed=17 successes=16 success_rate=0.941 chunks=570/3800")
+    ]

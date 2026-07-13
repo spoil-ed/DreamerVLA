@@ -3077,9 +3077,13 @@ class _EvaluationProgressMonitor:
         chunk_done = sum(max(0, int(record.get("done", 0))) for record in records)
         chunk_total = sum(max(0, int(record.get("total", 0))) for record in records)
         finished = sum(bool(record.get("finished", False)) for record in records)
+        completed = sum(
+            max(0, int(record.get("episodes_completed", 0))) for record in records
+        )
         successes = sum(
             max(0, int(record.get("episodes_successful", 0))) for record in records
         )
+        successes = min(completed, successes)
         if chunk_total > 0:
             done = min(
                 self._total_episodes,
@@ -3090,8 +3094,8 @@ class _EvaluationProgressMonitor:
         if records and finished == len(records):
             done = self._total_episodes
         status = (
-            f"successes={successes} success_rate="
-            f"{float(successes) / float(max(1, done)):.3f} "
+            f"completed={completed} successes={successes} success_rate="
+            f"{float(successes) / float(max(1, completed)):.3f} "
             f"chunks={chunk_done}/{chunk_total}"
         )
         self._console_progress(
