@@ -858,6 +858,7 @@ def test_release_scripts_tree_is_curated() -> None:
         "e2e_frozen_model_pre_mainline.sh",
         "e2e_manual_cotrain_async.sh",
         "e2e_wmcls_cotrain_eval.sh",
+        "e2e_wmcls_cotrain_eval_oneclick.sh",
         "eval_libero_vla.sh",
         "install_env.sh",
         "preprocess_libero.sh",

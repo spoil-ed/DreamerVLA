@@ -145,6 +145,28 @@ def test_frozen_cotrain_script_only_requires_component_paths_at_handoff() -> Non
     assert "dreamervla.train" not in text
 
 
+def test_wmcls_cotrain_oneclick_script_pins_reusable_warm_start_defaults() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = root / "scripts" / "e2e_wmcls_cotrain_eval_oneclick.sh"
+
+    assert script.is_file()
+    assert os.access(script, os.X_OK)
+    text = script.read_text(encoding="utf-8")
+    for marker in (
+        'CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"',
+        "world_model/20260712_052904/ckpt/warmup_topk/wm/",
+        "wm_step=00004000-loss=0.097758.ckpt",
+        "classifier/20260712_052906/checkpoints/",
+        "best_window_f10.9711_th0.45.ckpt",
+        'WMCLS_COTRAIN_GLOBAL_STEPS="${WMCLS_COTRAIN_GLOBAL_STEPS:-20000}"',
+        'COTRAIN_RUN_ROOT="${COTRAIN_RUN_ROOT:-',
+        'exec bash "${SCRIPT_DIR}/e2e_wmcls_cotrain_eval.sh"',
+        'manual_cotrain.global_steps="${WMCLS_COTRAIN_GLOBAL_STEPS}"',
+        '"$@"',
+    ):
+        assert marker in text
+
+
 def test_eight_card_training_scripts_embed_h100_runtime_defaults() -> None:
     root = Path(__file__).resolve().parents[2]
     scripts = [

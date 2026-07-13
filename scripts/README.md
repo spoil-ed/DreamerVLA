@@ -20,6 +20,7 @@ Runtime paths are documented in [docs/data_layout.md](../docs/data_layout.md).
 | `e2e_frozen_model_cotrain.sh` | Eight-GPU Ray policy training with frozen WM/CLS checkpoints |
 | `e2e_frozen_model_cotrain_eval.sh` | Frozen WM/CLS cotrain plus matched step-0/every-10-step VLA eval |
 | `e2e_wmcls_cotrain_eval.sh` | Trainable WM/CLS cotrain plus matched step-0/every-10-step VLA eval |
+| `e2e_wmcls_cotrain_eval_oneclick.sh` | Pinned 8-GPU staged full-VLA cotrain from the selected WM/CLS warm states |
 | `experiments/single_trajectory_overfit/train.sh` | Single-trajectory overfit training diagnostic |
 | `experiments/single_trajectory_overfit/eval.sh` | Single-trajectory overfit eval summary |
 | `experiments/classifier_training/train.sh` | One-click official-data classifier upper-bound training |
@@ -145,6 +146,15 @@ CLASSIFIER_CKPT=/path/to/classifier/run \
 WORLD_MODEL_CKPT=/path/to/world_model/run \
 CLASSIFIER_CKPT=/path/to/classifier/run \
   bash scripts/e2e_wmcls_cotrain_eval.sh
+```
+
+The selected staged full-VLA run has a one-click entrypoint. It defaults to the
+2026-07-12 WM/classifier warm checkpoints, 8 GPUs, 20,000 global steps, and a
+new timestamped run root. The corresponding environment variables remain
+overridable:
+
+```bash
+bash scripts/e2e_wmcls_cotrain_eval_oneclick.sh
 ```
 
 Resume the same run with its policy checkpoint; WM/CLS are still loaded from
