@@ -200,6 +200,12 @@ Production saves every 10 global steps. Debug runs for 10 global steps and saves
 evaluates every step, with 8 real and 256 imagined trajectories. Other debug values
 inherit production defaults.
 
+Debug limits are enforced by the resolved `CotrainRunner` configuration before the
+driver loop starts; they are not launcher-only hints. A debug run must terminate after
+exactly 10 accepted global steps even when the shell entrypoint or base experiment
+declares a larger production target. Resume and evaluation orchestration must not
+replace that cap with a larger target.
+
 A cotrain checkpoint contains the complete VLA, World Model, Success Classifier,
 classifier threshold, all active optimizers, global step, and required replay/sampling
 metadata. Component checkpoints remain loadable as native PyTorch state. VLA export
@@ -235,6 +241,12 @@ The consolidation is complete only when:
 - all six phase progress streams advance monotonically and finish at their own totals;
 - native PyTorch component restore and Hugging Face VLA evaluation/export both pass;
 - debug and production schedules match their declared budgets.
+
+The final acceptance test is a real local eight-GPU debug run with
+`CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7`. It must launch all resident Ray groups, stop
+after global step 10, collect 8 real and 256 imagined trajectories per accepted step,
+save every step, evaluate every step, and expose all phase-specific progress streams.
+Dry-run composition or a mocked worker test does not replace this acceptance run.
 
 ## Non-Goals
 
