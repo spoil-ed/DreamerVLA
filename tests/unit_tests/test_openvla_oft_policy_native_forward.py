@@ -48,7 +48,9 @@ class _FakeVLA(nn.Module):
         super().__init__()
         self.config = SimpleNamespace(hidden_size=int(token_dim))
         self.vision_backbone = _FakeVisionBackbone(token_count)
-        self.vocab_size = 16
+        # Keep LM token ids disjoint from compact action-class indices, matching
+        # the real checkpoint vocabulary contract.
+        self.vocab_size = 32
         self.bin_centers = np.linspace(-1.0, 1.0, 8, dtype=np.float32)
         self.embedding = _FunctionalEmbedding(token_dim)
         self.vision_scale = nn.Parameter(torch.tensor(0.5))
@@ -128,7 +130,7 @@ def _policy() -> OpenVLAOFTPolicy:
     policy = OpenVLAOFTPolicy.from_modules(
         vla=_FakeVLA(),
         action_head=None,
-        action_tokenizer=object(),
+        action_tokenizer=SimpleNamespace(vocab_size=9),
         num_patches=256,
     )
     policy.unnorm_key = "fake_libero"
@@ -141,7 +143,7 @@ def test_policy_geometry_is_derived_from_the_loaded_vla() -> None:
     policy = OpenVLAOFTPolicy.from_modules(
         vla=_FakeVLA(token_count=4, token_dim=12),
         action_head=None,
-        action_tokenizer=object(),
+        action_tokenizer=SimpleNamespace(vocab_size=9),
         num_patches=4,
     )
 
@@ -154,7 +156,26 @@ def test_policy_geometry_is_derived_from_the_loaded_vla() -> None:
     assert policy.token_count == 4
     assert policy.token_dim == 12
     assert output.projected_tokens.shape == (1, 4, 12)
-    assert output.action_logits.shape == (1, 56, 8)
+    assert output.action_logits.shape == (1, 56, 9)
+    assert output.action_token_ids.tolist() == list(range(31, 22, -1))
+
+
+def test_terminal_action_classes_share_the_last_bin_center() -> None:
+    policy = _policy()
+
+    normalized = policy.action_classes_to_normalized_actions(
+        torch.tensor([0, 7, 8], dtype=torch.long)
+    )
+
+    expected = torch.tensor(
+        [
+            policy.vla.bin_centers[0],
+            policy.vla.bin_centers[-1],
+            policy.vla.bin_centers[-1],
+        ],
+        dtype=torch.float32,
+    )
+    torch.testing.assert_close(normalized, expected)
 
 
 def test_raw_and_projected_token_paths_share_native_action_decoder() -> None:
@@ -175,7 +196,7 @@ def test_raw_and_projected_token_paths_share_native_action_decoder() -> None:
     )
 
     assert raw.projected_tokens.shape == (1, 256, 4096)
-    assert raw.action_logits.shape == (1, 56, 8)
+    assert raw.action_logits.shape == (1, 56, 9)
     torch.testing.assert_close(latent.action_logits, raw.action_logits)
     torch.testing.assert_close(latent.language_embedding, raw.language_embedding)
 
@@ -243,6 +264,29 @@ def test_actor_interface_reuses_exact_native_action_tokens_for_evaluation() -> N
     torch.testing.assert_close(new_logprob, old_logprob)
     assert entropy.shape == old_logprob.shape
     torch.testing.assert_close(evaluated["action_token_ids"], extra["action_token_ids"])
+
+
+def test_deterministic_actor_uses_upstream_full_vocabulary_tie_breaking() -> None:
+    policy = _policy()
+    with torch.no_grad():
+        policy.vla.language_model.proj.weight.zero_()
+
+    actions, _, extra = policy(
+        {
+            "mode": "sample",
+            "hidden": torch.ones((1, 256, 4096)),
+            "input_ids": torch.tensor([[1, 3]], dtype=torch.long),
+            "attention_mask": torch.ones((1, 2), dtype=torch.long),
+            "deterministic": True,
+        }
+    )
+
+    terminal_token_id = policy.vla.vocab_size - policy.action_token_vocabulary_size
+    assert torch.all(extra["action_token_ids"] == terminal_token_id)
+    torch.testing.assert_close(
+        actions,
+        torch.full_like(actions, float(policy.vla.bin_centers[-1])),
+    )
 
 
 def test_staged_modes_expose_encoder_only_sft_and_raw_reencoding() -> None:

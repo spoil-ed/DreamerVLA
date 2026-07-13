@@ -505,17 +505,10 @@ class OFTBatchedDecoder:
                 image_keys=self._image_keys,
                 patches_per_image=int(model.vision_backbone.get_num_patches()),
             )
-            action_classes = native.action_logits.argmax(dim=-1)
-            token_ids = native.action_token_ids.index_select(
-                0, action_classes.reshape(-1)
-            ).reshape_as(action_classes)
-            centers = torch.as_tensor(
-                np.asarray(model.bin_centers),
-                device=action_classes.device,
-                dtype=torch.float32,
-            )
-            normalized = centers.index_select(
-                0, action_classes.reshape(-1)
+            token_ids = native.full_action_logits.argmax(dim=-1)
+            action_classes = self._policy.action_token_ids_to_classes(token_ids)
+            normalized = self._policy.action_classes_to_normalized_actions(
+                action_classes
             ).reshape(
                 input_ids.shape[0], self._num_chunks, self._action_dim
             )

@@ -138,6 +138,7 @@ class NativeOFTForwardOutput:
     projected_tokens: torch.Tensor
     language_embedding: torch.Tensor
     multimodal_attention_mask: torch.Tensor | None
+    full_action_logits: torch.Tensor
     full_logits: torch.Tensor
 
 
@@ -321,6 +322,59 @@ class OpenVLAOFTPolicy(nn.Module):
     @property
     def device(self) -> torch.device:
         return next(self.parameters()).device
+
+    @property
+    def action_token_vocabulary_size(self) -> int:
+        """Return the complete checkpoint action-token vocabulary size.
+
+        OpenVLA uses 256 discrete action tokens but only 255 bin centers.  The
+        terminal token is intentional: upstream decoding clips both terminal
+        classes to the final bin center.
+        """
+
+        value = getattr(self.action_tokenizer, "vocab_size", None)
+        if value is None:
+            raise ValueError("action tokenizer must expose vocab_size")
+        vocabulary_size = int(value)
+        center_count = int(len(self.vla.bin_centers))
+        if vocabulary_size != center_count + 1:
+            raise ValueError(
+                "OpenVLA action-token vocabulary must contain one terminal class "
+                "beyond the bin centers: "
+                f"vocabulary_size={vocabulary_size}, bin_centers={center_count}"
+            )
+        return vocabulary_size
+
+    def action_classes_to_normalized_actions(
+        self,
+        action_classes: torch.Tensor,
+    ) -> torch.Tensor:
+        """Decode action classes with the upstream terminal-bin clipping rule."""
+
+        classes = action_classes.to(dtype=torch.long)
+        vocabulary_size = self.action_token_vocabulary_size
+        if classes.numel() and (
+            int(classes.min().item()) < 0 or int(classes.max().item()) >= vocabulary_size
+        ):
+            raise ValueError("action classes are outside the checkpoint action-token vocabulary")
+        centers = torch.as_tensor(
+            np.asarray(self.vla.bin_centers),
+            dtype=torch.float32,
+            device=classes.device,
+        )
+        bin_indices = classes.clamp(max=int(centers.numel()) - 1)
+        return centers.index_select(0, bin_indices.reshape(-1)).reshape_as(classes)
+
+    def action_token_ids_to_classes(
+        self,
+        action_token_ids: torch.Tensor,
+    ) -> torch.Tensor:
+        """Map LM token ids to action classes with upstream endpoint clipping."""
+
+        return (int(self.vla.vocab_size) - action_token_ids.to(dtype=torch.long) - 1).clamp(
+            min=0,
+            max=self.action_token_vocabulary_size - 1,
+        )
 
     def encoder_parameter_names(self) -> tuple[str, ...]:
         """Return the input-to-projected-token parameter partition.
@@ -567,7 +621,7 @@ class OpenVLAOFTPolicy(nn.Module):
         full_action_logits = lm_out.logits[:, action_start : action_start + action_span, :]
         if int(full_action_logits.shape[1]) != action_span:
             raise ValueError("native OpenVLA LM output does not contain all action positions")
-        num_bins = int(len(model.bin_centers))
+        num_bins = self.action_token_vocabulary_size
         action_token_ids = int(model.vocab_size) - torch.arange(
             1,
             num_bins + 1,
@@ -587,6 +641,7 @@ class OpenVLAOFTPolicy(nn.Module):
             projected_tokens=projected,
             language_embedding=language_embedding,
             multimodal_attention_mask=multimodal_attention_mask,
+            full_action_logits=full_action_logits,
             full_logits=lm_out.logits,
         )
 
@@ -741,7 +796,9 @@ class OpenVLAOFTPolicy(nn.Module):
         distribution = Categorical(logits=output.action_logits.float())
         if mode == "sample":
             if bool(batch.get("deterministic", False)):
-                action_classes = output.action_logits.argmax(dim=-1)
+                action_classes = self.action_token_ids_to_classes(
+                    output.full_action_logits.argmax(dim=-1)
+                )
             else:
                 action_classes = distribution.sample()
         else:
@@ -789,12 +846,7 @@ class OpenVLAOFTPolicy(nn.Module):
         if mode == "evaluate":
             return log_prob, entropy, extras
 
-        centers = torch.as_tensor(
-            np.asarray(self.vla.bin_centers),
-            dtype=torch.float32,
-            device=action_classes.device,
-        )
-        normalized_actions = centers.index_select(0, action_classes.reshape(-1)).reshape(
+        normalized_actions = self.action_classes_to_normalized_actions(action_classes).reshape(
             batch_size, self.time_horizon, self.action_dim
         )
         unnormalized = self.vla._unnormalize_actions(
