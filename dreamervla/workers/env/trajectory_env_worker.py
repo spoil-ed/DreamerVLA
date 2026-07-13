@@ -1287,7 +1287,7 @@ class BaseTrajectoryEnvWorker(Worker):
         self._apply_pending_component_states()
 
     def _pin_inproc_render_backend(self) -> None:
-        if self.role != "real_env":
+        if self.role not in {"real_env", "eval_env"}:
             return
         render_backend = str(self.env_cfg.get("render_backend", "osmesa")).strip().lower()
         apply_libero_render_regime(

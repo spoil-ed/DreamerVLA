@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from dreamervla.runners.cotrain_runner import (
     _EvaluationProgressMonitor,
     _read_manual_cotrain_progress_snapshot,
 )
 from dreamervla.workers.actor.learner_worker import LearnerWorker
+from dreamervla.workers.env import trajectory_env_worker
+from dreamervla.workers.env.evaluation_env_worker import EvaluationEnvironmentWorker
 
 
 def test_env_progress_snapshot_filters_real_and_imagined_roles(tmp_path) -> None:
@@ -103,3 +106,33 @@ def test_eval_progress_rate_uses_completed_episodes(tmp_path) -> None:
     assert reports == [
         (15, 100, "completed=17 successes=16 success_rate=0.941 chunks=570/3800")
     ]
+
+
+def test_eval_env_pins_osmesa_before_env_build(monkeypatch) -> None:
+    events: list[tuple[Any, ...]] = []
+    worker = EvaluationEnvironmentWorker(
+        env_cfg={"target": "unused", "render_backend": "osmesa"},
+        num_slots=1,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=1,
+        num_action_chunks=1,
+        task_ids=[0],
+    )
+    worker.local_rank = 0
+
+    monkeypatch.setattr(
+        trajectory_env_worker,
+        "apply_libero_render_regime",
+        lambda backend, shard_id, gpu_pool: events.append(
+            ("helper", backend, int(shard_id), list(gpu_pool))
+        ),
+    )
+    monkeypatch.setattr(
+        trajectory_env_worker,
+        "_build_env_from_cfg",
+        lambda cfg: events.append(("build", cfg.get("render_backend"))) or object(),
+    )
+
+    worker.init()
+
+    assert events[:2] == [("helper", "osmesa", 0, []), ("build", "osmesa")]
