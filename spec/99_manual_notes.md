@@ -134,3 +134,81 @@ for rollout_epoch in 16:
 在这里记录需要讨论的问题。
 
 ## Decisions
+
+### Cotrain、运行目录与恢复的不可回归约束
+
+以下规则是已经确认的主线行为。后续实现、重构、进度条调整和实验脚本修改不得在没有
+用户明确指令的情况下改变这些语义。
+
+#### 1. Cotrain 是有因果顺序的分阶段流程
+
+一次 cotrain `global_step` 的主线顺序是：
+
+1. 从当前 policy 收集完整的 real trajectories；
+2. 使用 real trajectories 执行 VLA encoder real-SFT，并用更新后的 encoder 重新编码轨迹；
+3. 用重新编码后的真实轨迹更新本步 replay；
+4. LearnerGroup 更新 world model 和 classifier，并把新状态同步到 WMEnvGroup；
+5. RolloutGroup 从 ActorGroup 同步 post-SFT policy；
+6. 收集 imagined trajectories；
+7. ActorGroup 使用 imagined trajectories 执行 advantage、PPO/actor update；
+8. 按配置执行 evaluation、checkpoint 和 metrics 记录。
+
+初始 evaluation 可以发生在第一个 `global_step` 之前。各 Group/Worker 可以在 setup 阶段提前
+创建，但“worker 已经创建”不等于“对应阶段正在执行”。因此 real rollout 阶段只显示 real
+rollout 是正确行为；WMEnvWorker 此时等待阶段屏障，进入第 6 步后才显示独立的 imagined
+rollout。禁止仅为了让两个进度条同时出现而把上述因果流程误改为 real/imagined 并发。
+
+#### 2. Real rollout 和 evaluation 的主进度必须按完整轨迹统计
+
+- real rollout 的主进度分子是所有 `real_env` worker 已完成 trajectory 数之和，分母是配置的
+  real trajectory 总目标；单位为 `trajectory`。
+- evaluation 的主进度分子是所有 `eval_env` worker 已完成 episode 数之和，分母是配置的
+  evaluation episode 总数。这里一个 episode 是一条完整评测轨迹。
+- `chunks`、action chunk callback 次数、环境 step 数、worker callback 序号和 worker finished
+  状态都不得作为上述主进度分子，也不得让主进度条提前前进。
+- chunks 只允许显示在 status/diagnostic 字段中。success rate 必须使用
+  `successes / completed`，不能使用 chunks 作为分母。
+- imagined rollout 是 real-SFT 和 WM/classifier 更新后的独立后续阶段，使用独立进度条，不能
+  混入 real rollout 或 evaluation 的主进度。
+
+如果日志出现 `completed=0` 但 evaluation 主进度已经大于 0，或 real rollout 主单位仍是
+`chunk/s`，说明运行的是旧实现或进度口径已经回归，不能把该日志当作当前正确行为。
+
+#### 3. 一个 invocation 只拥有一个浅层 run root
+
+默认 run root 必须是：
+
+```text
+<output_root>/<run.name>/<YYYYMMDD_HHMMSS>/
+```
+
+同一层级包含：
+
+```text
+checkpoints/  wandb/  tensorboard/  logs/  video/  diagnostics/  .hydra/
+```
+
+禁止再次嵌套重复的任务名、`wm/`、`classifier/`、`wmcls_cotrain/`、`log/wandb/` 或其它路线
+目录。旧日志若仍写入 `log/wandb/` 或 checkpoint 仍写入 `ckpt/`，说明运行的不是当前统一
+布局实现。
+
+#### 4. Resume 必须是真正的原地继续训练
+
+- 所有当前可训练实验都必须接受显式 resume path；它可以指向 run root、checkpoint 目录或
+  checkpoint 文件。
+- resume 后必须继续使用 checkpoint 所属的原 run root，不得创建新 timestamp 目录，也不得
+  把新的 W&B、TensorBoard、Hydra、视频或 checkpoint 产物散落到另一个目录。
+- 新 checkpoint 统一写入 `checkpoints/`；可以兼容读取历史 `ckpt/`，但不能继续产生新的
+  legacy 布局。
+- checkpoint 必须保存该路线继续训练所需的模型、optimizer、global step/epoch、best metric、
+  classifier threshold、replay/sampling state 等实际存在的状态。只加载模型权重然后从第 0 步
+  重开不属于 resume。
+- cotrain checkpoint 使用 `checkpoints/global_step_<N>/manual_cotrain.ckpt`，并维护规范的
+  `checkpoints/latest.ckpt` 指针或副本。
+
+#### 5. 修改这些行为时必须保留回归证据
+
+涉及以上规则的修改至少要覆盖：run-root/config composition、legacy/canonical resume path、
+checkpoint round-trip、多个 worker 的 completed/success 聚合，以及“chunks 不推进 real/eval
+主进度”的测试。完成前还要执行相关单元测试、Ruff、格式检查、Shell 语法检查和
+`git diff --check`。不得仅凭进程成功启动就宣称这些约束已经满足。
