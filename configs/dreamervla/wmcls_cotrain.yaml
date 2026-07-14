@@ -14,12 +14,9 @@ cluster:
   component_placement: null
 
 training:
-  out_dir: ${oc.env:RUN_ROOT,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/pre_mainline/wmcls_cotrain/${now:%Y%m%d_%H%M%S}}
   debug: false
   device: cuda
   distributed_strategy: single
-  resume: false
-  resume_dir: null
   require_policy_update: true
 
 manual_cotrain:

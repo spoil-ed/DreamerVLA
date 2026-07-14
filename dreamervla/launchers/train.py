@@ -14,6 +14,7 @@ from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 
 from dreamervla.config_resolvers import register_dreamervla_resolvers
+from dreamervla.utils.run_paths import infer_run_root, resolve_resume_checkpoint
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = PROJECT_ROOT / "configs"
@@ -63,14 +64,22 @@ def _parse_args(
             experiment = items[index + 1]
             index += 2
             continue
+        if item == "--resume":
+            if index + 1 >= len(items):
+                raise SystemExit("--resume requires a run or checkpoint path")
+            launcher["resume"] = items[index + 1]
+            index += 2
+            continue
+        if item.startswith("--resume="):
+            launcher["resume"] = item.split("=", 1)[1]
+            index += 1
+            continue
         if item.startswith("--config=") or item.startswith("--config-name="):
             experiment = item.split("=", 1)[1]
             index += 1
             continue
         if item.startswith("--"):
-            raise SystemExit(
-                f"Unsupported launcher flag {item!r}. Use Hydra key=value overrides."
-            )
+            raise SystemExit(f"Unsupported launcher flag {item!r}. Use Hydra key=value overrides.")
         if "=" not in item:
             raise SystemExit(f"expected a Hydra key=value override, got {item!r}")
 
@@ -122,6 +131,7 @@ def _compose(experiment: str, overrides: Sequence[str]) -> DictConfig:
 def _target_overrides(
     cfg: DictConfig,
     launcher: Mapping[str, str],
+    raw_overrides: Sequence[str] = (),
 ) -> list[str]:
     mapping = {
         "batch_size": (
@@ -135,15 +145,41 @@ def _target_overrides(
         "out_dir": ("training.out_dir",),
     }
     overrides: list[str] = []
+    resume_source = launcher.get("resume")
+    if resume_source not in (None, ""):
+        raw_keys = {item.split("=", 1)[0].lstrip("+~") for item in raw_overrides}
+        conflicts = raw_keys.intersection(
+            {
+                "training.out_dir",
+                "training.resume",
+                "training.resume_dir",
+                "training.resume_path",
+            }
+        )
+        if launcher.get("out_dir") not in (None, "") or conflicts:
+            raise ValueError(
+                "--resume cannot be combined with out_dir or training.out_dir/resume overrides"
+            )
+        source = Path(str(resume_source)).expanduser().resolve()
+        if not source.exists():
+            raise FileNotFoundError(f"--resume path does not exist: {source}")
+        checkpoint = resolve_resume_checkpoint(source)
+        run_root = infer_run_root(source)
+        overrides.extend(
+            [
+                "training.resume=true",
+                f"training.resume_path={checkpoint}",
+                f"training.resume_dir={run_root}",
+                f"training.out_dir={run_root}",
+            ]
+        )
     for alias, candidates in mapping.items():
         value = launcher.get(alias)
         if value in (None, ""):
             continue
         target = next((key for key in candidates if _has_path(cfg, key)), None)
         if target is None:
-            raise ValueError(
-                f"experiment does not expose a target for launcher alias {alias!r}"
-            )
+            raise ValueError(f"experiment does not expose a target for launcher alias {alias!r}")
         overrides.append(f"{target}={value}")
     return overrides
 
@@ -160,9 +196,7 @@ def _launch_value(
 
 
 def _write_libero_config(data_root: str) -> None:
-    config_root = Path(
-        os.environ.get("LIBERO_CONFIG_PATH", str(Path(data_root) / ".libero"))
-    )
+    config_root = Path(os.environ.get("LIBERO_CONFIG_PATH", str(Path(data_root) / ".libero")))
     config_root.mkdir(parents=True, exist_ok=True)
     (config_root / "config.yaml").write_text(
         "\n".join(
@@ -181,11 +215,7 @@ def _write_libero_config(data_root: str) -> None:
 
 def _missing_required_values(cfg: DictConfig) -> list[str]:
     required = _select(cfg, "launch.required_target_values", []) or []
-    return [
-        str(key)
-        for key in required
-        if _select(cfg, str(key), None) in (None, "", "???")
-    ]
+    return [str(key) for key in required if _select(cfg, str(key), None) in (None, "", "???")]
 
 
 def _build_env(
@@ -241,19 +271,15 @@ def _command(
                 "-m",
             ]
         )
-    command.extend(
-        ["dreamervla.train", "--config-name", "train", f"experiment={experiment}"]
-    )
+    command.extend(["dreamervla.train", "--config-name", "train", f"experiment={experiment}"])
     command.extend(overrides)
     return command
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    experiment, launcher, overrides = _parse_args(
-        list(sys.argv[1:] if argv is None else argv)
-    )
+    experiment, launcher, overrides = _parse_args(list(sys.argv[1:] if argv is None else argv))
     cfg = _compose(experiment, overrides)
-    alias_overrides = _target_overrides(cfg, launcher)
+    alias_overrides = _target_overrides(cfg, launcher, overrides)
     if alias_overrides:
         overrides = [*overrides, *alias_overrides]
         cfg = _compose(experiment, overrides)

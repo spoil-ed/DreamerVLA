@@ -27,10 +27,10 @@ def test_base_runner_uses_rlinf_style_run_artifact_dirs(tmp_path: Path) -> None:
     runner = _ConcreteRunner(OmegaConf.create({"training": {"out_dir": str(out_dir)}}))
 
     assert runner.get_run_dir() == out_dir.resolve()
-    assert runner.get_log_dir() == out_dir.resolve() / "log"
+    assert runner.get_log_dir() == out_dir.resolve() / "logs"
     assert runner.get_checkpoint_dir() == out_dir.resolve() / "checkpoints"
-    assert runner.get_tensorboard_dir() == out_dir.resolve() / "log" / "tensorboard"
-    assert runner.get_wandb_dir() == out_dir.resolve() / "log" / "wandb"
+    assert runner.get_tensorboard_dir() == out_dir.resolve() / "tensorboard"
+    assert runner.get_wandb_dir() == out_dir.resolve() / "wandb"
     assert runner.get_video_dir("eval") == out_dir.resolve() / "video" / "eval"
     assert (
         runner.get_global_step_checkpoint_dir(12)
@@ -52,15 +52,33 @@ def test_base_runner_prefers_new_checkpoint_dir_but_resumes_compat_latest(
     runner = _ConcreteRunner(OmegaConf.create({"training": {"out_dir": str(out_dir)}}))
 
     assert runner.get_checkpoint_path("latest") == out_dir / "checkpoints" / "latest.ckpt"
-    assert (
-        runner.get_checkpoint_path("latest", prefer_existing=True)
-        == compat_latest.resolve()
-    )
+    assert runner.get_checkpoint_path("latest", prefer_existing=True) == compat_latest.resolve()
 
     new_latest = out_dir / "checkpoints" / "latest.ckpt"
     new_latest.parent.mkdir(parents=True)
     new_latest.write_bytes(b"new")
     assert runner.get_checkpoint_path("latest", prefer_existing=True) == new_latest
+
+
+def test_base_runner_resume_reuses_checkpoint_owning_run_root(tmp_path: Path) -> None:
+    run_dir = tmp_path / "dreamer-wm" / "20260714_120000"
+    checkpoint = run_dir / "checkpoints" / "latest.ckpt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.touch()
+    cfg = OmegaConf.create(
+        {
+            "training": {
+                "out_dir": str(tmp_path / "fresh"),
+                "resume": True,
+                "resume_dir": str(checkpoint),
+                "resume_path": str(checkpoint),
+            }
+        }
+    )
+
+    runner = _ConcreteRunner(cfg)
+
+    assert runner.get_run_dir() == run_dir.resolve()
 
 
 def test_base_runner_writes_reproducible_run_artifacts(tmp_path: Path) -> None:
@@ -87,18 +105,26 @@ def test_base_runner_writes_reproducible_run_artifacts(tmp_path: Path) -> None:
     manifest_path = out_dir / "run_manifest.json"
     assert resolved_config.is_file()
     assert manifest_path.is_file()
+    for artifact_dir in (
+        "checkpoints",
+        "logs",
+        "tensorboard",
+        "wandb",
+        "video/train",
+        "video/eval",
+        "diagnostics",
+    ):
+        assert (out_dir / artifact_dir).is_dir()
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["schema_version"] == 1
     assert manifest["runner"]["class"] == "_ConcreteRunner"
     assert manifest["runner"]["name"] == "base"
     assert manifest["run_dir"] == str(out_dir.resolve())
-    assert manifest["artifact_dirs"]["checkpoints"] == str(
-        out_dir.resolve() / "checkpoints"
-    )
-    assert manifest["artifact_dirs"]["tensorboard"] == str(
-        out_dir.resolve() / "log" / "tensorboard"
-    )
+    assert manifest["artifact_dirs"]["checkpoints"] == str(out_dir.resolve() / "checkpoints")
+    assert manifest["artifact_dirs"]["logs"] == str(out_dir.resolve() / "logs")
+    assert manifest["artifact_dirs"]["tensorboard"] == str(out_dir.resolve() / "tensorboard")
     assert manifest["logging"]["backends"] == ["tensorboard", "wandb"]
+    assert manifest["logging"]["log_path"] == str(out_dir.resolve())
     assert manifest["distributed"]["strategy"] == "ddp"
     assert "git" in manifest

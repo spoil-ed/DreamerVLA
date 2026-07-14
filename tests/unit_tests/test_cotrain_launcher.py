@@ -37,14 +37,8 @@ def test_cotrain_launcher_accepts_atomic_warm_start_pair(
 
     launch = build_launch([])
 
-    assert (
-        f"init.world_model_state_ckpt={json.dumps(str(wm.resolve()))}"
-        in launch.command
-    )
-    assert (
-        f"init.classifier_state_ckpt={json.dumps(str(classifier.resolve()))}"
-        in launch.command
-    )
+    assert f"init.world_model_state_ckpt={json.dumps(str(wm.resolve()))}" in launch.command
+    assert f"init.classifier_state_ckpt={json.dumps(str(classifier.resolve()))}" in launch.command
     assert launch.cfg.manual_cotrain.global_steps == 20_000
     assert launch.cfg.manual_cotrain.eval_interval_global_steps == 10
     assert launch.cfg.manual_cotrain.eval_initial_global_step is True
@@ -115,10 +109,7 @@ def test_cotrain_launcher_accepts_huggingface_component_directories(
     launch = build_launch([])
 
     assert f"init.world_model_state_ckpt={json.dumps(str(wm.resolve()))}" in launch.command
-    assert (
-        f"init.classifier_state_ckpt={json.dumps(str(classifier.resolve()))}"
-        in launch.command
-    )
+    assert f"init.classifier_state_ckpt={json.dumps(str(classifier.resolve()))}" in launch.command
 
 
 def test_cotrain_launcher_rejects_partial_warm_start_pair(
@@ -183,14 +174,8 @@ def test_cotrain_launcher_translates_public_cli_options(
     )
 
     assert "experiment=openvla_libero" in launch.command
-    assert (
-        f"init.world_model_state_ckpt={json.dumps(str(wm.resolve()))}"
-        in launch.command
-    )
-    assert (
-        f"init.classifier_state_ckpt={json.dumps(str(classifier.resolve()))}"
-        in launch.command
-    )
+    assert f"init.world_model_state_ckpt={json.dumps(str(wm.resolve()))}" in launch.command
+    assert f"init.classifier_state_ckpt={json.dumps(str(classifier.resolve()))}" in launch.command
     assert launch.cfg.manual_cotrain.global_steps == 3
 
 
@@ -249,5 +234,46 @@ def test_cotrain_launcher_rejects_duplicate_public_and_hydra_checkpoint(
                 "--cls_ckpt",
                 str(classifier),
                 f"init.world_model_state_ckpt={wm}",
+            ]
+        )
+
+
+def test_cotrain_launcher_resume_reuses_original_run_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "openvla_libero" / "20260714_120000"
+    checkpoint = run_dir / "checkpoints" / "global_step_10" / "manual_cotrain.ckpt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.touch()
+    monkeypatch.delenv("WORLD_MODEL_CKPT", raising=False)
+    monkeypatch.delenv("CLASSIFIER_CKPT", raising=False)
+
+    launch = build_launch(["--resume", str(run_dir)])
+
+    assert launch.cfg.training.resume is True
+    assert Path(launch.cfg.training.resume_path) == checkpoint.resolve()
+    assert Path(launch.cfg.training.resume_dir) == run_dir.resolve()
+    assert Path(launch.cfg.training.out_dir) == run_dir.resolve()
+    assert f"training.resume_path={json.dumps(str(checkpoint.resolve()))}" in launch.command
+
+
+def test_cotrain_launcher_rejects_resume_with_output_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "run"
+    latest = run_dir / "checkpoints" / "latest.ckpt"
+    latest.parent.mkdir(parents=True)
+    latest.touch()
+    monkeypatch.delenv("WORLD_MODEL_CKPT", raising=False)
+    monkeypatch.delenv("CLASSIFIER_CKPT", raising=False)
+
+    with pytest.raises(ValueError, match="--resume.*training.out_dir"):
+        build_launch(
+            [
+                "--resume",
+                str(latest),
+                "training.out_dir=/tmp/fork",
             ]
         )

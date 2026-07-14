@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from hydra import compose, initialize_config_dir
 from hydra.utils import get_class
+from omegaconf import OmegaConf
 
 _REMOVED_UNDERSCORE_WM_ROUTE = "dino" + "_wm"
 _REMOVED_COMPACT_WM_ROUTE = "dino" + "wm"
@@ -28,6 +29,21 @@ def _compose_experiment(name: str, extra_overrides: list[str] | None = None):
     if extra_overrides is not None:
         overrides.extend(extra_overrides)
     return compose(config_name="train", overrides=overrides)
+
+
+def test_active_experiments_use_named_timestamped_run_roots() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    experiment_dir = config_dir / "experiment"
+    experiments = sorted(path.stem for path in experiment_dir.glob("*.yaml"))
+
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        for experiment in experiments:
+            cfg = _compose_experiment(experiment)
+            OmegaConf.resolve(cfg)
+            out_dir = Path(str(cfg.training.out_dir))
+            assert str(cfg.run.name) == experiment
+            assert out_dir.parent.name == experiment
+            assert out_dir.name == str(cfg.run.timestamp)
 
 
 def test_world_model_package_exports_role_based_wm_aliases() -> None:
@@ -254,12 +270,12 @@ def test_train_config_exposes_tensorboard_and_wandb_logger_routes() -> None:
 
     assert default_cfg.runner.logger.project_name == "dreamervla"
     assert default_cfg.runner.logger.logger_backends == ["tensorboard", "wandb"]
-    assert default_cfg.runner.logger.log_path == f"{default_cfg.training.out_dir}/log"
+    assert default_cfg.runner.logger.log_path == default_cfg.training.out_dir
     assert default_cfg.runner.logger.wandb_mode == "online"
 
     assert wandb_cfg.runner.logger.project_name == "dreamervla"
     assert wandb_cfg.runner.logger.logger_backends == ["wandb"]
-    assert wandb_cfg.runner.logger.log_path == f"{wandb_cfg.training.out_dir}/log"
+    assert wandb_cfg.runner.logger.log_path == wandb_cfg.training.out_dir
     assert wandb_cfg.runner.logger.wandb_mode == "online"
 
 
@@ -272,7 +288,8 @@ def test_train_config_resolves_public_default_experiment() -> None:
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         cfg = compose(config_name="train")
         assert cfg._target_ == "dreamervla.runners.CotrainRunner"
-        assert "cotrain_oft_hidden_token" in cfg.training.out_dir
+    assert cfg.run.name == "openvla_onetraj_libero_cotrain"
+    assert Path(cfg.training.out_dir).parent.name == cfg.run.name
 
 
 def test_cli_default_uses_current_public_runner_target() -> None:

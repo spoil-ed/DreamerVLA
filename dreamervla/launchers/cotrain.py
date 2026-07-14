@@ -18,6 +18,7 @@ from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 
 from dreamervla.config_resolvers import register_dreamervla_resolvers
+from dreamervla.utils.run_paths import infer_run_root, resolve_resume_checkpoint
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_EXPERIMENT = "openvla_libero"
@@ -53,6 +54,7 @@ def _public_cli_overrides(argv: list[str]) -> list[str]:
     parser.add_argument("--config", help="Hydra experiment name")
     parser.add_argument("--wm_ckpt", help="world-model checkpoint file or directory")
     parser.add_argument("--cls_ckpt", help="classifier checkpoint file or directory")
+    parser.add_argument("--resume", help="run root or consolidated checkpoint")
     args, remaining = parser.parse_known_args(argv)
     values = _overrides(remaining)
 
@@ -61,6 +63,33 @@ def _public_cli_overrides(argv: list[str]) -> list[str]:
     if not _has_override(values, "experiment"):
         experiment = args.config or DEFAULT_EXPERIMENT
         values.insert(0, f"experiment={experiment}")
+
+    if args.resume is not None:
+        conflicting = tuple(
+            key
+            for key in (
+                "training.out_dir",
+                "training.resume",
+                "training.resume_dir",
+                "training.resume_path",
+            )
+            if _has_override(values, key)
+        )
+        if conflicting:
+            raise ValueError("--resume cannot be combined with " + ", ".join(conflicting))
+        source = Path(args.resume).expanduser().resolve()
+        if not source.exists():
+            raise FileNotFoundError(f"--resume path does not exist: {source}")
+        checkpoint = resolve_resume_checkpoint(source)
+        run_root = infer_run_root(source)
+        values.extend(
+            [
+                "training.resume=true",
+                f"training.resume_path={_hydra_string(checkpoint)}",
+                f"training.resume_dir={_hydra_string(run_root)}",
+                f"training.out_dir={_hydra_string(run_root)}",
+            ]
+        )
 
     if (args.wm_ckpt is None) != (args.cls_ckpt is None):
         raise ValueError("--wm_ckpt and --cls_ckpt must be supplied together")
@@ -134,9 +163,7 @@ def _runtime_overrides(values: list[str]) -> None:
     try:
         global_steps = int(raw)
     except ValueError as exc:
-        raise ValueError(
-            "WMCLS_COTRAIN_GLOBAL_STEPS must be a positive integer"
-        ) from exc
+        raise ValueError("WMCLS_COTRAIN_GLOBAL_STEPS must be a positive integer") from exc
     if global_steps <= 0:
         raise ValueError("WMCLS_COTRAIN_GLOBAL_STEPS must be a positive integer")
     values.append(f"{key}={global_steps}")
@@ -249,8 +276,7 @@ def _process_env(cfg: DictConfig) -> dict[str, str]:
         visible = [str(index) for index in range(count)]
     if len(visible) != count or len(set(visible)) != count:
         raise ValueError(
-            f"cotrain requires {count} distinct visible GPUs; "
-            f"CUDA_VISIBLE_DEVICES={raw!r}"
+            f"cotrain requires {count} distinct visible GPUs; CUDA_VISIBLE_DEVICES={raw!r}"
         )
     env = dict(os.environ)
     env["CUDA_VISIBLE_DEVICES"] = ",".join(visible)

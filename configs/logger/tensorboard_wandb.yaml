@@ -1,6 +1,6 @@
 # @package runner.logger
 project_name: dreamervla
 logger_backends: [tensorboard, wandb]
-log_path: ${training.out_dir}/log
+log_path: ${training.out_dir}
 wandb_mode: online
 wandb_proxy: null

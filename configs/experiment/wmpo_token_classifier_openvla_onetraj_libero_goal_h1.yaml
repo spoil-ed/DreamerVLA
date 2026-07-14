@@ -7,6 +7,9 @@ defaults:
 _target_: dreamervla.runners.SuccessClassifierTrainingRunner
 seed: 7
 
+run:
+  name: wmpo_token_classifier_openvla_onetraj_libero_goal_h1
+
 launch:
   distributed: true
   ngpu: 8
@@ -26,11 +29,9 @@ launch:
     TORCH_NCCL_ASYNC_ERROR_HANDLING: 1
 
 training:
-  out_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/classifier/wmpo_token_cls_openvla_onetraj_libero_goal_h1/${now:%Y%m%d_%H%M%S}
   seed: 7
   device: cuda
   checkpoint_format: torch
-  resume: false
   num_epochs: 8
   steps_per_epoch: 0
   batch_size: 4
@@ -56,7 +57,7 @@ runner:
   logger:
     project_name: dreamervla
     logger_backends: [tensorboard]
-    log_path: ${training.out_dir}/log
+    log_path: ${training.out_dir}
 
 data:
   success_dir_raw: ${task.collected_reward_dir}

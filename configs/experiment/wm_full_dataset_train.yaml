@@ -7,6 +7,9 @@ defaults:
 
 _target_: dreamervla.runners.WorldModelTrainingRunner
 
+run:
+  name: wm_full_dataset_train
+
 launch:
   distributed: true
   ngpu: 8
@@ -27,9 +30,7 @@ launch:
 
 # Complete 8xH100 recipe for full-dataset Chunk-WM replay training.
 training:
-  out_dir: ${oc.env:RUN_ROOT,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/wm_full_dataset/${now:%Y%m%d_%H%M%S}}/cotrain
   device: cuda
-  resume: false
   wm_warmup_steps: 20000
   classifier_warmup_steps: 0
   warmup_replay_epochs: 10

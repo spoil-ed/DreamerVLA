@@ -41,6 +41,13 @@ def _require_path(path: Path, label: str) -> None:
         raise FileNotFoundError(f"{label} not found: {path}")
 
 
+def _warmup_artifact(run_dir: Path, name: str) -> Path:
+    """Prefer the canonical checkpoint tree while accepting legacy runs."""
+
+    candidates = (run_dir / "checkpoints" / name, run_dir / "ckpt" / name)
+    return next((path for path in candidates if path.exists()), candidates[0])
+
+
 def _count_hdf5(path: Path) -> int:
     _require_path(path, "directory")
     if not path.is_dir():
@@ -139,15 +146,23 @@ def collect_check(args: argparse.Namespace) -> int:
     _require_path(ckpt, "OpenVLA-OFT checkpoint")
     _require_path(stats, "OpenVLA-OFT dataset statistics")
     suite = str(cfg.task.suite)
-    reward_dir = Path(args.reward_dir).expanduser() if args.reward_dir else data_path(
-        "collected_rollouts",
-        suite,
-        "reward",
+    reward_dir = (
+        Path(args.reward_dir).expanduser()
+        if args.reward_dir
+        else data_path(
+            "collected_rollouts",
+            suite,
+            "reward",
+        )
     )
-    hidden_dir = Path(args.hidden_dir).expanduser() if args.hidden_dir else data_path(
-        "collected_rollouts",
-        suite,
-        "hidden",
+    hidden_dir = (
+        Path(args.hidden_dir).expanduser()
+        if args.hidden_dir
+        else data_path(
+            "collected_rollouts",
+            suite,
+            "hidden",
+        )
     )
     target_episodes, num_tasks = _collect_target(args, cfg)
     _print_json(
@@ -216,9 +231,7 @@ def _collection_output_payload(
     if collect_cmd is not None:
         manifest_data["collect_cmd"] = list(collect_cmd)
     if resolved_config is not None and resolved_config.is_file():
-        manifest_data["resolved_config_snapshot"] = resolved_config.read_text(
-            encoding="utf-8"
-        )
+        manifest_data["resolved_config_snapshot"] = resolved_config.read_text(encoding="utf-8")
     root.mkdir(parents=True, exist_ok=True)
     manifest = write_manifest(root, manifest_data)
     copied_resolved = None
@@ -243,21 +256,33 @@ def _collection_output_payload(
 def collect_run(args: argparse.Namespace) -> int:
     cfg = _compose_collect_config(args)
     suite = str(cfg.task.suite)
-    reward_dir = Path(args.reward_dir).expanduser() if args.reward_dir else data_path(
-        "collected_rollouts",
-        suite,
-        "reward",
+    reward_dir = (
+        Path(args.reward_dir).expanduser()
+        if args.reward_dir
+        else data_path(
+            "collected_rollouts",
+            suite,
+            "reward",
+        )
     )
-    hidden_dir = Path(args.hidden_dir).expanduser() if args.hidden_dir else data_path(
-        "collected_rollouts",
-        suite,
-        "hidden",
+    hidden_dir = (
+        Path(args.hidden_dir).expanduser()
+        if args.hidden_dir
+        else data_path(
+            "collected_rollouts",
+            suite,
+            "hidden",
+        )
     )
-    out_dir = Path(args.out_dir).expanduser() if args.out_dir else data_path(
-        "outputs",
-        "collect_rollouts",
-        suite,
-        time.strftime("%Y%m%d_%H%M%S"),
+    out_dir = (
+        Path(args.out_dir).expanduser()
+        if args.out_dir
+        else data_path(
+            "outputs",
+            "collect_rollouts",
+            suite,
+            time.strftime("%Y%m%d_%H%M%S"),
+        )
     )
     python_bin = str(args.python or sys.executable)
     target_episodes, num_tasks = _collect_target(args, cfg)
@@ -310,15 +335,23 @@ def collect_run(args: argparse.Namespace) -> int:
 def collect_output(args: argparse.Namespace) -> int:
     cfg = _compose_collect_config(args)
     suite = str(cfg.task.suite)
-    reward_dir = Path(args.reward_dir).expanduser() if args.reward_dir else data_path(
-        "collected_rollouts",
-        suite,
-        "reward",
+    reward_dir = (
+        Path(args.reward_dir).expanduser()
+        if args.reward_dir
+        else data_path(
+            "collected_rollouts",
+            suite,
+            "reward",
+        )
     )
-    hidden_dir = Path(args.hidden_dir).expanduser() if args.hidden_dir else data_path(
-        "collected_rollouts",
-        suite,
-        "hidden",
+    hidden_dir = (
+        Path(args.hidden_dir).expanduser()
+        if args.hidden_dir
+        else data_path(
+            "collected_rollouts",
+            suite,
+            "hidden",
+        )
     )
     _require_path(reward_dir, "collection reward directory")
     _require_path(hidden_dir, "collection hidden directory")
@@ -340,23 +373,21 @@ def collect_output(args: argparse.Namespace) -> int:
     return 0
 
 
-def _compose_original_config(args: argparse.Namespace, overrides: list[str] | None = None) -> DictConfig:
+def _compose_original_config(
+    args: argparse.Namespace, overrides: list[str] | None = None
+) -> DictConfig:
     return _compose_train_config(
         args.experiment,
         [f"task={args.task}", *(overrides or []), *list(args.overrides)],
     )
 
 
-def _original_paths(
-    cfg: DictConfig, *, hidden_dir: str | None = None
-) -> dict[str, Path | None]:
+def _original_paths(cfg: DictConfig, *, hidden_dir: str | None = None) -> dict[str, Path | None]:
     oft = cfg.task.openvla_oft
     failure_raw = OmegaConf.select(oft, "failure_hdf5_dir", default=None)
     failure_hidden = OmegaConf.select(oft, "failure_hidden_token_dir", default=None)
     collected_reward = Path(str(cfg.task.collected_reward_dir)).expanduser()
-    resolved_hidden = (
-        hidden_dir if hidden_dir else str(cfg.task.collected_hidden_token_dir)
-    )
+    resolved_hidden = hidden_dir if hidden_dir else str(cfg.task.collected_hidden_token_dir)
     return {
         "checkpoint": Path(str(oft.ckpt_path)).expanduser(),
         "dataset_statistics": Path(str(oft.dataset_statistics_path)).expanduser(),
@@ -370,9 +401,7 @@ def _original_paths(
 
 def _original_hidden_candidates(cfg: DictConfig) -> dict[str, Path]:
     return {
-        "hidden_token": Path(
-            str(cfg.task.collected_hidden_token_dir)
-        ).expanduser(),
+        "hidden_token": Path(str(cfg.task.collected_hidden_token_dir)).expanduser(),
     }
 
 
@@ -389,11 +418,7 @@ def libero_original_check(args: argparse.Namespace) -> int:
             counts[name] = None
         else:
             counts[name] = _count_hdf5(path)
-    empty = [
-        name
-        for name, count in counts.items()
-        if count is not None and int(count) <= 0
-    ]
+    empty = [name for name, count in counts.items() if count is not None and int(count) <= 0]
     if empty:
         raise FileNotFoundError(f"original LIBERO data directories contain no HDF5 files: {empty}")
     validate_hidden_token_sidecar_dir(
@@ -413,12 +438,10 @@ def libero_original_check(args: argparse.Namespace) -> int:
             "task": args.task,
             "suite": str(cfg.task.suite),
             "paths": {
-                name: str(path) if path is not None else None
-                for name, path in paths.items()
+                name: str(path) if path is not None else None for name, path in paths.items()
             },
             "hidden_candidates": {
-                name: str(path)
-                for name, path in _original_hidden_candidates(cfg).items()
+                name: str(path) for name, path in _original_hidden_candidates(cfg).items()
             },
             "hdf5_counts": counts,
             "wm_warmup_steps_default": int(
@@ -459,11 +482,15 @@ def _python_module_launch(
 
 
 def libero_original_cls_run(args: argparse.Namespace) -> int:
-    out_dir = Path(args.out_dir).expanduser() if args.out_dir else data_path(
-        "outputs",
-        "classifier",
-        "libero_original_best_cls",
-        time.strftime("%Y%m%d_%H%M%S"),
+    out_dir = (
+        Path(args.out_dir).expanduser()
+        if args.out_dir
+        else data_path(
+            "outputs",
+            "classifier",
+            "libero_original_best_cls",
+            time.strftime("%Y%m%d_%H%M%S"),
+        )
     )
     python_bin = str(args.python or sys.executable)
     cmd = [
@@ -551,9 +578,12 @@ def libero_original_rl_run(args: argparse.Namespace) -> int:
     run_root = Path(args.run_root).expanduser()
     out_dir = run_root / "cotrain"
     if not args.dry_run:
-        _require_path(out_dir / "ckpt" / "wm_warmup.ckpt", "WM warmup checkpoint")
         _require_path(
-            out_dir / "ckpt" / "classifier_warmup.ckpt",
+            _warmup_artifact(out_dir, "wm_warmup.ckpt"),
+            "WM warmup checkpoint",
+        )
+        _require_path(
+            _warmup_artifact(out_dir, "classifier_warmup.ckpt"),
             "classifier warmup checkpoint",
         )
     python_bin = str(args.python or sys.executable)
@@ -612,10 +642,7 @@ def cls_check(args: argparse.Namespace) -> int:
         counts[name] = count
         optional_directories[name] = status
 
-    missing = [
-        name for name in required_directories
-        if counts[name] <= 0
-    ]
+    missing = [name for name in required_directories if counts[name] <= 0]
     if missing:
         raise FileNotFoundError(f"classifier data directories contain no HDF5 files: {missing}")
     validate_hidden_token_sidecar_dir(
@@ -626,9 +653,7 @@ def cls_check(args: argparse.Namespace) -> int:
     if failure_hidden is not None and failure_hidden.exists():
         failure_raw = directories.get("failure_dir_raw")
         if failure_raw is None or not failure_raw.exists():
-            raise FileNotFoundError(
-                "failure_dir_hidden requires an existing failure_dir_raw"
-            )
+            raise FileNotFoundError("failure_dir_hidden requires an existing failure_dir_raw")
         validate_hidden_token_sidecar_dir(
             failure_hidden,
             reference_dir=failure_raw,
@@ -641,8 +666,7 @@ def cls_check(args: argparse.Namespace) -> int:
             "experiment": args.experiment,
             "training_out_dir": str(cfg.training.out_dir),
             "directories": {
-                name: str(path) if path is not None else None
-                for name, path in directories.items()
+                name: str(path) if path is not None else None for name, path in directories.items()
             },
             "hdf5_counts": counts,
             "optional_directories": optional_directories,
@@ -655,8 +679,10 @@ def cls_check(args: argparse.Namespace) -> int:
 
 
 def cls_eval(args: argparse.Namespace) -> int:
-    run_dir = Path(args.run_dir).expanduser() if args.run_dir else _latest_child(
-        data_path("outputs/classifier", args.family)
+    run_dir = (
+        Path(args.run_dir).expanduser()
+        if args.run_dir
+        else _latest_child(data_path("outputs/classifier", args.family))
     )
     _require_path(run_dir, "classifier run directory")
     summary_path = run_dir / "summary.json"
@@ -787,19 +813,26 @@ def pack_init(args: argparse.Namespace) -> int:
 
 
 def cotrain_check(args: argparse.Namespace) -> int:
-    run_root = Path(args.run_root).expanduser() if args.run_root else _latest_child(
-        data_path("outputs/coldstart_warmup_cotrain")
+    run_root = (
+        Path(args.run_root).expanduser()
+        if args.run_root
+        else _latest_child(data_path("outputs/coldstart_warmup_cotrain"))
     )
-    cotrain_dir = run_root / "cotrain"
-    ckpt_dir = cotrain_dir / "ckpt"
-    wm = ckpt_dir / "wm_warmup.ckpt"
-    cls = ckpt_dir / "classifier_warmup.ckpt"
+    cotrain_dir = (
+        run_root / "cotrain"
+        if (run_root / "cotrain" / "resolved_config.yaml").is_file()
+        else run_root
+    )
+    wm = _warmup_artifact(cotrain_dir, "wm_warmup.ckpt")
+    cls = _warmup_artifact(cotrain_dir, "classifier_warmup.ckpt")
+    wm_hf = _warmup_artifact(cotrain_dir, "wm_warmup_hf")
+    cls_hf = _warmup_artifact(cotrain_dir, "classifier_warmup_hf")
     resolved = cotrain_dir / "resolved_config.yaml"
     _require_path(run_root, "run root")
     _require_path(resolved, "cotrain resolved config")
-    if not wm.is_file() and not (ckpt_dir / "wm_warmup_hf").is_dir():
+    if not wm.is_file() and not wm_hf.is_dir():
         raise FileNotFoundError(f"warmup world-model checkpoint not found: {wm}")
-    if not cls.is_file() and not (ckpt_dir / "classifier_warmup_hf").is_dir():
+    if not cls.is_file() and not cls_hf.is_dir():
         raise FileNotFoundError(f"warmup classifier checkpoint not found: {cls}")
     init_ckpt = Path(args.init_ckpt).expanduser() if args.init_ckpt else None
     if init_ckpt is not None:

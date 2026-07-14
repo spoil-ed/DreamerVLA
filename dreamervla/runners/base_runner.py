@@ -37,6 +37,7 @@ from dreamervla.utils.hf_checkpoint import (
 )
 from dreamervla.utils.metric_logger import MetricLogger, NullMetricLogger
 from dreamervla.utils.progress import ProgressReporter
+from dreamervla.utils.run_paths import infer_run_root, resolve_resume_checkpoint
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
@@ -77,6 +78,12 @@ class BaseRunner(ABC):
 
         # Resolved config
         OmegaConf.resolve(self.config)
+        if bool(OmegaConf.select(self.config, "training.resume", default=False)):
+            resume_source = OmegaConf.select(
+                self.config, "training.resume_dir", default=None
+            ) or OmegaConf.select(self.config, "training.resume_path", default=None)
+            if resume_source not in (None, ""):
+                self._output_dir = str(infer_run_root(str(resume_source)))
 
         # Loop state
         self.global_step = 0
@@ -117,13 +124,13 @@ class BaseRunner(ABC):
 
     def get_log_dir(self) -> pathlib.Path:
         # Log dir
-        return self.get_artifact_dir("log")
+        return self.get_artifact_dir("logs")
 
     def get_tensorboard_dir(self) -> pathlib.Path:
-        return self.get_log_dir().joinpath("tensorboard")
+        return self.get_artifact_dir("tensorboard")
 
     def get_wandb_dir(self) -> pathlib.Path:
-        return self.get_log_dir().joinpath("wandb")
+        return self.get_artifact_dir("wandb")
 
     def get_video_dir(self, split: str = "eval") -> pathlib.Path:
         return self.get_artifact_dir("video", str(split))
@@ -180,7 +187,16 @@ class BaseRunner(ABC):
             return None
 
         self.get_run_dir().mkdir(parents=True, exist_ok=True)
-        self.get_log_dir().mkdir(parents=True, exist_ok=True)
+        for artifact_dir in (
+            self.get_checkpoint_dir(),
+            self.get_log_dir(),
+            self.get_tensorboard_dir(),
+            self.get_wandb_dir(),
+            self.get_video_dir("train"),
+            self.get_video_dir("eval"),
+            self.get_diagnostics_dir(),
+        ):
+            artifact_dir.mkdir(parents=True, exist_ok=True)
         OmegaConf.save(
             config=self.cfg,
             f=str(self.get_resolved_config_path()),
@@ -206,9 +222,7 @@ class BaseRunner(ABC):
         except (FileNotFoundError, json.JSONDecodeError):
             manifest = {}
         manifest["model"] = summary
-        path.write_text(
-            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
+        path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     def build_run_manifest(self) -> dict[str, Any]:
         """Build a compact RLinf-style run manifest."""
@@ -234,9 +248,10 @@ class BaseRunner(ABC):
             "artifact_dirs": {
                 "checkpoints": str(self.get_checkpoint_dir()),
                 "diagnostics": str(self.get_diagnostics_dir()),
-                "log": str(self.get_log_dir()),
+                "logs": str(self.get_log_dir()),
                 "tensorboard": str(self.get_tensorboard_dir()),
                 "wandb": str(self.get_wandb_dir()),
+                "video_train": str(self.get_video_dir("train")),
                 "video_eval": str(self.get_video_dir("eval")),
             },
             "state": {
@@ -257,7 +272,7 @@ class BaseRunner(ABC):
             },
             "logging": {
                 "backends": backends,
-                "log_path": str(self.get_log_dir()),
+                "log_path": str(self.get_run_dir()),
             },
             "config": {
                 "resolved_config_path": str(self.get_resolved_config_path()),
@@ -292,10 +307,7 @@ class BaseRunner(ABC):
         # Encoder config
         encoder_cfg = copy.deepcopy(cfg.encoder)
         init_model_path = OmegaConf.select(cfg, "init.vla_ckpt_path")
-        if (
-            init_model_path is not None
-            and OmegaConf.select(encoder_cfg, "model_path") is None
-        ):
+        if init_model_path is not None and OmegaConf.select(encoder_cfg, "model_path") is None:
             encoder_cfg.model_path = str(init_model_path)
         return self._target_compatible_cfg(encoder_cfg)
 
@@ -327,11 +339,7 @@ class BaseRunner(ABC):
         raw = OmegaConf.to_container(component_cfg, resolve=False)
         if not isinstance(raw, dict):
             return component_cfg
-        filtered = {
-            key: value
-            for key, value in raw.items()
-            if key in reserved or key in allowed
-        }
+        filtered = {key: value for key, value in raw.items() if key in reserved or key in allowed}
         return OmegaConf.create(filtered)
 
     def _resolve_vla_init_path(self) -> str:
@@ -389,9 +397,7 @@ class BaseRunner(ABC):
             dataloader_kwargs = self._sanitize_worker_kwargs(dataloader_kwargs)
 
         effective_shuffle = (
-            bool(dataloader_kwargs.get("shuffle", True))
-            if shuffle is None
-            else bool(shuffle)
+            bool(dataloader_kwargs.get("shuffle", True)) if shuffle is None else bool(shuffle)
         )
         effective_drop_last = (
             bool(dataloader_kwargs.get("drop_last", False))
@@ -502,12 +508,8 @@ class BaseRunner(ABC):
 
         hidden_dim = fallback_hidden_dim
         if hidden_dim is None:
-            hidden_dim = int(
-                OmegaConf.select(self.cfg, "world_model.hidden_dim", default=1)
-            )
-        return torch.zeros(
-            batch_size, int(hidden_dim), device=device, dtype=torch.float32
-        )
+            hidden_dim = int(OmegaConf.select(self.cfg, "world_model.hidden_dim", default=1))
+        return torch.zeros(batch_size, int(hidden_dim), device=device, dtype=torch.float32)
 
     def attach_encoder_outputs(
         self,
@@ -540,17 +542,13 @@ class BaseRunner(ABC):
                     if "obs_embedding" in batch and isinstance(
                         batch["obs_embedding"], torch.Tensor
                     ):
-                        batch["next_obs_embedding"] = (
-                            batch["obs_embedding"].detach().clone()
-                        )
+                        batch["next_obs_embedding"] = batch["obs_embedding"].detach().clone()
             return batch
 
         with torch.no_grad():
             if isinstance(obs, Mapping):
                 obs_embedding = encoder.encode(obs)
-                batch["obs_embedding"] = (
-                    obs_embedding.detach() if detach else obs_embedding
-                )
+                batch["obs_embedding"] = obs_embedding.detach() if detach else obs_embedding
             if isinstance(next_obs, Mapping):
                 next_obs_embedding = encoder.encode(next_obs)
                 batch["next_obs_embedding"] = (
@@ -559,9 +557,7 @@ class BaseRunner(ABC):
         return batch
 
     @staticmethod
-    def slice_batch_mapping(
-        mapping: Mapping[str, Any], indices: torch.Tensor
-    ) -> dict[str, Any]:
+    def slice_batch_mapping(mapping: Mapping[str, Any], indices: torch.Tensor) -> dict[str, Any]:
         # Indexed slice for one mapping level plus one nested mapping level.
         sliced: dict[str, Any] = {}
         index_list = indices.tolist()
@@ -581,13 +577,9 @@ class BaseRunner(ABC):
                     if isinstance(nested_value, torch.Tensor):
                         nested[nested_key] = nested_value.index_select(0, indices)
                     elif isinstance(nested_value, list):
-                        nested[nested_key] = [
-                            nested_value[int(idx)] for idx in index_list
-                        ]
+                        nested[nested_key] = [nested_value[int(idx)] for idx in index_list]
                     elif isinstance(nested_value, tuple):
-                        nested[nested_key] = tuple(
-                            nested_value[int(idx)] for idx in index_list
-                        )
+                        nested[nested_key] = tuple(nested_value[int(idx)] for idx in index_list)
                     else:
                         nested[nested_key] = nested_value
                 sliced[key] = nested
@@ -629,13 +621,20 @@ class BaseRunner(ABC):
         if cfg is None:
             cfg = self.cfg
         if cfg.training.resume:
-            explicit_resume_dir = OmegaConf.select(
-                cfg, "training.resume_dir", default=None
-            )
+            explicit_resume_path = OmegaConf.select(cfg, "training.resume_path", default=None)
+            if explicit_resume_path not in (None, ""):
+                resume_path = pathlib.Path(str(explicit_resume_path)).expanduser().resolve()
+                if is_hf_checkpoint(resume_path):
+                    self.load_hf_checkpoint(resume_path)
+                    return
+                if resume_path.is_file():
+                    if self.is_main_process:
+                        print(f"Resuming from checkpoint {resume_path}")
+                    self.load_checkpoint(path=resume_path)
+                    return
+            explicit_resume_dir = OmegaConf.select(cfg, "training.resume_dir", default=None)
             if explicit_resume_dir is not None:
-                resume_path = (
-                    pathlib.Path(str(explicit_resume_dir)).expanduser().resolve()
-                )
+                resume_path = pathlib.Path(str(explicit_resume_dir)).expanduser().resolve()
                 if is_hf_checkpoint(resume_path):
                     self.load_hf_checkpoint(resume_path)
                     return
@@ -648,15 +647,10 @@ class BaseRunner(ABC):
                         if is_hf_checkpoint(hf_path):
                             self.load_hf_checkpoint(hf_path)
                             return
-                    ckpt_candidates = (
-                        resume_path / "checkpoints" / "latest.ckpt",
-                        resume_path / "ckpt" / "latest.ckpt",
-                        resume_path / "latest.ckpt",
-                    )
-                    resume_path = next(
-                        (candidate for candidate in ckpt_candidates if candidate.is_file()),
-                        ckpt_candidates[0],
-                    )
+                    try:
+                        resume_path = resolve_resume_checkpoint(resume_path)
+                    except FileNotFoundError:
+                        resume_path = resume_path / "checkpoints" / "latest.ckpt"
                 if resume_path.is_file():
                     if self.is_main_process:
                         print(f"Resuming from checkpoint {resume_path}")
@@ -684,9 +678,7 @@ class BaseRunner(ABC):
                 for key, value in entry.items()
                 if key not in {"stage", "step", "global_step", "epoch"}
             )
-            print(
-                f"{stage}_step={step} global_step={global_step} epoch={epoch} {metrics}"
-            )
+            print(f"{stage}_step={step} global_step={global_step} epoch={epoch} {metrics}")
 
     def _ensure_metric_logger(self) -> Any:
         if self._metric_logger is not None:
@@ -698,7 +690,7 @@ class BaseRunner(ABC):
         output_name = pathlib.Path(self.output_dir).name or str(self.runner_name)
         self._metric_logger = MetricLogger(
             self.cfg,
-            default_log_path=str(self.get_log_dir()),
+            default_log_path=str(self.get_run_dir()),
             default_project_name="dreamervla",
             default_experiment_name=output_name,
         )
@@ -793,17 +785,17 @@ class BaseRunner(ABC):
         if "/" in key:
             return key
         if key.startswith("train_"):
-            return f"train/{key[len('train_'):]}"
+            return f"train/{key[len('train_') :]}"
         if key.startswith("val_"):
-            return f"eval/{key[len('val_'):]}"
+            return f"eval/{key[len('val_') :]}"
         if key.startswith("eval_"):
-            return f"eval/{key[len('eval_'):]}"
+            return f"eval/{key[len('eval_') :]}"
         if key.startswith("env_"):
-            return f"env/{key[len('env_'):]}"
+            return f"env/{key[len('env_') :]}"
         if key.startswith("rollout_"):
-            return f"rollout/{key[len('rollout_'):]}"
+            return f"rollout/{key[len('rollout_') :]}"
         if key.startswith("time_"):
-            return f"time/{key[len('time_'):]}"
+            return f"time/{key[len('time_') :]}"
         if key.startswith("wall_"):
             return f"time/{key}"
         if prefix:
@@ -831,9 +823,7 @@ class BaseRunner(ABC):
             include_keys = tuple(self.include_keys) + ("_output_dir",)
 
         distributed = getattr(self, "distributed", None)
-        is_main_process = (
-            True if distributed is None else bool(distributed.is_main_process)
-        )
+        is_main_process = True if distributed is None else bool(distributed.is_main_process)
         requires_collective = (
             False
             if distributed is None
@@ -906,9 +896,7 @@ class BaseRunner(ABC):
             return compat_path
         return canonical_path
 
-    def _save_checkpoint_sidecars(
-        self, path: pathlib.Path, payload: dict[str, Any]
-    ) -> None:
+    def _save_checkpoint_sidecars(self, path: pathlib.Path, payload: dict[str, Any]) -> None:
         return None
 
     def load_payload(
@@ -926,20 +914,12 @@ class BaseRunner(ABC):
         if include_keys is None:
             include_keys = tuple(pickles.keys())
             if not bool(getattr(self, "checkpoint_restore_output_dir", False)):
-                include_keys = tuple(
-                    key for key in include_keys if key != "_output_dir"
-                )
+                include_keys = tuple(key for key in include_keys if key != "_output_dir")
 
         # State restore
         for key, value in state_dicts.items():
-            if (
-                key not in exclude_keys
-                and key in self.__dict__
-                and self.__dict__[key] is not None
-            ):
-                self._load_state_dict_from_checkpoint(
-                    key, self.__dict__[key], value, **kwargs
-                )
+            if key not in exclude_keys and key in self.__dict__ and self.__dict__[key] is not None:
+                self._load_state_dict_from_checkpoint(key, self.__dict__[key], value, **kwargs)
 
         # Pickle restore
         for key in include_keys:
@@ -1029,7 +1009,9 @@ class BaseRunner(ABC):
         if st is None:
             st = {
                 "width": int(OmegaConf.select(self.cfg, "console.banner_width", default=65)),
-                "log_every": max(1, int(OmegaConf.select(self.cfg, "console.log_every", default=1))),
+                "log_every": max(
+                    1, int(OmegaConf.select(self.cfg, "console.log_every", default=1))
+                ),
                 "window": int(OmegaConf.select(self.cfg, "console.success_window", default=50)),
                 "progress_every_s": float(
                     OmegaConf.select(self.cfg, "console.progress_every_s", default=5.0)
@@ -1080,7 +1062,9 @@ class BaseRunner(ABC):
             # thousands of stale bars and re-printing all of them at teardown.
             reporters.pop(desc, None)
 
-    def console_banner(self, title: str, *, subtitle: str | None = None, done: bool = False) -> None:
+    def console_banner(
+        self, title: str, *, subtitle: str | None = None, done: bool = False
+    ) -> None:
         if not self.is_main_process:
             return
         st = self._console_state_get()

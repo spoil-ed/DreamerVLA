@@ -6,9 +6,9 @@ buffer (same step functions as the online phase, so zero semantic drift), then
 runs the existing world-model training common online loop with RL enabled. WM and
 classifier warmup checkpoints are saved separately for independent resume.
 """
+
 from __future__ import annotations
 
-import os
 import re
 import time
 from collections.abc import Callable, Mapping
@@ -88,9 +88,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         value = OmegaConf.select(cfg, "training.wm_profile_steps", default=0)
         return int(value)
 
-    def _record_wm_profile(
-        self, timings: dict[str, float], *, step: int, total_steps: int
-    ) -> None:
+    def _record_wm_profile(self, timings: dict[str, float], *, step: int, total_steps: int) -> None:
         device_stages = ("h2d", "forward", "backward", "grad_clip", "optimizer")
         device_active = sum(float(timings.get(name, 0.0)) for name in device_stages)
         total = float(timings.get("total", 0.0))
@@ -103,9 +101,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             for name, value in enriched.items()
             if name != "device_active_fraction"
         }
-        metrics["time/wm_warmup_device_active_fraction"] = enriched[
-            "device_active_fraction"
-        ]
+        metrics["time/wm_warmup_device_active_fraction"] = enriched["device_active_fraction"]
         self._log_replay_warmup_metrics(metrics, step=int(step))
         if not self.is_main_process:
             return
@@ -122,17 +118,11 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             "total",
         )
         parts = [
-            f"{name}={float(enriched[name]) * 1000.0:.1f}ms"
-            for name in order
-            if name in enriched
+            f"{name}={float(enriched[name]) * 1000.0:.1f}ms" for name in order if name in enriched
         ]
-        parts.append(
-            "device_active="
-            f"{float(enriched['device_active_fraction']) * 100.0:.1f}%"
-        )
+        parts.append(f"device_active={float(enriched['device_active_fraction']) * 100.0:.1f}%")
         print(
-            f"[pipeline][wm-profile] step={int(step)}/{int(total_steps)} "
-            + " ".join(parts),
+            f"[pipeline][wm-profile] step={int(step)}/{int(total_steps)} " + " ".join(parts),
             flush=True,
         )
 
@@ -161,16 +151,10 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         if current_i >= total_i or current_i % int(every) != 0:
             return
         resolved_metrics = {
-            key: (
-                float(value.detach().cpu())
-                if isinstance(value, torch.Tensor)
-                else float(value)
-            )
+            key: (float(value.detach().cpu()) if isinstance(value, torch.Tensor) else float(value))
             for key, value in (metrics or {}).items()
         }
-        self._invoke_warmup_checkpoint(
-            checkpoint_fn, step=current_i, metrics=resolved_metrics
-        )
+        self._invoke_warmup_checkpoint(checkpoint_fn, step=current_i, metrics=resolved_metrics)
         self._print_pipeline_event(
             f"[pipeline][{label}] checkpoint saved step={current_i}/{total_i}"
         )
@@ -244,14 +228,10 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         """Format loss and detached cosine diagnostics for every WM horizon."""
 
         loss = float(metrics.get("loss", float("nan")))
-        one_step = float(
-            metrics.get("one_step_cosine_similarity", float("nan"))
-        )
+        one_step = float(metrics.get("one_step_cosine_similarity", float("nan")))
         chunk = float(metrics.get("chunk_cosine_similarity", float("nan")))
         rollout = float(metrics.get("rollout_cosine_similarity", float("nan")))
-        persistence = float(
-            metrics.get("persistence_cosine_similarity", float("nan"))
-        )
+        persistence = float(metrics.get("persistence_cosine_similarity", float("nan")))
         return (
             f"global_step={int(global_step)} loss={loss:.6f} "
             f"one_step_cos={one_step:.6f} chunk_cos={chunk:.6f} "
@@ -295,14 +275,18 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         """Map replay-update budgets onto epoch-style progress coordinates."""
 
         cfg = getattr(self, "cfg", None)
-        replay_epochs = int(
-            OmegaConf.select(
-                cfg,
-                "training.warmup_replay_epochs",
-                default=0,
+        replay_epochs = (
+            int(
+                OmegaConf.select(
+                    cfg,
+                    "training.warmup_replay_epochs",
+                    default=0,
+                )
+                or 0
             )
-            or 0
-        ) if cfg is not None else 0
+            if cfg is not None
+            else 0
+        )
         count_fn = getattr(replay, "sampleable_window_count", None)
         if replay_epochs <= 0 or not callable(count_fn):
             return (
@@ -399,8 +383,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                     else ""
                 )
                 self._print_pipeline_event(
-                    f"[pipeline][wm-warmup] step={i}/{total_steps} "
-                    f"loss={last:.4f}{cosine_suffix}"
+                    f"[pipeline][wm-warmup] step={i}/{total_steps} loss={last:.4f}{cosine_suffix}"
                 )
             self._maybe_warmup_checkpoint(
                 current=i + 1,
@@ -431,9 +414,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                     wait_started_at = time.perf_counter()
                     wm_batch, profile_timings = future.result()
                     if profile_timings is not None:
-                        profile_timings["data_wait"] = (
-                            time.perf_counter() - wait_started_at
-                        )
+                        profile_timings["data_wait"] = time.perf_counter() - wait_started_at
                     if i + 1 < total_steps:
                         future = executor.submit(
                             self._sample_wm_pretrain_batch,
@@ -457,9 +438,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 profile=should_profile(i),
             )
             if profile_timings is not None:
-                profile_timings["data_wait"] = (
-                    time.perf_counter() - update_started_at
-                )
+                profile_timings["data_wait"] = time.perf_counter() - update_started_at
             consume_batch(
                 i,
                 wm_batch,
@@ -629,17 +608,15 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             task_ids = cls_batch.get("task_ids")
             forward_kwargs: dict[str, Any] = {}
             if bool(getattr(module, "supports_proprio_conditioning", False)):
-                forward_kwargs["proprio"] = cls_batch["proprio"].to(
-                    self.device, non_blocking=True
-                )
+                forward_kwargs["proprio"] = cls_batch["proprio"].to(self.device, non_blocking=True)
             if bool(getattr(module, "supports_language_conditioning", False)):
                 forward_kwargs["lang_emb"] = cls_batch["lang_emb"].to(
                     self.device, non_blocking=True
                 )
             with torch.no_grad():
-                if bool(
-                    getattr(module, "supports_task_conditioning", False)
-                ) and isinstance(task_ids, torch.Tensor):
+                if bool(getattr(module, "supports_task_conditioning", False)) and isinstance(
+                    task_ids, torch.Tensor
+                ):
                     logits = self.classifier(
                         windows,
                         task_ids=task_ids.to(self.device, non_blocking=True),
@@ -863,22 +840,40 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
 
     # ------------------------------------------------------------ split ckpts
     def _wm_warmup_ckpt(self) -> str:
-        return os.path.join(self.output_dir, "ckpt", "wm_warmup.ckpt")
+        return str(self.get_checkpoint_dir() / "wm_warmup.ckpt")
 
     def _cls_warmup_ckpt(self) -> str:
-        return os.path.join(self.output_dir, "ckpt", "classifier_warmup.ckpt")
+        return str(self.get_checkpoint_dir() / "classifier_warmup.ckpt")
 
     def _wm_warmup_hf_dir(self) -> str:
-        return os.path.join(self.output_dir, "ckpt", "wm_warmup_hf")
+        return str(self.get_checkpoint_dir() / "wm_warmup_hf")
 
     def _cls_warmup_hf_dir(self) -> str:
-        return os.path.join(self.output_dir, "ckpt", "classifier_warmup_hf")
+        return str(self.get_checkpoint_dir() / "classifier_warmup_hf")
 
     def _warmup_progress_dir(self) -> Path:
-        return Path(self.output_dir) / "ckpt" / "warmup_progress"
+        return self.get_checkpoint_dir() / "warmup_progress"
 
     def _warmup_topk_dir(self, component: str) -> Path:
-        return Path(self.output_dir) / "ckpt" / "warmup_topk" / str(component)
+        return self.get_checkpoint_dir() / "warmup_topk" / str(component)
+
+    def _warmup_checkpoint_candidates(self, name: str) -> tuple[Path, ...]:
+        return (
+            self.get_checkpoint_dir() / str(name),
+            self.get_compat_checkpoint_dir() / str(name),
+        )
+
+    def _existing_warmup_checkpoint(self, name: str) -> Path | None:
+        return next(
+            (path for path in self._warmup_checkpoint_candidates(name) if path.is_file()),
+            None,
+        )
+
+    def _existing_warmup_hf_dir(self, name: str) -> Path | None:
+        return next(
+            (path for path in self._warmup_checkpoint_candidates(name) if path.is_dir()),
+            None,
+        )
 
     def _warmup_progress_path(self, component: str, step: int) -> Path:
         return self._warmup_progress_dir() / f"{component}_step_{int(step):08d}.ckpt"
@@ -886,17 +881,21 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
     def _latest_warmup_progress_path(self, component: str) -> Path | None:
         latest_step = -1
         latest_path: Path | None = None
-        progress_dir = self._warmup_progress_dir()
-        if not progress_dir.is_dir():
-            return None
-        for path in progress_dir.glob(f"{component}_step_*.ckpt"):
-            match = _WARMUP_PROGRESS_RE.match(path.name)
-            if match is None or match.group("component") != component:
+        progress_dirs = (
+            self._warmup_progress_dir(),
+            self.get_compat_checkpoint_dir() / "warmup_progress",
+        )
+        for progress_dir in progress_dirs:
+            if not progress_dir.is_dir():
                 continue
-            step = int(match.group("step"))
-            if step > latest_step:
-                latest_step = step
-                latest_path = path
+            for path in progress_dir.glob(f"{component}_step_*.ckpt"):
+                match = _WARMUP_PROGRESS_RE.match(path.name)
+                if match is None or match.group("component") != component:
+                    continue
+                step = int(match.group("step"))
+                if step > latest_step:
+                    latest_step = step
+                    latest_path = path
         return latest_path
 
     def _make_warmup_topk_manager(
@@ -968,9 +967,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             "world_model_optimizer": self.world_model_optimizer.state_dict(),
         }
         _atomic_torch_save(payload, self._warmup_progress_path("wm", int(step)))
-        self._save_warmup_topk(
-            payload, metrics=metrics, step=int(step), topk_manager=topk_manager
-        )
+        self._save_warmup_topk(payload, metrics=metrics, step=int(step), topk_manager=topk_manager)
 
     def _save_cls_warmup_progress(
         self,
@@ -992,9 +989,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             "classifier_threshold": float(self.classifier_threshold),
         }
         _atomic_torch_save(payload, self._warmup_progress_path("classifier", int(step)))
-        self._save_warmup_topk(
-            payload, metrics=metrics, step=int(step), topk_manager=topk_manager
-        )
+        self._save_warmup_topk(payload, metrics=metrics, step=int(step), topk_manager=topk_manager)
 
     def _load_latest_wm_warmup_progress(self) -> int:
         path = self._latest_warmup_progress_path("wm")
@@ -1029,42 +1024,49 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
     def _save_wm_warmup(self, *, completed_steps: int) -> None:
         completed_steps = int(completed_steps)
         if completed_steps <= 0:
-            raise ValueError(
-                f"completed WM warmup steps must be positive, got {completed_steps}"
-            )
+            raise ValueError(f"completed WM warmup steps must be positive, got {completed_steps}")
         if self.checkpoint_save_torch():
-            _atomic_torch_save(
-                {
-                    "global_step": int(self.global_step),
-                    "world_model": _unwrap(self.world_model).state_dict(),
-                    "warmup_component": "wm",
-                    "warmup_step": completed_steps,
-                    "warmup_total_steps": completed_steps,
-                    "complete": True,
-                    "config": {
-                        "world_model": OmegaConf.to_container(
-                            self.cfg.world_model,
-                            resolve=True,
-                        )
-                    },
+            payload = {
+                "global_step": int(self.global_step),
+                "world_model": _unwrap(self.world_model).state_dict(),
+                "warmup_component": "wm",
+                "warmup_step": completed_steps,
+                "warmup_total_steps": completed_steps,
+                "complete": True,
+                "config": {
+                    "world_model": OmegaConf.to_container(
+                        self.cfg.world_model,
+                        resolve=True,
+                    )
                 },
+            }
+            optimizer = getattr(self, "world_model_optimizer", None)
+            if optimizer is not None:
+                payload["world_model_optimizer"] = optimizer.state_dict()
+            _atomic_torch_save(
+                payload,
                 Path(self._wm_warmup_ckpt()),
             )
         if self.checkpoint_save_hf():
             wm_cfg = OmegaConf.to_container(OmegaConf.select(self.cfg, "world_model"), resolve=True)
             target = wm_cfg.pop("_target_")
-            save_module_pretrained(_unwrap(self.world_model), self._wm_warmup_hf_dir(),
-                                   target=target, init_args=wm_cfg)
+            save_module_pretrained(
+                _unwrap(self.world_model), self._wm_warmup_hf_dir(), target=target, init_args=wm_cfg
+            )
 
     def _save_cls_warmup(self) -> None:
         if self.checkpoint_save_torch():
+            payload = {
+                "global_step": int(self.global_step),
+                "classifier": _unwrap(self.classifier).state_dict(),
+                "classifier_threshold": float(self.classifier_threshold),
+                "complete": True,
+            }
+            optimizer = getattr(self, "classifier_optimizer", None)
+            if optimizer is not None:
+                payload["classifier_optimizer"] = optimizer.state_dict()
             _atomic_torch_save(
-                {
-                    "global_step": int(self.global_step),
-                    "classifier": _unwrap(self.classifier).state_dict(),
-                    "classifier_threshold": float(self.classifier_threshold),
-                    "complete": True,
-                },
+                payload,
                 Path(self._cls_warmup_ckpt()),
             )
         if self.checkpoint_save_hf():
@@ -1105,8 +1107,16 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             ("dataloader.batch_size", "dataloader.debug_batch_size", 2),
             ("algorithm.imagination_horizon", "algorithm.debug_imagination_horizon", 3),
             ("algorithm.ppo_rollouts_per_start", "algorithm.debug_ppo_rollouts_per_start", 2),
-            ("algorithm.lumos.ppo_rollouts_per_start_min", "algorithm.debug_ppo_rollouts_per_start", 2),
-            ("algorithm.lumos.ppo_rollouts_per_start_max", "algorithm.debug_ppo_rollouts_per_start", 2),
+            (
+                "algorithm.lumos.ppo_rollouts_per_start_min",
+                "algorithm.debug_ppo_rollouts_per_start",
+                2,
+            ),
+            (
+                "algorithm.lumos.ppo_rollouts_per_start_max",
+                "algorithm.debug_ppo_rollouts_per_start",
+                2,
+            ),
             ("algorithm.lumos.episode_max_steps", "algorithm.lumos.debug_episode_max_steps", 150),
         ]
         for full_key, debug_key, fallback in swaps:
@@ -1142,9 +1152,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         cfg = copy.deepcopy(self.cfg)
         self._apply_debug_overrides(cfg)
         resolved_batch_size = self._per_rank_batch_size(
-            configured_batch_size=int(
-                OmegaConf.select(cfg, "dataloader.batch_size", default=4)
-            ),
+            configured_batch_size=int(OmegaConf.select(cfg, "dataloader.batch_size", default=4)),
             global_batch_size=OmegaConf.select(
                 cfg,
                 "training.global_batch_size",
@@ -1172,9 +1180,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 "latent_type route selection has been removed; the pipeline only "
                 "supports hidden_token [256,4096]"
             )
-        env_image_keys = OmegaConf.select(
-            cfg, "env.image_keys", default=["agentview_rgb"]
-        )
+        env_image_keys = OmegaConf.select(cfg, "env.image_keys", default=["agentview_rgb"])
         self._num_views = len(list(env_image_keys)) if env_image_keys is not None else 1
         OmegaConf.update(
             cfg,
@@ -1188,16 +1194,31 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         # warmup-ckpt resume), fail fast here instead of paying the model load only to
         # crash in seeding. A full resume needs no seeding, so the check is skipped.
         resume = bool(OmegaConf.select(cfg, "training.resume", default=False))
-        need_wm = not (resume and (os.path.exists(self._wm_warmup_ckpt()) or os.path.isdir(self._wm_warmup_hf_dir())))
-        need_cls = not (resume and (os.path.exists(self._cls_warmup_ckpt()) or os.path.isdir(self._cls_warmup_hf_dir())))
-        if int(
-            OmegaConf.select(
-                cfg,
-                "training.classifier_warmup_steps",
-                default=0,
+        need_wm = not (
+            resume
+            and (
+                self._existing_warmup_checkpoint("wm_warmup.ckpt") is not None
+                or self._existing_warmup_hf_dir("wm_warmup_hf") is not None
             )
-            or 0
-        ) <= 0:
+        )
+        need_cls = not (
+            resume
+            and (
+                self._existing_warmup_checkpoint("classifier_warmup.ckpt") is not None
+                or self._existing_warmup_hf_dir("classifier_warmup_hf") is not None
+            )
+        )
+        if (
+            int(
+                OmegaConf.select(
+                    cfg,
+                    "training.classifier_warmup_steps",
+                    default=0,
+                )
+                or 0
+            )
+            <= 0
+        ):
             need_cls = False
         if need_wm or need_cls:
             _assert_offline_seed_present(
@@ -1221,8 +1242,8 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                     "model_step_frames": 1,
                 }
             )
-            print(f"[ok] model ready · {total/1e6:.1f}M trainable", flush=True)
-        os.makedirs(os.path.join(self.output_dir, "ckpt"), exist_ok=True)
+            print(f"[ok] model ready · {total / 1e6:.1f}M trainable", flush=True)
+        self.get_checkpoint_dir().mkdir(parents=True, exist_ok=True)
 
         # warmup knobs (debug values, if any, were applied by _apply_debug_overrides)
         wm_steps = int(OmegaConf.select(cfg, "training.wm_warmup_steps", default=2000))
@@ -1239,7 +1260,9 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         bs = int(OmegaConf.select(cfg, "dataloader.batch_size", default=4))
         cls_bs = int(OmegaConf.select(cfg, "training.classifier_batch_size", default=16))
         optim_cfg = OmegaConf.select(cfg, "optim")
-        early_neg_stride = int(OmegaConf.select(cfg, "online_rollout.classifier_early_neg_stride", default=8))
+        early_neg_stride = int(
+            OmegaConf.select(cfg, "online_rollout.classifier_early_neg_stride", default=8)
+        )
         classifier_loss_type = OmegaConf.select(
             cfg, "online_rollout.classifier_loss_type", default=None
         )
@@ -1265,7 +1288,9 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         replay_capacity_mode = str(
             OmegaConf.select(cfg, "online_rollout.replay_capacity_mode", default="per_task")
         )
-        env_task_ids = tuple(int(x) for x in (OmegaConf.select(cfg, "env.task_ids", default=[0]) or [0]))
+        env_task_ids = tuple(
+            int(x) for x in (OmegaConf.select(cfg, "env.task_ids", default=[0]) or [0])
+        )
         default_task_id = OmegaConf.select(cfg, "offline_warmup.task_id", default=None)
         infer_task_id_from_shard = bool(
             OmegaConf.select(cfg, "offline_warmup.infer_task_id_from_shard", default=False)
@@ -1284,11 +1309,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         if need_wm or need_cls:
             data_dir = OmegaConf.select(cfg, "offline_warmup.data_dir")
             hidden_dir = OmegaConf.select(cfg, "offline_warmup.hidden_dir")
-            max_seed_label = (
-                "all"
-                if max_seed_eps is None
-                else f"<= {int(max_seed_eps)}/task"
-            )
+            max_seed_label = "all" if max_seed_eps is None else f"<= {int(max_seed_eps)}/task"
             self._print_pipeline_event(
                 "[pipeline][replay] loading offline shards "
                 f"data_dir={data_dir} hidden_dir={hidden_dir} "
@@ -1303,9 +1324,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 hidden_dir=hidden_dir,
                 default_task_id=(int(default_task_id) if default_task_id is not None else None),
                 infer_task_id_from_shard=infer_task_id_from_shard,
-                max_episodes_per_task=(
-                    int(max_seed_eps) if max_seed_eps is not None else None
-                ),
+                max_episodes_per_task=(int(max_seed_eps) if max_seed_eps is not None else None),
                 require_reference_complete=bool(
                     OmegaConf.select(
                         cfg,
@@ -1323,11 +1342,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 f"elapsed_s={replay_load_s:.1f}"
             )
             if self.distributed.is_main_process:
-                cap_msg = (
-                    "all"
-                    if max_seed_eps is None
-                    else f"<= {int(max_seed_eps)}/task"
-                )
+                cap_msg = "all" if max_seed_eps is None else f"<= {int(max_seed_eps)}/task"
                 print(
                     f"[pipeline] seeded {n} offline episodes ({cap_msg}), "
                     f"{warmup_replay.num_transitions} transitions, "
@@ -1342,13 +1357,9 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 default=None,
             )
             if required_task_ids_raw is not None:
-                required_task_ids = tuple(
-                    int(task_id) for task_id in required_task_ids_raw
-                )
+                required_task_ids = tuple(int(task_id) for task_id in required_task_ids_raw)
                 missing_task_ids = sorted(
-                    set(required_task_ids).difference(
-                        warmup_replay.task_episode_counts()
-                    )
+                    set(required_task_ids).difference(warmup_replay.task_episode_counts())
                 )
                 if missing_task_ids:
                     raise RuntimeError(
@@ -1389,9 +1400,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 )
                 or 1
             )
-            cls_chunk_size = int(
-                getattr(classifier_cfg, "chunk_size", default_cls_chunk_size)
-            )
+            cls_chunk_size = int(getattr(classifier_cfg, "chunk_size", default_cls_chunk_size))
             classifier_windows = int(
                 warmup_replay.classifier_window_count(
                     window=cls_window,
@@ -1442,9 +1451,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             # The frozen encoder is idle during warmup — park it off-GPU to reclaim
             # its weights (restored before the online phase below).
             self._set_encoder_device("cpu")
-            self._print_pipeline_event(
-                "[pipeline][device] encoder parked on cpu for replay warmup"
-            )
+            self._print_pipeline_event("[pipeline][device] encoder parked on cpu for replay warmup")
         else:
             wm_start_step = 0
             cls_start_step = 0
@@ -1549,11 +1556,20 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 self._save_wm_warmup(completed_steps=wm_steps)
                 self.console_banner("[1/3] WM WARMUP", subtitle=f"wm_loss {wm_last:.3f}", done=True)
         if not need_wm:
-            if os.path.exists(self._wm_warmup_ckpt()):
-                payload = torch.load(self._wm_warmup_ckpt(), map_location="cpu", weights_only=False)
+            wm_checkpoint = self._existing_warmup_checkpoint("wm_warmup.ckpt")
+            wm_hf_dir = self._existing_warmup_hf_dir("wm_warmup_hf")
+            if wm_checkpoint is not None:
+                payload = torch.load(wm_checkpoint, map_location="cpu", weights_only=False)
                 _unwrap(self.world_model).load_state_dict(payload["world_model"])
-            elif os.path.isdir(self._wm_warmup_hf_dir()):
-                src = load_module_pretrained(self._wm_warmup_hf_dir())
+                optimizer = getattr(self, "world_model_optimizer", None)
+                if optimizer is not None and "world_model_optimizer" in payload:
+                    optimizer.load_state_dict(payload["world_model_optimizer"])
+                self.global_step = max(
+                    int(self.global_step),
+                    int(payload.get("global_step", 0) or 0),
+                )
+            elif wm_hf_dir is not None:
+                src = load_module_pretrained(wm_hf_dir)
                 _unwrap(self.world_model).load_state_dict(src.state_dict())
 
         if need_cls and not need_wm:
@@ -1586,14 +1602,27 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             )
             if self.distributed.is_main_process:
                 self._save_cls_warmup()
-                self.console_banner("[2/3] CLASSIFIER WARMUP", subtitle=f"acc {cls_last:.3f}", done=True)
+                self.console_banner(
+                    "[2/3] CLASSIFIER WARMUP", subtitle=f"acc {cls_last:.3f}", done=True
+                )
         if not need_cls:
-            if os.path.exists(self._cls_warmup_ckpt()):
-                payload = torch.load(self._cls_warmup_ckpt(), map_location="cpu", weights_only=False)
+            cls_checkpoint = self._existing_warmup_checkpoint("classifier_warmup.ckpt")
+            cls_hf_dir = self._existing_warmup_hf_dir("classifier_warmup_hf")
+            if cls_checkpoint is not None:
+                payload = torch.load(cls_checkpoint, map_location="cpu", weights_only=False)
                 _unwrap(self.classifier).load_state_dict(payload["classifier"])
-                self.classifier_threshold = float(payload.get("classifier_threshold", self.classifier_threshold))
-            elif os.path.isdir(self._cls_warmup_hf_dir()):
-                src = load_module_pretrained(self._cls_warmup_hf_dir())
+                optimizer = getattr(self, "classifier_optimizer", None)
+                if optimizer is not None and "classifier_optimizer" in payload:
+                    optimizer.load_state_dict(payload["classifier_optimizer"])
+                self.classifier_threshold = float(
+                    payload.get("classifier_threshold", self.classifier_threshold)
+                )
+                self.global_step = max(
+                    int(self.global_step),
+                    int(payload.get("global_step", 0) or 0),
+                )
+            elif cls_hf_dir is not None:
+                src = load_module_pretrained(cls_hf_dir)
                 _unwrap(self.classifier).load_state_dict(src.state_dict())
 
         # online cotrain with RL from the start (already warm): force warmup_steps=0.
@@ -1604,7 +1633,9 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         self.cfg = cfg
         total_env_steps = int(OmegaConf.select(cfg, "online_rollout.total_env_steps", default=0))
         if total_env_steps <= 0:
-            self.console_banner("[3/3] ONLINE COTRAIN", subtitle="skipped · total_env_steps=0", done=True)
+            self.console_banner(
+                "[3/3] ONLINE COTRAIN", subtitle="skipped · total_env_steps=0", done=True
+            )
             return []
         # Restore the encoder onto the device for the online phase that uses it.
         self._set_encoder_device(self.device)

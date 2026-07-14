@@ -8,8 +8,10 @@ defaults:
 pre_mainline:
   stage: wm_upper_bound
 
+run:
+  name: wm_official_upper_bound
+
 training:
-  out_dir: ${oc.env:RUN_ROOT,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/pre_mainline/wm/${now:%Y%m%d_%H%M%S}}
   classifier_warmup_steps: 0
   warmup_replay_epochs: 100
 

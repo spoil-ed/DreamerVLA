@@ -3,3 +3,6 @@
 defaults:
   - wm_official_upper_bound
   - _self_
+
+run:
+  name: dreamer-wm

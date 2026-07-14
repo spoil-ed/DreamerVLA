@@ -6,6 +6,9 @@ defaults:
   - override /classifier: dreamer-cls
   - _self_
 
+run:
+  name: openvla_libero
+
 runner:
   logger:
     logger_backends: [tensorboard, wandb]

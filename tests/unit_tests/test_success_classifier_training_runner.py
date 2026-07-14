@@ -17,12 +17,23 @@ from dreamervla.dataset.lumos_aligned_latent_dataset import (
     _DemoRecord,
     _partition_demo_pairs,
 )
-from dreamervla.runtime.classifier_metrics import sweep_threshold_metrics
 from dreamervla.runners.success_classifier_training_runner import (
     SuccessClassifierTrainingRunner,
     _classifier_loss_and_predictions,
     _success_probabilities_from_logits,
 )
+from dreamervla.runtime.classifier_metrics import sweep_threshold_metrics
+
+
+def test_classifier_checkpoint_includes_all_resume_loop_state() -> None:
+    assert {
+        "global_step",
+        "epoch",
+        "best_window_f1",
+        "best_episode_f1",
+        "best_window_ckpt_path",
+        "best_episode_ckpt_path",
+    }.issubset(set(SuccessClassifierTrainingRunner.include_keys))
 
 
 class _FixedLogitClassifier(torch.nn.Module):
@@ -607,12 +618,12 @@ def test_bce_classifier_loss_uses_float_targets_and_sigmoid_predictions() -> Non
 def test_predict_success_supports_single_bce_logit() -> None:
     model = LatentSuccessClassifier(
         LatentSuccessClassifierConfig(
-                latent_dim=1,
-                window=1,
-                head_type="linear",
-                output_dim=1,
-                granularity="action",
-            )
+            latent_dim=1,
+            window=1,
+            head_type="linear",
+            output_dim=1,
+            granularity="action",
+        )
     )
     with torch.no_grad():
         model.head.weight.fill_(1.0)

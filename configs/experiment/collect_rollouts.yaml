@@ -7,6 +7,9 @@ defaults:
 _target_: dreamervla.runners.RolloutCollectionRunner
 mode: oft
 
+run:
+  name: collect_rollouts
+
 launch:
   distributed: false
   ngpu: 1
@@ -45,8 +48,6 @@ rollout:
   # full per-task init-state sweep is never truncated (real stop = done_count>=target).
 
 training:
-  out_dir: ${oc.env:OUT_DIR,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/coldstart_oft}
   distributed_strategy: single
   data_parallel: false
   seed: 7
-  resume: false

@@ -3,3 +3,6 @@
 defaults:
   - wm_dino_token_official
   - _self_
+
+run:
+  name: dino-wm

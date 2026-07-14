@@ -18,6 +18,7 @@ Shell launchers expose a small set of convenience keys and pass remaining
 | `batch_size` | `dataloader.batch_size` | per-config | local batch per GPU |
 | `num_workers` | `dataloader.num_workers` | per-config | dataloader workers |
 | `out_dir` | `training.out_dir` | timestamped | run output root |
+| `--resume PATH` | `training.resume*` | disabled | resume a run/checkpoint in its original run root |
 
 ## Config Groups
 
@@ -66,12 +67,33 @@ Shell launchers expose a small set of convenience keys and pass remaining
 | `manual_cotrain.wm_rollout_target_trajectories` | imagined trajectories used by actor PPO |
 | `manual_cotrain.wm_env_write_replay` | whether imagined episodes enter replay; staged mainline keeps this `false` |
 | `manual_cotrain.checkpoint_every` | completed global-step checkpoint cadence; segmented eval forces its boundary checkpoint |
-| `manual_cotrain.resume_ckpt` | full manual checkpoint to resume; launcher-injected optional keys use `++` |
+| `training.resume` | enable restoration for the selected runner |
+| `training.resume_path` | exact checkpoint resolved by the launcher |
+| `training.resume_dir` | owning run root reused by the resumed invocation |
+| `manual_cotrain.resume_ckpt` | legacy/internal full-checkpoint override; public launchers should use `--resume` |
 | `actor.train_cfg.encoder_sft.epochs` | successful-real encoder-only SFT epochs |
 | `actor.train_cfg.encoder_sft.batch_size` | raw decision batch for SFT and action-distribution KL measurement |
 | `actor.train_cfg.encoder_sft.reencode_batch_size` | batch for re-encoding all current-step real trajectories |
 | `actor.train_cfg.optimizers.encoder.lr` | vision backbone/projector SFT LR |
 | `actor.train_cfg.optimizers.policy.lr` | original LM/OFT actor PPO LR |
+
+The canonical checkpoint tree is `${training.out_dir}/checkpoints/`. Public train
+launchers accept either a run root or a checkpoint:
+
+```bash
+bash scripts/experiments/world_model_training/train.sh \
+  --config dreamer-wm --resume /path/to/dreamer-wm/20260714_120000
+
+bash scripts/experiments/cotrain/train.sh \
+  --config openvla_libero --resume /path/to/openvla_libero/20260714_120000
+```
+
+`--resume` cannot be combined with a new `out_dir`; it intentionally appends logs and
+checkpoints to the original run root.
+
+Cotrain real-rollout and evaluation progress bars use completed trajectories as the
+numerator and the configured trajectory total as the denominator. `chunks` remains a
+diagnostic status field and never advances the primary bar.
 
 ## OpenVLA-OFT Token Contract
 

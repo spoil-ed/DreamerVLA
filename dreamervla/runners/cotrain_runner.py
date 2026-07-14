@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import time
 import uuid
 from dataclasses import dataclass
@@ -34,8 +35,8 @@ from dreamervla.scheduler.placement import (
     ResourceMapPlacementStrategy,
 )
 from dreamervla.scheduler.worker_group import WorkerGroup
-from dreamervla.utils.egl_device import _ZERO_GPU_EGL_ERROR
 from dreamervla.utils.component_checkpoint import load_component_checkpoint, state_dict_sha256
+from dreamervla.utils.egl_device import _ZERO_GPU_EGL_ERROR
 from dreamervla.workers.actor.embodied_fsdp_actor import EmbodiedFSDPActor
 from dreamervla.workers.actor.learner_worker import LearnerWorker
 from dreamervla.workers.cotrain.handshake_trace import trace as _hs_trace
@@ -139,9 +140,7 @@ class CotrainRunner(BaseRunner):
                 self.log_metrics(initial_eval, step=0)
             for global_step in range(resume_step + 1, target_step + 1):
                 step_metrics = self._run_global_step(groups, global_step)
-                step_metrics.update(
-                    self._maybe_evaluate_resident_policy(groups, global_step)
-                )
+                step_metrics.update(self._maybe_evaluate_resident_policy(groups, global_step))
                 metrics.update(step_metrics)
                 self.log_metrics(step_metrics, step=global_step)
                 self._report_global_step_progress(
@@ -178,15 +177,17 @@ class CotrainRunner(BaseRunner):
             )
         checkpoint_paths = {
             "vla": OmegaConf.select(self.cfg, "init.vla_ckpt_path", default=None),
-            "world_model": OmegaConf.select(
-                self.cfg, "init.world_model_state_ckpt", default=None
-            ),
-            "classifier": OmegaConf.select(
-                self.cfg, "init.classifier_state_ckpt", default=None
-            ),
+            "world_model": OmegaConf.select(self.cfg, "init.world_model_state_ckpt", default=None),
+            "classifier": OmegaConf.select(self.cfg, "init.classifier_state_ckpt", default=None),
             "warmup": OmegaConf.select(self.cfg, "init.warmup_ckpt_path", default=None),
             "resume": OmegaConf.select(
-                self.cfg, "manual_cotrain.resume_ckpt", default=None
+                self.cfg,
+                "manual_cotrain.resume_ckpt",
+                default=OmegaConf.select(
+                    self.cfg,
+                    "training.resume_path",
+                    default=None,
+                ),
             ),
         }
         rendered = " ".join(
@@ -473,9 +474,7 @@ class CotrainRunner(BaseRunner):
             if isinstance(initial_states.get(name), dict)
         }
         if "classifier_threshold" in initial_states:
-            component_states["classifier_threshold"] = float(
-                initial_states["classifier_threshold"]
-            )
+            component_states["classifier_threshold"] = float(initial_states["classifier_threshold"])
         if component_states:
             shared_component_states = _share_ray_value(
                 component_states,
@@ -550,9 +549,7 @@ class CotrainRunner(BaseRunner):
         elif configured_threshold is not None:
             threshold = float(configured_threshold)
         else:
-            raise ValueError(
-                "classifier checkpoint or active config must provide a threshold"
-            )
+            raise ValueError("classifier checkpoint or active config must provide a threshold")
         return {
             "world_model": loaded_wm.state_dict,
             "classifier": loaded_classifier.state_dict,
@@ -635,11 +632,18 @@ class CotrainRunner(BaseRunner):
         progress_dir = self._prepare_manual_cotrain_progress_dir(global_step)
         self._configure_env_progress(real_env, progress_dir)
         self._configure_env_progress(wm_env, progress_dir)
-        real_progress_monitor = _ManualCotrainEnvProgressMonitor(
+        configured_real_target = self._real_rollout_target_trajectories()
+        real_trajectory_target = configured_real_target or (
+            self._envs_per_worker()
+            * sum(self._real_rollout_epochs_by_worker(self._real_env_workers()))
+        )
+        real_progress_monitor = _EvaluationProgressMonitor(
             progress_dir,
             self.console_progress,
             desc=f"cotrain-real-rollout/{int(global_step):08d}",
+            total_episodes=real_trajectory_target,
             roles={"real_env"},
+            unit="trajectory",
         )
         imagined_progress_monitor = _ManualCotrainEnvProgressMonitor(
             progress_dir,
@@ -1420,9 +1424,7 @@ class CotrainRunner(BaseRunner):
             )
         )
         if per_task <= 0:
-            raise ValueError(
-                "manual_cotrain.eval_protocol.num_episodes_per_task must be positive"
-            )
+            raise ValueError("manual_cotrain.eval_protocol.num_episodes_per_task must be positive")
         return len(self._eval_task_ids()) * per_task
 
     def _eval_max_steps(self) -> int:
@@ -1440,13 +1442,17 @@ class CotrainRunner(BaseRunner):
 
     def _eval_env_cfg(self) -> dict[str, Any]:
         cfg = self._real_env_cfg()
-        cfg["render_backend"] = str(
-            OmegaConf.select(
-                self.cfg,
-                "manual_cotrain.eval_protocol.render_backend",
-                default="osmesa",
+        cfg["render_backend"] = (
+            str(
+                OmegaConf.select(
+                    self.cfg,
+                    "manual_cotrain.eval_protocol.render_backend",
+                    default="osmesa",
+                )
             )
-        ).strip().lower()
+            .strip()
+            .lower()
+        )
         if cfg["render_backend"] != "osmesa":
             raise ValueError("resident evaluation requires OSMesa CPU rendering")
         cfg["num_envs_per_worker"] = self._eval_num_envs()
@@ -1517,9 +1523,7 @@ class CotrainRunner(BaseRunner):
             )
         )
         if value < 1:
-            raise ValueError(
-                f"manual_cotrain.real_env_workers must be positive, got {value}"
-            )
+            raise ValueError(f"manual_cotrain.real_env_workers must be positive, got {value}")
         return value
 
     def _real_env_enabled(self) -> bool:
@@ -1802,8 +1806,7 @@ class CotrainRunner(BaseRunner):
         if self._actor_cpu_offload_enabled():
             if not self._overlap_bootstrap_offload_warned:
                 _hs_trace(
-                    "[cotrain] overlap_env_bootstrap skipped while actor "
-                    "cpu_offload is enabled"
+                    "[cotrain] overlap_env_bootstrap skipped while actor cpu_offload is enabled"
                 )
                 self._overlap_bootstrap_offload_warned = True
             return None
@@ -1871,9 +1874,7 @@ class CotrainRunner(BaseRunner):
         completed_metrics: list[Any] = []
         start = time.monotonic()
         configured_real_workers = (
-            min(self._real_env_workers(), self._ngpu())
-            if self._ngpu() > 0
-            else 1
+            min(self._real_env_workers(), self._ngpu()) if self._ngpu() > 0 else 1
         )
         real_worker_epochs = self._real_rollout_epochs_by_worker(int(configured_real_workers))
         real_total_chunks = (
@@ -2429,6 +2430,19 @@ class CotrainRunner(BaseRunner):
         if explicit_path not in (None, ""):
             return _load_manual_resume_payload(str(_plain(explicit_path)), required=True)
 
+        common_path = OmegaConf.select(
+            self.cfg,
+            "training.resume_path",
+            default=None,
+        )
+        if bool(
+            OmegaConf.select(self.cfg, "training.resume", default=False)
+        ) and common_path not in (
+            None,
+            "",
+        ):
+            return _load_manual_resume_payload(str(_plain(common_path)), required=True)
+
         actor_path = self._init_ckpt_path("actor.init_ckpt")
         learner_path = self._init_ckpt_path("learner.init_ckpt")
         if actor_path is None or learner_path is None:
@@ -2512,7 +2526,7 @@ class CotrainRunner(BaseRunner):
         )
         if not force and (interval <= 0 or int(global_step) % interval != 0):
             return None
-        ckpt_dir = self.get_checkpoint_dir() / f"manual_cotrain_step_{int(global_step)}"
+        ckpt_dir = self.get_global_step_checkpoint_dir(int(global_step))
         ckpt_dir.mkdir(parents=True, exist_ok=True)
         actor_state = _first_nonempty_mapping(groups["ActorGroup"].state_dict().wait())
         self._policy_final_hash = state_dict_sha256(actor_state)
@@ -2589,6 +2603,7 @@ class CotrainRunner(BaseRunner):
             payload,
             ckpt_path,
         )
+        _atomic_link_or_copy(ckpt_path, self.get_checkpoint_path())
         run_metadata = self._manual_checkpoint_run_metadata(ckpt_dir)
         manifest = _manual_checkpoint_manifest(
             global_step=int(global_step),
@@ -2603,26 +2618,6 @@ class CotrainRunner(BaseRunner):
             run=run_metadata,
         )
         _atomic_write_json(ckpt_dir / "manual_cotrain_manifest.json", manifest)
-        canonical_dir = self.get_global_step_checkpoint_dir(int(global_step))
-        if canonical_dir != ckpt_dir:
-            canonical_dir.mkdir(parents=True, exist_ok=True)
-            alias_payload = (Path("..") / ckpt_dir.name / ckpt_path.name).as_posix()
-            alias_manifest = _manual_checkpoint_manifest(
-                global_step=int(global_step),
-                metrics=metrics,
-                ckpt_name=alias_payload,
-                state_dicts={
-                    name: state
-                    for name, state in state_dicts.items()
-                    if not name.endswith("_optimizer")
-                },
-                has_replay=replay_state is not None,
-                run=self._manual_checkpoint_run_metadata(canonical_dir),
-            )
-            _atomic_write_json(
-                canonical_dir / "manual_cotrain_manifest.json",
-                alias_manifest,
-            )
         return ckpt_path
 
     def _manual_checkpoint_run_metadata(self, manifest_dir: Path) -> dict[str, str]:
@@ -3060,7 +3055,7 @@ class _ManualCotrainEnvProgressMonitor:
 
 
 class _EvaluationProgressMonitor:
-    """Map resident evaluation chunk progress to its fixed episode budget."""
+    """Report completed real trajectories against a fixed job budget."""
 
     def __init__(
         self,
@@ -3069,37 +3064,29 @@ class _EvaluationProgressMonitor:
         *,
         desc: str,
         total_episodes: int,
+        roles: set[str] | None = None,
+        unit: str = "episode",
     ) -> None:
         self.progress_dir = Path(progress_dir)
         self._console_progress = console_progress
         self._desc = str(desc)
         self._total_episodes = max(1, int(total_episodes))
+        self._roles = {"eval_env"} if roles is None else {str(role) for role in roles}
+        self._unit = str(unit)
 
     def report(self, *, force: bool = False) -> _ManualCotrainProgressSnapshot:
         records = [
             record
             for record in _read_manual_cotrain_progress_records(self.progress_dir)
-            if str(record.get("role", "")) == "eval_env"
+            if str(record.get("role", "")) in self._roles
         ]
         chunk_done = sum(max(0, int(record.get("done", 0))) for record in records)
         chunk_total = sum(max(0, int(record.get("total", 0))) for record in records)
         finished = sum(bool(record.get("finished", False)) for record in records)
-        completed = sum(
-            max(0, int(record.get("episodes_completed", 0))) for record in records
-        )
-        successes = sum(
-            max(0, int(record.get("episodes_successful", 0))) for record in records
-        )
+        completed = sum(max(0, int(record.get("episodes_completed", 0))) for record in records)
+        successes = sum(max(0, int(record.get("episodes_successful", 0))) for record in records)
         successes = min(completed, successes)
-        if chunk_total > 0:
-            done = min(
-                self._total_episodes,
-                int(self._total_episodes * min(chunk_done, chunk_total) / chunk_total),
-            )
-        else:
-            done = 0
-        if records and finished == len(records):
-            done = self._total_episodes
+        done = min(self._total_episodes, completed)
         status = (
             f"completed={completed} successes={successes} success_rate="
             f"{float(successes) / float(max(1, completed)):.3f} "
@@ -3109,7 +3096,7 @@ class _EvaluationProgressMonitor:
             done,
             self._total_episodes,
             self._desc,
-            unit="episode",
+            unit=self._unit,
             status=status,
             force=force,
         )
@@ -3146,11 +3133,7 @@ def _read_manual_cotrain_progress_snapshot(
     records = _read_manual_cotrain_progress_records(progress_dir)
     if roles is not None:
         selected_roles = {str(role) for role in roles}
-        records = [
-            record
-            for record in records
-            if str(record.get("role", "")) in selected_roles
-        ]
+        records = [record for record in records if str(record.get("role", "")) in selected_roles]
     if not records:
         return _ManualCotrainProgressSnapshot(
             done=0,
@@ -3438,6 +3421,21 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
         encoding="utf-8",
     )
     tmp_path.replace(path)
+
+
+def _atomic_link_or_copy(source: Path, destination: Path) -> None:
+    """Atomically refresh a latest pointer without serializing twice."""
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        try:
+            os.link(source, temporary)
+        except OSError:
+            shutil.copy2(source, temporary)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _manual_checkpoint_manifest(

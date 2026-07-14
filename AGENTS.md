@@ -125,13 +125,17 @@ stepping 和 trajectory assembly。DreamerVLA manual route 额外增加 `Learner
 - `resolved_config.yaml`
 - `run_manifest.json`
 - `checkpoints/`
-- `log/tensorboard/`
-- `log/wandb/`
+- `logs/`
+- `tensorboard/`
+- `wandb/`
 - `video/{train,eval}/`
 - `diagnostics/`
+- `.hydra/`
 
-Keep one invocation under one run root. Pipeline collection and cotrain are separate
-sub-roots under `RUN_ROOT`; do not scatter extra artifacts elsewhere.
+By default one invocation owns
+`${RUN_ROOT:-${DVLA_DATA_ROOT}/outputs}/${run.name}/${run.timestamp}`. Resume reuses
+the checkpoint's owning run root; do not create a second timestamp or scatter extra
+artifacts elsewhere.
 
 ---
 
@@ -173,8 +177,8 @@ sub-roots under `RUN_ROOT`; do not scatter extra artifacts elsewhere.
 - Logger backends come from `runner.logger.logger_backends`; defaults use TensorBoard
   and W&B where the active experiment declares them.
 - Base checkpoints use `${training.out_dir}/checkpoints/global_step_<N>/`.
-- Pipeline warmup checkpoints use `${RUN_ROOT}/cotrain/ckpt/wm_warmup.ckpt` and
-  `${RUN_ROOT}/cotrain/ckpt/classifier_warmup.ckpt`.
+- Pipeline warmup checkpoints use `${training.out_dir}/checkpoints/wm_warmup.ckpt`
+  and `${training.out_dir}/checkpoints/classifier_warmup.ckpt`.
 - Use `BaseRunner.get_global_step_checkpoint_dir` and component checkpoint helpers
   instead of hand-built paths.
 - Cotrain evaluation goes through `scripts/experiments/cotrain/eval.sh` and

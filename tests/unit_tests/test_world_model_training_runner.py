@@ -418,28 +418,34 @@ def test_training_bursts_episode_trigger_waits_for_completed_episode(monkeypatch
         "updates_per_train": 1,
     }
 
-    assert runner._run_training_bursts(
-        1,
-        10,
-        replay=object(),
-        env_task_ids=(0,),
-        knobs=knobs,
-        counters={},
-        history=[],
-        episode_added=False,
-    ) is False
+    assert (
+        runner._run_training_bursts(
+            1,
+            10,
+            replay=object(),
+            env_task_ids=(0,),
+            knobs=knobs,
+            counters={},
+            history=[],
+            episode_added=False,
+        )
+        is False
+    )
     assert calls == []
 
-    assert runner._run_training_bursts(
-        2,
-        10,
-        replay=object(),
-        env_task_ids=(0,),
-        knobs=knobs,
-        counters={},
-        history=[],
-        episode_added=True,
-    ) is False
+    assert (
+        runner._run_training_bursts(
+            2,
+            10,
+            replay=object(),
+            env_task_ids=(0,),
+            knobs=knobs,
+            counters={},
+            history=[],
+            episode_added=True,
+        )
+        is False
+    )
     assert calls == [1]
 
 
@@ -754,24 +760,26 @@ _HIDDEN_TOKEN_PREPROCESS_CONFIG = {
 def _demo_steps(T, success):
     steps = []
     for t in range(T):
-        steps.append({
-            "actions": np.full(7, t, np.float64),
-            "rewards": np.float32(0.0),
-            "sparse_rewards": np.uint8(1 if (success and t == T - 1) else 0),
-            "dones": np.uint8(1 if t == T - 1 else 0),
-            "robot_states": np.zeros(9, np.float64),
-            "states": np.zeros(5, np.float64),
-            "obs": {
-                "agentview_rgb": np.zeros((256, 256, 3), np.uint8),
-                "eye_in_hand_rgb": np.zeros((256, 256, 3), np.uint8),
-                "ee_pos": np.zeros(3, np.float64), "ee_ori": np.zeros(3, np.float64),
-                "ee_states": np.zeros(6, np.float64), "gripper_states": np.zeros(2, np.float64),
-                "joint_states": np.zeros(7, np.float64),
-            },
-            "obs_embedding": np.broadcast_to(
-                np.asarray(t, dtype=np.float16), (256, 4096)
-            ),
-        })
+        steps.append(
+            {
+                "actions": np.full(7, t, np.float64),
+                "rewards": np.float32(0.0),
+                "sparse_rewards": np.uint8(1 if (success and t == T - 1) else 0),
+                "dones": np.uint8(1 if t == T - 1 else 0),
+                "robot_states": np.zeros(9, np.float64),
+                "states": np.zeros(5, np.float64),
+                "obs": {
+                    "agentview_rgb": np.zeros((256, 256, 3), np.uint8),
+                    "eye_in_hand_rgb": np.zeros((256, 256, 3), np.uint8),
+                    "ee_pos": np.zeros(3, np.float64),
+                    "ee_ori": np.zeros(3, np.float64),
+                    "ee_states": np.zeros(6, np.float64),
+                    "gripper_states": np.zeros(2, np.float64),
+                    "joint_states": np.zeros(7, np.float64),
+                },
+                "obs_embedding": np.broadcast_to(np.asarray(t, dtype=np.float16), (256, 4096)),
+            }
+        )
     return steps
 
 
@@ -831,7 +839,9 @@ def test_offline_warmup_steps_update_modules(tmp_path, monkeypatch):
     runner.device = torch.device("cpu")
     runner.global_step = 0
     runner._build_wm_pretrain_batch = lambda b: {
-        "images": torch.zeros(1), "obs_embedding": torch.zeros(1), "actions": torch.zeros(1)
+        "images": torch.zeros(1),
+        "obs_embedding": torch.zeros(1),
+        "actions": torch.zeros(1),
     }
     # world_model needs .train() (warmup puts it in train mode, like the online
     # loop does); the step fns themselves are faked so these are otherwise inert.
@@ -842,10 +852,8 @@ def test_offline_warmup_steps_update_modules(tmp_path, monkeypatch):
     runner.classifier_optimizer = object()
     runner._cls_window = 4
     runner.log_metrics = lambda metrics, step: logged.append((dict(metrics), int(step)))
-    runner.console_progress = (
-        lambda current, total, desc, **kwargs: progress.append(
-            (int(current), int(total), str(desc), kwargs.get("unit"))
-        )
+    runner.console_progress = lambda current, total, desc, **kwargs: progress.append(
+        (int(current), int(total), str(desc), kwargs.get("unit"))
     )
 
     runner._offline_warmup_wm(
@@ -967,8 +975,8 @@ def test_offline_warmup_wm_profiles_configured_initial_steps(monkeypatch):
     runner.world_model_optimizer = object()
     runner.policy = object()
     runner._build_wm_pretrain_batch = lambda b: b
-    runner._log_replay_warmup_metrics = (
-        lambda metrics, **kwargs: logged.append((dict(metrics), kwargs["step"]))
+    runner._log_replay_warmup_metrics = lambda metrics, **kwargs: logged.append(
+        (dict(metrics), kwargs["step"])
     )
     runner.console_progress = lambda *_args, **_kwargs: None
 
@@ -1106,9 +1114,7 @@ def test_offline_warmup_classifier_progress_uses_rank_zero_event_printer(monkeyp
         grad_clip=1.0,
     )
 
-    assert events == [
-        "[pipeline][cls-warmup] step=0/1 loss=0.2000 acc=0.750 f1=0.500 pos=0.250"
-    ]
+    assert events == ["[pipeline][cls-warmup] step=0/1 loss=0.2000 acc=0.750 f1=0.500 pos=0.250"]
     assert "[pipeline][cls-warmup]" not in capsys.readouterr().out
 
 
@@ -1214,11 +1220,11 @@ def test_offline_warmup_alternating_interleaves_wm_and_classifier(tmp_path, monk
     runner.policy = object()
     runner.classifier = torch.nn.Module()
     runner.classifier_optimizer = object()
-    runner._log_replay_warmup_metrics = lambda metrics, step: logged.append((dict(metrics), int(step)))
-    runner.console_progress = (
-        lambda current, total, desc, **kwargs: progress.append(
-            (int(current), int(total), str(desc), kwargs.get("unit"))
-        )
+    runner._log_replay_warmup_metrics = lambda metrics, step: logged.append(
+        (dict(metrics), int(step))
+    )
+    runner.console_progress = lambda current, total, desc, **kwargs: progress.append(
+        (int(current), int(total), str(desc), kwargs.get("unit"))
     )
 
     wm_last, cls_last = runner._offline_warmup_alternating(
@@ -1253,11 +1259,14 @@ def test_warmup_replay_epochs_derive_steps_from_sampleable_windows(tmp_path):
     replay = _seeded_replay(tmp_path, seq_len=4)
 
     assert replay.sampleable_window_count() == 12
-    assert WorldModelTrainingRunner._steps_for_replay_epochs(
-        replay,
-        replay_epochs=2,
-        batch_size=6,
-    ) == 4
+    assert (
+        WorldModelTrainingRunner._steps_for_replay_epochs(
+            replay,
+            replay_epochs=2,
+            batch_size=6,
+        )
+        == 4
+    )
 
 
 def test_warmup_replay_epochs_use_classifier_window_count_for_classifier(tmp_path):
@@ -1492,35 +1501,41 @@ def test_world_model_metrics_namespace_aliases_chunk_hidden_mse():
 def _orchestration_cfg(tmp_path, *, resume=False, total_env_steps=None):
     from omegaconf import OmegaConf
 
-    cfg = OmegaConf.create({
-        "training": {
-            "out_dir": str(tmp_path),
-            "debug": True,
-            "resume": resume,
-            # orchestration uses fake nn.Linear modules; HF export needs real
-            # target/init_args, so pin torch-only (the test asserts the .ckpt).
-            "checkpoint_format": "torch",
-        },
-        "offline_warmup": {
-            "data_dir": str(tmp_path / "offline_data"),
-            "hidden_dir": str(tmp_path / "offline_hidden"),
-            "debug_wm_warmup_steps": 2,
-            "debug_classifier_warmup_steps": 2,
-        },
-        # run() reads optim.grad_clip_norm; the real config always supplies optim.
-        "optim": {"grad_clip_norm": 1.0},
-        # Warmup checkpoints persist the Hydra construction contract.
-        "world_model": {
-            "_target_": "torch.nn.Linear",
-            "in_features": 2,
-            "out_features": 2,
-        },
-    })
+    cfg = OmegaConf.create(
+        {
+            "training": {
+                "out_dir": str(tmp_path),
+                "debug": True,
+                "resume": resume,
+                # orchestration uses fake nn.Linear modules; HF export needs real
+                # target/init_args, so pin torch-only (the test asserts the .ckpt).
+                "checkpoint_format": "torch",
+            },
+            "offline_warmup": {
+                "data_dir": str(tmp_path / "offline_data"),
+                "hidden_dir": str(tmp_path / "offline_hidden"),
+                "debug_wm_warmup_steps": 2,
+                "debug_classifier_warmup_steps": 2,
+            },
+            # run() reads optim.grad_clip_norm; the real config always supplies optim.
+            "optim": {"grad_clip_norm": 1.0},
+            # Warmup checkpoints persist the Hydra construction contract.
+            "world_model": {
+                "_target_": "torch.nn.Linear",
+                "in_features": 2,
+                "out_features": 2,
+            },
+        }
+    )
     if total_env_steps is not None:
-        OmegaConf.update(cfg, "online_rollout.total_env_steps", int(total_env_steps), force_add=True)
+        OmegaConf.update(
+            cfg, "online_rollout.total_env_steps", int(total_env_steps), force_add=True
+        )
         # cfg sets debug=True, so _apply_debug_overrides swaps in the debug knob;
         # pin it too or the requested step count is overwritten by the fallback.
-        OmegaConf.update(cfg, "online_rollout.debug_total_env_steps", int(total_env_steps), force_add=True)
+        OmegaConf.update(
+            cfg, "online_rollout.debug_total_env_steps", int(total_env_steps), force_add=True
+        )
     return cfg
 
 
@@ -1616,9 +1631,11 @@ def _make_orchestration_runner(
     def fake_build_components(self, cfg):
         calls.append("build")
         self.world_model = torch.nn.Linear(2, 2)
+        self.world_model_optimizer = torch.optim.AdamW(self.world_model.parameters(), lr=1e-3)
         self.policy = None
         self.critic = None
         self.classifier = torch.nn.Linear(2, 2)
+        self.classifier_optimizer = torch.optim.AdamW(self.classifier.parameters(), lr=1e-3)
         self.classifier_threshold = 0.5
 
     def fake_seed(
@@ -1645,9 +1662,17 @@ def _make_orchestration_runner(
             seed_capture["max_episodes_per_task"] = max_episodes_per_task
         # add a tiny real episode so num_transitions > 0 (run() guards on it)
         episode = [
-            {"image": np.zeros((4, 4, 3), np.uint8), "obs_embedding": np.zeros(8, np.float32),
-             "reward": 0.0, "done": 0.0, "is_last": 0.0, "is_terminal": 0.0,
-             "wm_action": np.zeros(7, np.float32), "task_id": 0, "success": True}
+            {
+                "image": np.zeros((4, 4, 3), np.uint8),
+                "obs_embedding": np.zeros(8, np.float32),
+                "reward": 0.0,
+                "done": 0.0,
+                "is_last": 0.0,
+                "is_terminal": 0.0,
+                "wm_action": np.zeros(7, np.float32),
+                "task_id": 0,
+                "success": True,
+            }
             for _ in range(replay.sequence_length + 1)
         ]
         replay.add_episode(episode)
@@ -1657,9 +1682,7 @@ def _make_orchestration_runner(
         calls.append("wm_warmup")
         return 0.0  # run() formats the returned loss into the warmup banner
 
-    def fake_cls_warmup(
-        self, replay, *, steps, batch_size, early_neg_stride, grad_clip, **_kwargs
-    ):
+    def fake_cls_warmup(self, replay, *, steps, batch_size, early_neg_stride, grad_clip, **_kwargs):
         calls.append("cls_warmup")
         return 0.0  # run() formats the returned acc into the warmup banner
 
@@ -1686,7 +1709,9 @@ def _make_orchestration_runner(
     monkeypatch.setattr(mod, "seed_replay_from_offline", fake_seed)
     monkeypatch.setattr(mod.WorldModelTrainingRunner, "_offline_warmup_wm", fake_wm_warmup)
     monkeypatch.setattr(mod.WorldModelTrainingRunner, "_offline_warmup_classifier", fake_cls_warmup)
-    monkeypatch.setattr(mod.WorldModelTrainingRunner, "_offline_warmup_alternating", fake_alternating_warmup)
+    monkeypatch.setattr(
+        mod.WorldModelTrainingRunner, "_offline_warmup_alternating", fake_alternating_warmup
+    )
     monkeypatch.setattr(mod.WorldModelTrainingRunner, "_online_cotrain_loop", fake_online_loop)
     # wrap _save_* so we can record their order while still writing the files
     real_save_wm = mod.WorldModelTrainingRunner._save_wm_warmup
@@ -1719,13 +1744,11 @@ def test_run_orchestrates_seed_warmup_split_ckpt_online(tmp_path, monkeypatch, c
     assert "[pipeline][replay] loaded complete episodes=1" in out
     assert "[pipeline][warmup] resolved replay warmup" in out
     # order: build -> seed -> WM warmup/checkpoint -> classifier warmup/checkpoint -> online
-    assert calls == [
-        "build", "seed", "wm_warmup", "save_wm", "cls_warmup", "save_cls", "online"
-    ]
-    assert os.path.exists(os.path.join(str(tmp_path), "ckpt", "wm_warmup.ckpt"))
-    assert os.path.exists(os.path.join(str(tmp_path), "ckpt", "classifier_warmup.ckpt"))
+    assert calls == ["build", "seed", "wm_warmup", "save_wm", "cls_warmup", "save_cls", "online"]
+    assert os.path.exists(os.path.join(str(tmp_path), "checkpoints", "wm_warmup.ckpt"))
+    assert os.path.exists(os.path.join(str(tmp_path), "checkpoints", "classifier_warmup.ckpt"))
     wm_payload = torch.load(
-        tmp_path / "ckpt" / "wm_warmup.ckpt",
+        tmp_path / "checkpoints" / "wm_warmup.ckpt",
         map_location="cpu",
         weights_only=False,
     )
@@ -1804,8 +1827,8 @@ def test_run_stops_after_warmup_when_total_env_steps_zero(tmp_path, monkeypatch)
 
     assert history == []
     assert calls == ["build", "seed", "wm_warmup", "save_wm", "cls_warmup", "save_cls"]
-    assert os.path.exists(os.path.join(str(tmp_path), "ckpt", "wm_warmup.ckpt"))
-    assert os.path.exists(os.path.join(str(tmp_path), "ckpt", "classifier_warmup.ckpt"))
+    assert os.path.exists(os.path.join(str(tmp_path), "checkpoints", "wm_warmup.ckpt"))
+    assert os.path.exists(os.path.join(str(tmp_path), "checkpoints", "classifier_warmup.ckpt"))
 
 
 def test_offline_warmup_requires_every_hydra_declared_task(
@@ -1829,9 +1852,7 @@ def test_offline_warmup_requires_every_hydra_declared_task(
     assert calls == ["build", "seed"]
 
 
-def test_wm_only_run_never_calibrates_or_checkpoints_classifier(
-    tmp_path, monkeypatch
-):
+def test_wm_only_run_never_calibrates_or_checkpoints_classifier(tmp_path, monkeypatch):
     calls: list[str] = []
     runner = _make_orchestration_runner(
         tmp_path,
@@ -1850,7 +1871,7 @@ def test_wm_only_run_never_calibrates_or_checkpoints_classifier(
 
     assert history == []
     assert calls == ["build", "seed", "wm_warmup", "save_wm"]
-    assert not (tmp_path / "ckpt" / "classifier_warmup.ckpt").exists()
+    assert not (tmp_path / "checkpoints" / "classifier_warmup.ckpt").exists()
 
 
 def test_warmup_progress_checkpoint_does_not_mark_component_complete(tmp_path):
@@ -1887,8 +1908,8 @@ def test_warmup_progress_checkpoint_does_not_mark_component_complete(tmp_path):
     restored_step = runner._load_latest_wm_warmup_progress()
 
     assert restored_step == 7
-    assert not (tmp_path / "ckpt" / "wm_warmup.ckpt").exists()
-    assert (tmp_path / "ckpt" / "warmup_progress" / "wm_step_00000007.ckpt").exists()
+    assert not (tmp_path / "checkpoints" / "wm_warmup.ckpt").exists()
+    assert (tmp_path / "checkpoints" / "warmup_progress" / "wm_step_00000007.ckpt").exists()
     assert torch.allclose(
         runner.world_model.weight,
         torch.full_like(runner.world_model.weight, 3.0),
@@ -1914,7 +1935,9 @@ def test_warmup_topk_checkpoint_keeps_best_metric_values(tmp_path):
             topk_manager=topk,
         )
 
-    names = sorted(p.name for p in (tmp_path / "ckpt" / "warmup_topk" / "classifier").glob("*.ckpt"))
+    names = sorted(
+        p.name for p in (tmp_path / "checkpoints" / "warmup_topk" / "classifier").glob("*.ckpt")
+    )
     assert len(names) == 2
     assert any("step=00000002" in name and "f1=0.700000" in name for name in names)
     assert any("step=00000004" in name and "f1=0.900000" in name for name in names)
@@ -1947,23 +1970,45 @@ def test_warmup_only_component_build_skips_rollout_encoder(monkeypatch):
 
     monkeypatch.setattr(runner, "_build_frozen_encoder_cfg", fail_if_encoder_cfg)
     monkeypatch.setattr(mod.hydra.utils, "instantiate", fake_instantiate)
-    monkeypatch.setattr(mod._WorldModelTrainingCommon, "_build_trainable_classifier", fake_build_classifier)
+    monkeypatch.setattr(
+        mod._WorldModelTrainingCommon, "_build_trainable_classifier", fake_build_classifier
+    )
 
-    cfg = OmegaConf.create({
-        "online_rollout": {"total_env_steps": 0},
-        "world_model": {"_target_": "world_model"},
-        "policy": {"_target_": "policy"},
-        "critic": {"_target_": "critic"},
-        "algorithm": {},
-        "optim": {
-            "param_precision": "fp32",
-            "precision": "fp32",
-            "world_model": {"name": "adam", "lr": 1e-3, "weight_decay": 0.0, "betas": [0.9, 0.999], "eps": 1e-8},
-            "policy": {"name": "adam", "lr": 1e-3, "weight_decay": 0.0, "betas": [0.9, 0.999], "eps": 1e-8},
-            "critic": {"name": "adam", "lr": 1e-3, "weight_decay": 0.0, "betas": [0.9, 0.999], "eps": 1e-8},
-        },
-        "init": {"world_model_state_ckpt": None},
-    })
+    cfg = OmegaConf.create(
+        {
+            "online_rollout": {"total_env_steps": 0},
+            "world_model": {"_target_": "world_model"},
+            "policy": {"_target_": "policy"},
+            "critic": {"_target_": "critic"},
+            "algorithm": {},
+            "optim": {
+                "param_precision": "fp32",
+                "precision": "fp32",
+                "world_model": {
+                    "name": "adam",
+                    "lr": 1e-3,
+                    "weight_decay": 0.0,
+                    "betas": [0.9, 0.999],
+                    "eps": 1e-8,
+                },
+                "policy": {
+                    "name": "adam",
+                    "lr": 1e-3,
+                    "weight_decay": 0.0,
+                    "betas": [0.9, 0.999],
+                    "eps": 1e-8,
+                },
+                "critic": {
+                    "name": "adam",
+                    "lr": 1e-3,
+                    "weight_decay": 0.0,
+                    "betas": [0.9, 0.999],
+                    "eps": 1e-8,
+                },
+            },
+            "init": {"world_model_state_ckpt": None},
+        }
+    )
 
     runner._build_components(cfg)
 
@@ -2043,6 +2088,7 @@ def test_online_rollout_uses_only_oft_hidden_token_extractor():
 
         def step(self, obs, task_description):
             calls.append(f"step:{task_description}")
+
             class DecodeOutput:
                 lang_emb = torch.arange(6, dtype=torch.float16)
 
@@ -2139,7 +2185,7 @@ def test_single_env_rollout_executes_full_chunk_and_clears_on_reset(monkeypatch)
             pass
 
         def step(self, _obs, _desc):
-                return [], torch.zeros(1, 256, 4096)
+            return [], torch.zeros(1, 256, 4096)
 
     class FakeWorldModel:
         def __call__(self, batch):
@@ -2212,13 +2258,29 @@ def test_run_resume_skips_seed_and_warmups_when_ckpts_exist(tmp_path, monkeypatc
     # Pre-create both warmup ckpts with minimal valid payloads.
     ckpt_dir = os.path.join(str(tmp_path), "ckpt")
     os.makedirs(ckpt_dir, exist_ok=True)
+    saved_world_model = torch.nn.Linear(2, 2)
+    saved_world_model_optimizer = torch.optim.AdamW(saved_world_model.parameters(), lr=1e-3)
+    saved_world_model(torch.ones(1, 2)).sum().backward()
+    saved_world_model_optimizer.step()
     torch.save(
-        {"global_step": 7, "world_model": torch.nn.Linear(2, 2).state_dict()},
+        {
+            "global_step": 7,
+            "world_model": saved_world_model.state_dict(),
+            "world_model_optimizer": saved_world_model_optimizer.state_dict(),
+        },
         os.path.join(ckpt_dir, "wm_warmup.ckpt"),
     )
+    saved_classifier = torch.nn.Linear(2, 2)
+    saved_classifier_optimizer = torch.optim.AdamW(saved_classifier.parameters(), lr=1e-3)
+    saved_classifier(torch.ones(1, 2)).sum().backward()
+    saved_classifier_optimizer.step()
     torch.save(
-        {"global_step": 9, "classifier": torch.nn.Linear(2, 2).state_dict(),
-         "classifier_threshold": 0.42},
+        {
+            "global_step": 9,
+            "classifier": saved_classifier.state_dict(),
+            "classifier_optimizer": saved_classifier_optimizer.state_dict(),
+            "classifier_threshold": 0.42,
+        },
         os.path.join(ckpt_dir, "classifier_warmup.ckpt"),
     )
 
@@ -2241,6 +2303,8 @@ def test_run_resume_skips_seed_and_warmups_when_ckpts_exist(tmp_path, monkeypatc
     assert "save_wm" not in calls
     assert "save_cls" not in calls
     assert calls == ["build", "online"]
+    assert runner.world_model_optimizer.state_dict()["state"]
+    assert runner.classifier_optimizer.state_dict()["state"]
     # threshold restored from the cls warmup ckpt
     assert runner.classifier_threshold == 0.42
 
@@ -2254,8 +2318,8 @@ def test_sweep_metrics_is_exported_and_picks_separating_threshold():
     # B1 Step 1: the sweep must live in the shared classifier_metrics module
     # (so the cotrain pipeline does not depend on the classifier runner) and
     # select a threshold that perfectly separates a linearly-separable set.
-    from dreamervla.runtime.classifier_metrics import sweep_threshold_metrics
     from dreamervla.runners.success_classifier_training_runner import _sweep_metrics
+    from dreamervla.runtime.classifier_metrics import sweep_threshold_metrics
 
     assert _sweep_metrics is sweep_threshold_metrics
 
@@ -2296,9 +2360,7 @@ class _FakeConstantClassifier(torch.nn.Module):
     def forward(self, windows, **kwargs):
         n = windows.shape[0]
         # logits [+1, -1] -> P(success)=softmax[:,1] ~= 0.12 for every sample
-        return torch.stack(
-            [torch.ones(n), -torch.ones(n)], dim=1
-        )
+        return torch.stack([torch.ones(n), -torch.ones(n)], dim=1)
 
 
 def _make_warmup_runner(monkeypatch, classifier):

@@ -17,7 +17,7 @@ Reports cos sim + MSE per env-step (averaged over demos) for both modes.
 
 Usage:
     python -m dreamervla.diagnostics.eval_chunkwm_closeloop \
-        --ckpt /path/to/wm_run/ckpt/latest.ckpt \
+        --ckpt /path/to/wm_run/checkpoints/latest.ckpt \
         --num-demos 16 --num-chunks 20 --device cuda:4
 """
 
@@ -165,12 +165,15 @@ def _instantiate_legacy_chunk_wm(wm_cfg_blob: object) -> ChunkAwareWorldModel:
 
 def load_demo(
     raw_p: Path, hid_p: Path, demo_key: str
-) -> tuple[
-    np.ndarray,
-    np.ndarray,
-    np.ndarray | None,
-    np.ndarray | None,
-] | None:
+) -> (
+    tuple[
+        np.ndarray,
+        np.ndarray,
+        np.ndarray | None,
+        np.ndarray | None,
+    ]
+    | None
+):
     """Return tokenized observations, actions, proprio, and language sidecar."""
     with h5py.File(str(hid_p), "r") as hh:
         if f"{demo_key}/obs_embedding" not in hh:
@@ -259,9 +262,7 @@ def rollout(
     else:
         lang_batch = None
     history = obs_tokens[:H].unsqueeze(0)
-    action_history = torch.zeros(
-        1, H, wm.action_dim, device=obs.device, dtype=obs.dtype
-    )
+    action_history = torch.zeros(1, H, wm.action_dim, device=obs.device, dtype=obs.dtype)
     if H > 1:
         action_history[:, : H - 1] = actions[: H - 1].unsqueeze(0)
 
@@ -277,9 +278,7 @@ def rollout(
         cur_latent["proprio"] = proprio_batch[:, H - 1]
 
     for c in range(N):
-        chunk_actions = actions[H - 1 + c * K : H - 1 + c * K + K].unsqueeze(
-            0
-        )  # [1, K, A]
+        chunk_actions = actions[H - 1 + c * K : H - 1 + c * K + K].unsqueeze(0)  # [1, K, A]
         out = wm.predict_next_chunk(cur_latent, chunk_actions)
         pred = out["hidden_seq"][0]
         target = obs_tokens[H + c * K : H + (c + 1) * K]
@@ -302,9 +301,7 @@ def rollout(
                 1, H, wm.action_dim, device=obs.device, dtype=obs.dtype
             )
             if H > 1:
-                new_action_history[:, : H - 1] = actions[
-                    start : start + H - 1
-                ].unsqueeze(0)
+                new_action_history[:, : H - 1] = actions[start : start + H - 1].unsqueeze(0)
             cur_latent = {
                 "hidden": new_history[:, -1],
                 "history": new_history,
@@ -332,9 +329,9 @@ def per_step_metrics(pred: torch.Tensor, target: torch.Tensor) -> dict:
     target = target.reshape(target.shape[0], -1)
     cos = F.cosine_similarity(pred.float(), target.float(), dim=-1)  # [T]
     mse = ((pred.float() - target.float()) ** 2).mean(dim=-1)  # [T]
-    rel_l2 = (pred.float() - target.float()).norm(dim=-1) / target.float().norm(
-        dim=-1
-    ).clamp_min(1e-8)
+    rel_l2 = (pred.float() - target.float()).norm(dim=-1) / target.float().norm(dim=-1).clamp_min(
+        1e-8
+    )
     return {
         "cos": cos.cpu().numpy(),
         "mse": mse.cpu().numpy(),
@@ -352,21 +349,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--success-dir-raw",
-        default=str(
-            PROJECT_ROOT
-            / "data"
-            / "collected_rollouts"
-            / "libero_goal/reward"
-        ),
+        default=str(PROJECT_ROOT / "data" / "collected_rollouts" / "libero_goal/reward"),
     )
     parser.add_argument(
         "--success-dir-hidden",
-        default=str(
-            PROJECT_ROOT
-            / "data"
-            / "collected_rollouts"
-            / "libero_goal/hidden"
-        ),
+        default=str(PROJECT_ROOT / "data" / "collected_rollouts" / "libero_goal/hidden"),
     )
     parser.add_argument("--num-demos", type=int, default=16)
     parser.add_argument("--num-chunks", type=int, default=20)
@@ -377,13 +364,9 @@ def main() -> None:
     device = torch.device(args.device)
     wm = load_chunk_wm(args.ckpt, device, config_path=args.config)
     H, K = wm.num_hist, wm.chunk_size
-    print(
-        f"[wm] num_hist={H} chunk_size={K} action_dim={wm.action_dim} obs_dim={wm.obs_dim}"
-    )
+    print(f"[wm] num_hist={H} chunk_size={K} action_dim={wm.action_dim} obs_dim={wm.obs_dim}")
 
-    pairs = _find_demo_pairs(args.success_dir_raw, args.success_dir_hidden)[
-        : args.num_demos
-    ]
+    pairs = _find_demo_pairs(args.success_dir_raw, args.success_dir_hidden)[: args.num_demos]
     print(f"[data] using {len(pairs)} demos")
 
     per_demo_open: list[dict] = []

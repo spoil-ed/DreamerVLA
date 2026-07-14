@@ -83,16 +83,12 @@ def _classifier_forward_kwargs(
     if bool(getattr(model, "supports_proprio_conditioning", False)):
         proprio = extra.get("proprio")
         if not isinstance(proprio, torch.Tensor):
-            raise ValueError(
-                "classifier requires proprio conditioning, but batch has no proprio"
-            )
+            raise ValueError("classifier requires proprio conditioning, but batch has no proprio")
         kwargs["proprio"] = proprio.to(device, non_blocking=True)
     if bool(getattr(model, "supports_language_conditioning", False)):
         lang_emb = extra.get("lang_emb")
         if not isinstance(lang_emb, torch.Tensor):
-            raise ValueError(
-                "classifier requires language conditioning, but batch has no lang_emb"
-            )
+            raise ValueError("classifier requires language conditioning, but batch has no lang_emb")
         kwargs["lang_emb"] = lang_emb.to(device, non_blocking=True)
     return kwargs
 
@@ -160,7 +156,14 @@ class SuccessClassifierTrainingRunner(BaseRunner):
     runner_name = "latent_classifier"
     runner_status = "current"
     runner_family = "reward"
-    include_keys = ("_output_dir",)
+    include_keys = (
+        "global_step",
+        "epoch",
+        "best_window_f1",
+        "best_episode_f1",
+        "best_window_ckpt_path",
+        "best_episode_ckpt_path",
+    )
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         super().__init__(config, output_dir)
@@ -299,9 +302,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                 "event": "setup_begin",
                 "output_dir": str(self.output_dir),
                 "device": str(self.device),
-                "head_type": str(
-                    OmegaConf.select(self.cfg, "classifier.head_type") or "linear"
-                ),
+                "head_type": str(OmegaConf.select(self.cfg, "classifier.head_type") or "linear"),
             }
         )
 
@@ -354,9 +355,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
             failure_hidden = OmegaConf.select(d, "failure_dir_hidden", default=None)
             if failure_raw is not None or failure_hidden is not None:
                 if failure_raw is None or failure_hidden is None:
-                    raise ValueError(
-                        "failure sidecar validation requires both raw and hidden dirs"
-                    )
+                    raise ValueError("failure sidecar validation requires both raw and hidden dirs")
                 validate_hidden_token_sidecar_dir(
                     failure_hidden,
                     reference_dir=failure_raw,
@@ -372,9 +371,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
             )
         )
         train_dataset_cfg = OmegaConf.select(self.cfg, "task.classifier.dataset.train")
-        validation_dataset_cfg = OmegaConf.select(
-            self.cfg, "task.classifier.dataset.validation"
-        )
+        validation_dataset_cfg = OmegaConf.select(self.cfg, "task.classifier.dataset.validation")
         if train_dataset_cfg is None or validation_dataset_cfg is None:
             raise ValueError(
                 "classifier training requires Hydra-selected "
@@ -425,9 +422,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         # ----- dataloaders -----------------------------------------------
         tr = self.cfg.training
         if sampling_protocol == "wmpo" and balance_batches and int(tr.batch_size) % 2:
-            raise ValueError(
-                "WMPO batch-balanced sampling requires an even training.batch_size"
-            )
+            raise ValueError("WMPO batch-balanced sampling requires an even training.batch_size")
         if (
             sampling_protocol == "wmpo"
             and balance_batches
@@ -466,9 +461,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         if loss_type_for_cfg == "ce" and int(cls_cfg.output_dim) != 2:
             raise ValueError("training.loss_type=ce requires classifier.output_dim=2")
         if int(cls_cfg.window) != int(d.window):
-            raise ValueError(
-                f"classifier.window ({cls_cfg.window}) != data.window ({d.window})"
-            )
+            raise ValueError(f"classifier.window ({cls_cfg.window}) != data.window ({d.window})")
         # Chunk granularity consistency: classifier.cfg.chunk_size must match
         # data.chunk_subsample, otherwise the windows produced by the dataset
         # have a different time-coverage than what the classifier expects at
@@ -488,9 +481,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
             raise ValueError(
                 f"data.chunk_subsample={chunk_subsample} requires classifier.granularity='chunk'"
             )
-        classifier_target = OmegaConf.select(
-            self.cfg, "classifier._target_", default=None
-        )
+        classifier_target = OmegaConf.select(self.cfg, "classifier._target_", default=None)
         if classifier_target:
             self.model = hydra.utils.instantiate(self.cfg.classifier).to(self.device)
         else:
@@ -573,14 +564,9 @@ class SuccessClassifierTrainingRunner(BaseRunner):
             "total",
         )
         parts = [
-            f"{name}={float(enriched[name]) * 1000.0:.1f}ms"
-            for name in order
-            if name in enriched
+            f"{name}={float(enriched[name]) * 1000.0:.1f}ms" for name in order if name in enriched
         ]
-        parts.append(
-            "device_active="
-            f"{float(enriched['device_active_fraction']) * 100.0:.1f}%"
-        )
+        parts.append(f"device_active={float(enriched['device_active_fraction']) * 100.0:.1f}%")
         print(
             f"[classifier-profile] step={int(self.global_step)} " + " ".join(parts),
             flush=True,
@@ -618,8 +604,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                 )
             ):
                 raise ValueError(
-                    "final_selection_metric=episode_f1 requires "
-                    "training.episode_eval_enabled=true"
+                    "final_selection_metric=episode_f1 requires training.episode_eval_enabled=true"
                 )
             metrics = self._evaluate_episode_level()
             if float(metrics["best_f1"]) > float(self.best_episode_f1):
@@ -632,8 +617,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                 )
             return {"episode": metrics}
         raise ValueError(
-            "training.final_selection_metric must be one of: "
-            "none, window_f1, episode_f1"
+            "training.final_selection_metric must be one of: none, window_f1, episode_f1"
         )
 
     def run(self) -> dict[str, float]:
@@ -717,9 +701,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                     if callable(clip_tensor):
                         grad_norm = clip_tensor(self.model, 5.0)
                     else:
-                        grad_norm = torch.nn.utils.clip_grad_norm_(
-                            self.model.parameters(), 5.0
-                        )
+                        grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), 5.0)
                 with timer.device_stage("optimizer"):
                     self.optim.step()
 
@@ -732,13 +714,9 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                 self.global_step += 1
                 if profile:
                     profile_timings.update(timer.finish())
-                    profile_timings["total"] = (
-                        time.perf_counter() - update_started_at
-                    )
+                    profile_timings["total"] = time.perf_counter() - update_started_at
                     self._record_update_profile(profile_timings)
-                self.console_progress(
-                    self.global_step, num_epochs * steps_per_epoch, "train"
-                )
+                self.console_progress(self.global_step, num_epochs * steps_per_epoch, "train")
 
                 if self.global_step % log_every == 0:
                     step_loss = running_loss / log_every
@@ -777,9 +755,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                 if self.global_step % eval_every == 0:
                     eval_started_at = time.perf_counter()
                     w_metrics = self._evaluate_window_level()
-                    self._log(
-                        {"event": "val_window", "step": self.global_step, **w_metrics}
-                    )
+                    self._log({"event": "val_window", "step": self.global_step, **w_metrics})
                     if w_metrics["best_f1"] > self.best_window_f1:
                         self.best_window_f1 = float(w_metrics["best_f1"])
                         self._save_named(
@@ -863,13 +839,9 @@ class SuccessClassifierTrainingRunner(BaseRunner):
             extra: dict[str, torch.Tensor] = {}
             if isinstance(extra_or_meta, list):
                 if extra_or_meta and all("proprio" in meta for meta in extra_or_meta):
-                    extra["proprio"] = torch.stack(
-                        [meta["proprio"] for meta in extra_or_meta]
-                    )
+                    extra["proprio"] = torch.stack([meta["proprio"] for meta in extra_or_meta])
                 if extra_or_meta and all("lang_emb" in meta for meta in extra_or_meta):
-                    extra["lang_emb"] = torch.stack(
-                        [meta["lang_emb"] for meta in extra_or_meta]
-                    )
+                    extra["lang_emb"] = torch.stack([meta["lang_emb"] for meta in extra_or_meta])
             forward_kwargs = _classifier_forward_kwargs(
                 self._classifier_module(), extra, self.device
             )
@@ -971,9 +943,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                     T = 0
                 else:
                     trailing_shape = obs.shape[1:]
-                    reshaped = obs[: T_chunk * K].reshape(
-                        T_chunk, K, *trailing_shape
-                    )
+                    reshaped = obs[: T_chunk * K].reshape(T_chunk, K, *trailing_shape)
                     if chunk_pool == "last":
                         obs_pooled = reshaped[:, -1]
                     elif chunk_pool == "first":
@@ -1065,17 +1035,13 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                 "f1": f1,
                 "step": int(self.global_step),
                 "config": {
-                    "classifier": OmegaConf.to_container(
-                        self.cfg.classifier, resolve=True
-                    ),
+                    "classifier": OmegaConf.to_container(self.cfg.classifier, resolve=True),
                 },
                 "extra": extra or {},
             },
             path,
         )
-        self._log(
-            {"event": "ckpt_named", "path": str(path), "f1": f1, "threshold": threshold}
-        )
+        self._log({"event": "ckpt_named", "path": str(path), "f1": f1, "threshold": threshold})
 
     def _log(self, payload: dict) -> None:
         if not self.is_main_process:

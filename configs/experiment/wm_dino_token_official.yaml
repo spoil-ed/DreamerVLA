@@ -9,6 +9,9 @@ defaults:
 _target_: dreamervla.runners.DinoTokenWorldModelTrainingRunner
 seed: 0
 
+run:
+  name: wm_dino_token_official
+
 launch:
   distributed: true
   ngpu: 8
@@ -27,21 +30,14 @@ launch:
     NCCL_DEBUG: WARN
     TORCH_NCCL_ASYNC_ERROR_HANDLING: 1
 
-hydra:
-  run:
-    dir: ${training.out_dir}
-  output_subdir: .hydra
-
 init:
   world_model_state_ckpt: null
 
 training:
-  out_dir: ${oc.env:RUN_ROOT,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/dino_token_wm/${now:%Y%m%d_%H%M%S}}
   device: cuda
   distributed_strategy: ddp
   fsdp_mixed_precision: fp32
   enable_activation_checkpointing: false
-  resume: false
   checkpoint_format: torch
   num_epochs: 100
   max_steps: 0

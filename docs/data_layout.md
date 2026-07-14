@@ -117,8 +117,11 @@ bash scripts/preprocess_libero.sh
 
 ## Outputs
 
-Training runs write under `${DVLA_DATA_ROOT}/outputs/`. Pipeline runs keep
-collection and cotrain sub-roots under one launcher `run_root`.
+Training runs default to
+`${RUN_ROOT:-${DVLA_DATA_ROOT}/outputs}/${run.name}/${run.timestamp}`. Every invocation
+owns one run root with sibling `checkpoints/`, `logs/`, `tensorboard/`, `wandb/`,
+`video/`, `diagnostics/`, and `.hydra/` directories. Collection, warmup, cotrain, and
+evaluation use their experiment names as `run.name`; resuming keeps the original root.
 
 ## Move Data
 

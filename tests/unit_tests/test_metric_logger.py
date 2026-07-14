@@ -56,13 +56,10 @@ def test_metric_logger_writes_tensorboard_run_and_config(tmp_path: Path) -> None
 
     tensorboard_dir = log_root / "tensorboard"
     assert (tensorboard_dir / "config.yaml").is_file()
-    assert any(
-        path.name.startswith("events.out.tfevents")
-        for path in tensorboard_dir.iterdir()
-    )
+    assert any(path.name.startswith("events.out.tfevents") for path in tensorboard_dir.iterdir())
 
 
-def test_metric_logger_defaults_to_training_output_log_dir(
+def test_metric_logger_defaults_to_training_output_root(
     tmp_path: Path,
 ) -> None:
     out_dir = tmp_path / "out"
@@ -72,7 +69,7 @@ def test_metric_logger_defaults_to_training_output_log_dir(
     logger.log({"train/loss": 1.0}, step=0)
     logger.finish()
 
-    assert (out_dir / "log" / "tensorboard" / "config.yaml").is_file()
+    assert (out_dir / "tensorboard" / "config.yaml").is_file()
 
 
 def test_metric_logger_passes_online_mode_to_wandb_init(

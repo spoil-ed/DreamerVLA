@@ -12,20 +12,13 @@ launch:
   required_target_values: []
   env: {}
 
-hydra:
-  run:
-    dir: ${training.out_dir}
-  output_subdir: .hydra
-
 trainer:
   device: cuda:0
   debug: false
 
 training:
   device: cuda:0
-  out_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/eval/eval_libero_vla
   debug: false
-  resume: false
   distributed_strategy: ddp
   fsdp_mixed_precision: bf16
   enable_activation_checkpointing: false

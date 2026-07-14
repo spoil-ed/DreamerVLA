@@ -104,13 +104,13 @@ logger=tensorboard                                          # local TensorBoard 
 logger=wandb runner.logger.wandb_mode=online               # W&B online only
 ```
 
-TensorBoard events: `${training.out_dir}/log/tensorboard`; W&B run files:
-`${training.out_dir}/log/wandb`.
+TensorBoard events: `${training.out_dir}/tensorboard`; W&B run files:
+`${training.out_dir}/wandb`.
 
 ```bash
-tensorboard --logdir "${OUT_DIR}/log/tensorboard" --host 0.0.0.0 --port 6006
+tensorboard --logdir "${OUT_DIR}/tensorboard" --host 0.0.0.0 --port 6006
 ssh -L 6006:localhost:6006 user@host        # remote: forward then open localhost:6006
-wandb sync "${OUT_DIR}/log/wandb"           # upload an offline run
+wandb sync "${OUT_DIR}/wandb"               # upload an offline run
 ```
 
 "TensorFlow logging" in these recipes means the TensorBoard event writer, not a

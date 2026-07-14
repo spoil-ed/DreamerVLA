@@ -3,10 +3,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
 import h5py
+import pytest
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
@@ -38,9 +40,7 @@ def test_cotrain_experiment_directory_contains_train_and_eval() -> None:
 
 def test_cotrain_train_script_uses_train_only_recipe_without_pinned_warm_states() -> None:
     root = Path(__file__).resolve().parents[2]
-    text = (root / "scripts/experiments/cotrain/train.sh").read_text(
-        encoding="utf-8"
-    )
+    text = (root / "scripts/experiments/cotrain/train.sh").read_text(encoding="utf-8")
 
     assert "dreamervla.launchers.cotrain" in text
     assert "experiment=openvla_libero" not in text
@@ -62,9 +62,9 @@ def test_experiment_scripts_defer_defaults_and_messages_to_python() -> None:
 
 def test_world_model_training_entrypoint_defers_model_choice_to_hydra() -> None:
     root = Path(__file__).resolve().parents[2]
-    script = (
-        root / "scripts" / "experiments" / "world_model_training" / "train.sh"
-    ).read_text(encoding="utf-8")
+    script = (root / "scripts" / "experiments" / "world_model_training" / "train.sh").read_text(
+        encoding="utf-8"
+    )
 
     assert "--config dreamer-wm" in script
     assert "wm_dino_token_official" not in script
@@ -110,6 +110,39 @@ def test_mainline_experiments_compose_only_the_components_their_stage_needs() ->
     assert cotrain.classifier._target_
     assert cotrain.manual_cotrain.real_env_enabled is True
     assert cotrain.task.openvla_oft.hidden_token.token_dim == 4096
+
+
+def test_active_experiments_use_one_named_timestamped_run_root(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("RUN_ROOT", str(tmp_path))
+    expected = {
+        "collect_rollouts": "collect_rollouts",
+        "dino-wm": "dino-wm",
+        "dreamer-wm": "dreamer-wm",
+        "classifier_official_upper_bound": "classifier_official_upper_bound",
+        "openvla_libero": "openvla_libero",
+        "eval_cotrain": "eval_cotrain",
+    }
+    root = Path(__file__).resolve().parents[2]
+    with initialize_config_dir(config_dir=str(root / "configs"), version_base=None):
+        configs = {
+            experiment: compose(
+                config_name="train",
+                overrides=[f"experiment={experiment}"],
+            )
+            for experiment in expected
+        }
+
+    for experiment, run_name in expected.items():
+        cfg = configs[experiment]
+        OmegaConf.resolve(cfg)
+        out_dir = Path(cfg.training.out_dir)
+        assert cfg.run.name == run_name
+        assert out_dir.parent == tmp_path / run_name
+        assert re.fullmatch(r"\d{8}_\d{6}", out_dir.name)
+        assert "pre_mainline" not in out_dir.parts
 
 
 def test_world_model_training_config_switch_selects_expected_recipe() -> None:
@@ -163,11 +196,62 @@ def test_world_model_training_launcher_maps_batch_size_to_dino_dataloader() -> N
     assert "training.global_batch_size=7" not in result.stdout
 
 
+def test_experiment_launcher_resume_reuses_original_run_root(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    from dreamervla.launchers.train import main
+
+    run_dir = tmp_path / "dreamer-wm" / "20260714_120000"
+    checkpoint = run_dir / "checkpoints" / "latest.ckpt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.touch()
+
+    result = main(
+        [
+            "--config",
+            "dreamer-wm",
+            "--resume",
+            str(checkpoint),
+            "dry_run=true",
+            "ngpu=1",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert "training.resume=true" in output
+    assert f"training.resume_path={checkpoint.resolve()}" in output
+    assert f"training.resume_dir={run_dir.resolve()}" in output
+    assert f"training.out_dir={run_dir.resolve()}" in output
+
+
+def test_experiment_launcher_rejects_resume_with_output_override(
+    tmp_path: Path,
+) -> None:
+    from dreamervla.launchers.train import main
+
+    run_dir = tmp_path / "run"
+    latest = run_dir / "checkpoints" / "latest.ckpt"
+    latest.parent.mkdir(parents=True)
+    latest.touch()
+
+    with pytest.raises(ValueError, match="--resume.*out_dir"):
+        main(
+            [
+                "--config",
+                "dreamer-wm",
+                "--resume",
+                str(run_dir),
+                "out_dir=/tmp/fork",
+                "dry_run=true",
+            ]
+        )
+
+
 def test_cotrain_eval_protocol_lives_in_hydra_config() -> None:
     root = Path(__file__).resolve().parents[2]
-    script = (root / "scripts/experiments/cotrain/eval.sh").read_text(
-        encoding="utf-8"
-    )
+    script = (root / "scripts/experiments/cotrain/eval.sh").read_text(encoding="utf-8")
     cfg = OmegaConf.load(root / "configs/experiment/eval_cotrain.yaml")
 
     assert "--config eval_cotrain" in script

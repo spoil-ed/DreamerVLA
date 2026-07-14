@@ -111,11 +111,16 @@ ${training.out_dir}/
 ├── resolved_config.yaml
 ├── run_manifest.json
 ├── checkpoints/
-├── log/
-│   ├── tensorboard/
-│   └── wandb/
-├── video/
-└── diagnostics/
+├── logs/
+├── tensorboard/
+├── wandb/
+├── video/{train,eval}/
+├── diagnostics/
+└── .hydra/
 ```
 
-Warmup pipeline checkpoints are written under `${RUN_ROOT}/cotrain/ckpt/`.
+The default run root is
+`${RUN_ROOT:-${DVLA_DATA_ROOT}/outputs}/${run.name}/${run.timestamp}`. Warmup and
+periodic checkpoints are written under its `checkpoints/` directory. Supplying
+`--resume <run-or-checkpoint>` to a train launcher restores the checkpoint and keeps
+writing into that same run root.

@@ -84,9 +84,9 @@ def test_docs_and_smoke_script_do_not_point_at_removed_entrypoints() -> None:
 
     readme = (project_root / "README.md").read_text(encoding="utf-8")
     scripts_readme = (project_root / "scripts" / "README.md").read_text(encoding="utf-8")
-    eval_script = (
-        project_root / "scripts" / "experiments" / "cotrain" / "eval.sh"
-    ).read_text(encoding="utf-8")
+    eval_script = (project_root / "scripts" / "experiments" / "cotrain" / "eval.sh").read_text(
+        encoding="utf-8"
+    )
 
     assert "eval_wm.sh" not in readme
     assert "pretokenize_sft_wm_vla_smoke" not in scripts_readme
@@ -99,9 +99,7 @@ def test_cotrain_train_and_eval_entrypoints_are_documented() -> None:
     agents = (project_root / "AGENTS.md").read_text(encoding="utf-8")
     readme = (project_root / "README.md").read_text(encoding="utf-8")
     readme_zh = (project_root / "README.zh-CN.md").read_text(encoding="utf-8")
-    config_registry = (project_root / "configs" / "README.md").read_text(
-        encoding="utf-8"
-    )
+    config_registry = (project_root / "configs" / "README.md").read_text(encoding="utf-8")
     scripts = (project_root / "scripts" / "README.md").read_text(encoding="utf-8")
 
     train = "scripts/experiments/cotrain/train.sh"
@@ -159,24 +157,13 @@ def test_openvla_mainline_uses_only_hidden_token_public_names() -> None:
             offenders[str(path.relative_to(project_root))] = matches
 
     assert offenders == {}
+    assert (project_root / "dreamervla" / "preprocess" / "preprocess_oft_hidden_token.py").is_file()
     assert (
-        project_root / "dreamervla" / "preprocess" / "preprocess_oft_hidden_token.py"
+        project_root / "configs" / "scripts" / "preprocess" / "preprocess_oft_hidden_token.yaml"
     ).is_file()
-    assert (
-        project_root
-        / "configs"
-        / "scripts"
-        / "preprocess"
-        / "preprocess_oft_hidden_token.yaml"
-    ).is_file()
-    assert (
-        project_root / "scripts" / "preprocess" / "10_oft_hidden_token.sh"
-    ).is_file()
+    assert (project_root / "scripts" / "preprocess" / "10_oft_hidden_token.sh").is_file()
     assert not (
-        project_root
-        / "dreamervla"
-        / "preprocess"
-        / f"preprocess_oft_{legacy_namespace}.py"
+        project_root / "dreamervla" / "preprocess" / f"preprocess_oft_{legacy_namespace}.py"
     ).exists()
     assert not (
         project_root
@@ -185,9 +172,7 @@ def test_openvla_mainline_uses_only_hidden_token_public_names() -> None:
         / "preprocess"
         / f"preprocess_oft_{legacy_namespace}.yaml"
     ).exists()
-    assert not (
-        project_root / "scripts" / "preprocess" / f"35_oft_{legacy_namespace}.sh"
-    ).exists()
+    assert not (project_root / "scripts" / "preprocess" / f"35_oft_{legacy_namespace}.sh").exists()
 
 
 def test_legacy_projected_token_source_is_confined_to_migration_adapter() -> None:
@@ -200,10 +185,20 @@ def test_legacy_projected_token_source_is_confined_to_migration_adapter() -> Non
     offenders: list[str] = []
     for root_name in ("dreamervla", "configs", "scripts", "tests", "docs", "spec"):
         for path in (project_root / root_name).rglob("*"):
-            if not path.is_file() or path.suffix not in {".py", ".yaml", ".yml", ".sh", ".md", ".tex"}:
+            if not path.is_file() or path.suffix not in {
+                ".py",
+                ".yaml",
+                ".yml",
+                ".sh",
+                ".md",
+                ".tex",
+            }:
                 continue
             relative = path.relative_to(project_root)
-            if legacy_source in path.read_text(encoding="utf-8", errors="ignore") and relative not in allowed:
+            if (
+                legacy_source in path.read_text(encoding="utf-8", errors="ignore")
+                and relative not in allowed
+            ):
                 offenders.append(str(relative))
 
     assert offenders == []
@@ -276,9 +271,7 @@ def test_setup_guide_documents_current_cotrain_entrypoints() -> None:
 
 def test_configs_readme_documents_current_cotrain_recipes() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    configs_readme = (project_root / "configs" / "README.md").read_text(
-        encoding="utf-8"
-    )
+    configs_readme = (project_root / "configs" / "README.md").read_text(encoding="utf-8")
 
     assert "openvla_onetraj_libero_cotrain" in configs_readme
     assert "openvla_onetraj_libero_cotrain" in configs_readme
@@ -289,9 +282,7 @@ def test_configs_readme_documents_current_cotrain_recipes() -> None:
 
 def test_scripts_readme_documents_current_cotrain_launchers() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    scripts_readme = (project_root / "scripts" / "README.md").read_text(
-        encoding="utf-8"
-    )
+    scripts_readme = (project_root / "scripts" / "README.md").read_text(encoding="utf-8")
 
     assert "experiments/cotrain/train.sh" in scripts_readme
     assert "experiments/cotrain/eval.sh" in scripts_readme
@@ -313,9 +304,9 @@ def test_route_reference_documents_current_release_routes() -> None:
 
 def test_experiment_tutorial_index_documents_current_recipes() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    tutorial_index = (
-        project_root / "docs" / "tutorials" / "experiments" / "README.md"
-    ).read_text(encoding="utf-8")
+    tutorial_index = (project_root / "docs" / "tutorials" / "experiments" / "README.md").read_text(
+        encoding="utf-8"
+    )
 
     assert "openvla_onetraj_libero_cotrain" in tutorial_index
     assert "wm_full_dataset_train" in tutorial_index
@@ -332,11 +323,7 @@ def test_retired_model_tutorial_is_absent() -> None:
 def test_openvla_onetraj_tutorial_prefers_role_based_wm_route_examples() -> None:
     project_root = Path(__file__).resolve().parents[2]
     tutorial = (
-        project_root
-        / "docs"
-        / "tutorials"
-        / "experiments"
-        / "OpenVLA_Onetraj_LIBERO.md"
+        project_root / "docs" / "tutorials" / "experiments" / "OpenVLA_Onetraj_LIBERO.md"
     ).read_text(encoding="utf-8")
 
     assert "scripts/experiments/cotrain/train.sh" in tutorial
@@ -347,9 +334,7 @@ def test_openvla_onetraj_tutorial_prefers_role_based_wm_route_examples() -> None
 
 def test_parameter_reference_uses_role_based_wm_wording() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    parameter_reference = (project_root / "docs" / "PARAMETERS.md").read_text(
-        encoding="utf-8"
-    )
+    parameter_reference = (project_root / "docs" / "PARAMETERS.md").read_text(encoding="utf-8")
 
     assert "## World Model" in parameter_reference
     assert "world_model.chunk_rollout_chunks" in parameter_reference
@@ -358,9 +343,9 @@ def test_parameter_reference_uses_role_based_wm_wording() -> None:
 
 def test_repository_structure_documents_current_release_routes() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    repository_structure = (
-        project_root / "docs" / "repository_structure.md"
-    ).read_text(encoding="utf-8")
+    repository_structure = (project_root / "docs" / "repository_structure.md").read_text(
+        encoding="utf-8"
+    )
 
     assert "collect_rollouts" in repository_structure
     assert "openvla_onetraj_libero_cotrain" in repository_structure
@@ -372,19 +357,13 @@ def test_repository_structure_documents_current_release_routes() -> None:
 def test_retired_model_dataset_reference_is_absent() -> None:
     project_root = Path(__file__).resolve().parents[2]
     removed_reference = ("rynn" + "vla") + "_libero_goal.md"
-    assert not (
-        project_root / "docs" / "reference" / "model_datasets" / removed_reference
-    ).exists()
+    assert not (project_root / "docs" / "reference" / "model_datasets" / removed_reference).exists()
 
 
 def test_openvla_model_dataset_reference_prefers_role_based_wm_route_examples() -> None:
     project_root = Path(__file__).resolve().parents[2]
     reference = (
-        project_root
-        / "docs"
-        / "reference"
-        / "model_datasets"
-        / "openvla_oft_libero_goal.md"
+        project_root / "docs" / "reference" / "model_datasets" / "openvla_oft_libero_goal.md"
     ).read_text(encoding="utf-8")
 
     assert "scripts/experiments/cotrain/train.sh" in reference
@@ -394,9 +373,9 @@ def test_openvla_model_dataset_reference_prefers_role_based_wm_route_examples() 
 
 def test_experiment_explainer_uses_role_based_wm_wording() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    explainer = (
-        project_root / "docs" / "tutorials" / "experiments" / "EXPLAINED.md"
-    ).read_text(encoding="utf-8")
+    explainer = (project_root / "docs" / "tutorials" / "experiments" / "EXPLAINED.md").read_text(
+        encoding="utf-8"
+    )
 
     assert "WM chunk predictor" in explainer
     assert "WM paradigm" in explainer
@@ -417,14 +396,11 @@ def test_removed_observation_diagnostics_are_absent() -> None:
 
 def test_chunkwm_closeloop_diagnostic_usage_uses_role_based_wm_path() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    source = (
-        project_root
-        / "dreamervla"
-        / "diagnostics"
-        / "eval_chunkwm_closeloop.py"
-    ).read_text(encoding="utf-8")
+    source = (project_root / "dreamervla" / "diagnostics" / "eval_chunkwm_closeloop.py").read_text(
+        encoding="utf-8"
+    )
 
-    assert "--ckpt /path/to/wm_run/ckpt/latest.ckpt" in source
+    assert "--ckpt /path/to/wm_run/checkpoints/latest.ckpt" in source
     assert f"{_REMOVED_COMPACT_WM_ROUTE}_chunk" not in source
 
 
@@ -620,12 +596,8 @@ def test_files_live_under_their_architecture_domains() -> None:
     assert not (project_root / "dreamervla" / "models" / "xllmx").exists()
     assert not (project_root / "dreamervla" / "models" / "openvla-oft").exists()
     assert (preprocess_dir / "libero_utils").is_dir()
-    assert (
-        project_root / "dreamervla" / "models" / "embodiment" / "openvla_oft"
-    ).is_dir()
-    assert (
-        project_root / "dreamervla" / "models" / "embodiment" / "chameleon_model"
-    ).is_dir()
+    assert (project_root / "dreamervla" / "models" / "embodiment" / "openvla_oft").is_dir()
+    assert (project_root / "dreamervla" / "models" / "embodiment" / "chameleon_model").is_dir()
 
     assert not (project_root / "scripts" / "paper_tables").exists()
     assert not (project_root / "scripts" / "wm_variants_v4_v4E").exists()
@@ -824,9 +796,7 @@ def test_active_configs_do_not_describe_ignored_targets() -> None:
 def test_active_configs_do_not_pin_machine_local_roots() -> None:
     project_root = Path(__file__).resolve().parents[2]
     config_dir = project_root / "configs"
-    active_configs = sorted(
-        path for path in config_dir.rglob("*.yaml") if path.is_file()
-    )
+    active_configs = sorted(path for path in config_dir.rglob("*.yaml") if path.is_file())
 
     forbidden_roots = [
         "/" + "/".join(("mnt", "data", "spoil", "workspace", "DreamerVLA")),

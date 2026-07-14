@@ -4,6 +4,9 @@ defaults:
   - wm_official_upper_bound
   - _self_
 
+run:
+  name: wm_official_upper_bound_profile
+
 training:
   # Run enough updates to report profiled and synchronization-free throughput.
   wm_warmup_steps: 64

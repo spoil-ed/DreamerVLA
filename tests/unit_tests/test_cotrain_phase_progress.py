@@ -98,16 +98,65 @@ def test_eval_progress_rate_uses_completed_episodes(tmp_path) -> None:
 
     monitor = _EvaluationProgressMonitor(
         tmp_path,
-        lambda done, total, _desc, **kwargs: reports.append(
-            (done, total, str(kwargs["status"]))
-        ),
+        lambda done, total, _desc, **kwargs: reports.append((done, total, str(kwargs["status"]))),
         desc="eval/00000000",
         total_episodes=100,
     )
     monitor.report(force=True)
 
+    assert reports == [(17, 100, "completed=17 successes=16 success_rate=0.941 chunks=570/3800")]
+
+
+def test_real_rollout_progress_aggregates_completed_trajectories(tmp_path) -> None:
+    for rank, completed, successes, chunks in ((0, 3, 2, 40), (1, 4, 3, 50)):
+        (tmp_path / f"real_{rank}.json").write_text(
+            json.dumps(
+                {
+                    "role": "real_env",
+                    "env_rank": rank,
+                    "done": chunks,
+                    "total": 100,
+                    "episodes_completed": completed,
+                    "episodes_successful": successes,
+                    "finished": False,
+                }
+            ),
+            encoding="utf-8",
+        )
+    (tmp_path / "wm.json").write_text(
+        json.dumps(
+            {
+                "role": "wm_env",
+                "env_rank": 0,
+                "done": 1000,
+                "total": 2000,
+                "episodes_completed": 100,
+                "episodes_successful": 100,
+            }
+        ),
+        encoding="utf-8",
+    )
+    reports: list[tuple[int, int, str, str]] = []
+    monitor = _EvaluationProgressMonitor(
+        tmp_path,
+        lambda done, total, _desc, **kwargs: reports.append(
+            (done, total, str(kwargs["unit"]), str(kwargs["status"]))
+        ),
+        desc="cotrain-real-rollout/00000001",
+        total_episodes=10,
+        roles={"real_env"},
+        unit="trajectory",
+    )
+
+    monitor.report(force=True)
+
     assert reports == [
-        (15, 100, "completed=17 successes=16 success_rate=0.941 chunks=570/3800")
+        (
+            7,
+            10,
+            "trajectory",
+            "completed=7 successes=5 success_rate=0.714 chunks=90/200",
+        )
     ]
 
 
@@ -180,10 +229,7 @@ def test_eval_env_runs_osmesa_slots_in_spawned_processes(monkeypatch) -> None:
 def test_cotrain_eval_defaults_to_25_parallel_osmesa_slots() -> None:
     project_root = Path(__file__).resolve().parents[2]
     cfg = OmegaConf.load(
-        project_root
-        / "configs"
-        / "dreamervla"
-        / "openvla_onetraj_libero_cotrain.yaml"
+        project_root / "configs" / "dreamervla" / "openvla_onetraj_libero_cotrain.yaml"
     )
 
     assert cfg.manual_cotrain.eval_protocol.render_backend == "osmesa"

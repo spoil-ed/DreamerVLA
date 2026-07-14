@@ -61,7 +61,7 @@ class MetricLogger:
     ```
 
     Existing DreamerVLA configs do not need a `runner` section; when it is
-    absent, logs default to `${training.out_dir}/log`.
+    absent, backend directories default to `${training.out_dir}/{backend}`.
     """
 
     supported_logger = ["wandb", "swanlab", "tensorboard"]
@@ -79,31 +79,23 @@ class MetricLogger:
 
         training_out_dir = OmegaConf.select(cfg, "training.out_dir", default=None)
         fallback_log_path = (
-            Path(str(training_out_dir)).expanduser() / "log"
-            if training_out_dir is not None
-            else Path("log")
+            Path(str(training_out_dir)).expanduser() if training_out_dir is not None else Path(".")
         )
         log_path = _cfg_get(logger_cfg, "log_path", default_log_path)
         if log_path is None:
             log_path = fallback_log_path
         self.log_path = str(Path(str(log_path)).expanduser())
 
-        self.project_name = str(
-            _cfg_get(logger_cfg, "project_name", default_project_name)
-        )
+        self.project_name = str(_cfg_get(logger_cfg, "project_name", default_project_name))
         experiment_default = default_experiment_name
         if experiment_default is None:
             if training_out_dir is not None:
                 experiment_default = Path(str(training_out_dir)).expanduser().name
             else:
                 experiment_default = "default"
-        self.experiment_name = str(
-            _cfg_get(logger_cfg, "experiment_name", experiment_default)
-        )
+        self.experiment_name = str(_cfg_get(logger_cfg, "experiment_name", experiment_default))
 
-        self.per_worker_log = bool(
-            OmegaConf.select(cfg, "runner.per_worker_log", default=False)
-        )
+        self.per_worker_log = bool(OmegaConf.select(cfg, "runner.per_worker_log", default=False))
         self.per_worker_log_root = str(
             OmegaConf.select(
                 cfg,
@@ -115,9 +107,7 @@ class MetricLogger:
         logger_backends = _cfg_get(logger_cfg, "logger_backends", ["tensorboard"])
         self.logger_backends = _normalize_backends(logger_backends)
         unsupported = [
-            backend
-            for backend in self.logger_backends
-            if backend not in self.supported_logger
+            backend for backend in self.logger_backends if backend not in self.supported_logger
         ]
         if unsupported:
             raise ValueError(f"Unsupported logger backend: {unsupported}")
@@ -205,9 +195,7 @@ class MetricLogger:
             str(worker_group_name),
             f"rank_{int(rank)}",
         )
-        scoped_experiment_name = (
-            f"{self.experiment_name}-{worker_group_name}-rank_{int(rank)}"
-        )
+        scoped_experiment_name = f"{self.experiment_name}-{worker_group_name}-rank_{int(rank)}"
         scoped_logger = self._create_logger_bundle(
             log_path=scoped_log_path,
             experiment_name=scoped_experiment_name,

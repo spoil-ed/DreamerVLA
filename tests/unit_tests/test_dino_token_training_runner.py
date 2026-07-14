@@ -39,10 +39,7 @@ def _runner_config(tmp_path):
                 },
             },
             "world_model": {
-                "_target_": (
-                    "dreamervla.models.embodiment.world_model."
-                    "DinoTokenWorldModel"
-                ),
+                "_target_": ("dreamervla.models.embodiment.world_model.DinoTokenWorldModel"),
                 "token_count": 2,
                 "token_dim": 4,
                 "action_dim": 6,
@@ -122,3 +119,18 @@ def test_dino_runner_requires_fp32_master_parameters(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="param_precision=fp32"):
         runner._build_model_and_optimizers(runner.cfg)
+
+
+def test_dino_epoch_checkpoint_writes_canonical_warmup_alias(tmp_path) -> None:
+    runner = DinoTokenWorldModelTrainingRunner(_runner_config(tmp_path))
+    runner.global_step = 12
+    captured: dict[str, object] = {}
+    runner.save_checkpoint = lambda **kwargs: captured.update(kwargs) or ""
+
+    runner._save_epoch_checkpoint()
+
+    assert captured["path"] == tmp_path / "checkpoints" / "global_step_12" / "model.ckpt"
+    assert captured["extra_paths"] == (
+        tmp_path / "checkpoints" / "latest.ckpt",
+        tmp_path / "checkpoints" / "wm_warmup.ckpt",
+    )

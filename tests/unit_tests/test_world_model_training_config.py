@@ -70,7 +70,7 @@ def test_full_dataset_wm_experiment_owns_complete_training_recipe(tmp_path, monk
 
     assert cfg._target_ == "dreamervla.runners.WorldModelTrainingRunner"
     assert cfg.task.name == "OpenVLA_Onetraj_LIBERO"
-    assert cfg.training.out_dir == f"{tmp_path}/cotrain"
+    assert Path(cfg.training.out_dir).parent == tmp_path / "wm_full_dataset_train"
     assert cfg.training.resume is False
     assert cfg.training.wm_warmup_steps == 20000
     assert cfg.training.classifier_warmup_steps == 0
@@ -156,9 +156,7 @@ def test_dino_token_architecture_and_data_protocol_recipe(tmp_path, monkeypatch)
     assert cfg.dataset.train.hidden_dir == cfg.task.openvla_oft.hidden_token_dir
 
 
-def test_user_facing_dino_and_dreamer_configs_align_batch_and_lr(
-    tmp_path, monkeypatch
-):
+def test_user_facing_dino_and_dreamer_configs_align_batch_and_lr(tmp_path, monkeypatch):
     from pathlib import Path
 
     from hydra import compose, initialize_config_dir
@@ -175,9 +173,7 @@ def test_user_facing_dino_and_dreamer_configs_align_batch_and_lr(
     assert dreamer.training.warmup_replay_epochs == 100
 
 
-def test_classifier_and_full_dataset_wm_share_mainline_success_sidecar(
-    tmp_path, monkeypatch
-):
+def test_classifier_and_full_dataset_wm_share_mainline_success_sidecar(tmp_path, monkeypatch):
     from pathlib import Path
 
     from hydra import compose, initialize_config_dir
@@ -206,57 +202,70 @@ def test_validate_cfg_warmup(tmp_path):
     from omegaconf import OmegaConf
 
     from dreamervla.config import validate_cfg
-    base = OmegaConf.create({
-        "_target_": "dreamervla.runners.WorldModelTrainingRunner",
-        "offline_warmup": {"data_dir": str(tmp_path), "hidden_dir": str(tmp_path)},
-        "training": {"wm_warmup_steps": 10, "classifier_warmup_steps": 10},
-    })
+
+    base = OmegaConf.create(
+        {
+            "_target_": "dreamervla.runners.WorldModelTrainingRunner",
+            "offline_warmup": {"data_dir": str(tmp_path), "hidden_dir": str(tmp_path)},
+            "training": {"wm_warmup_steps": 10, "classifier_warmup_steps": 10},
+        }
+    )
     validate_cfg(base)  # existing dir -> ok
-    bad = OmegaConf.create({
-        "_target_": "dreamervla.runners.WorldModelTrainingRunner",
-        "offline_warmup": {"data_dir": str(tmp_path / "nope"), "hidden_dir": str(tmp_path)},
-        "training": {"wm_warmup_steps": 10, "classifier_warmup_steps": 10},
-    })
+    bad = OmegaConf.create(
+        {
+            "_target_": "dreamervla.runners.WorldModelTrainingRunner",
+            "offline_warmup": {"data_dir": str(tmp_path / "nope"), "hidden_dir": str(tmp_path)},
+            "training": {"wm_warmup_steps": 10, "classifier_warmup_steps": 10},
+        }
+    )
     with pytest.raises(Exception, match="offline_warmup.data_dir"):
         validate_cfg(bad)
-    neg = OmegaConf.create({
-        "_target_": "dreamervla.runners.WorldModelTrainingRunner",
-        "offline_warmup": {"data_dir": str(tmp_path), "hidden_dir": str(tmp_path)},
-        "training": {"wm_warmup_steps": -1, "classifier_warmup_steps": 10},
-    })
+    neg = OmegaConf.create(
+        {
+            "_target_": "dreamervla.runners.WorldModelTrainingRunner",
+            "offline_warmup": {"data_dir": str(tmp_path), "hidden_dir": str(tmp_path)},
+            "training": {"wm_warmup_steps": -1, "classifier_warmup_steps": 10},
+        }
+    )
     with pytest.raises(Exception, match="wm_warmup_steps"):
         validate_cfg(neg)
-    neg_replay_max = OmegaConf.create({
-        "_target_": "dreamervla.runners.WorldModelTrainingRunner",
-        "offline_warmup": {"data_dir": str(tmp_path), "hidden_dir": str(tmp_path)},
-        "training": {
-            "wm_warmup_steps": 10,
-            "classifier_warmup_steps": 10,
-            "warmup_replay_epochs": 1,
-            "warmup_replay_max_steps": -1,
-        },
-    })
+    neg_replay_max = OmegaConf.create(
+        {
+            "_target_": "dreamervla.runners.WorldModelTrainingRunner",
+            "offline_warmup": {"data_dir": str(tmp_path), "hidden_dir": str(tmp_path)},
+            "training": {
+                "wm_warmup_steps": 10,
+                "classifier_warmup_steps": 10,
+                "warmup_replay_epochs": 1,
+                "warmup_replay_max_steps": -1,
+            },
+        }
+    )
     with pytest.raises(Exception, match="warmup_replay_max_steps"):
         validate_cfg(neg_replay_max)
-    neg_ckpt_every = OmegaConf.create({
-        "_target_": "dreamervla.runners.WorldModelTrainingRunner",
-        "offline_warmup": {"data_dir": str(tmp_path), "hidden_dir": str(tmp_path)},
-        "training": {
-            "wm_warmup_steps": 10,
-            "classifier_warmup_steps": 10,
-            "warmup_checkpoint_every": -1,
-        },
-    })
+    neg_ckpt_every = OmegaConf.create(
+        {
+            "_target_": "dreamervla.runners.WorldModelTrainingRunner",
+            "offline_warmup": {"data_dir": str(tmp_path), "hidden_dir": str(tmp_path)},
+            "training": {
+                "wm_warmup_steps": 10,
+                "classifier_warmup_steps": 10,
+                "warmup_checkpoint_every": -1,
+            },
+        }
+    )
     with pytest.raises(Exception, match="warmup_checkpoint_every"):
         validate_cfg(neg_ckpt_every)
-    bad_log_every = OmegaConf.create({
-        "_target_": "dreamervla.runners.WorldModelTrainingRunner",
-        "offline_warmup": {"data_dir": str(tmp_path), "hidden_dir": str(tmp_path)},
-        "training": {
-            "wm_warmup_steps": 10,
-            "classifier_warmup_steps": 10,
-            "replay_warmup_log_every": 0,
-        },
-    })
+    bad_log_every = OmegaConf.create(
+        {
+            "_target_": "dreamervla.runners.WorldModelTrainingRunner",
+            "offline_warmup": {"data_dir": str(tmp_path), "hidden_dir": str(tmp_path)},
+            "training": {
+                "wm_warmup_steps": 10,
+                "classifier_warmup_steps": 10,
+                "replay_warmup_log_every": 0,
+            },
+        }
+    )
     with pytest.raises(Exception, match="replay_warmup_log_every"):
         validate_cfg(bad_log_every)

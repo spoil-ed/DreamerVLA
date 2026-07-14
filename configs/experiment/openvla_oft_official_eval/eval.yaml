@@ -1,12 +1,14 @@
 name: openvla_oft_official_eval
 data_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}
+output_root: ${oc.env:RUN_ROOT,${data_root}/outputs}
+timestamp: ${now:%Y%m%d_%H%M%S}
 ckpt: ${data_root}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1
 suite: libero_goal
 task_ids: null
 num_trials: 10
 gpu_id: 0
 seed: 7
-output_dir: ${data_root}/outputs/eval/openvla_oft_official_libero
+output_dir: ${output_root}/${name}/${timestamp}
 openvla_oft_root: ${oc.env:OPENVLA_OFT_ROOT,${oc.env:DVLA_ROOT,.}/../WMPO/dependencies/openvla-oft}
 policy_mode: discrete
 num_images: 1

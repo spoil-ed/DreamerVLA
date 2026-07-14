@@ -75,13 +75,9 @@ class DinoTokenWorldModelTrainingRunner(WorldModelTrainingBase):
         compute_dtype = precision_dtype(str(OmegaConf.select(cfg, "optim.precision")))
         if compute_dtype != torch.float32:
             raise ValueError("DINO-WM reproduction requires optim.precision=fp32")
-        parameter_dtype = precision_dtype(
-            str(OmegaConf.select(cfg, "optim.param_precision"))
-        )
+        parameter_dtype = precision_dtype(str(OmegaConf.select(cfg, "optim.param_precision")))
         if parameter_dtype != torch.float32:
-            raise ValueError(
-                "DINO-WM reproduction requires optim.param_precision=fp32"
-            )
+            raise ValueError("DINO-WM reproduction requires optim.param_precision=fp32")
         model = hydra.utils.instantiate(model_cfg)
         if not isinstance(model, DinoTokenWorldModel):
             raise TypeError(
@@ -102,9 +98,7 @@ class DinoTokenWorldModelTrainingRunner(WorldModelTrainingBase):
         conditioning_cfg = OmegaConf.select(cfg, "optim.conditioning")
         if predictor_cfg is None or conditioning_cfg is None:
             raise ValueError("optim.predictor and optim.conditioning are required")
-        self.predictor_optimizer = _adamw_from_cfg(
-            raw_model.predictor.parameters(), predictor_cfg
-        )
+        self.predictor_optimizer = _adamw_from_cfg(raw_model.predictor.parameters(), predictor_cfg)
         self.conditioning_optimizer = _adamw_from_cfg(
             itertools.chain(
                 raw_model.action_encoder.parameters(),
@@ -205,10 +199,13 @@ class DinoTokenWorldModelTrainingRunner(WorldModelTrainingBase):
             batch_size = int(batch["obs_embedding"].shape[0])
             examples += batch_size
             for name, value in self._loss_metrics(losses).items():
-                totals[name] = totals.get(
-                    name,
-                    torch.zeros((), device=self.device, dtype=torch.float64),
-                ) + value.to(dtype=torch.float64) * batch_size
+                totals[name] = (
+                    totals.get(
+                        name,
+                        torch.zeros((), device=self.device, dtype=torch.float64),
+                    )
+                    + value.to(dtype=torch.float64) * batch_size
+                )
         count = self.distributed.reduce_sum(examples)
         if count <= 0:
             return {}
@@ -220,7 +217,7 @@ class DinoTokenWorldModelTrainingRunner(WorldModelTrainingBase):
     def _save_epoch_checkpoint(self) -> None:
         checkpoint = self.get_global_step_checkpoint_dir(self.global_step) / "model.ckpt"
         latest = self.get_checkpoint_path()
-        warmup = self.get_compat_checkpoint_dir() / "wm_warmup.ckpt"
+        warmup = self.get_checkpoint_dir() / "wm_warmup.ckpt"
         self.save_checkpoint(
             path=checkpoint,
             extra_paths=(latest, warmup),
@@ -240,13 +237,9 @@ class DinoTokenWorldModelTrainingRunner(WorldModelTrainingBase):
             ("proprio_dim", train_dataset.proprio_dim, raw_model.proprio_dim),
         ):
             if int(actual) != int(expected):
-                raise ValueError(
-                    f"DINO dataset/model {name} mismatch: {actual} != {expected}"
-                )
+                raise ValueError(f"DINO dataset/model {name} mismatch: {actual} != {expected}")
 
-        dataloader_cfg = OmegaConf.create(
-            OmegaConf.to_container(cfg.dataloader, resolve=True)
-        )
+        dataloader_cfg = OmegaConf.create(OmegaConf.to_container(cfg.dataloader, resolve=True))
         dataloader_cfg.batch_size = self._per_rank_batch_size(
             configured_batch_size=int(dataloader_cfg.batch_size),
             global_batch_size=OmegaConf.select(
@@ -256,9 +249,7 @@ class DinoTokenWorldModelTrainingRunner(WorldModelTrainingBase):
             ),
             world_size=self.world_size,
         )
-        effective_global_batch_size = int(dataloader_cfg.batch_size) * max(
-            1, int(self.world_size)
-        )
+        effective_global_batch_size = int(dataloader_cfg.batch_size) * max(1, int(self.world_size))
         train_dataloader = self.make_distributed_dataloader(
             train_dataset,
             dataloader_cfg,
@@ -293,9 +284,7 @@ class DinoTokenWorldModelTrainingRunner(WorldModelTrainingBase):
         num_epochs = int(cfg.training.num_epochs)
         max_steps = int(OmegaConf.select(cfg, "training.max_steps", default=0) or 0)
         eval_every = int(OmegaConf.select(cfg, "training.eval_every", default=1))
-        checkpoint_every = int(
-            OmegaConf.select(cfg, "training.checkpoint_every", default=1)
-        )
+        checkpoint_every = int(OmegaConf.select(cfg, "training.checkpoint_every", default=1))
         try:
             stop = False
             for epoch in range(int(self.epoch) + 1, num_epochs + 1):
@@ -328,8 +317,7 @@ class DinoTokenWorldModelTrainingRunner(WorldModelTrainingBase):
                     if stop:
                         break
                 train_metrics = {
-                    f"train/{name}": total / max(1, batches)
-                    for name, total in sums.items()
+                    f"train/{name}": total / max(1, batches) for name, total in sums.items()
                 }
                 epoch_metrics: dict[str, float | str | int] = {
                     "epoch": epoch,
