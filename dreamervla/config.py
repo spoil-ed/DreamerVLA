@@ -42,6 +42,7 @@ def validate_cfg(cfg: DictConfig, *, world_size: int | None = None) -> DictConfi
     _validate_logger_backends(cfg)
     _validate_algorithm_routes(cfg)
     _validate_training_batch(cfg, world_size=_resolve_world_size(world_size))
+    _validate_precision_controls(cfg)
     _validate_resume_paths(cfg)
     _validate_removed_observation_routes(cfg)
     _validate_mainline_hidden_token_contract(cfg)
@@ -57,6 +58,21 @@ def validate_cfg(cfg: DictConfig, *, world_size: int | None = None) -> DictConfi
     if bool(OmegaConf.select(cfg, "validation.require_existing_paths", default=False)):
         _validate_existing_paths(cfg)
     return cfg
+
+
+def _validate_precision_controls(cfg: DictConfig) -> None:
+    """Validate separately configured compute and master-parameter dtypes."""
+
+    compute_values = {"fp32", "float32", "bf16", "bfloat16", "fp16", "float16"}
+    parameter_values = {"fp32", "float32", "bf16", "bfloat16"}
+    for path in ("optim.precision", "learner.train_cfg.precision"):
+        value = OmegaConf.select(cfg, path, default=None)
+        if value is not None and str(value).strip().lower() not in compute_values:
+            raise ValueError(f"{path} must be one of fp32, bf16, or fp16; got {value!r}")
+    for path in ("optim.param_precision", "learner.train_cfg.param_precision"):
+        value = OmegaConf.select(cfg, path, default=None)
+        if value is not None and str(value).strip().lower() not in parameter_values:
+            raise ValueError(f"{path} must be fp32 or bf16; got {value!r}")
 
 
 def _validate_logger_backends(cfg: DictConfig) -> None:
@@ -966,6 +982,14 @@ def _validate_dino_token_training(cfg: DictConfig) -> None:
     if precision != "fp32":
         raise ValueError(
             "DinoTokenWorldModelTrainingRunner requires optim.precision=fp32"
+        )
+    param_precision = str(
+        OmegaConf.select(cfg, "optim.param_precision", default="")
+    ).lower()
+    if param_precision != "fp32":
+        raise ValueError(
+            "DinoTokenWorldModelTrainingRunner requires "
+            "optim.param_precision=fp32"
         )
     frameskip = _select_int(cfg, "dino_wm.frameskip")
     action_dim = _select_int(cfg, "task.action_dim")

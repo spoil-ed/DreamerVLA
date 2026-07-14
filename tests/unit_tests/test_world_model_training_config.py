@@ -29,7 +29,11 @@ def test_hidden_token_pipeline_uses_traj1_proprio_language_wm_profile():
     assert cfg.training.wm_profile_steps == 8
     assert cfg.training.wm_prefetch_workers == 1
     assert cfg.dataloader.batch_size == 16
+    assert cfg.optim.param_precision == "fp32"
+    assert cfg.optim.precision == "bf16"
+    assert cfg.optim.world_model.name == "adamw"
     assert cfg.optim.world_model.lr == 1.0e-4
+    assert cfg.optim.world_model.eps == 1.0e-8
     assert cfg.online_rollout.sequence_length == 36
     assert wm.model_dim == 4148
     assert wm.proprio_dim == 8
@@ -80,7 +84,11 @@ def test_full_dataset_wm_experiment_owns_complete_training_recipe(tmp_path, monk
     assert cfg.training.world_model_ddp.static_graph is True
     assert cfg.training.world_model_ddp.gradient_as_bucket_view is True
     assert cfg.dataloader.batch_size == 16
+    assert cfg.optim.param_precision == "fp32"
+    assert cfg.optim.precision == "bf16"
+    assert cfg.optim.world_model.name == "adamw"
     assert cfg.optim.world_model.lr == 1.0e-4
+    assert cfg.optim.world_model.eps == 1.0e-8
     assert cfg.online_rollout.buffer_size == 160000
     assert cfg.online_rollout.sequence_length == 36
     assert cfg.online_rollout.total_env_steps == 0
@@ -136,6 +144,7 @@ def test_dino_token_architecture_and_data_protocol_recipe(tmp_path, monkeypatch)
     assert "global_batch_size" not in cfg.training
     assert cfg.dataloader.batch_size == 16
     assert cfg.training.num_epochs == 100
+    assert cfg.optim.param_precision == "fp32"
     assert cfg.optim.precision == "fp32"
     assert cfg.optim.predictor.name == "adamw"
     assert cfg.optim.predictor.lr == 1.0e-4

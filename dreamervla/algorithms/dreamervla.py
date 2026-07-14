@@ -84,6 +84,7 @@ _WM_LOG_METRIC_KEYS = (
     "one_step_cosine_similarity",
     "persistence_cosine_similarity",
     "chunk_cosine_similarity",
+    "rollout_cosine_similarity",
     "full_hidden_rec_loss",
     "full_hidden_cosine_loss",
     "proprio_reconstruction_loss",
@@ -221,6 +222,7 @@ def world_model_pretrain_step(
                 "one_step_cosine_similarity",
                 "persistence_cosine_similarity",
                 "chunk_cosine_similarity",
+                "rollout_cosine_similarity",
             ):
                 value = losses.get(key)
                 if isinstance(value, torch.Tensor):
@@ -268,6 +270,9 @@ def world_model_pretrain_step(
                     "persistence_cosine_similarity"
                 ),
                 "chunk_cosine_similarity": _f("chunk_cosine_similarity"),
+                "rollout_cosine_similarity": _f(
+                    "rollout_cosine_similarity"
+                ),
                 "full_hidden_rec_loss": _f("full_hidden_rec_loss"),
                 "full_hidden_rec_scaled_loss": _f("full_hidden_rec_scaled_loss"),
                 "full_hidden_cosine_loss": _f("full_hidden_cosine_loss"),

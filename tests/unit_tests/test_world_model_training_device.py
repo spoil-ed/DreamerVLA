@@ -136,6 +136,7 @@ def test_wm_only_build_skips_policy_critic_and_classifier() -> None:
             },
             "optim": {
                 "precision": "fp32",
+                "param_precision": "fp32",
                 "world_model": {
                     "name": "adamw",
                     "lr": 1.0e-4,
@@ -159,7 +160,7 @@ def test_wm_only_build_skips_policy_critic_and_classifier() -> None:
     assert runner.classifier is None
 
 
-def test_wm_only_build_casts_model_to_hydra_precision() -> None:
+def test_wm_only_build_keeps_fp32_parameters_for_bf16_compute() -> None:
     class _LocalDistributed:
         @staticmethod
         def wrap_trainable_module(module, **_kwargs):
@@ -176,6 +177,49 @@ def test_wm_only_build_casts_model_to_hydra_precision() -> None:
             },
             "optim": {
                 "precision": "bf16",
+                "param_precision": "fp32",
+                "world_model": {
+                    "name": "adamw",
+                    "lr": 1.0e-4,
+                    "weight_decay": 0.0,
+                },
+            },
+            "init": {"world_model_state_ckpt": None},
+        }
+    )
+    runner = object.__new__(_WorldModelTrainingCommon)
+    runner.device = torch.device("cpu")
+    runner.distributed = _LocalDistributed()
+
+    runner._build_components(cfg)
+
+    assert runner.world_model.weight.dtype is torch.float32
+    loss = runner.world_model.weight.square().mean()
+    loss.backward()
+    runner.world_model_optimizer.step()
+    state = runner.world_model_optimizer.state[runner.world_model.weight]
+    assert state["exp_avg"].dtype is torch.float32
+    assert state["exp_avg_sq"].dtype is torch.float32
+
+
+def test_wm_only_build_allows_bf16_parameters_with_fp32_compute() -> None:
+    class _LocalDistributed:
+        @staticmethod
+        def wrap_trainable_module(module, **_kwargs):
+            return module
+
+    cfg = OmegaConf.create(
+        {
+            "training": {"classifier_warmup_steps": 0},
+            "online_rollout": {"total_env_steps": 0},
+            "world_model": {
+                "_target_": "torch.nn.Linear",
+                "in_features": 3,
+                "out_features": 5,
+            },
+            "optim": {
+                "precision": "fp32",
+                "param_precision": "bf16",
                 "world_model": {
                     "name": "adamw",
                     "lr": 1.0e-4,

@@ -1118,11 +1118,18 @@ class ChunkAwareWorldModel(WorldModel):
             rollout_loss_total, rollout_mse, rollout_cosine = self._hidden_loss_terms(
                 rollout_pred, rollout_target
             )
+            with torch.no_grad():
+                rollout_cosine_similarity = F.cosine_similarity(
+                    rollout_pred.detach()[..., : self.token_dim].float(),
+                    rollout_target.detach()[..., : self.token_dim].float(),
+                    dim=-1,
+                ).mean()
             loss = loss + self.chunk_rollout_loss_scale * rollout_loss_total
             rollout_out = {
                 "rollout_loss": rollout_loss_total.detach(),
                 "rollout_mse": rollout_mse.detach(),
                 "rollout_cosine_loss": rollout_cosine.detach(),
+                "rollout_cosine_similarity": rollout_cosine_similarity,
                 "rollout_chunks": loss.new_tensor(float(N)),
             }
 

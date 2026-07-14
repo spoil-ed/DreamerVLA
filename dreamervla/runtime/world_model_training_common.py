@@ -743,14 +743,16 @@ class _WorldModelTrainingCommon(WorldModelTrainingBase):
             worker_component_path="ray_components.world_model",
         )
         OmegaConf.update(cfg, "world_model", world_model_cfg, merge=False)
-        model_precision = OmegaConf.select(cfg, "optim.precision", default=None)
-        if model_precision is None:
+        parameter_precision = OmegaConf.select(
+            cfg, "optim.param_precision", default=None
+        )
+        if parameter_precision is None:
             raise ValueError(
-                "optim.precision is required to select world-model parameter dtype"
+                "optim.param_precision is required to select world-model parameter dtype"
             )
         self.world_model = hydra.utils.instantiate(world_model_cfg).to(
             device=self.device,
-            dtype=precision_dtype(str(model_precision)),
+            dtype=precision_dtype(str(parameter_precision)),
         )
         self._unwrapped_world_model = self.world_model
         wm_ckpt = OmegaConf.select(cfg, "init.world_model_state_ckpt", default=None)

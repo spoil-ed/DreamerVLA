@@ -130,7 +130,7 @@ def test_dino_token_runner_rejects_dataset_model_frameskip_mismatch() -> None:
         {
             "_target_": "dreamervla.runners.DinoTokenWorldModelTrainingRunner",
             "training": {"global_batch_size": 32},
-            "optim": {"precision": "fp32"},
+            "optim": {"param_precision": "fp32", "precision": "fp32"},
             "world_model": {
                 "_target_": (
                     "dreamervla.models.embodiment.world_model."

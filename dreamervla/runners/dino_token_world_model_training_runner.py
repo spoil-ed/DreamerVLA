@@ -72,16 +72,26 @@ class DinoTokenWorldModelTrainingRunner(WorldModelTrainingBase):
         model_cfg = OmegaConf.select(cfg, "world_model")
         if model_cfg is None:
             raise ValueError("world_model config is required")
-        dtype = precision_dtype(str(OmegaConf.select(cfg, "optim.precision")))
-        if dtype != torch.float32:
+        compute_dtype = precision_dtype(str(OmegaConf.select(cfg, "optim.precision")))
+        if compute_dtype != torch.float32:
             raise ValueError("DINO-WM reproduction requires optim.precision=fp32")
+        parameter_dtype = precision_dtype(
+            str(OmegaConf.select(cfg, "optim.param_precision"))
+        )
+        if parameter_dtype != torch.float32:
+            raise ValueError(
+                "DINO-WM reproduction requires optim.param_precision=fp32"
+            )
         model = hydra.utils.instantiate(model_cfg)
         if not isinstance(model, DinoTokenWorldModel):
             raise TypeError(
                 "DinoTokenWorldModelTrainingRunner requires DinoTokenWorldModel, "
                 f"got {type(model).__name__}"
             )
-        self._unwrapped_world_model = model.to(device=self.device, dtype=dtype)
+        self._unwrapped_world_model = model.to(
+            device=self.device,
+            dtype=parameter_dtype,
+        )
         self.world_model = self.distributed.wrap_trainable_module(
             self._unwrapped_world_model,
             find_unused_parameters=False,

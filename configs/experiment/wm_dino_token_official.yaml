@@ -98,6 +98,7 @@ dataloader:
   prefetch_factor: 2
 
 optim:
+  param_precision: fp32
   precision: fp32
   predictor:
     name: adamw

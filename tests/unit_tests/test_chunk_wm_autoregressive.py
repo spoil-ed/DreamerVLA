@@ -177,6 +177,48 @@ def test_comparable_chunk_cosine_excludes_proprio_dimensions() -> None:
     assert metrics["hidden_cosine_loss"] > 0.0
 
 
+def test_chunk_loss_reports_closed_loop_rollout_cosine_similarity() -> None:
+    torch.manual_seed(13)
+    wm = _tiny_chunk_wm(
+        token_normalization="layer_norm",
+        chunk_rollout_chunks=2,
+        chunk_rollout_loss_scale=0.2,
+    )
+    time_steps = wm.num_hist + 2 * wm.chunk_size
+    obs = torch.randn(2, time_steps, wm.token_count, wm.token_dim)
+    normalized = wm._normalize_raw_vision_tokens(obs)
+    targets = normalized[:, wm.num_hist :]
+    calls = 0
+
+    def perfect_rollout(self, latent, action_chunk):
+        nonlocal calls
+        del action_chunk
+        start = calls * self.chunk_size
+        hidden_seq = targets[:, start : start + self.chunk_size].to(
+            device=latent["history"].device,
+            dtype=latent["history"].dtype,
+        )
+        calls += 1
+        return {
+            "hidden": hidden_seq[:, -1],
+            "hidden_seq": hidden_seq,
+            "history": latent["history"],
+            "actions": latent["actions"],
+            "lang": latent.get("lang"),
+        }
+
+    wm.predict_next_chunk = types.MethodType(perfect_rollout, wm)
+    metrics = wm.chunk_loss(
+        {
+            "obs_embedding": obs,
+            "actions": torch.randn(2, time_steps, wm.action_dim),
+        }
+    )
+
+    assert torch.allclose(metrics["rollout_cosine_similarity"], torch.ones(()))
+    assert not metrics["rollout_cosine_similarity"].requires_grad
+
+
 def test_chunk_wm_normalizes_online_observations_but_not_imagined_history() -> None:
     wm = _tiny_chunk_wm(token_normalization="layer_norm")
     calls = 0

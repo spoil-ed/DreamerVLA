@@ -205,6 +205,7 @@ learner:
     classifier_threshold: null
     lr: 1.0e-4
     device: auto
+    param_precision: fp32
     precision: bf16
     syncer:
       store_name: DreamerVLALearnerWMClassifierStore
@@ -217,7 +218,10 @@ learner:
       zero_grad_set_to_none: true
     optimizers:
       world_model:
+        name: adamw
         lr: 3.0e-5
+        betas: [0.9, 0.999]
+        eps: 1.0e-8
         weight_decay: 0.0
       classifier:
         lr: 1.0e-4

@@ -22,6 +22,7 @@ from dreamervla.hybrid_engines.weight_syncer.objectstore import (
     _independent_cpu,
 )
 from dreamervla.scheduler.worker import Worker
+from dreamervla.utils.torch_utils import precision_dtype
 
 
 class LearnerWorker(Worker):
@@ -285,10 +286,14 @@ class LearnerWorker(Worker):
 
     def _build_components(self) -> dict[str, nn.Module]:
         components: dict[str, nn.Module] = {}
+        parameter_dtype = _resolve_parameter_dtype(self.train_cfg)
         for name, cfg in self.model_cfg.items():
             if not _is_component_cfg(cfg):
                 continue
-            module = _build_from_cfg(_as_plain_dict(cfg)).to(self.torch_device)
+            module = _build_from_cfg(_as_plain_dict(cfg)).to(
+                device=self.torch_device,
+                dtype=parameter_dtype,
+            )
             if name in self.init_ckpt:
                 module.load_state_dict(_to_device_state(self.init_ckpt[name], self.torch_device))
             if self.fsdp_manager is not None:
@@ -319,14 +324,30 @@ class LearnerWorker(Worker):
             if not params:
                 continue
             cfg = dict(optimizer_cfgs.get(name, {}))
+            optimizer_name = str(cfg.get("name", "adam")).strip().lower()
+            if optimizer_name not in {"adam", "adamw"}:
+                raise ValueError(
+                    f"learner optimizer {name!r} must be adam or adamw; "
+                    f"got {optimizer_name!r}"
+                )
             lr = float(
                 cfg.get("lr", self.train_cfg.get(f"{name}_lr", self.train_cfg.get("lr", 1e-3)))
             )
             weight_decay = float(cfg.get("weight_decay", 0.0))
-            optimizers[name] = torch.optim.Adam(
+            optimizer_cls = (
+                torch.optim.AdamW if optimizer_name == "adamw" else torch.optim.Adam
+            )
+            optimizer_kwargs: dict[str, Any] = {
+                "lr": lr,
+                "weight_decay": weight_decay,
+            }
+            if cfg.get("betas") is not None:
+                optimizer_kwargs["betas"] = tuple(float(v) for v in cfg["betas"])
+            if cfg.get("eps") is not None:
+                optimizer_kwargs["eps"] = float(cfg["eps"])
+            optimizers[name] = optimizer_cls(
                 params,
-                lr=lr,
-                weight_decay=weight_decay,
+                **optimizer_kwargs,
             )
         return optimizers
 
@@ -874,6 +895,7 @@ class LearnerWorker(Worker):
     def _optim_cfg(self):
         return OmegaConf.create(
             {
+                "precision": self._precision().name,
                 "grad_clip_norm": 1.0,
                 "zero_grad_set_to_none": True,
                 **dict(self.train_cfg.get("optim_cfg", {})),
@@ -1114,6 +1136,19 @@ def _resolve_precision(train_cfg: dict[str, Any], device: torch.device) -> Preci
         autocast_dtype=torch.float16,
         use_grad_scaler=(device_type == "cuda"),
     )
+
+
+def _resolve_parameter_dtype(train_cfg: dict[str, Any]) -> torch.dtype:
+    """Resolve the Hydra-selected learner master-parameter precision."""
+
+    raw = train_cfg.get("param_precision", "fp32")
+    dtype = precision_dtype(str(raw))
+    if dtype not in {torch.float32, torch.bfloat16}:
+        raise ValueError(
+            "learner.train_cfg.param_precision must be fp32 or bf16; "
+            f"got {raw!r}"
+        )
+    return dtype
 
 
 def _build_from_cfg(cfg: dict[str, Any]) -> Any:

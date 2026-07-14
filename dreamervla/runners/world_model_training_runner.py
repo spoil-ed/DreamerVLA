@@ -241,13 +241,22 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         *,
         global_step: int,
     ) -> str:
-        """Format the same loss/one-step-cosine status used by DINO-WM."""
+        """Format loss and detached cosine diagnostics for every WM horizon."""
 
         loss = float(metrics.get("loss", float("nan")))
-        cosine = float(
+        one_step = float(
             metrics.get("one_step_cosine_similarity", float("nan"))
         )
-        return f"global_step={int(global_step)} loss={loss:.6f} cos={cosine:.6f}"
+        chunk = float(metrics.get("chunk_cosine_similarity", float("nan")))
+        rollout = float(metrics.get("rollout_cosine_similarity", float("nan")))
+        persistence = float(
+            metrics.get("persistence_cosine_similarity", float("nan"))
+        )
+        return (
+            f"global_step={int(global_step)} loss={loss:.6f} "
+            f"one_step_cos={one_step:.6f} chunk_cos={chunk:.6f} "
+            f"rollout_cos={rollout:.6f} persistence_cos={persistence:.6f}"
+        )
 
     def _reduce_wm_warmup_metrics(
         self,
@@ -379,6 +388,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                     "one_step_cosine_similarity",
                     "persistence_cosine_similarity",
                     "chunk_cosine_similarity",
+                    "rollout_cosine_similarity",
                 ):
                     if name in metrics:
                         log_metrics[f"train/wm_{name}"] = metrics[name]

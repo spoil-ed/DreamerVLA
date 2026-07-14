@@ -155,6 +155,7 @@ def test_world_model_pretrain_step_preserves_chunk_hidden_mse_metrics():
                 "hidden_mse": loss.detach() + 1.0,
                 "next_latent_mse": loss.detach() + 2.0,
                 "hidden_cosine_loss": loss.detach() + 3.0,
+                "rollout_cosine_similarity": loss.detach() * 0.0 + 0.75,
             }
 
     wm = ChunkMetricWM()
@@ -172,6 +173,7 @@ def test_world_model_pretrain_step_preserves_chunk_hidden_mse_metrics():
     assert metrics["hidden_mse"] == 2.0
     assert metrics["next_latent_mse"] == 3.0
     assert metrics["hidden_rec_loss"] == 2.0
+    assert metrics["rollout_cosine_similarity"] == 0.75
 
 
 def test_world_model_pretrain_step_populates_optional_profile_timings():
@@ -299,6 +301,7 @@ def test_world_model_warmup_keeps_detached_cosine_diagnostics_on_device():
                 "one_step_cosine_similarity": loss.detach() * 0.0 + 0.75,
                 "persistence_cosine_similarity": loss.detach() * 0.0 + 0.5,
                 "chunk_cosine_similarity": loss.detach() * 0.0 + 0.625,
+                "rollout_cosine_similarity": loss.detach() * 0.0 + 0.375,
             }
 
     wm = TinyWM()
@@ -318,12 +321,13 @@ def test_world_model_warmup_keeps_detached_cosine_diagnostics_on_device():
         "one_step_cosine_similarity",
         "persistence_cosine_similarity",
         "chunk_cosine_similarity",
+        "rollout_cosine_similarity",
     }
     assert abs(metrics["one_step_cosine_similarity"].item() - 0.75) < 1.0e-7
     assert all(not value.requires_grad for value in metrics.values())
 
 
-def test_dreamer_wm_progress_status_uses_unified_one_step_cosine():
+def test_dreamer_wm_progress_status_reports_all_prediction_horizons():
     from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
 
     status = WorldModelTrainingRunner._progress_status(
@@ -331,11 +335,16 @@ def test_dreamer_wm_progress_status_uses_unified_one_step_cosine():
             "loss": 0.1234567,
             "one_step_cosine_similarity": 0.9876543,
             "chunk_cosine_similarity": 0.5,
+            "rollout_cosine_similarity": 0.375,
+            "persistence_cosine_similarity": 0.25,
         },
         global_step=39,
     )
 
-    assert status == "global_step=39 loss=0.123457 cos=0.987654"
+    assert status == (
+        "global_step=39 loss=0.123457 one_step_cos=0.987654 "
+        "chunk_cos=0.500000 rollout_cos=0.375000 persistence_cos=0.250000"
+    )
 
 
 def test_dreamer_wm_replay_budget_uses_dino_style_epoch_progress():
@@ -1433,6 +1442,7 @@ def test_world_model_metrics_namespace_includes_hidden_losses():
             "one_step_cosine_similarity": 0.9,
             "persistence_cosine_similarity": 0.8,
             "chunk_cosine_similarity": 0.7,
+            "rollout_cosine_similarity": 0.6,
             "ignored": 6.0,
         }
     ) == {
@@ -1444,6 +1454,7 @@ def test_world_model_metrics_namespace_includes_hidden_losses():
         "wm/one_step_cosine_similarity": 0.9,
         "wm/persistence_cosine_similarity": 0.8,
         "wm/chunk_cosine_similarity": 0.7,
+        "wm/rollout_cosine_similarity": 0.6,
     }
 
 
@@ -1945,6 +1956,7 @@ def test_warmup_only_component_build_skips_rollout_encoder(monkeypatch):
         "critic": {"_target_": "critic"},
         "algorithm": {},
         "optim": {
+            "param_precision": "fp32",
             "precision": "fp32",
             "world_model": {"name": "adam", "lr": 1e-3, "weight_decay": 0.0, "betas": [0.9, 0.999], "eps": 1e-8},
             "policy": {"name": "adam", "lr": 1e-3, "weight_decay": 0.0, "betas": [0.9, 0.999], "eps": 1e-8},

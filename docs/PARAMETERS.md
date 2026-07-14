@@ -115,12 +115,21 @@ The current cotrain path reads token metadata from
 
 | Key | Meaning |
 | --- | --- |
+| `optim.param_precision` | WM master-parameter and optimizer-state precision (`fp32` or `bf16`) |
+| `optim.precision` | WM forward/backward autocast precision (`fp32`, `bf16`, or `fp16`) |
 | `optim.grad_clip_norm` | global grad-norm clip |
 | `optim.world_model.lr` | WM learning rate |
 | `optim.world_model.betas` | WM Adam betas |
+| `optim.world_model.eps` | WM Adam/AdamW numerical epsilon |
 | `optim.world_model.weight_decay` | WM weight decay |
 | `optim.policy.lr` | actor learning rate |
 | `optim.critic.lr` | critic/classifier learning rate |
+
+The Ray learner uses the corresponding
+`learner.train_cfg.param_precision`, `learner.train_cfg.precision`, and
+`learner.train_cfg.optimizers.<component>.*` keys. The Dreamer-WM recipe keeps
+parameters and AdamW moments in FP32 while using BF16 autocast; DINO-WM keeps
+both controls at FP32.
 
 ## Evaluation
 

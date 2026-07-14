@@ -66,6 +66,8 @@ dataloader:
   batch_size: 16
 
 optim:
+  # Master parameters and AdamW moments stay FP32; forward/backward uses BF16 AMP.
+  param_precision: fp32
   precision: bf16
   grad_clip_norm: 1.0
   zero_grad_set_to_none: true
@@ -73,7 +75,7 @@ optim:
     name: adamw
     lr: 1.0e-4
     betas: [0.9, 0.999]
-    eps: 1.0e-20
+    eps: 1.0e-8
     weight_decay: 0.0
 
 runner:

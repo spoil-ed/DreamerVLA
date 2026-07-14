@@ -29,6 +29,43 @@ def test_resolve_precision_rejects_auto() -> None:
         _resolve_precision({"precision": "auto"}, torch.device("cpu"))
 
 
+def test_learner_world_model_uses_configured_fp32_adamw_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_dummy_syncer(monkeypatch)
+    train_cfg = _wm_classifier_only_train_cfg()
+    train_cfg.update(
+        {
+            "precision": "bf16",
+            "param_precision": "fp32",
+            "optimizers": {
+                "world_model": {
+                    "name": "adamw",
+                    "lr": 1.0e-4,
+                    "betas": [0.9, 0.999],
+                    "eps": 1.0e-8,
+                    "weight_decay": 0.0,
+                }
+            },
+        }
+    )
+    learner = LearnerWorker(
+        _wm_classifier_only_model_cfg(), {}, train_cfg, replay=None
+    )
+
+    learner.init()
+
+    assert learner.world_model is not None
+    assert all(p.dtype is torch.float32 for p in learner.world_model.parameters())
+    assert isinstance(learner.world_model_optimizer, torch.optim.AdamW)
+    parameter = next(learner.world_model.parameters())
+    parameter.square().mean().backward()
+    learner.world_model_optimizer.step()
+    state = learner.world_model_optimizer.state[parameter]
+    assert state["exp_avg"].dtype is torch.float32
+    assert state["exp_avg_sq"].dtype is torch.float32
+
+
 class _DirectReplay:
     def __init__(self) -> None:
         self.sample_calls = 0

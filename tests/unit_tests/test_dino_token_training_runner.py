@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from omegaconf import OmegaConf
 
 from dreamervla.runners.dino_token_world_model_training_runner import (
@@ -20,6 +21,7 @@ def _runner_config(tmp_path):
                 "resume": False,
             },
             "optim": {
+                "param_precision": "fp32",
                 "precision": "fp32",
                 "predictor": {
                     "name": "adamw",
@@ -111,3 +113,12 @@ def test_dino_runner_uses_separate_disjoint_upstream_optimizers(tmp_path) -> Non
         for parameter in module.parameters()
     }
     assert predictor_ids.isdisjoint(conditioning_ids)
+
+
+def test_dino_runner_requires_fp32_master_parameters(tmp_path) -> None:
+    cfg = _runner_config(tmp_path)
+    cfg.optim.param_precision = "bf16"
+    runner = DinoTokenWorldModelTrainingRunner(cfg)
+
+    with pytest.raises(ValueError, match="param_precision=fp32"):
+        runner._build_model_and_optimizers(runner.cfg)
