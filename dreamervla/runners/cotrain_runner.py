@@ -1,8 +1,10 @@
 """Target manual-cotrain Ray runner.
 
-This route follows ``spec/99_manual_notes.md``: LearnerGroup owns WM/classifier,
-ActorGroup owns VLA PPO, RolloutGroup owns no-grad policy inference, and
-EnvGroup owns real/WM env interaction.
+This route follows ``spec/99_manual_notes.md``: LearnerGroup owns WM/classifier
+state, ActorGroup owns VLA PPO, RolloutGroup owns no-grad policy inference, and
+EnvGroup owns real/WM env interaction.  The active failure-imagined-RL recipe keeps
+the encoder, world model, and classifier frozen and updates only the actor through
+imagined PPO.
 """
 
 from __future__ import annotations
@@ -70,11 +72,31 @@ class CotrainRunner(BaseRunner):
             config.manual_cotrain.checkpoint_every = 1
             config.manual_cotrain.real_rollout_target_trajectories = 8
             config.manual_cotrain.wm_rollout_target_trajectories = 256
-        required_flags = {
-            "manual_cotrain.real_env_enabled": True,
-            "manual_cotrain.learner_updates_enabled": True,
-            "manual_cotrain.staged_policy_update": True,
-        }
+        training_mode = str(
+            OmegaConf.select(
+                config,
+                "manual_cotrain.training_mode",
+                default="staged_full_cotrain",
+            )
+        ).strip()
+        if training_mode == "failure_imagined_rl":
+            required_flags = {
+                "manual_cotrain.real_env_enabled": True,
+                "manual_cotrain.learner_updates_enabled": False,
+                "manual_cotrain.staged_policy_update": False,
+            }
+        elif training_mode == "staged_full_cotrain":
+            required_flags = {
+                "manual_cotrain.real_env_enabled": True,
+                "manual_cotrain.learner_updates_enabled": True,
+                "manual_cotrain.staged_policy_update": True,
+            }
+        else:
+            raise ValueError(
+                "manual_cotrain.training_mode must be one of "
+                "['failure_imagined_rl', 'staged_full_cotrain'], "
+                f"got {training_mode!r}"
+            )
         disabled = [
             key
             for key, expected in required_flags.items()
@@ -82,8 +104,7 @@ class CotrainRunner(BaseRunner):
         ]
         if disabled:
             raise ValueError(
-                "CotrainRunner requires real rollout, trainable WM/CLS, and staged "
-                f"policy updates; invalid settings: {disabled}"
+                f"CotrainRunner mode {training_mode!r} has invalid settings: {disabled}"
             )
         super().__init__(config)
         self.history: dict[str, float | int] | None = None
@@ -161,6 +182,7 @@ class CotrainRunner(BaseRunner):
         print(
             "[cotrain] config "
             f"debug={str(debug).lower()} "
+            f"training_mode={self._training_mode()} "
             f"total_global_steps={self._global_steps()} "
             f"eval_interval_global_steps={self._eval_interval_global_steps()} "
             f"checkpoint_every_global_steps={self._checkpoint_every()} "
@@ -228,6 +250,21 @@ class CotrainRunner(BaseRunner):
         return ["LearnerGroup", "ActorGroup", "RolloutGroup", "EnvGroup"]
 
     def _global_step_operation_names(self) -> list[str]:
+        if self._training_mode() == "failure_imagined_rl":
+            return [
+                "set_global_step",
+                "sync_step_start_policy",
+                "collect_real_trajectories",
+                "drain_real_trajectories",
+                "append_real_replay",
+                "select_failed_episode_starts",
+                "refresh_wm_initial_conditions",
+                "collect_imagined_trajectories",
+                "actor_recv_trajectories",
+                "actor_compute_advantages_and_returns",
+                "actor_run_training",
+                "checkpoint_and_metrics",
+            ]
         return [
             "set_global_step",
             "sync_step_start_policy",
@@ -709,144 +746,193 @@ class CotrainRunner(BaseRunner):
         )
         stage_start = mark_stage("drain_real_trajectories", stage_start)
 
+        max_policy_kl = self._max_policy_kl()
+        encoder_sft_metrics: dict[str, float] = {}
+        learner_metrics: dict[str, float] = {}
+        refresh_metrics: dict[str, float] = {}
+        encoder_kl_effective = 0.0
+        failure_imagined_rl = self._training_mode() == "failure_imagined_rl"
         shared_real_batch = _share_ray_value(
             real_batch,
             cluster=groups.get("cluster"),
         )
-        max_policy_kl = self._max_policy_kl()
-        if max_policy_kl is not None:
-            actor.begin_policy_transaction().wait()
-        encoder_sft_metrics = _aggregate_actor_metric_lists(
-            [actor.encoder_sft(shared_real_batch).wait()]
-        )
-        encoder_kl_attempted = max(
-            0.0,
-            float(encoder_sft_metrics.get("actor/encoder_sft_kl", 0.0)),
-        )
-        encoder_kl_effective = encoder_kl_attempted
-        if max_policy_kl is not None:
-            encoder_transaction_metrics = _aggregate_actor_metric_lists(
-                [
-                    actor.finalize_policy_transaction(
-                        encoder_kl_attempted,
-                        max_policy_kl,
-                    ).wait()
-                ]
+        if failure_imagined_rl:
+            replay_metrics = _merge_metric_lists(
+                [replay_group.append_real_trajectories(shared_real_batch).wait()]
             )
-            encoder_rolled_back = bool(
-                encoder_transaction_metrics.get(
-                    "actor/kl_transaction_rolled_back",
-                    0.0,
+            stage_start = mark_stage("append_real_replay", stage_start)
+            selector = self._initial_condition_selector()
+            eligible = int(
+                replay_group.eligible_initial_condition_count(selector).wait()[0]
+            )
+            replay_metrics["replay_buffer/eligible_failure_anchors"] = float(eligible)
+            if eligible <= 0:
+                return self._finish_no_failure_imagination_step(
+                    groups=groups,
+                    global_step=global_step,
+                    global_step_start=global_step_start,
+                    real_env_metrics=real_env_metrics,
+                    real_rollout_metrics=real_rollout_metrics,
+                    real_reset_metrics=real_reset_metrics,
+                    real_batch_metrics=real_batch_metrics,
+                    replay_metrics=replay_metrics,
+                    sync_metrics=sync_metrics,
+                    stage_times=stage_times,
                 )
-                > 0.5
+            refresh_metrics = _merge_metric_lists(
+                [wm_env.refresh_wm_initial_conditions().wait()]
             )
-            if encoder_rolled_back:
-                encoder_kl_effective = 0.0
-            encoder_sft_metrics.update(
-                {
-                    f"actor/encoder_{key.removeprefix('actor/')}": value
-                    for key, value in encoder_transaction_metrics.items()
-                }
+            stage_start = mark_stage("refresh_wm_initial_conditions", stage_start)
+        else:
+            if max_policy_kl is not None:
+                actor.begin_policy_transaction().wait()
+            encoder_sft_metrics = _aggregate_actor_metric_lists(
+                [actor.encoder_sft(shared_real_batch).wait()]
             )
-        encoder_sft_metrics["actor/encoder_sft_kl_effective"] = encoder_kl_effective
-        encoder_updates = max(
-            0,
-            int(float(encoder_sft_metrics.get("actor/encoder_sft_optimizer_steps", 0.0))),
-        )
-        self._report_phase_completion(
-            "cotrain-vla-real-sft",
-            global_step,
-            done=encoder_updates,
-            total=max(1, encoder_updates),
-            unit="update",
-            status=(
-                f"loss={float(encoder_sft_metrics.get('actor/encoder_sft_loss', 0.0)):.4g} "
-                f"kl={float(encoder_sft_metrics.get('actor/encoder_sft_kl_effective', 0.0)):.4g}"
-            ),
-        )
-        stage_start = mark_stage("encoder_sft", stage_start)
-
-        reencoded_results = actor.reencode_real_trajectories(shared_real_batch).wait()
-        reencoded_batch = _first_real_trajectory_batch(reencoded_results)
-        _validate_reencoded_batch(
-            reencoded_batch,
-            expected_step=global_step,
-            expected_trajectories=real_batch.num_trajectories,
-        )
-        stage_start = mark_stage("reencode_real_trajectories", stage_start)
-
-        shared_reencoded_batch = _share_ray_value(
-            reencoded_batch,
-            cluster=groups.get("cluster"),
-        )
-        replay_metrics = _merge_metric_lists(
-            [replay_group.replace_real_trajectories(shared_reencoded_batch).wait()]
-        )
-        stage_start = mark_stage("replace_step_local_replay", stage_start)
-
-        learner_result = learner.update_current_step(
-            self._learner_update_phase(),
-            self._learner_updates_per_global_step(),
-            self._learner_early_stop_patience(),
-        )
-        learner_metrics = _with_train_learner_aliases(
-            _merge_metric_lists(
-                [
-                    self._wait_learner_update_with_progress(
-                        learner_result,
-                        progress_path=groups.get("learner_progress_path"),
-                        global_step=global_step,
+            encoder_kl_attempted = max(
+                0.0,
+                float(encoder_sft_metrics.get("actor/encoder_sft_kl", 0.0)),
+            )
+            encoder_kl_effective = encoder_kl_attempted
+            if max_policy_kl is not None:
+                encoder_transaction_metrics = _aggregate_actor_metric_lists(
+                    [
+                        actor.finalize_policy_transaction(
+                            encoder_kl_attempted,
+                            max_policy_kl,
+                        ).wait()
+                    ]
+                )
+                encoder_rolled_back = bool(
+                    encoder_transaction_metrics.get(
+                        "actor/kl_transaction_rolled_back",
+                        0.0,
                     )
-                ]
+                    > 0.5
+                )
+                if encoder_rolled_back:
+                    encoder_kl_effective = 0.0
+                encoder_sft_metrics.update(
+                    {
+                        f"actor/encoder_{key.removeprefix('actor/')}": value
+                        for key, value in encoder_transaction_metrics.items()
+                    }
+                )
+            encoder_sft_metrics["actor/encoder_sft_kl_effective"] = (
+                encoder_kl_effective
             )
-        )
-        learner_done = max(
-            0,
-            int(float(learner_metrics.get("learner/updates", 0.0))),
-        )
-        self._report_phase_completion(
-            "cotrain-wmcls-training",
-            global_step,
-            done=learner_done,
-            total=self._learner_updates_per_global_step(),
-            unit="update",
-            status=(
-                f"wm_loss={float(learner_metrics.get('wm/loss', 0.0)):.4g} "
-                f"cls_loss={float(learner_metrics.get('cls/loss', 0.0)):.4g} "
-                f"early_stop={int(float(learner_metrics.get('learner/early_stopped', 0.0)) > 0.5)}"
-            ),
-        )
-        stage_start = mark_stage("learner_update_wm_classifier", stage_start)
+            encoder_updates = max(
+                0,
+                int(
+                    float(
+                        encoder_sft_metrics.get(
+                            "actor/encoder_sft_optimizer_steps", 0.0
+                        )
+                    )
+                ),
+            )
+            self._report_phase_completion(
+                "cotrain-vla-real-sft",
+                global_step,
+                done=encoder_updates,
+                total=max(1, encoder_updates),
+                unit="update",
+                status=(
+                    f"loss={float(encoder_sft_metrics.get('actor/encoder_sft_loss', 0.0)):.4g} "
+                    f"kl={float(encoder_sft_metrics.get('actor/encoder_sft_kl_effective', 0.0)):.4g}"
+                ),
+            )
+            stage_start = mark_stage("encoder_sft", stage_start)
 
-        state_start = time.perf_counter()
-        state_dicts = _first_result(learner.state_dicts().wait())
-        sync_metrics["sync/learner_state_dicts_s"] = float(time.perf_counter() - state_start)
-        if not isinstance(state_dicts, dict):
-            raise TypeError("LearnerGroup.state_dicts() must return a mapping")
-        component_states = {
-            "world_model": dict(state_dicts.get("world_model", {})),
-            "classifier": dict(state_dicts.get("classifier", {})),
-            "classifier_threshold": float(state_dicts.get("classifier_threshold", 0.5)),
-        }
-        shared_component_states = _share_ray_value(
-            component_states,
-            cluster=groups.get("cluster"),
-        )
-        load_metrics = wm_env.load_component_states(
-            shared_component_states,
-            global_step,
-        ).wait()
-        sync_metrics.update(_aggregate_sync_metric_lists([load_metrics]))
-        stage_start = mark_stage("learner_to_wm_env_sync", stage_start)
+            reencoded_results = actor.reencode_real_trajectories(shared_real_batch).wait()
+            reencoded_batch = _first_real_trajectory_batch(reencoded_results)
+            _validate_reencoded_batch(
+                reencoded_batch,
+                expected_step=global_step,
+                expected_trajectories=real_batch.num_trajectories,
+            )
+            stage_start = mark_stage("reencode_real_trajectories", stage_start)
 
-        refresh_metrics = _merge_metric_lists([wm_env.refresh_wm_initial_conditions().wait()])
-        stage_start = mark_stage("refresh_wm_initial_conditions", stage_start)
+            shared_reencoded_batch = _share_ray_value(
+                reencoded_batch,
+                cluster=groups.get("cluster"),
+            )
+            replay_metrics = _merge_metric_lists(
+                [replay_group.replace_real_trajectories(shared_reencoded_batch).wait()]
+            )
+            stage_start = mark_stage("replace_step_local_replay", stage_start)
 
-        # Encoder SFT changed projected-token space, so RolloutGroup must pull the
-        # post-SFT policy before any imagined action is sampled.
-        post_sft_version = self._staged_policy_sync_version(global_step, post_sft=True)
-        sync_metrics.update(self._sync_policy_groups(actor, rollout, version=post_sft_version))
-        stage_start = mark_stage("sync_post_sft_policy", stage_start)
+            learner_result = learner.update_current_step(
+                self._learner_update_phase(),
+                self._learner_updates_per_global_step(),
+                self._learner_early_stop_patience(),
+            )
+            learner_metrics = _with_train_learner_aliases(
+                _merge_metric_lists(
+                    [
+                        self._wait_learner_update_with_progress(
+                            learner_result,
+                            progress_path=groups.get("learner_progress_path"),
+                            global_step=global_step,
+                        )
+                    ]
+                )
+            )
+            learner_done = max(
+                0,
+                int(float(learner_metrics.get("learner/updates", 0.0))),
+            )
+            self._report_phase_completion(
+                "cotrain-wmcls-training",
+                global_step,
+                done=learner_done,
+                total=self._learner_updates_per_global_step(),
+                unit="update",
+                status=(
+                    f"wm_loss={float(learner_metrics.get('wm/loss', 0.0)):.4g} "
+                    f"cls_loss={float(learner_metrics.get('cls/loss', 0.0)):.4g} "
+                    f"early_stop={int(float(learner_metrics.get('learner/early_stopped', 0.0)) > 0.5)}"
+                ),
+            )
+            stage_start = mark_stage("learner_update_wm_classifier", stage_start)
+
+            state_start = time.perf_counter()
+            state_dicts = _first_result(learner.state_dicts().wait())
+            sync_metrics["sync/learner_state_dicts_s"] = float(
+                time.perf_counter() - state_start
+            )
+            if not isinstance(state_dicts, dict):
+                raise TypeError("LearnerGroup.state_dicts() must return a mapping")
+            component_states = {
+                "world_model": dict(state_dicts.get("world_model", {})),
+                "classifier": dict(state_dicts.get("classifier", {})),
+                "classifier_threshold": float(
+                    state_dicts.get("classifier_threshold", 0.5)
+                ),
+            }
+            shared_component_states = _share_ray_value(
+                component_states,
+                cluster=groups.get("cluster"),
+            )
+            load_metrics = wm_env.load_component_states(
+                shared_component_states,
+                global_step,
+            ).wait()
+            sync_metrics.update(_aggregate_sync_metric_lists([load_metrics]))
+            stage_start = mark_stage("learner_to_wm_env_sync", stage_start)
+
+            refresh_metrics = _merge_metric_lists(
+                [wm_env.refresh_wm_initial_conditions().wait()]
+            )
+            stage_start = mark_stage("refresh_wm_initial_conditions", stage_start)
+
+            post_sft_version = self._staged_policy_sync_version(
+                global_step, post_sft=True
+            )
+            sync_metrics.update(
+                self._sync_policy_groups(actor, rollout, version=post_sft_version)
+            )
+            stage_start = mark_stage("sync_post_sft_policy", stage_start)
 
         if max_policy_kl is not None:
             actor.begin_policy_transaction().wait()
@@ -1042,6 +1128,72 @@ class CotrainRunner(BaseRunner):
         if global_step == 1:
             metrics.update(groups.get("replay_seed_metrics", {}))
         metrics = _with_train_learner_aliases(metrics)
+        checkpoint_start = time.perf_counter()
+        self._maybe_save_manual_checkpoint(groups, global_step, metrics)
+        metrics["time/manual_cotrain/checkpoint_and_metrics_s"] = float(
+            time.perf_counter() - checkpoint_start
+        )
+        metrics["time/manual_cotrain/global_step_s"] = float(
+            time.perf_counter() - global_step_start
+        )
+        return metrics
+
+    def _finish_no_failure_imagination_step(
+        self,
+        *,
+        groups: dict[str, Any],
+        global_step: int,
+        global_step_start: float,
+        real_env_metrics: dict[str, float],
+        real_rollout_metrics: dict[str, float],
+        real_reset_metrics: dict[str, float],
+        real_batch_metrics: dict[str, float],
+        replay_metrics: dict[str, float],
+        sync_metrics: dict[str, float],
+        stage_times: dict[str, float],
+    ) -> dict[str, float]:
+        """Finish a real-only step when no failed imagination anchor exists."""
+
+        replay_group = groups["ReplayGroup"]
+        replay_metrics["replay_buffer/size"] = float(replay_group.size().wait()[0])
+        replay_metrics["replay_buffer/transitions"] = float(
+            replay_group.num_transitions().wait()[0]
+        )
+        skipped_metrics = {
+            "rollout/imagined_skipped_no_failure": 1.0,
+            "actor/ppo_updates": 0.0,
+            "actor/ppo_optimizer_steps": 0.0,
+            "actor/ppo_update_committed": 0.0,
+            "actor/policy_kl_encoder": 0.0,
+            "actor/policy_kl_actor": 0.0,
+            "actor/policy_kl_total": 0.0,
+            "actor/policy_kl_budget": float(self._max_policy_kl() or 0.0),
+        }
+        self._report_phase_completion(
+            "cotrain-imagined-rollout",
+            global_step,
+            done=0,
+            total=1,
+            unit="trajectory",
+            status="skipped=no_failed_episode",
+        )
+        metrics = {
+            "global_step": float(global_step),
+            **real_env_metrics,
+            **self._real_env_success_rate_metrics(
+                real_env_metrics,
+                global_step=global_step,
+            ),
+            **real_reset_metrics,
+            **real_batch_metrics,
+            **real_rollout_metrics,
+            **replay_metrics,
+            **skipped_metrics,
+            **sync_metrics,
+            **stage_times,
+        }
+        if global_step == 1:
+            metrics.update(groups.get("replay_seed_metrics", {}))
         checkpoint_start = time.perf_counter()
         self._maybe_save_manual_checkpoint(groups, global_step, metrics)
         metrics["time/manual_cotrain/checkpoint_and_metrics_s"] = float(
@@ -1527,13 +1679,63 @@ class CotrainRunner(BaseRunner):
         return value
 
     def _real_env_enabled(self) -> bool:
-        return True
+        return bool(
+            OmegaConf.select(
+                self.cfg,
+                "manual_cotrain.real_env_enabled",
+                default=True,
+            )
+        )
 
     def _learner_updates_enabled(self) -> bool:
-        return True
+        return bool(
+            OmegaConf.select(
+                self.cfg,
+                "manual_cotrain.learner_updates_enabled",
+                default=True,
+            )
+        )
 
     def _staged_policy_update_enabled(self) -> bool:
-        return True
+        return bool(
+            OmegaConf.select(
+                self.cfg,
+                "manual_cotrain.staged_policy_update",
+                default=True,
+            )
+        )
+
+    def _training_mode(self) -> str:
+        mode = str(
+            OmegaConf.select(
+                self.cfg,
+                "manual_cotrain.training_mode",
+                default="staged_full_cotrain",
+            )
+        ).strip()
+        allowed = {"failure_imagined_rl", "staged_full_cotrain"}
+        if mode not in allowed:
+            raise ValueError(
+                "manual_cotrain.training_mode must be one of "
+                f"{sorted(allowed)}, got {mode!r}"
+            )
+        return mode
+
+    def _initial_condition_selector(self) -> str:
+        selector = str(
+            OmegaConf.select(
+                self.cfg,
+                "manual_cotrain.initial_condition_selector",
+                default="episode_start",
+            )
+        ).strip()
+        allowed = {"episode_start", "failed_episode_start"}
+        if selector not in allowed:
+            raise ValueError(
+                "manual_cotrain.initial_condition_selector must be one of "
+                f"{sorted(allowed)}, got {selector!r}"
+            )
+        return selector
 
     def _learner_updates_per_global_step(self) -> int:
         return self._positive_manual_int(

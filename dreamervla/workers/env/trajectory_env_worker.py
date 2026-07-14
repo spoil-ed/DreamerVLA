@@ -3254,11 +3254,20 @@ class BaseTrajectoryEnvWorker(Worker):
                 else None
             )
             try:
+                selector = str(
+                    self.env_cfg.get("initial_condition_selector", "episode_start")
+                )
+                selector_kwargs = (
+                    {"selector": selector}
+                    if "initial_condition_selector" in self.env_cfg
+                    else {}
+                )
                 conditions = _call_maybe_remote(
                     aligned_sampler,
                     sampled_condition_count,
                     task_ids=task_ids,
                     keys=tuple(keys),
+                    **selector_kwargs,
                 )
                 if group_size > 1:
                     conditions = _repeat_initial_condition_groups(

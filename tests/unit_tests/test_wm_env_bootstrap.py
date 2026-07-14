@@ -86,6 +86,27 @@ class _CyclingGroupedInitialConditions(_ReplayWithInitialEmbeddings):
         }
 
 
+class _SelectorInitialConditions(_CyclingGroupedInitialConditions):
+    def __init__(self) -> None:
+        super().__init__()
+        self.selectors: list[str] = []
+
+    def sample_initial_conditions(
+        self,
+        batch_size: int,
+        *,
+        task_ids=None,
+        keys=(),
+        selector: str = "episode_start",
+    ):
+        self.selectors.append(str(selector))
+        return super().sample_initial_conditions(
+            batch_size,
+            task_ids=task_ids,
+            keys=keys,
+        )
+
+
 def test_online_replay_samples_initial_obs_embeddings() -> None:
     replay = OnlineReplay(capacity=10, sequence_length=1, task_ids=(0,))
     replay.add_episode(
@@ -274,6 +295,52 @@ def test_wm_env_worker_repeats_one_aligned_condition_for_each_policy_group() -> 
         worker.close()
 
 
+def test_wm_env_worker_forwards_failure_initial_condition_selector() -> None:
+    replay = _SelectorInitialConditions()
+    worker = WMEnvWorker(
+        env_cfg={
+            "target": (
+                "dreamervla.envs.world_model.latent_world_model_env:"
+                "LatentWorldModelEnv"
+            ),
+            "bootstrap_group_size": 4,
+            "defer_initial_condition_bootstrap": True,
+            "initial_condition_selector": "failed_episode_start",
+            "kwargs": {
+                "world_model": {
+                    "target": (
+                        "dreamervla.workers.actor._test_models:"
+                        "TinyLumosWorldModel"
+                    ),
+                    "kwargs": {"hidden_dim": 2, "action_dim": 1},
+                },
+                "classifier": None,
+                "latent_dim": 2,
+                "action_dim": 1,
+                "lang_dim": 3,
+                "proprio_dim": 2,
+                "num_envs": 4,
+                "device": "cpu",
+            },
+        },
+        num_slots=4,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=2,
+        num_action_chunks=1,
+        task_id=0,
+        replay=replay,
+    )
+    try:
+        worker.init()
+        worker.refresh_wm_initial_conditions()
+        messages = worker.bootstrap_obs()
+
+        assert replay.selectors == ["failed_episode_start"]
+        assert [message.task_id for message in messages] == [3, 3, 3, 3]
+    finally:
+        worker.close()
+
+
 def test_wm_env_worker_bootstraps_initial_lang_embs_from_replay() -> None:
     worker = WMEnvWorker(
         env_cfg={
@@ -358,4 +425,3 @@ def test_wm_env_worker_bootstraps_initial_proprios_from_replay() -> None:
         assert messages[1].obs["proprio"].tolist() == [3.0, 4.0]
     finally:
         worker.close()
-

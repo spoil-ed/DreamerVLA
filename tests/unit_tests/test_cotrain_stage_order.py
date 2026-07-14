@@ -22,7 +22,7 @@ class _Ready:
         return True
 
 
-def _cfg():
+def _cfg(*, training_mode: str = "staged_full_cotrain"):
     return OmegaConf.create(
         {
             "_target_": "dreamervla.runners.CotrainRunner",
@@ -52,6 +52,8 @@ def _cfg():
                 "checkpoint_every": 0,
                 "save_replay_state": False,
                 "publish_learner_weights": False,
+                "training_mode": training_mode,
+                "initial_condition_selector": "failed_episode_start",
             },
             "actor": {"train_cfg": {"algorithm_cfg": {"group_size": 1}}},
         }
@@ -209,8 +211,9 @@ class _Env:
 
 
 class _Replay:
-    def __init__(self, events: list[str]) -> None:
+    def __init__(self, events: list[str], *, eligible: int = 1) -> None:
         self.events = events
+        self.eligible = int(eligible)
 
     def set_policy_version(self, version: int):
         return _Ready([None])
@@ -219,6 +222,15 @@ class _Replay:
         self.events.append("replay_replace")
         assert batch.trajectories[0].transitions[0]["encoder_version"] == 1
         return _Ready([{"replay_buffer/step_local_trajectories": 1.0}])
+
+    def append_real_trajectories(self, batch: RealTrajectoryBatch):
+        self.events.append("replay_append")
+        assert batch.num_trajectories == 1
+        return _Ready([{"replay_buffer/appended_trajectories": 1.0}])
+
+    def eligible_initial_condition_count(self, selector: str):
+        self.events.append(f"eligible:{selector}")
+        return _Ready([self.eligible])
 
     def size(self):
         return _Ready([1])
@@ -325,3 +337,85 @@ def test_staged_global_step_has_explicit_real_model_imagination_barriers(monkeyp
         "cotrain-imagined-rollout/00000001",
         "cotrain-vla-ppo/00000001",
     ]
+
+
+def test_failure_imagined_rl_skips_encoder_and_learner_updates(monkeypatch) -> None:
+    events: list[str] = []
+    cfg = _cfg(training_mode="failure_imagined_rl")
+    cfg.manual_cotrain.staged_policy_update = False
+    cfg.manual_cotrain.learner_updates_enabled = False
+    runner = CotrainRunner(cfg)
+    runner.console_progress = lambda *_args, **_kwargs: None
+    env_channel = _Channel()
+    monkeypatch.setattr(
+        "dreamervla.runners.cotrain_runner._share_ray_value",
+        lambda value, *, cluster: value,
+    )
+    groups = {
+        "ActorGroup": _Actor(events),
+        "RolloutGroup": _Rollout(events),
+        "LearnerGroup": _Learner(events),
+        "RealEnvGroup": _Env("real", events),
+        "WMEnvGroup": _Env("wm", events),
+        "ReplayGroup": _Replay(events),
+        "cluster": object(),
+        "env_channel": env_channel,
+        "actor_channel": _Channel(),
+        "env_channel_name": "env",
+        "rollout_channel_name": "rollout",
+        "actor_channel_name": "actor",
+    }
+
+    metrics = runner._run_global_step(groups, global_step=1)
+
+    assert "replay_append" in events
+    assert "eligible:failed_episode_start" in events
+    assert "wm_refresh" in events
+    assert "wm_generate" in events
+    assert "ppo" in events
+    assert "encoder_sft" not in events
+    assert "reencode" not in events
+    assert "replay_replace" not in events
+    assert "wm_cls_update" not in events
+    assert "wm_cls_sync" not in events
+    assert metrics["actor/ppo_updates"] == 1.0
+
+
+def test_failure_imagined_rl_skips_imagination_when_failure_pool_is_empty(
+    monkeypatch,
+) -> None:
+    events: list[str] = []
+    cfg = _cfg(training_mode="failure_imagined_rl")
+    cfg.manual_cotrain.staged_policy_update = False
+    cfg.manual_cotrain.learner_updates_enabled = False
+    runner = CotrainRunner(cfg)
+    runner.console_progress = lambda *_args, **_kwargs: None
+    monkeypatch.setattr(
+        "dreamervla.runners.cotrain_runner._share_ray_value",
+        lambda value, *, cluster: value,
+    )
+    groups = {
+        "ActorGroup": _Actor(events),
+        "RolloutGroup": _Rollout(events),
+        "LearnerGroup": _Learner(events),
+        "RealEnvGroup": _Env("real", events),
+        "WMEnvGroup": _Env("wm", events),
+        "ReplayGroup": _Replay(events, eligible=0),
+        "cluster": object(),
+        "env_channel": _Channel(),
+        "actor_channel": _Channel(),
+        "env_channel_name": "env",
+        "rollout_channel_name": "rollout",
+        "actor_channel_name": "actor",
+    }
+
+    metrics = runner._run_global_step(groups, global_step=1)
+
+    assert "real_generate" in events
+    assert "replay_append" in events
+    assert "wm_refresh" not in events
+    assert "wm_generate" not in events
+    assert "actor_recv_wm_only" not in events
+    assert "ppo" not in events
+    assert metrics["rollout/imagined_skipped_no_failure"] == 1.0
+    assert metrics["actor/ppo_updates"] == 0.0

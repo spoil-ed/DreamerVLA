@@ -177,6 +177,29 @@ def test_initial_condition_options_reach_replay_through_ray_worker_facade():
     ]
 
 
+def test_failure_selector_reaches_replay_through_ray_worker_facade():
+    spy = _InitialConditionSpyReplay()
+    worker = ReplayWorker.__new__(ReplayWorker)
+    worker.replay = spy
+
+    worker.sample_initial_conditions(
+        8,
+        keys=("obs_embedding",),
+        selector="failed_episode_start",
+    )
+
+    assert spy.calls == [
+        (
+            8,
+            {
+                "task_ids": None,
+                "keys": ("obs_embedding",),
+                "selector": "failed_episode_start",
+            },
+        )
+    ]
+
+
 def test_ray_replay_worker_seeds_official_data_through_shared_loader(monkeypatch):
     calls: list[dict] = []
 

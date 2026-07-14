@@ -1,106 +1,80 @@
-# Online Keyframe-Initialized Rollouts Design
+# Failure-Conditioned Episode-Start Imagination Design
 
 ## Objective
 
-Add reference-style keyframe-initialized rollouts to DreamerVLA while preserving the
-repository's online cotrain architecture. Failed real trajectories from cold-start
-collection and current-step collection become KIR sources. DreamerVLA must not
-copy RLinf's static `.npy` initialization pool.
+Use real LIBERO collection only to maintain a pool of failed episodes, then train
+the VLA exclusively with imagined PPO. The vision encoder, world model, and success
+classifier stay frozen. Only the actor parameter partition is optimized.
 
-## Semantics
+This is deliberately an episode-start selector, not failure-near KIR: every imagined
+rollout starts from the first valid hidden state of a failed real episode. The selector
+name remains explicit so endpoint/window/classifier-guided anchors can be added later.
 
-For a failed real episode with final valid index `k`, KIR initializes imagination
-at `episode[k]`. The world model receives the real observation-latent history ending
-at `k`, the aligned real action history, the real proprio history required by the
-active WM, and the episode's language/task conditioning. The next policy action is
-therefore evaluated locally after the failure-near keyframe.
-
-Ordinary initialization remains episode-start initialization. Hydra explicitly
-controls the mixture between ordinary and KIR anchors. If KIR is requested but no
-failed episode is available for a requested task, sampling falls back to an ordinary
-anchor rather than starving WM rollout.
-
-## Data Flow
+## Step Order
 
 ```text
-cold-start collected episodes ─┐
-                               ├─> OnlineReplay records
-current-step real episodes ────┘        │
-                                        ├─ ordinary: episode start
-                                        └─ KIR: failed episode endpoint
-                                                   │
-                                      aligned latent/action/proprio history
-                                                   │
-                                              ReplayWorker
-                                                   │
-                                repeat each anchor for one policy group
-                                                   │
-                                        WM trajectory EnvWorker
-                                                   │
-                                     LatentWorldModelEnv.reset()
-                                                   │
-                                          imagined rollout
+collect completed real episodes
+        |
+append current episodes to historical replay (preserve success metadata)
+        |
+select failed_episode_start anchors from current + historical failures
+        |
+sample with replacement to fill imagined policy groups
+        |
+frozen WM rollout + frozen classifier reward
+        |
+imagined PPO updates actor parameters only
 ```
+
+There is no encoder SFT, real-batch re-encoding, WM update, or classifier update.
+The rollout policy is synchronized once at step entry and again after committed PPO.
+
+## Anchor Contract
+
+`OnlineReplay` owns selection. For `selector=failed_episode_start` it:
+
+- filters to records whose explicit episode outcome is failure;
+- takes `episode[0]` from each selected record;
+- balances across requested tasks that have eligible failures;
+- samples cyclically with replacement, allowing a failed episode to be reused;
+- returns `anchor_step=0`, `is_failure_anchor=true`, and aligned requested sidecars.
+
+Current real episodes are appended rather than replacing replay, so cold-start,
+historical online, and current-step failures form one bounded pool. `RealTrajectory.success`
+is authoritative when a Ray real batch is inserted.
+
+If the replay has no failed episode, the global step skips imagined rollout and PPO
+with an explicit metric. It must not silently fall back to successful/ordinary starts.
 
 ## Ownership
 
-- `OnlineReplay` owns anchor selection and extraction of aligned episode-local
-  histories.
-- `ReplayWorker` exposes the sampler without choosing defaults.
-- The WM EnvWorker derives history length from the instantiated world model, requests
-  initial conditions, repeats anchors by the configured policy group size, and
-  installs them on each environment slot.
-- `LatentWorldModelEnv` and the chunk world model own construction of the exact
-  recurrent imagination state from supplied history.
-- Hydra owns whether KIR is enabled and the ordinary/KIR mixture ratio.
+- `ReplayWorker` inserts real trajectories and exposes selector/count APIs.
+- WM EnvWorker forwards the configured selector and repeats each sampled anchor by
+  PPO `group_size`, keeping every comparison group on an identical real context.
+- WM/classifier inference remains in WM EnvGroup and is no-grad/frozen.
+- RolloutGroup performs policy inference only.
+- ActorGroup receives imagined trajectories and performs PPO only.
+- LearnerGroup may remain resident as the checkpoint owner in this first version,
+  but its update method is never called in this mode.
 
-## Exact Anchor Contract
+## Configuration
 
-The replay response keeps current-condition keys for compatibility and adds history
-keys used by stateful chunk world models:
+Hydra selects:
 
-- `obs_embedding`: keyframe/current latent.
-- `obs_embedding_history`: real latent frames ending at the anchor.
-- `action_history`: real actions aligned to the returned latent history.
-- `lang_emb`: task language embedding.
-- `proprio`: keyframe/current proprioception.
-- `proprio_history`: real proprio frames aligned to latent history.
-- `is_kir`: whether the selected anchor is a failed endpoint.
-- `anchor_step`: episode-local anchor index.
+- `manual_cotrain.training_mode: failure_imagined_rl`
+- `manual_cotrain.initial_condition_selector: failed_episode_start`
+- `manual_cotrain.learner_updates_enabled: false`
+- `manual_cotrain.staged_policy_update: false`
 
-Short histories are left-padded within the same episode using the first observation
-and proprio state. Missing pre-history actions are padded with the model's neutral
-action value; no history may cross an episode boundary.
-
-## Grouping
-
-Each sampled anchor is repeated for the active policy optimization group so all
-actions within a comparison group start from the same real context. Group repetition
-applies to current keys, history keys, and KIR metadata together.
-
-## Metrics
-
-WM refresh reports the number/fraction of KIR anchors and mean anchor step using the
-existing `env/` metric route. Cosine similarity remains a WM evaluation metric and is
-unrelated to KIR selection.
-
-## Failure Handling
-
-- Missing failed candidates: fall back to ordinary initialization for that task.
-- Missing required latent/language/proprio/action fields: fail with a precise replay
-  contract error rather than silently substituting unrelated data.
-- Inconsistent history dimensions: fail before world-model rollout.
-- Non-stateful WMs continue to consume the current condition and ignore optional
-  history fields through narrow capability checks.
+The active cotrain recipe uses these values. Shell launchers contain no hidden
+training defaults.
 
 ## Tests
 
-Unit tests will prove:
-
-1. Failed-only endpoint selection and correct keyframe metadata.
-2. Exact latent/action/proprio history alignment and episode-local padding.
-3. Fallback to ordinary starts when no failed episode exists.
-4. Group repetition preserves all history and metadata.
-5. Chunk-WM initialization uses supplied real history/actions instead of repeated
-   latent and zero actions.
-6. Hydra composition exposes KIR behavior without shell defaults.
+1. Failed-only first-frame selection and explicit anchor metadata.
+2. Repeated sampling fills batches and preserves task/sidecar alignment.
+3. Appending real batches preserves historical failures and explicit outcomes.
+4. WM bootstrap forwards the configured selector and preserves group repetition.
+5. Cotrain order excludes encoder SFT, re-encoding, and learner updates while still
+   running real collection, imagined rollout, and PPO.
+6. No-failure steps skip imagined PPO instead of falling back or hanging.

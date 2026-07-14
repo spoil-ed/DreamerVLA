@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Train the staged full VLA + world-model + classifier cotrain route.
+# Train the failure-conditioned imagined-RL cotrain route.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"

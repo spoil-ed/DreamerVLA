@@ -45,7 +45,7 @@ backend with `logger=tensorboard` / `logger=wandb`.
 
 | Stage | Script | Default Config |
 | --- | --- | --- |
-| Trainable WM/CLS cotrain | `scripts/experiments/cotrain/train.sh --config openvla_libero` | `openvla_libero` |
+| Failure-conditioned imagined RL | `scripts/experiments/cotrain/train.sh --config openvla_libero --wm_ckpt <wm> --cls_ckpt <cls>` | `openvla_libero` |
 | Cotrain policy eval | `scripts/experiments/cotrain/eval.sh` | `eval_cotrain` |
 | Official-data world model | `scripts/experiments/world_model_training/train.sh --config dino-wm\|dreamer-wm` | `dino-wm` / `dreamer-wm` |
 | Bounded WM timing profile | `scripts/experiments/world_model_training/profile.sh` | `wm_official_upper_bound_profile` |
@@ -66,7 +66,7 @@ backend with `logger=tensorboard` / `logger=wandb`.
 | `wm_official_upper_bound_profile` | bounded 8-GPU timing run of the same optimized WM route |
 | `classifier_official_upper_bound` | pre-mainline classifier training from official data |
 | `wmpo_token_classifier_openvla_onetraj_libero_goal_h1` | token classifier recipe |
-| `openvla_libero` | trainable OpenVLA LIBERO WM/CLS cotrain (Ray backend) |
+| `openvla_libero` | frozen-WM/CLS failure-conditioned OpenVLA imagined RL (Ray backend) |
 | `eval_libero_vla` | LIBERO rollout eval |
 
 The release training path is OpenVLA-OFT one-trajectory cold-start cotrain.

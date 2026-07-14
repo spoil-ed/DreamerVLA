@@ -55,26 +55,24 @@ Shell launchers expose a small set of convenience keys and pass remaining
 | `online_rollout.num_envs` | vector env count for sync path |
 | `online_rollout.buffer_size` | replay capacity |
 
-### Manual Ray staged cotrain
+### Manual Ray failure-conditioned imagined RL
 
 | Key | Meaning |
 | --- | --- |
-| `manual_cotrain.staged_policy_update` | enable `real -> encoder SFT -> WM/CLS -> imagined PPO` barriers |
+| `manual_cotrain.training_mode` | active mainline is `failure_imagined_rl` |
+| `manual_cotrain.initial_condition_selector` | active selector is `failed_episode_start`; future selectors remain config extensions |
+| `manual_cotrain.staged_policy_update` | legacy full-cotrain barrier switch; `false` in imagined-only mode |
+| `manual_cotrain.learner_updates_enabled` | WM/CLS optimizer switch; `false` in imagined-only mode |
 | `manual_cotrain.real_rollout_target_trajectories` | exact completed real trajectories drained per global step; mainline is `32` |
-| `manual_cotrain.learner_updates_per_global_step` | maximum step-local WM and classifier optimizer iterations |
-| `manual_cotrain.learner_early_stop_patience` | no-improvement iterations before stopping the current WM/CLS fit |
-| `manual_cotrain.max_policy_kl` | one cumulative KL allowance shared by encoder SFT and actor PPO |
+| `manual_cotrain.max_policy_kl` | per-step actor PPO trust-region allowance |
 | `manual_cotrain.wm_rollout_target_trajectories` | imagined trajectories used by actor PPO |
-| `manual_cotrain.wm_env_write_replay` | whether imagined episodes enter replay; staged mainline keeps this `false` |
+| `manual_cotrain.wm_env_write_replay` | whether imagined episodes enter replay; mainline keeps this `false` |
+| `manual_cotrain.save_replay_state` | persist the historical failed-episode pool for exact resume |
 | `manual_cotrain.checkpoint_every` | completed global-step checkpoint cadence; segmented eval forces its boundary checkpoint |
 | `training.resume` | enable restoration for the selected runner |
 | `training.resume_path` | exact checkpoint resolved by the launcher |
 | `training.resume_dir` | owning run root reused by the resumed invocation |
 | `manual_cotrain.resume_ckpt` | legacy/internal full-checkpoint override; public launchers should use `--resume` |
-| `actor.train_cfg.encoder_sft.epochs` | successful-real encoder-only SFT epochs |
-| `actor.train_cfg.encoder_sft.batch_size` | raw decision batch for SFT and action-distribution KL measurement |
-| `actor.train_cfg.encoder_sft.reencode_batch_size` | batch for re-encoding all current-step real trajectories |
-| `actor.train_cfg.optimizers.encoder.lr` | vision backbone/projector SFT LR |
 | `actor.train_cfg.optimizers.policy.lr` | original LM/OFT actor PPO LR |
 
 The canonical checkpoint tree is `${training.out_dir}/checkpoints/`. Public train

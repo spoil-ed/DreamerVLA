@@ -69,8 +69,8 @@ to inspect commands. This test does not replace the
 1. Install the environment with `scripts/install_env.sh`.
 2. Download OpenVLA-OFT one-trajectory checkpoints and LIBERO data with
    `scripts/download_assets.sh`.
-3. Train with `scripts/experiments/cotrain/train.sh`; WM/CLS use random
-   initialization unless both warm-start checkpoints are supplied.
+3. Train with `scripts/experiments/cotrain/train.sh`, explicitly supplying the
+   frozen WM and classifier checkpoints.
 4. Evaluate an explicit policy checkpoint with
    `scripts/experiments/cotrain/eval.sh`.
 

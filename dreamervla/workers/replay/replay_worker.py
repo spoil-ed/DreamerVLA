@@ -22,9 +22,16 @@ class ReplayWorker(Worker):
         self.replay = OnlineReplay(**self.replay_cfg)
 
     def add_episode(
-        self, episode: list[dict[str, Any]], source: str = "online"
+        self,
+        episode: list[dict[str, Any]],
+        source: str = "online",
+        success: bool | None = None,
     ) -> dict[str, Any] | None:
-        return self._replay().add_episode(episode, source=str(source))
+        return self._replay().add_episode(
+            episode,
+            source=str(source),
+            success=success,
+        )
 
     def set_policy_version(self, version: int) -> None:
         self._replay().set_policy_version(int(version))
@@ -64,6 +71,38 @@ class ReplayWorker(Worker):
                 self._replay().num_transitions
             ),
             "replay_buffer/step_local_encoder_version": float(expected),
+        }
+
+    def append_real_trajectories(
+        self,
+        batch: RealTrajectoryBatch,
+    ) -> dict[str, float]:
+        """Append frozen-encoder real episodes while preserving outcome labels."""
+
+        expected = int(batch.global_step)
+        added = 0
+        transitions = 0
+        failures = 0
+        for trajectory in batch.trajectories:
+            if int(trajectory.global_step) != expected:
+                raise ValueError(
+                    "real trajectory global_step does not match batch"
+                )
+            episode = [dict(transition) for transition in trajectory.transitions]
+            record = self._replay().add_episode(
+                episode,
+                source="online",
+                success=bool(trajectory.success),
+            )
+            if record is None:
+                continue
+            added += 1
+            transitions += len(episode)
+            failures += int(not trajectory.success)
+        return {
+            "replay_buffer/appended_trajectories": float(added),
+            "replay_buffer/appended_transitions": float(transitions),
+            "replay_buffer/appended_failures": float(failures),
         }
 
     def sample(
@@ -112,15 +151,36 @@ class ReplayWorker(Worker):
         *,
         task_ids: tuple[int, ...] | None = None,
         keys: tuple[str, ...] = ("obs_embedding", "lang_emb", "proprio"),
+        selector: str = "episode_start",
     ) -> Any:
-        return self._replay().sample_initial_conditions(
-            int(batch_size),
+        kwargs: dict[str, Any] = {
+            "task_ids": (
+                tuple(int(task_id) for task_id in task_ids)
+                if task_ids is not None
+                else None
+            ),
+            "keys": tuple(str(key) for key in keys),
+        }
+        normalized_selector = str(selector)
+        if normalized_selector != "episode_start":
+            kwargs["selector"] = normalized_selector
+        return self._replay().sample_initial_conditions(int(batch_size), **kwargs)
+
+    def eligible_initial_condition_count(
+        self,
+        selector: str = "episode_start",
+        *,
+        task_ids: tuple[int, ...] | None = None,
+    ) -> int:
+        """Return the number of replay records eligible for WM bootstrap."""
+
+        return self._replay().eligible_initial_condition_count(
+            str(selector),
             task_ids=(
                 tuple(int(task_id) for task_id in task_ids)
                 if task_ids is not None
                 else None
             ),
-            keys=tuple(str(key) for key in keys),
         )
 
     def sampling_state_dict(self) -> dict[str, int]:

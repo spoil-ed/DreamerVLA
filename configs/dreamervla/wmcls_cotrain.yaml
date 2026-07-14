@@ -1,7 +1,7 @@
 # @package _global_
-# Staged full-policy cotrain with trainable WM/CLS. Every global step collects
-# fresh real trajectories, updates the native OpenVLA encoder, replaces replay,
-# refits WM/CLS in the new token space, then runs imagined-only PPO.
+# Failure-conditioned imagined RL. Every global step collects real trajectories,
+# appends them to replay, samples failed episode starts, and updates only the actor
+# with PPO under a frozen WM and frozen success classifier.
 defaults:
   - openvla_onetraj_libero_cotrain
   - _self_
@@ -23,10 +23,13 @@ manual_cotrain:
   ngpu: 8
   global_steps: 20000
   checkpoint_every: 10
-  save_replay_state: false
+  save_replay_state: true
   real_env_enabled: true
   real_env_workers: 1
-  learner_updates_enabled: true
+  training_mode: failure_imagined_rl
+  initial_condition_selector: failed_episode_start
+  staged_policy_update: false
+  learner_updates_enabled: false
   refresh_wm_initial_conditions_per_lease: true
   wm_rollout_target_trajectories: 1024
   wm_rollout_lease_epochs: 1
@@ -47,15 +50,15 @@ replay:
     task_balanced: true
     replay_sampling:
       enabled: false
-  # Warm checkpoints initialise WM/CLS weights, but no old trajectory survives
-  # into a staged step. replace_real_trajectories() installs exactly the 32
-  # current-policy real trajectories before either learner is called.
+  # Current real episodes append to this bounded replay. A seed may be supplied
+  # to make failed anchors available before the first online collection.
   seed: null
 
 env:
   wm:
     cfg:
       bootstrap_task_ids: ${ray_data.task_ids}
-      bootstrap_group_size: ${manual_cotrain.wm_envs_per_worker}
+      bootstrap_group_size: ${algorithm.group_size}
+      initial_condition_selector: ${manual_cotrain.initial_condition_selector}
       defer_initial_condition_bootstrap: true
       require_balanced_initial_conditions: true

@@ -248,12 +248,18 @@ class OnlineReplay:
         return max(int(self.sequence_length), int(self.capacity) // denom)
 
     def add_episode(
-        self, episode: list[dict[str, Any]], *, source: str = "online"
+        self,
+        episode: list[dict[str, Any]],
+        *,
+        source: str = "online",
+        success: bool | None = None,
     ) -> dict[str, Any] | None:
         if len(episode) < self.sequence_length:
             return None
         task_id = self._episode_task_id(episode)
-        success = self._episode_success(episode)
+        episode_success = (
+            self._episode_success(episode) if success is None else bool(success)
+        )
         finish_step = self._episode_finish_step(episode)
         episode_id = int(self._next_episode_id)
         collection_index = int(self._next_collection_index)
@@ -268,7 +274,7 @@ class OnlineReplay:
             "task_episode_index": task_episode_index,
             "rank": self.rank,
             "task_id": task_id,
-            "success": success,
+            "success": episode_success,
             "source": str(source),
             "source_id": self._source_id(str(source)),
             "length": len(episode),
@@ -352,8 +358,13 @@ class OnlineReplay:
         *,
         task_ids: tuple[int, ...] | None = None,
         keys: tuple[str, ...] = ("obs_embedding", "lang_emb", "proprio"),
+        selector: str = "episode_start",
     ) -> dict[str, np.ndarray]:
-        """Return aligned first-step WM conditions with balanced task coverage."""
+        """Return aligned episode-start conditions with balanced task coverage.
+
+        ``failed_episode_start`` filters to explicitly failed episode records and
+        samples them with replacement. It never falls back to successful records.
+        """
 
         count = int(batch_size)
         if count <= 0:
@@ -362,10 +373,11 @@ class OnlineReplay:
         if not requested_keys:
             raise ValueError("initial-condition keys must not be empty")
 
+        normalized_selector = self._validate_initial_condition_selector(selector)
         records_by_task: dict[int, list[dict[str, Any]]] = {}
-        for record in self._valid_records():
+        for record in self._eligible_initial_condition_records(normalized_selector):
             records_by_task.setdefault(int(record["task_id"]), []).append(record)
-        selected_tasks = tuple(
+        requested_tasks = tuple(
             int(task_id)
             for task_id in (
                 task_ids
@@ -373,16 +385,22 @@ class OnlineReplay:
                 else (self.task_ids or tuple(sorted(records_by_task)))
             )
         )
+        selected_tasks = tuple(
+            task_id for task_id in requested_tasks if records_by_task.get(task_id)
+        )
         if not selected_tasks:
+            if normalized_selector == "failed_episode_start":
+                raise RuntimeError(
+                    "online replay has no failed episodes for WMEnv bootstrap"
+                )
             raise RuntimeError("online replay has no records for WMEnv bootstrap")
-        missing_tasks = [
-            task_id for task_id in selected_tasks if not records_by_task.get(task_id)
-        ]
+        missing_tasks = [task_id for task_id in requested_tasks if not records_by_task.get(task_id)]
         if missing_tasks:
-            raise RuntimeError(
-                "online replay has no WMEnv bootstrap records for task IDs "
-                f"{missing_tasks}"
-            )
+            if normalized_selector == "episode_start":
+                raise RuntimeError(
+                    "online replay has no WMEnv bootstrap records for task IDs "
+                    f"{missing_tasks}"
+                )
 
         cursor = int(self._initial_condition_cursor)
         task_count = len(selected_tasks)
@@ -398,7 +416,13 @@ class OnlineReplay:
         self._initial_condition_cursor = cursor + count
 
         output: dict[str, np.ndarray] = {
-            "task_ids": np.asarray(sampled_task_ids, dtype=np.int64)
+            "task_ids": np.asarray(sampled_task_ids, dtype=np.int64),
+            "anchor_step": np.zeros((count,), dtype=np.int64),
+            "is_failure_anchor": np.full(
+                (count,),
+                normalized_selector == "failed_episode_start",
+                dtype=np.bool_,
+            ),
         }
         for key in requested_keys:
             values: list[np.ndarray] = []
@@ -412,6 +436,42 @@ class OnlineReplay:
                 values.append(np.asarray(first[key], dtype=np.float32))
             output[key] = np.stack(values, axis=0)
         return output
+
+    def eligible_initial_condition_count(
+        self,
+        selector: str = "episode_start",
+        *,
+        task_ids: tuple[int, ...] | None = None,
+    ) -> int:
+        """Return the number of replay episodes eligible for ``selector``."""
+
+        normalized_selector = self._validate_initial_condition_selector(selector)
+        requested = None if task_ids is None else {int(value) for value in task_ids}
+        return sum(
+            1
+            for record in self._eligible_initial_condition_records(normalized_selector)
+            if requested is None or int(record["task_id"]) in requested
+        )
+
+    @staticmethod
+    def _validate_initial_condition_selector(selector: str) -> str:
+        normalized = str(selector).strip().lower()
+        allowed = {"episode_start", "failed_episode_start"}
+        if normalized not in allowed:
+            raise ValueError(
+                "initial-condition selector must be one of "
+                f"{sorted(allowed)}, got {selector!r}"
+            )
+        return normalized
+
+    def _eligible_initial_condition_records(
+        self,
+        selector: str,
+    ) -> list[dict[str, Any]]:
+        records = self._valid_records()
+        if selector == "failed_episode_start":
+            return [record for record in records if not bool(record["success"])]
+        return records
 
     @staticmethod
     def _source_id(source: str) -> int:

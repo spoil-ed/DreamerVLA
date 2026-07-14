@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 
 import numpy as np
+import pytest
 import torch
 
 from dreamervla.runtime.online_replay import (
@@ -155,6 +156,56 @@ def test_initial_conditions_cover_tasks_and_keep_sidecars_aligned() -> None:
         batch["proprio"][:, 0],
         batch["task_ids"] + 200,
     )
+
+
+def test_failed_episode_start_conditions_filter_failures_and_repeat() -> None:
+    replay = OnlineReplay(
+        capacity=1_000,
+        sequence_length=1,
+        task_ids=(0, 1),
+        task_balanced=True,
+    )
+    successful = _episode(task_id=0, length=3, success=True)
+    failed_0 = _episode(task_id=0, length=3, success=False)
+    failed_1 = _episode(task_id=1, length=3, success=False)
+    for value, episode in ((99, successful), (10, failed_0), (20, failed_1)):
+        for step_index, step in enumerate(episode):
+            step["obs_embedding"] = np.full(
+                (2,), value + step_index, dtype=np.float32
+            )
+            step["lang_emb"] = np.full((3,), value, dtype=np.float32)
+        replay.add_episode(episode)
+
+    assert replay.eligible_initial_condition_count(
+        selector="failed_episode_start",
+        task_ids=(0, 1),
+    ) == 2
+    batch = replay.sample_initial_conditions(
+        6,
+        task_ids=(0, 1),
+        keys=("obs_embedding", "lang_emb"),
+        selector="failed_episode_start",
+    )
+
+    assert batch["task_ids"].tolist() == [0, 1, 0, 1, 0, 1]
+    assert batch["obs_embedding"][:, 0].tolist() == [10, 20, 10, 20, 10, 20]
+    assert batch["anchor_step"].tolist() == [0] * 6
+    assert batch["is_failure_anchor"].tolist() == [True] * 6
+
+
+def test_failed_episode_start_conditions_do_not_fallback_to_success() -> None:
+    replay = OnlineReplay(capacity=100, sequence_length=1, task_ids=(0,))
+    replay.add_episode(_episode(task_id=0, length=3, success=True))
+
+    assert replay.eligible_initial_condition_count(
+        selector="failed_episode_start"
+    ) == 0
+    with pytest.raises(RuntimeError, match="no failed episodes"):
+        replay.sample_initial_conditions(
+            1,
+            keys=("obs_embedding",),
+            selector="failed_episode_start",
+        )
 
 
 def test_online_replay_lightweight_sampling_state_restores_initial_condition_cursor() -> None:

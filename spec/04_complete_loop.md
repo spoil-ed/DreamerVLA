@@ -48,28 +48,28 @@ online cotrain 同时维护三类模型状态：
 
 - Actor/VLA policy：由 ActorGroup 更新。
 - Rollout policy replica：由 RolloutGroup 做 no-grad inference，定期从 Actor 同步。
-- World model + classifier：由 LearnerGroup 更新，定期同步给 WMEnvWorker。
+- World model + classifier：从显式 warmup checkpoint 加载并冻结，由 LearnerGroup
+  持有状态并在 setup 时同步给 WMEnvWorker。
 
-每个 staged global step 的固定因果顺序是：
+每个 `failure_imagined_rl` global step 的固定因果顺序是：
 
 1. 在 step 边界 reset 真实 slot、丢弃任何旧 policy 的半条轨迹，再用 step-entry
    `pi_old` 收集恰好 32 条完整真实轨迹并 drain 为 step-local batch。每个
    slot/rollout epoch 只接收第一条终止轨迹，提前成功不会使预算溢出。
-2. 只用成功轨迹的真实 action-token label，以低 LR SFT vision backbone/projector；
-   actor decoder 在此阶段冻结。
-3. 用 SFT 后 encoder 重编码当步全部 32 条成功/失败轨迹。
-4. `replace` online replay，使 WM/CLS 只看到当步新 latent；多步更新 WM/CLS，并重新
-   校准 classifier threshold。模型与 optimizer state 跨步延续，但训练样本不跨步保留。
-5. 同步最新 WM/CLS，使用同一步 latent history 做 closed-loop imagined rollout。
-6. 冻结 encoder，只把 imagined trajectory 送入原生 OpenVLA actor 的 PPO；真实轨迹
+2. 把成功/失败轨迹追加进 bounded historical replay，使用 `RealTrajectory.success`
+   作为 episode outcome。
+3. 从当前与历史 replay 的失败 episode 中重复采样，固定选择 episode 首帧；同一 PPO
+   comparison group 的成员共享同一个起点。
+4. 使用冻结 WM 做 closed-loop imagined rollout，冻结 classifier 提供 reward。
+5. 冻结 encoder，只把 imagined trajectory 送入原生 OpenVLA actor 的 PPO；真实轨迹
    不进入 PPO。
-7. 保存完整 VLA、WM、CLS、各 optimizer 和 classifier threshold，再做只读真实评估。
+6. 保存完整 VLA、冻结 WM/CLS 状态、actor optimizer、replay 和 classifier threshold，
+   再做只读真实评估。
 
-`pi_initial` 只用于监控；每步 trust region 比较 step-entry `pi_old` 与候选更新。
-encoder-SFT 先使用共享 KL 总预算，若越界则连同 encoder optimizer 回滚；通过后 WM/CLS
-在已接受的新空间训练。actor-PPO 只能使用剩余 KL 预算，越界时回滚到 post-SFT policy。
-因此最终累计 KL 不超过一个 `manual_cotrain.max_policy_kl`，且不会为了回滚 PPO 而破坏
-已经完成的 WM/CLS latent-space 对齐。
+`pi_initial` 只用于监控；每步 trust region 比较 step-entry `pi_old` 与候选 actor
+更新，越界时回滚 actor policy 和 optimizer。当前模式不执行 encoder SFT、re-encode、
+WM update 或 classifier update。若 replay 中没有失败 episode，该步明确跳过 imagination
+和 PPO，不回退到成功轨迹。
 
 Actor PPO 的训练数据来自 imagined rollout 组装出的 trajectory，不应隐式从 replay
 或真实 rollout 替代。
@@ -95,8 +95,8 @@ Real LIBERO collection
   -> reward/hidden shards + manifest
   -> OnlineReplay / warmup datasets
   -> WM + classifier warmup checkpoints
-  -> [32 real -> encoder SFT -> re-encode -> step-local WM/CLS]
-  -> [latest WM imagine -> actor PPO]
+  -> [32 real -> append replay -> failed episode-start anchors]
+  -> [frozen WM/classifier imagine -> actor PPO]
   -> complete VLA/WM/classifier checkpoint
   -> fixed read-only real LIBERO + closed-loop diagnostic eval
 ```
@@ -105,6 +105,6 @@ Real LIBERO collection
 
 - Collection experiment：`collect_rollouts`
 - Cotrain base experiment：`openvla_onetraj_libero_cotrain`
-- Full WM/CLS cotrain experiment：`openvla_libero`
+- Failure-conditioned imagined-RL experiment：`openvla_libero`
 - Eval experiment：`eval_cotrain`
 - Classifier role：`classifier=dreamer-cls`；具体 model/dataset 由 `task.classifier` 注入

@@ -1,4 +1,4 @@
-"""One-command launcher for the trainable WM/CLS/VLA cotrain mainline."""
+"""One-command launcher for failure-conditioned imagined VLA training."""
 
 from __future__ import annotations
 
@@ -306,6 +306,27 @@ def build_launch(argv: list[str]) -> CotrainLaunch:
     cfg = _compose(values)
     if _classifier_contract_overrides(values, cfg):
         cfg = _compose(values)
+    if (
+        str(
+            OmegaConf.select(
+                cfg,
+                "manual_cotrain.training_mode",
+                default="staged_full_cotrain",
+            )
+        )
+        == "failure_imagined_rl"
+        and not bool(OmegaConf.select(cfg, "training.resume", default=False))
+        and (
+            OmegaConf.select(cfg, "init.world_model_state_ckpt", default=None)
+            in {None, ""}
+            or OmegaConf.select(cfg, "init.classifier_state_ckpt", default=None)
+            in {None, ""}
+        )
+    ):
+        raise ValueError(
+            "failure_imagined_rl freezes WM/CLS and requires both --wm_ckpt and "
+            "--cls_ckpt (or --resume); random WM/CLS initialization is invalid"
+        )
     command = (sys.executable, "-m", "dreamervla.train", *values)
     return CotrainLaunch(command=command, env=_process_env(cfg), cfg=cfg)
 

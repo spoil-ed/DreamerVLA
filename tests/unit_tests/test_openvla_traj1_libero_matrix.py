@@ -224,6 +224,13 @@ def test_openvla_onetraj_cotrain_uses_wmpo_classifier_protocol() -> None:
 def test_cotrain_components_are_selected_from_worldmodel_and_classifier_groups() -> None:
     cfg = _compose(["experiment=openvla_libero"])
 
+    assert cfg.manual_cotrain.training_mode == "failure_imagined_rl"
+    assert cfg.manual_cotrain.initial_condition_selector == "failed_episode_start"
+    assert cfg.manual_cotrain.learner_updates_enabled is False
+    assert cfg.manual_cotrain.staged_policy_update is False
+    assert cfg.manual_cotrain.save_replay_state is True
+    assert cfg.env.wm.cfg.initial_condition_selector == "failed_episode_start"
+    assert cfg.env.wm.cfg.bootstrap_group_size == cfg.algorithm.group_size
     assert cfg.ray_components.world_model.target == cfg.world_model._target_
     assert cfg.ray_components.classifier.target == cfg.classifier._target_
     for key in (

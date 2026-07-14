@@ -19,9 +19,13 @@ cluster:
 manual_cotrain:
   ngpu: 1
   global_steps: 1000  # cotrain epochs
-  # Causal mainline order: real -> encoder SFT -> re-encode -> WM/CLS ->
-  # imagined PPO. The frozen feasibility recipe deliberately leaves this off.
-  staged_policy_update: true
+  # Real collection grows a failed-episode pool. Frozen WM/classifier imagination
+  # supplies rewards and PPO updates only the actor parameter partition.
+  training_mode: failure_imagined_rl
+  initial_condition_selector: failed_episode_start
+  real_env_enabled: true
+  learner_updates_enabled: false
+  staged_policy_update: false
   learner_update_step: 1
   learner_update_phase: cotrain
   learner_updates_per_global_step: 128
@@ -32,7 +36,7 @@ manual_cotrain:
   # One 1024x512 rollout step can exceed ten minutes. 5400s still catches an
   # actual stuck handshake without killing a progressing production step.
   env_rollout_timeout_s: 5400
-  save_replay_state: false
+  save_replay_state: true
   sync_every: 1
   requires_bootstrap_value: false
   wm_env_write_replay: false

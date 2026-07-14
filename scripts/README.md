@@ -96,12 +96,10 @@ Trainable VLA + world-model + classifier cotrain:
 - `experiments/cotrain/train.sh`
 - `experiments/cotrain/eval.sh`
 
-Cotrain starts WM/CLS from random weights when both checkpoint options are absent.
-Pass both `--wm_ckpt` and `--cls_ckpt` to warm-start them:
+Cotrain freezes WM/CLS, so both `--wm_ckpt` and `--cls_ckpt` are required unless
+the whole run is resumed:
 
 ```bash
-bash scripts/experiments/cotrain/train.sh --config openvla_libero
-
 bash scripts/experiments/cotrain/train.sh \
   --config openvla_libero \
   --wm_ckpt /path/to/wm.ckpt \

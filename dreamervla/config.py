@@ -1158,6 +1158,53 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
     _validate_manual_cotrain_replay_window(cfg)
     _validate_manual_cotrain_classifier_window(cfg)
 
+    training_mode = str(
+        OmegaConf.select(
+            cfg,
+            "manual_cotrain.training_mode",
+            default="staged_full_cotrain",
+        )
+    ).strip()
+    allowed_training_modes = {"failure_imagined_rl", "staged_full_cotrain"}
+    if training_mode not in allowed_training_modes:
+        raise ValueError(
+            "manual_cotrain.training_mode must be one of "
+            f"{sorted(allowed_training_modes)}, got {training_mode!r}"
+        )
+    if training_mode == "failure_imagined_rl":
+        if bool(
+            OmegaConf.select(
+                cfg,
+                "manual_cotrain.learner_updates_enabled",
+                default=True,
+            )
+        ):
+            raise ValueError(
+                "failure_imagined_rl requires learner_updates_enabled=false"
+            )
+        if bool(
+            OmegaConf.select(
+                cfg,
+                "manual_cotrain.staged_policy_update",
+                default=False,
+            )
+        ):
+            raise ValueError(
+                "failure_imagined_rl requires staged_policy_update=false"
+            )
+        selector = str(
+            OmegaConf.select(
+                cfg,
+                "manual_cotrain.initial_condition_selector",
+                default="",
+            )
+        ).strip()
+        if selector != "failed_episode_start":
+            raise ValueError(
+                "failure_imagined_rl requires initial_condition_selector="
+                "failed_episode_start"
+            )
+
     if bool(
         OmegaConf.select(
             cfg,

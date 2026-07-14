@@ -9,19 +9,15 @@ import torch
 from dreamervla.launchers.cotrain import build_launch
 
 
-def test_cotrain_launcher_uses_random_wm_and_classifier_when_pair_is_absent(
+def test_cotrain_launcher_rejects_random_frozen_wm_and_classifier(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("WORLD_MODEL_CKPT", raising=False)
     monkeypatch.delenv("CLASSIFIER_CKPT", raising=False)
     monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
 
-    launch = build_launch([])
-
-    assert launch.cfg.init.world_model_state_ckpt is None
-    assert launch.cfg.init.classifier_state_ckpt is None
-    assert not any("init.world_model_state_ckpt=" in item for item in launch.command)
-    assert not any("init.classifier_state_ckpt=" in item for item in launch.command)
+    with pytest.raises(ValueError, match="requires both --wm_ckpt and --cls_ckpt"):
+        build_launch([])
 
 
 def test_cotrain_launcher_accepts_atomic_warm_start_pair(

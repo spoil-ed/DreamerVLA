@@ -94,6 +94,40 @@ def test_step_local_load_rejects_mixed_or_stale_encoder_versions() -> None:
     assert worker.size() == 0
 
 
+def test_frozen_real_load_appends_history_and_preserves_explicit_failure() -> None:
+    worker = _worker()
+    worker.add_episode(
+        _episode(1.0, encoder_version=1),
+        source="coldstart",
+        success=False,
+    )
+    current = RealTrajectoryBatch(
+        global_step=7,
+        trajectories=(
+            RealTrajectory(
+                env_rank=0,
+                slot_id=0,
+                task_id=0,
+                episode_id=7,
+                global_step=7,
+                # The copied transitions contain positive terminal aliases, so
+                # this proves the trajectory outcome is the authoritative label.
+                success=False,
+                transitions=tuple(_episode(7.0, encoder_version=1)),
+            ),
+        ),
+    )
+
+    metrics = worker.append_real_trajectories(current)
+
+    replay = worker._replay()
+    assert len(replay.episodes) == 2
+    assert [record["source"] for record in replay.episodes] == ["coldstart", "online"]
+    assert [record["success"] for record in replay.episodes] == [False, False]
+    assert worker.eligible_initial_condition_count("failed_episode_start") == 2
+    assert metrics["replay_buffer/appended_trajectories"] == 1.0
+
+
 def test_classifier_threshold_is_recalibrated_for_best_current_step_f1() -> None:
     threshold, metrics = _calibrate_binary_threshold(
         labels=torch.tensor([0, 1, 0, 1]),
