@@ -12,6 +12,10 @@ with `train.sh --config dino-wm`; `--config dreamer-wm` selects
 promotion remains gated on beating the persistence baseline after a converged
 training run.
 
+Model construction parameters live in `configs/worldmodel/{dino-wm,dreamer-wm}.yaml`;
+batch size, optimizer, data, and schedule parameters remain in the corresponding
+Hydra experiment recipes.
+
 ## Implementation
 
 - [x] Copy the DINO frame-block causal transformer, learned positional embedding,

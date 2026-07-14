@@ -3,6 +3,7 @@
 defaults:
   - /task: openvla_onetraj_libero
   - override /pre_mainline: libero_goal_official
+  - override /worldmodel: dino-wm
   - _self_
 
 _target_: dreamervla.runners.DinoTokenWorldModelTrainingRunner
@@ -92,30 +93,6 @@ optim:
     betas: [0.9, 0.999]
     eps: 1.0e-8
     weight_decay: 0.01
-
-world_model:
-  _target_: dreamervla.models.embodiment.world_model.DinoTokenWorldModel
-  obs_dim: ${task.openvla_oft.hidden_token.wm_obs_dim}
-  token_count: ${task.openvla_oft.hidden_token.token_count}
-  token_dim: ${task.openvla_oft.hidden_token.token_dim}
-  action_dim: ${dvla_mul:${task.action_dim},${dino_wm.frameskip}}
-  proprio_dim: ${task.openvla_oft.hidden_token.proprio_dim}
-  action_emb_dim: 10
-  proprio_emb_dim: 10
-  num_action_repeat: 1
-  num_proprio_repeat: 1
-  num_hist: 3
-  num_pred: 1
-  concat_dim: 1
-  depth: 6
-  heads: 16
-  dim_head: 64
-  mlp_dim: 2048
-  dropout: 0.1
-  emb_dropout: 0.0
-  return_predictions: false
-  latent_stage: ${task.openvla_oft.hidden_token.latent_stage}
-  latent_source: ${task.openvla_oft.hidden_token.latent_source}
 
 runner:
   logger:

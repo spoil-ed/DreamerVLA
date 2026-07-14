@@ -2,6 +2,7 @@
 defaults:
   - /task: openvla_onetraj_libero
   - override /dreamervla: openvla_onetraj_libero_cotrain_ray_base
+  - override /worldmodel: dreamer-wm
   - _self_
 
 _target_: dreamervla.runners.WorldModelTrainingRunner
@@ -56,13 +57,6 @@ optim:
     betas: [0.9, 0.999]
     eps: 1.0e-20
     weight_decay: 0.0
-
-world_model:
-  token_normalization: layer_norm
-  token_norm_eps: 1.0e-6
-  chunk_rollout_chunks: 4
-  chunk_rollout_loss_scale: 0.2
-  proprio_reconstruction_loss_scale: 0.0
 
 runner:
   logger:

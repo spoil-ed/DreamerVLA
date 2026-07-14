@@ -68,12 +68,13 @@ bash scripts/experiments/world_model_training/train.sh --config dino-wm
 bash scripts/experiments/world_model_training/train.sh --config dreamer-wm
 ```
 
-The concrete recipes live at `configs/experiment/dino-wm.yaml` and
-`configs/experiment/dreamer-wm.yaml`. DINO-WM and Dreamer-WM both use a per-rank
-batch size of 16 and learning rate `3e-5`; DINO-WM applies that rate to both its
-predictor and conditioning optimizers. Architecture, trajectory slicing,
-normalization, optimizer, and schedule parameters remain under
-`configs/experiment/`; the shell launcher contains no training defaults.
+The model configs live at `configs/worldmodel/dino-wm.yaml` and
+`configs/worldmodel/dreamer-wm.yaml`; the same-named files under
+`configs/experiment/` are thin experiment selectors. DINO-WM and Dreamer-WM both
+use a per-rank batch size of 16 and learning rate `3e-5`; DINO-WM applies that
+rate to both its predictor and conditioning optimizers. Training and optimizer
+parameters remain under `configs/experiment/`; the shell launcher contains no
+training defaults.
 
 Trainable VLA + world-model + classifier cotrain:
 

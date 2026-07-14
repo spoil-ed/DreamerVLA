@@ -70,6 +70,8 @@ def test_world_model_training_entrypoint_defers_model_choice_to_hydra() -> None:
     assert not any(script_config_dir.glob("*.yaml"))
     assert (root / "configs" / "experiment" / "dino-wm.yaml").is_file()
     assert (root / "configs" / "experiment" / "dreamer-wm.yaml").is_file()
+    assert (root / "configs" / "worldmodel" / "dino-wm.yaml").is_file()
+    assert (root / "configs" / "worldmodel" / "dreamer-wm.yaml").is_file()
 
 
 def test_world_model_training_config_switch_selects_expected_recipe() -> None:
