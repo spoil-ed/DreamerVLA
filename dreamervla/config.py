@@ -50,6 +50,7 @@ def validate_cfg(cfg: DictConfig, *, world_size: int | None = None) -> DictConfi
     _validate_chunk_horizon_consistency(cfg)
     _validate_latent_dimension_contracts(cfg)
     _validate_model_registry_refs(cfg)
+    _validate_dino_token_training(cfg)
     _validate_online_cotrain_pipeline(cfg)
     _validate_ray_manual_resources(cfg)
     _validate_fsdp_config(cfg)
@@ -625,6 +626,7 @@ def _validate_chunk_horizon_consistency(cfg: DictConfig) -> None:
             message="Dataset expected horizon must match the selected sidecar action horizon.",
         )
     _validate_chunk_wm_sequence_lengths(cfg)
+    _validate_dino_token_wm_sequence_lengths(cfg)
 
 
 def _validate_chunk_wm_sequence_lengths(cfg: DictConfig) -> None:
@@ -668,6 +670,38 @@ def _validate_chunk_wm_sequence_length_for_component(
                 f"({value} != {num_hist} + {rollout_chunks} * {chunk_size} + 1 = "
                 f"{expected})"
             )
+
+
+def _validate_dino_token_wm_sequence_lengths(cfg: DictConfig) -> None:
+    for key in (
+        "world_model",
+        "ray_components.world_model.kwargs",
+        "learner.model_cfg.world_model.kwargs",
+        "inference.cfg.world_model.kwargs",
+    ):
+        target = _component_target(cfg, key)
+        if target is None or not target.endswith("DinoTokenWorldModel"):
+            continue
+        num_hist = _select_int(cfg, f"{key}.num_hist")
+        num_pred = _select_int(cfg, f"{key}.num_pred")
+        if num_hist is None or num_pred is None:
+            continue
+        expected = num_hist + num_pred
+        for sequence_key in (
+            "dataset.sequence_length",
+            "online_rollout.sequence_length",
+            "replay.cfg.sequence_length",
+            "ray_data.sequence_length",
+        ):
+            value = _select_int(cfg, sequence_key)
+            if value is None:
+                continue
+            if value != expected:
+                raise ValueError(
+                    f"{sequence_key} must equal {key}.num_hist + "
+                    f"{key}.num_pred for shifted DINO token training "
+                    f"({value} != {num_hist} + {num_pred} = {expected})"
+                )
 
 
 def _validate_latent_dimension_contracts(cfg: DictConfig) -> None:
@@ -916,9 +950,59 @@ def _validate_latent_spec(
         )
 
 
+def _validate_dino_token_training(cfg: DictConfig) -> None:
+    """Validate the dedicated token-sidecar DINO-WM reproduction contract."""
+
+    target = str(OmegaConf.select(cfg, "_target_", default="") or "")
+    if target.rsplit(".", 1)[-1] != "DinoTokenWorldModelTrainingRunner":
+        return
+    model_target = _component_target(cfg, "world_model")
+    if model_target is None or not model_target.endswith("DinoTokenWorldModel"):
+        raise ValueError(
+            "DinoTokenWorldModelTrainingRunner requires world_model="
+            "DinoTokenWorldModel"
+        )
+    precision = str(OmegaConf.select(cfg, "optim.precision", default="")).lower()
+    if precision != "fp32":
+        raise ValueError(
+            "DinoTokenWorldModelTrainingRunner requires optim.precision=fp32"
+        )
+    frameskip = _select_int(cfg, "dino_wm.frameskip")
+    action_dim = _select_int(cfg, "task.action_dim")
+    model_action_dim = _select_int(cfg, "world_model.action_dim")
+    if frameskip is None or frameskip < 1:
+        raise ValueError("dino_wm.frameskip must be positive")
+    if action_dim is None or model_action_dim != action_dim * frameskip:
+        raise ValueError(
+            "world_model.action_dim must equal task.action_dim * dino_wm.frameskip "
+            f"({model_action_dim} != {action_dim} * {frameskip})"
+        )
+    model_hist = _select_int(cfg, "world_model.num_hist")
+    model_pred = _select_int(cfg, "world_model.num_pred")
+    for split in ("train", "valid"):
+        prefix = f"dataset.{split}"
+        for field, expected in (
+            ("num_hist", model_hist),
+            ("num_pred", model_pred),
+            ("frameskip", frameskip),
+        ):
+            value = _select_int(cfg, f"{prefix}.{field}")
+            if value != expected:
+                raise ValueError(
+                    f"{prefix}.{field} must match the DINO model/data contract "
+                    f"({value} != {expected})"
+                )
+    for removed in ("token_normalization", "token_norm_eps"):
+        if OmegaConf.select(cfg, f"world_model.{removed}", default=None) is not None:
+            raise ValueError(
+                f"world_model.{removed} must not be configured; normalized token "
+                "output is intrinsic to the DINO token adapter"
+            )
+
+
 def _validate_online_cotrain_pipeline(cfg: DictConfig) -> None:
     target = str(OmegaConf.select(cfg, "_target_", default="") or "")
-    if not target.endswith("WorldModelTrainingRunner"):
+    if target.rsplit(".", 1)[-1] != "WorldModelTrainingRunner":
         return
     data_dir = OmegaConf.select(cfg, "offline_warmup.data_dir", default=None)
     hidden_dir = OmegaConf.select(cfg, "offline_warmup.hidden_dir", default=None)
@@ -962,6 +1046,10 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
         (
             "CotrainRunner",
             "RolloutCollectionRunner",
+            # Reject invalid settings in persisted pre-consolidation configs too.
+            "OnlineCotrainRayRunner",
+            "ManualCotrainRayRunner",
+            "ColdStartRayCollectRunner",
         )
     )
     if not is_ray_runner:

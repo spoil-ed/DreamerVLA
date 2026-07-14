@@ -19,6 +19,8 @@ def test_hidden_token_pipeline_uses_traj1_proprio_language_wm_profile():
     assert cfg.env.obs_hidden_source == "hidden_token"
     assert wm.token_count == 256
     assert wm.token_dim == 4096
+    assert wm.token_normalization == "layer_norm"
+    assert wm.token_norm_eps == 1.0e-6
     assert cfg.training.wm_warmup_steps == 20000
     assert cfg.training.warmup_replay_epochs == 10
     assert cfg.training.warmup_checkpoint_every == 500
@@ -88,6 +90,61 @@ def test_full_dataset_wm_experiment_owns_complete_training_recipe(tmp_path, monk
     assert cfg.world_model.chunk_rollout_chunks == 4
     assert cfg.world_model.chunk_rollout_loss_scale == 0.2
     assert cfg.world_model.proprio_reconstruction_loss_scale == 0.0
+    assert cfg.world_model.token_normalization == "layer_norm"
+    assert cfg.world_model.token_norm_eps == 1.0e-6
+
+
+def test_dino_token_reproduction_is_an_isolated_exact_recipe(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from hydra import compose, initialize_config_dir
+
+    monkeypatch.setenv("RUN_ROOT", str(tmp_path))
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        cfg = compose(
+            config_name="train",
+            overrides=["experiment=wm_dino_token_official"],
+        )
+
+    assert cfg._target_ == "dreamervla.runners.DinoTokenWorldModelTrainingRunner"
+    assert cfg.world_model._target_.endswith("DinoTokenWorldModel")
+    assert cfg.world_model.token_count == 256
+    assert cfg.world_model.token_dim == 4096
+    assert cfg.world_model.num_hist == 3
+    assert cfg.world_model.num_pred == 1
+    assert cfg.world_model.depth == 6
+    assert cfg.world_model.heads == 16
+    assert cfg.world_model.dim_head == 64
+    assert cfg.world_model.mlp_dim == 2048
+    assert cfg.world_model.dropout == 0.1
+    assert cfg.world_model.emb_dropout == 0.0
+    assert cfg.dino_wm.frameskip == 5
+    assert cfg.world_model.action_dim == 35
+    assert cfg.world_model.action_emb_dim == 10
+    assert cfg.world_model.proprio_emb_dim == 10
+    assert "token_normalization" not in cfg.world_model
+    assert "token_norm_eps" not in cfg.world_model
+    assert cfg.dataset.train.frameskip == 5
+    assert cfg.dataset.train.train_fraction == 0.9
+    assert cfg.dataset.train.split_seed == 42
+    assert cfg.dataset.train.slice_seed == 0
+    assert cfg.dataset.train.normalize_action is True
+    assert cfg.dataset.train.normalize_proprio is True
+    assert cfg.dataset.valid.split == "valid"
+    assert "lang_dim" not in cfg.world_model
+    assert "chunk_rollout_chunks" not in cfg.world_model
+    assert cfg.training.global_batch_size == 32
+    assert cfg.training.num_epochs == 100
+    assert cfg.optim.precision == "fp32"
+    assert cfg.optim.predictor.name == "adamw"
+    assert cfg.optim.predictor.lr == 5.0e-4
+    assert cfg.optim.predictor.betas == [0.9, 0.999]
+    assert cfg.optim.predictor.eps == 1.0e-8
+    assert cfg.optim.predictor.weight_decay == 0.01
+    assert cfg.optim.conditioning == cfg.optim.predictor
+    assert cfg.dataset.train.raw_dir == cfg.task.hdf5_reward_dir
+    assert cfg.dataset.train.hidden_dir == cfg.task.openvla_oft.hidden_token_dir
 
 
 def test_classifier_and_full_dataset_wm_share_mainline_success_sidecar(

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import h5py
+import numpy as np
 import torch
 from omegaconf import OmegaConf
 
 from dreamervla.diagnostics.eval_chunkwm_closeloop import (
     load_chunk_wm,
+    load_demo,
+    rollout,
     truncate_demo_to_wm_context,
 )
 from dreamervla.models.embodiment.world_model.wm_chunk import ChunkAwareWorldModel
@@ -60,6 +64,65 @@ def test_eval_chunkwm_loader_accepts_pipeline_split_warmup_ckpt(tmp_path) -> Non
     assert loaded.token_dim == 4
 
 
+def test_eval_chunkwm_loader_materializes_worker_target_config(tmp_path) -> None:
+    cfg = _tiny_wm_cfg()
+    cfg.update(
+        {
+            "model_dim": 10,
+            "proprio_dim": 3,
+            "proprio_emb_dim": 2,
+            "num_proprio_repeat": 1,
+            "lang_dim": 5,
+            "lang_emb_dim": 2,
+            "num_lang_repeat": 1,
+            "chunk_rollout_chunks": 2,
+            "chunk_rollout_loss_scale": 0.2,
+        }
+    )
+    wm = ChunkAwareWorldModel(**{k: v for k, v in cfg.items() if k != "_target_"})
+
+    run_dir = tmp_path / "cotrain"
+    ckpt_dir = run_dir / "ckpt" / "warmup_progress"
+    ckpt_dir.mkdir(parents=True)
+    worker_cfg = {
+        "target": cfg["_target_"],
+        "kwargs": {k: v for k, v in cfg.items() if k != "_target_"},
+    }
+    OmegaConf.save(
+        {
+            "world_model": {
+                "chunk_rollout_chunks": 2,
+                "chunk_rollout_loss_scale": 0.2,
+            },
+            "ray_components": {"world_model": worker_cfg},
+        },
+        run_dir / "resolved_config.yaml",
+    )
+    ckpt_path = ckpt_dir / "wm_step_00000100.ckpt"
+    torch.save(
+        {
+            "config": {
+                "world_model": {
+                    "chunk_rollout_chunks": 2,
+                    "chunk_rollout_loss_scale": 0.2,
+                }
+            },
+            "world_model": wm.state_dict(),
+        },
+        ckpt_path,
+    )
+
+    loaded = load_chunk_wm(
+        str(ckpt_path),
+        torch.device("cpu"),
+        config_path=str(run_dir / "resolved_config.yaml"),
+    )
+
+    assert loaded.model_dim == 10
+    assert loaded.proprio_dim == 3
+    assert loaded.lang_dim == 5
+
+
 def test_eval_chunkwm_truncates_demo_to_world_model_context() -> None:
     cfg = _tiny_wm_cfg()
     cfg["max_seq_len"] = 5
@@ -71,3 +134,64 @@ def test_eval_chunkwm_truncates_demo_to_world_model_context() -> None:
 
     assert obs_out.shape == (5, cfg["obs_dim"])
     assert actions_out.shape == (5, cfg["action_dim"])
+
+
+def test_eval_chunkwm_load_demo_preserves_tokenized_sidecar_shape(tmp_path) -> None:
+    raw_path = tmp_path / "raw.hdf5"
+    hidden_path = tmp_path / "hidden.hdf5"
+    with h5py.File(raw_path, "w") as handle:
+        handle.create_dataset("data/demo_0/actions", data=np.zeros((3, 2)))
+        handle.create_dataset("data/demo_0/obs/ee_pos", data=np.ones((3, 3)))
+        handle.create_dataset("data/demo_0/obs/ee_ori", data=np.ones((3, 3)) * 2)
+        handle.create_dataset(
+            "data/demo_0/obs/gripper_states", data=np.ones((3, 2)) * 3
+        )
+    with h5py.File(hidden_path, "w") as handle:
+        handle.create_dataset(
+            "data/demo_0/obs_embedding",
+            data=np.zeros((3, 2, 4), dtype=np.float16),
+        )
+        handle.create_dataset(
+            "data/demo_0/lang_emb", data=np.arange(5, dtype=np.float16)
+        )
+
+    loaded = load_demo(raw_path, hidden_path, "data/demo_0")
+
+    assert loaded is not None
+    observations, actions, proprio, lang_emb = loaded
+    assert observations.shape == (3, 2, 4)
+    assert actions.shape == (3, 2)
+    assert proprio.shape == (3, 8)
+    assert np.array_equal(proprio[0], np.array([1, 1, 1, 2, 2, 2, 3, 3]))
+    assert lang_emb.shape == (5,)
+
+
+def test_eval_chunkwm_rollout_uses_proprio_and_language_conditioning() -> None:
+    cfg = _tiny_wm_cfg()
+    cfg.update(
+        {
+            "model_dim": 10,
+            "proprio_dim": 3,
+            "proprio_emb_dim": 2,
+            "lang_dim": 5,
+            "lang_emb_dim": 2,
+        }
+    )
+    wm = ChunkAwareWorldModel(**{k: v for k, v in cfg.items() if k != "_target_"})
+    observations = torch.zeros(6, 2, 4)
+    actions = torch.zeros(6, 2)
+    proprio = torch.zeros(6, 3)
+    lang_emb = torch.zeros(5)
+
+    prediction, target = rollout(
+        wm,
+        observations,
+        actions,
+        num_chunks=2,
+        mode="close",
+        proprio=proprio,
+        lang_emb=lang_emb,
+    )
+
+    assert prediction.shape == (4, 2, 6)
+    assert target.shape == prediction.shape

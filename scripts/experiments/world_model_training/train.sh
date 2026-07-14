@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Train the official-data Chunk world model through Hydra.
+# Train the official-data DINO token world model through Hydra.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"

@@ -37,7 +37,6 @@ from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
 from dreamervla.runtime.action_chunk_queue import ActionChunkQueue
 from dreamervla.runtime.classifier_update import online_classifier_update_step
 from dreamervla.runtime.distributed import unwrap_module as _unwrap
-from dreamervla.runtime.world_model_training_base import WorldModelTrainingBase
 from dreamervla.runtime.online_replay import (
     OnlineReplay,
     get_replay_task_stats_global,
@@ -53,10 +52,11 @@ from dreamervla.runtime.vectorized_collect import (
     extractor_obs_from_record,
     proprio_from_record,
 )
+from dreamervla.runtime.world_model_training_base import WorldModelTrainingBase
 from dreamervla.utils.hf_checkpoint import is_hf_checkpoint
 from dreamervla.utils.hf_module import load_module_pretrained, save_module_pretrained
 from dreamervla.utils.optim import build_optimizer
-from dreamervla.utils.torch_utils import freeze_module
+from dreamervla.utils.torch_utils import freeze_module, precision_dtype
 
 _WORLD_MODEL_DDP_DEFAULTS: dict[str, bool] = {
     "find_unused_parameters": True,
@@ -70,6 +70,44 @@ _WORLD_MODEL_DDP_OPTION_KEYS = frozenset(
         "gradient_as_bucket_view",
     }
 )
+
+
+def _component_hydra_cfg(
+    cfg: DictConfig,
+    *,
+    component_path: str,
+    worker_component_path: str,
+) -> DictConfig:
+    """Resolve either a normal Hydra component or a worker ``target`` config.
+
+    Independent WM training shares the Ray cotrain recipe, whose worker-facing
+    component contract is ``target`` plus ``kwargs``.  The offline runner still
+    instantiates a normal local module, so materialize an equivalent Hydra
+    config while preserving any component-level experiment overrides.
+    """
+
+    component = OmegaConf.select(cfg, component_path, default=None)
+    if component is not None and OmegaConf.select(
+        component, "_target_", default=None
+    ) is not None:
+        return component
+
+    worker_component = OmegaConf.select(cfg, worker_component_path, default=None)
+    target = OmegaConf.select(worker_component, "target", default=None)
+    if target is None:
+        raise ValueError(
+            f"{component_path} requires either _target_ or "
+            f"{worker_component_path}.target"
+        )
+    kwargs = OmegaConf.select(worker_component, "kwargs", default={}) or {}
+    resolved = dict(OmegaConf.to_container(kwargs, resolve=True))
+    if component is not None:
+        overrides = dict(OmegaConf.to_container(component, resolve=True))
+        overrides.pop("_target_", None)
+        overrides.pop("target", None)
+        overrides.pop("kwargs", None)
+        resolved.update(overrides)
+    return OmegaConf.create({"_target_": str(target), **resolved})
 
 
 def _world_model_ddp_wrap_kwargs(cfg: DictConfig) -> dict[str, bool]:
@@ -699,8 +737,20 @@ class _WorldModelTrainingCommon(WorldModelTrainingBase):
             )
             self._oft_hidden_token_extractor = self._build_oft_hidden_token_extractor(cfg)
 
-        self.world_model = hydra.utils.instantiate(OmegaConf.select(cfg, "world_model")).to(
-            device=self.device, dtype=torch.bfloat16
+        world_model_cfg = _component_hydra_cfg(
+            cfg,
+            component_path="world_model",
+            worker_component_path="ray_components.world_model",
+        )
+        OmegaConf.update(cfg, "world_model", world_model_cfg, merge=False)
+        model_precision = OmegaConf.select(cfg, "optim.precision", default=None)
+        if model_precision is None:
+            raise ValueError(
+                "optim.precision is required to select world-model parameter dtype"
+            )
+        self.world_model = hydra.utils.instantiate(world_model_cfg).to(
+            device=self.device,
+            dtype=precision_dtype(str(model_precision)),
         )
         self._unwrapped_world_model = self.world_model
         wm_ckpt = OmegaConf.select(cfg, "init.world_model_state_ckpt", default=None)
@@ -713,6 +763,28 @@ class _WorldModelTrainingCommon(WorldModelTrainingBase):
         self.world_model_optimizer = build_optimizer(
             self.world_model, OmegaConf.select(cfg, "optim.world_model")
         )
+
+        wm_only = (
+            total_env_steps <= 0
+            and int(
+                OmegaConf.select(
+                    cfg,
+                    "training.classifier_warmup_steps",
+                    default=0,
+                )
+                or 0
+            )
+            <= 0
+        )
+        if wm_only:
+            self.policy = None
+            self.policy_optimizer = None
+            self.ref_policy = None
+            self.critic = None
+            self.critic_optimizer = None
+            self.classifier = None
+            self.classifier_optimizer = None
+            return
 
         policy_module = hydra.utils.instantiate(OmegaConf.select(cfg, "policy")).to(self.device)
         algo = OmegaConf.select(cfg, "algorithm")

@@ -1,0 +1,125 @@
+# @package _global_
+# Isolated DINO-WM reproduction over persisted OpenVLA-OFT hidden tokens.
+defaults:
+  - /task: openvla_onetraj_libero
+  - override /pre_mainline: libero_goal_official
+  - _self_
+
+_target_: dreamervla.runners.DinoTokenWorldModelTrainingRunner
+seed: 0
+
+hydra:
+  run:
+    dir: ${training.out_dir}
+  output_subdir: .hydra
+
+init:
+  world_model_state_ckpt: null
+
+training:
+  out_dir: ${oc.env:RUN_ROOT,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/dino_token_wm/${now:%Y%m%d_%H%M%S}}
+  device: cuda
+  distributed_strategy: ddp
+  fsdp_mixed_precision: fp32
+  enable_activation_checkpointing: false
+  resume: false
+  checkpoint_format: torch
+  num_epochs: 100
+  max_steps: 0
+  eval_every: 1
+  checkpoint_every: 1
+  global_batch_size: 32
+
+dino_wm:
+  frameskip: 5
+  train_fraction: 0.9
+  split_seed: 42
+  slice_seed: ${seed}
+  normalize_action: true
+  normalize_proprio: true
+  max_episodes: null
+
+dataset:
+  train:
+    _target_: dreamervla.dataset.DinoTokenTrajectoryDataset
+    raw_dir: ${task.hdf5_reward_dir}
+    hidden_dir: ${task.openvla_oft.hidden_token_dir}
+    split: train
+    num_hist: ${world_model.num_hist}
+    num_pred: ${world_model.num_pred}
+    frameskip: ${dino_wm.frameskip}
+    train_fraction: ${dino_wm.train_fraction}
+    split_seed: ${dino_wm.split_seed}
+    slice_seed: ${dino_wm.slice_seed}
+    normalize_action: ${dino_wm.normalize_action}
+    normalize_proprio: ${dino_wm.normalize_proprio}
+    max_episodes: ${dino_wm.max_episodes}
+  valid:
+    _target_: dreamervla.dataset.DinoTokenTrajectoryDataset
+    raw_dir: ${task.hdf5_reward_dir}
+    hidden_dir: ${task.openvla_oft.hidden_token_dir}
+    split: valid
+    num_hist: ${world_model.num_hist}
+    num_pred: ${world_model.num_pred}
+    frameskip: ${dino_wm.frameskip}
+    train_fraction: ${dino_wm.train_fraction}
+    split_seed: ${dino_wm.split_seed}
+    slice_seed: ${dino_wm.slice_seed}
+    normalize_action: ${dino_wm.normalize_action}
+    normalize_proprio: ${dino_wm.normalize_proprio}
+    max_episodes: ${dino_wm.max_episodes}
+
+dataloader:
+  # Replaced at runtime by global_batch_size / world_size.
+  batch_size: 32
+  shuffle: false
+  drop_last: false
+  num_workers: 16
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 2
+
+optim:
+  precision: fp32
+  predictor:
+    name: adamw
+    lr: 5.0e-4
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+    weight_decay: 0.01
+  conditioning:
+    name: adamw
+    lr: 5.0e-4
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+    weight_decay: 0.01
+
+world_model:
+  _target_: dreamervla.models.embodiment.world_model.DinoTokenWorldModel
+  obs_dim: ${task.openvla_oft.hidden_token.wm_obs_dim}
+  token_count: ${task.openvla_oft.hidden_token.token_count}
+  token_dim: ${task.openvla_oft.hidden_token.token_dim}
+  action_dim: ${dvla_mul:${task.action_dim},${dino_wm.frameskip}}
+  proprio_dim: ${task.openvla_oft.hidden_token.proprio_dim}
+  action_emb_dim: 10
+  proprio_emb_dim: 10
+  num_action_repeat: 1
+  num_proprio_repeat: 1
+  num_hist: 3
+  num_pred: 1
+  concat_dim: 1
+  depth: 6
+  heads: 16
+  dim_head: 64
+  mlp_dim: 2048
+  dropout: 0.1
+  emb_dropout: 0.0
+  return_predictions: false
+  latent_stage: ${task.openvla_oft.hidden_token.latent_stage}
+  latent_source: ${task.openvla_oft.hidden_token.latent_source}
+
+runner:
+  logger:
+    logger_backends: [tensorboard, wandb]
+    wandb_mode: offline
+    wandb_proxy: null

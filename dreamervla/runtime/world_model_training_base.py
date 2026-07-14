@@ -34,16 +34,16 @@ from diffusers.optimization import get_scheduler
 from omegaconf import DictConfig, OmegaConf, open_dict
 from torch.utils.data import DataLoader
 
+from dreamervla.algorithms.critic.twohot_critic import ReturnPercentileTracker
 from dreamervla.algorithms.dreamervla import (
     imagine_actor_critic_step,
     world_model_pretrain_step,
 )
 from dreamervla.algorithms.registry import get_actor_update_route
 from dreamervla.dataset import BaseDataset
-from dreamervla.algorithms.critic.twohot_critic import ReturnPercentileTracker
-from dreamervla.runtime.world_model_training_utils import save_viz_strip
 from dreamervla.runners.base_runner import BaseRunner
 from dreamervla.runtime.distributed import NopretokenizeSFTDistributedHelper
+from dreamervla.runtime.world_model_training_utils import save_viz_strip
 from dreamervla.utils.checkpoint_util import TopKCheckpointManager
 from dreamervla.utils.ema import EMAHelper
 from dreamervla.utils.hf_checkpoint import (
@@ -101,7 +101,12 @@ class WorldModelTrainingBase(BaseRunner):
         self.rank = self.distributed.rank
         self.local_rank = self.distributed.local_rank
         self.world_size = self.distributed.world_size
-        self.device = self.distributed.resolve_device(str(self.config.trainer.device))
+        configured_device = OmegaConf.select(
+            self.config,
+            "training.device",
+            default="cuda",
+        )
+        self.device = self.distributed.resolve_device(str(configured_device))
         if self.distributed.is_main_process:
             self.print_config()
         set_seed(int(self.config.seed) + self.rank)

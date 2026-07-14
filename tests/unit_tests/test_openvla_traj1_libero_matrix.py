@@ -119,6 +119,8 @@ def test_every_mainline_route_suite_composition_has_exact_hidden_token_contract(
     else:
         assert cfg.ray_components.world_model.kwargs.token_count == 256
         assert cfg.ray_components.world_model.kwargs.token_dim == 4096
+        assert cfg.ray_components.world_model.kwargs.token_normalization == "layer_norm"
+        assert cfg.ray_components.world_model.kwargs.token_norm_eps == 1.0e-6
         assert cfg.ray_components.world_model.kwargs.obs_dim == 1_048_576
         assert cfg.ray_components.classifier.kwargs.token_count == 256
         assert cfg.ray_components.classifier.kwargs.token_dim == 4096
@@ -240,6 +242,14 @@ def test_openvla_onetraj_cotrain_ray_uses_wmpo_classifier_protocol() -> None:
     assert cfg.learner.train_cfg.classifier_balance_batches is True
     assert cfg.learner.train_cfg.classifier_threshold is None
     assert cfg.learner.train_cfg.classifier_batch_size % 2 == 0
+
+
+def test_wmcls_cotrain_offloads_rollout_vla_only() -> None:
+    cfg = _compose(["experiment=dreamervla_wmcls_cotrain_ray"])
+
+    assert cfg.rollout.train_cfg.enable_offload is True
+    assert cfg.actor.train_cfg.fsdp.cpu_offload is False
+    assert "wrap_policy" not in cfg.actor.train_cfg.fsdp
 
 
 def test_openvla_onetraj_cotrain_ray_aligns_world_model_full_dataset_recipe() -> None:

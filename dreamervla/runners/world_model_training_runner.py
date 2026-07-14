@@ -23,10 +23,10 @@ from omegaconf import OmegaConf
 
 from dreamervla.algorithms.dreamervla import world_model_pretrain_step
 from dreamervla.runners.base_runner import _atomic_torch_save
+from dreamervla.runners.success_classifier_training_runner import _success_probabilities_from_logits
 from dreamervla.runtime.classifier_metrics import sweep_threshold_metrics
 from dreamervla.runtime.classifier_update import online_classifier_update_step
 from dreamervla.runtime.distributed import unwrap_module as _unwrap
-from dreamervla.runners.success_classifier_training_runner import _success_probabilities_from_logits
 from dreamervla.runtime.offline_seed import seed_replay_from_offline
 from dreamervla.runtime.world_model_training_common import _WorldModelTrainingCommon
 from dreamervla.utils.checkpoint_util import TopKCheckpointManager
@@ -596,6 +596,46 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             return 0
         return epochs * max(1, (windows + int(batch_size) - 1) // int(batch_size))
 
+    @staticmethod
+    def _global_batch_size(*, per_rank_batch_size: int, world_size: int) -> int:
+        """Return the effective DDP batch size used for replay epoch budgets."""
+
+        local_batch = int(per_rank_batch_size)
+        if local_batch <= 0:
+            raise ValueError("per_rank_batch_size must be positive")
+        return local_batch * max(1, int(world_size))
+
+    @staticmethod
+    def _per_rank_batch_size(
+        *,
+        configured_batch_size: int,
+        global_batch_size: int | None,
+        world_size: int,
+        gradient_accumulate_every: int,
+    ) -> int:
+        """Resolve a Hydra global batch into the replay batch sampled per rank."""
+
+        configured = int(configured_batch_size)
+        if configured <= 0:
+            raise ValueError("dataloader.batch_size must be positive")
+        if global_batch_size is None:
+            return configured
+        accumulation = int(gradient_accumulate_every)
+        if accumulation != 1:
+            raise ValueError(
+                "WorldModelTrainingRunner does not implement gradient accumulation; "
+                "training.gradient_accumulate_every must be 1 when "
+                "training.global_batch_size is set"
+            )
+        processes = max(1, int(world_size))
+        global_batch = int(global_batch_size)
+        if global_batch <= 0 or global_batch % processes != 0:
+            raise ValueError(
+                "training.global_batch_size must be positive and divisible by "
+                f"world_size ({global_batch} % {processes})"
+            )
+        return global_batch // processes
+
     @classmethod
     def _resolve_warmup_steps(
         cls,
@@ -950,6 +990,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             ("training.wm_warmup_steps", "offline_warmup.debug_wm_warmup_steps", 2),
             ("training.classifier_warmup_steps", "offline_warmup.debug_classifier_warmup_steps", 2),
             ("training.warmup_replay_epochs", "offline_warmup.debug_warmup_replay_epochs", 0),
+            ("training.global_batch_size", "training.debug_global_batch_size", None),
             ("online_rollout.total_env_steps", "online_rollout.debug_total_env_steps", 160),
             ("online_rollout.max_train_updates", "online_rollout.debug_max_train_updates", 4),
             ("online_rollout.episode_horizon", "online_rollout.debug_episode_horizon", 50),
@@ -993,6 +1034,31 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
 
         cfg = copy.deepcopy(self.cfg)
         self._apply_debug_overrides(cfg)
+        resolved_batch_size = self._per_rank_batch_size(
+            configured_batch_size=int(
+                OmegaConf.select(cfg, "dataloader.batch_size", default=4)
+            ),
+            global_batch_size=OmegaConf.select(
+                cfg,
+                "training.global_batch_size",
+                default=None,
+            ),
+            world_size=self._world_size,
+            gradient_accumulate_every=int(
+                OmegaConf.select(
+                    cfg,
+                    "training.gradient_accumulate_every",
+                    default=1,
+                )
+                or 1
+            ),
+        )
+        OmegaConf.update(
+            cfg,
+            "dataloader.batch_size",
+            resolved_batch_size,
+            force_add=True,
+        )
         removed_latent_type = OmegaConf.select(cfg, "latent_type", default=None)
         if removed_latent_type is not None:
             raise ValueError(
@@ -1017,6 +1083,15 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         resume = bool(OmegaConf.select(cfg, "training.resume", default=False))
         need_wm = not (resume and (os.path.exists(self._wm_warmup_ckpt()) or os.path.isdir(self._wm_warmup_hf_dir())))
         need_cls = not (resume and (os.path.exists(self._cls_warmup_ckpt()) or os.path.isdir(self._cls_warmup_hf_dir())))
+        if int(
+            OmegaConf.select(
+                cfg,
+                "training.classifier_warmup_steps",
+                default=0,
+            )
+            or 0
+        ) <= 0:
+            need_cls = False
         if need_wm or need_cls:
             _assert_offline_seed_present(
                 data_dir=OmegaConf.select(cfg, "offline_warmup.data_dir"),
@@ -1169,21 +1244,56 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                         "offline warmup replay has no sampleable sequence for "
                         f"required task IDs {missing_task_ids}"
                     )
-            classifier_cfg = getattr(_unwrap(self.classifier), "cfg", None)
+            classifier_cfg = (
+                getattr(_unwrap(self.classifier), "cfg", None)
+                if self.classifier is not None
+                else None
+            )
             default_cls_window = int(
                 getattr(
                     self,
                     "_cls_window",
-                    OmegaConf.select(cfg, "classifier.window", default=4) or 4,
+                    OmegaConf.select(
+                        cfg,
+                        "classifier.window",
+                        default=OmegaConf.select(
+                            cfg,
+                            "ray_components.classifier.kwargs.window",
+                            default=4,
+                        ),
+                    )
+                    or 4,
                 )
             )
             cls_window = int(getattr(classifier_cfg, "window", default_cls_window))
-            cls_chunk_size = int(getattr(classifier_cfg, "chunk_size", 1))
+            default_cls_chunk_size = int(
+                OmegaConf.select(
+                    cfg,
+                    "classifier.chunk_size",
+                    default=OmegaConf.select(
+                        cfg,
+                        "ray_components.classifier.kwargs.chunk_size",
+                        default=1,
+                    ),
+                )
+                or 1
+            )
+            cls_chunk_size = int(
+                getattr(classifier_cfg, "chunk_size", default_cls_chunk_size)
+            )
             classifier_windows = int(
                 warmup_replay.classifier_window_count(
                     window=cls_window,
                     chunk_size=cls_chunk_size,
                 )
+            )
+            wm_global_bs = self._global_batch_size(
+                per_rank_batch_size=bs,
+                world_size=self._world_size,
+            )
+            cls_global_bs = self._global_batch_size(
+                per_rank_batch_size=cls_bs,
+                world_size=self._world_size,
             )
             wm_steps, cls_steps = self._resolve_warmup_steps(
                 warmup_replay,
@@ -1191,8 +1301,8 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 cls_steps=cls_steps,
                 replay_epochs=warmup_replay_epochs,
                 replay_max_steps=warmup_replay_max_steps,
-                wm_batch_size=bs,
-                cls_batch_size=cls_bs,
+                wm_batch_size=wm_global_bs,
+                cls_batch_size=cls_global_bs,
                 cls_window=cls_window,
                 cls_chunk_size=cls_chunk_size,
             )
@@ -1204,7 +1314,9 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             self._print_pipeline_event(
                 "[pipeline][warmup] resolved replay warmup "
                 f"epochs={warmup_replay_epochs} wm_updates={wm_steps} "
-                f"cls_updates={cls_steps} wm_batch={bs} cls_batch={cls_bs} "
+                f"cls_updates={cls_steps} wm_batch_per_rank={bs} "
+                f"wm_global_batch={wm_global_bs} "
+                f"cls_batch_per_rank={cls_bs} cls_global_batch={cls_global_bs} "
                 f"classifier_window={cls_window} chunk_size={cls_chunk_size} "
                 f"classifier_windows={classifier_windows}"
             )

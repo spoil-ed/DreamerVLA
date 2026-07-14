@@ -6,6 +6,9 @@ from dreamervla.runners.base_runner import BaseRunner
 
 
 _RUNNER_MODULES = {
+    "DinoTokenWorldModelTrainingRunner": (
+        "dreamervla.runners.dino_token_world_model_training_runner"
+    ),
     "RolloutCollectionRunner": "dreamervla.runners.rollout_collection_runner",
     "WorldModelTrainingRunner": "dreamervla.runners.world_model_training_runner",
     "SuccessClassifierTrainingRunner": (

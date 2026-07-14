@@ -61,6 +61,8 @@ ray_components:
       action_dim: ${task.action_dim}
       token_count: ${task.openvla_oft.hidden_token.token_count}
       token_dim: ${task.openvla_oft.hidden_token.token_dim}
+      token_normalization: layer_norm
+      token_norm_eps: 1.0e-6
       time_horizon: ${task.openvla_oft.hidden_token.chunk_size}
       latent_stage: ${task.openvla_oft.hidden_token.latent_stage}
       latent_source: ${task.openvla_oft.hidden_token.latent_source}

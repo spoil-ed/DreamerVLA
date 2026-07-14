@@ -4,6 +4,19 @@ Shell files in this directory are entrypoints, not configuration sources. Traini
 evaluation defaults live in `configs/`; pass changes as Hydra `key=value` overrides.
 Repository data paths are described in `docs/data_layout.md`.
 
+## Frozen bootstrap surface
+
+The shell files in `download/`, `install/`, and `preprocess/` are the finalized
+bootstrap surface for this repository. These files
+must not be modified, renamed, reordered, or copied in part. Run them through the registered entrypoints and change supported
+inputs only through Hydra overrides or the environment variables already declared by
+the workflow configs.
+
+This restriction applies to every `*.sh` file in those three directories, including
+the unnumbered preprocessing wrappers. Keep the wrapper, Hydra config, numbered stage,
+tests, and documentation as one indivisible contract. New training or evaluation
+behavior belongs in `dreamervla/` and `configs/`, not in these frozen bootstrap files.
+
 ## Workflow entrypoints
 
 - `install_env.sh` runs the Hydra install workflow.
@@ -19,13 +32,13 @@ The workflow implementation steps are:
 - `install/40_third_party.sh`
 - `install/50_special_packages.sh`
 - `install/60_verify.sh`
-- `download/20_openvla_oft.sh`
-- `download/30_openvla_oft_one_trajectory.sh`
-- `download/40_libero_dataset.sh`
-- `download/50_calvin_dataset.sh`
-- `preprocess/10_hdf5_reward.sh`
-- `preprocess/35_oft_hidden_token.sh`
-- `preprocess/40_validate.sh`
+- `download/00_openvla_oft.sh`
+- `download/10_openvla_oft_one_trajectory.sh`
+- `download/20_libero_dataset.sh`
+- `download/30_calvin_dataset.sh`
+- `preprocess/00_hdf5_reward.sh`
+- `preprocess/10_oft_hidden_token.sh`
+- `preprocess/20_validate.sh`
 - `preprocess/prepare_libero_data.sh`
 - `preprocess/process_all_libero_data.sh`
 - `preprocess/validate_libero_data.sh`
@@ -47,6 +60,14 @@ Full-dataset world-model training, profiling, and evaluation:
 - `experiments/world_model_training/train.sh`
 - `experiments/world_model_training/profile.sh`
 - `experiments/world_model_training/eval.sh`
+
+The default training entrypoint reproduces DINO-WM dynamics directly over the
+persisted OpenVLA-OFT token grid. Its architecture, trajectory slicing
+(`frameskip=5` with concatenated actions), normalization, optimizer, and epoch
+parameters live in `configs/experiment/wm_dino_token_official.yaml`. The retained
+Chunk-WM recipe can still be selected explicitly with
+`experiment=wm_official_upper_bound`; its mainline config normalizes raw sidecar
+tokens once before transition modeling.
 
 Trainable VLA + world-model + classifier cotrain:
 

@@ -57,6 +57,42 @@ def test_experiment_scripts_defer_defaults_and_messages_to_python() -> None:
         assert "echo " not in text
 
 
+def test_world_model_training_entrypoint_selects_dino_token_hydra_recipe() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = (
+        root / "scripts" / "experiments" / "world_model_training" / "train.sh"
+    ).read_text(encoding="utf-8")
+    cfg = OmegaConf.load(root / "configs" / "scripts" / "world_model_training.yaml")
+
+    assert "--config-name world_model_training" in script
+    assert "wm_dino_token_official" not in script
+    assert cfg.experiment == "wm_dino_token_official"
+
+
+def test_world_model_training_launcher_maps_batch_size_to_dino_global_batch() -> None:
+    root = Path(__file__).resolve().parents[2]
+    result = subprocess.run(
+        [
+            "python",
+            "-m",
+            "dreamervla.launchers.train",
+            "--config-name",
+            "world_model_training",
+            "dry_run=true",
+            "ngpu=1",
+            "batch_size=7",
+        ],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "training.global_batch_size=7" in result.stdout
+    assert "dataloader.batch_size=7" not in result.stdout
+
+
 def test_cotrain_eval_protocol_lives_in_hydra_config() -> None:
     root = Path(__file__).resolve().parents[2]
     script = (root / "scripts/experiments/cotrain/eval.sh").read_text(
@@ -93,7 +129,7 @@ def test_cotrain_eval_script_rejects_missing_checkpoint() -> None:
 
 def test_hidden_token_preprocess_uses_configured_torchrun_world_size() -> None:
     root = Path(__file__).resolve().parents[2]
-    script = root / "scripts" / "preprocess" / "35_oft_hidden_token.sh"
+    script = root / "scripts" / "preprocess" / "10_oft_hidden_token.sh"
     text = script.read_text(encoding="utf-8")
     assert '--nproc-per-node="${OFT_HIDDEN_TOKEN_GPUS}"' in text
     assert "dreamervla.preprocess.preprocess_oft_hidden_token" in text

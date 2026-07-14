@@ -28,6 +28,7 @@ import json
 from pathlib import Path
 
 import h5py
+import hydra
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -35,6 +36,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from dreamervla.dataset.wm_replay_classifier_dataset import _find_demo_pairs
 from dreamervla.models.embodiment.world_model.wm_chunk import ChunkAwareWorldModel
+from dreamervla.runtime.world_model_training_common import _component_hydra_cfg
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -56,17 +58,21 @@ def _infer_resolved_config_path(ckpt_path: Path) -> Path | None:
 
 
 def _load_world_model_config(sd: dict, ckpt_path: Path, config_path: str | None) -> object:
-    cfg_blob = sd.get("cfg", {}) if isinstance(sd, dict) else {}
-    wm_cfg = _cfg_get(cfg_blob, "world_model", None)
-    if wm_cfg:
-        return wm_cfg
+    if isinstance(sd, dict):
+        for config_key in ("config", "cfg"):
+            cfg_blob = sd.get(config_key, {})
+            wm_cfg = _cfg_get(cfg_blob, "world_model", None)
+            if wm_cfg and _cfg_get(wm_cfg, "_target_", None):
+                return wm_cfg
 
     resolved_config = Path(config_path) if config_path else _infer_resolved_config_path(ckpt_path)
     if resolved_config is not None and resolved_config.is_file():
         cfg = OmegaConf.load(resolved_config)
-        wm_cfg = OmegaConf.select(cfg, "world_model")
-        if wm_cfg:
-            return wm_cfg
+        return _component_hydra_cfg(
+            cfg,
+            component_path="world_model",
+            worker_component_path="ray_components.world_model",
+        )
 
     raise ValueError(
         f"ckpt {ckpt_path} does not carry cfg.world_model and no resolved_config.yaml "
@@ -94,6 +100,32 @@ def load_chunk_wm(
     ckpt_file = Path(ckpt_path)
     sd = torch.load(ckpt_file, map_location="cpu", weights_only=False)
     wm_cfg_blob = _load_world_model_config(sd, ckpt_file, config_path)
+    if OmegaConf.is_config(wm_cfg_blob):
+        wm_cfg = wm_cfg_blob
+    else:
+        wm_cfg = OmegaConf.create(wm_cfg_blob)
+    target = OmegaConf.select(wm_cfg, "_target_", default=None)
+    if target is not None:
+        wm = hydra.utils.instantiate(wm_cfg)
+        if not isinstance(wm, ChunkAwareWorldModel):
+            raise TypeError(
+                "world-model evaluation requires ChunkAwareWorldModel, got "
+                f"{type(wm).__name__} from {target}"
+            )
+    else:
+        wm = _instantiate_legacy_chunk_wm(wm_cfg_blob)
+    model_state = _load_world_model_state(sd, ckpt_file)
+    missing, unexpected = wm.load_state_dict(model_state, strict=False)
+    print(
+        f"[load] global_step={sd.get('global_step')} epoch={sd.get('epoch')}"
+        f" missing={missing} unexpected={unexpected}"
+    )
+    return wm.eval().to(device)
+
+
+def _instantiate_legacy_chunk_wm(wm_cfg_blob: object) -> ChunkAwareWorldModel:
+    """Construct checkpoints whose historical config predates Hydra targets."""
+
     chunk_size = int(wm_cfg_blob.get("chunk_size", 5))
     kwargs = {}
     for k in (
@@ -128,31 +160,56 @@ def load_chunk_wm(
     ):
         if k in wm_cfg_blob:
             kwargs[k] = wm_cfg_blob[k]
-    wm = ChunkAwareWorldModel(chunk_size=chunk_size, **kwargs)
-    model_state = _load_world_model_state(sd, ckpt_file)
-    missing, unexpected = wm.load_state_dict(model_state, strict=False)
-    print(
-        f"[load] global_step={sd.get('global_step')} epoch={sd.get('epoch')}"
-        f" missing={missing} unexpected={unexpected}"
-    )
-    return wm.eval().to(device)
+    return ChunkAwareWorldModel(chunk_size=chunk_size, **kwargs)
 
 
 def load_demo(
     raw_p: Path, hid_p: Path, demo_key: str
-) -> tuple[np.ndarray, np.ndarray] | None:
-    """Returns (obs[T,...], actions[T, action_dim]) for one demo, or None."""
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray | None,
+    np.ndarray | None,
+] | None:
+    """Return tokenized observations, actions, proprio, and language sidecar."""
     with h5py.File(str(hid_p), "r") as hh:
         if f"{demo_key}/obs_embedding" not in hh:
             return None
         obs = np.asarray(hh[f"{demo_key}/obs_embedding"][...], dtype=np.float32)
+        lang_emb = (
+            np.asarray(hh[f"{demo_key}/lang_emb"][...], dtype=np.float32).reshape(-1)
+            if f"{demo_key}/lang_emb" in hh
+            else None
+        )
     with h5py.File(str(raw_p), "r") as fr:
         grp = fr[demo_key]
         if "actions" not in grp:
             return None
         actions = np.asarray(grp["actions"][...], dtype=np.float32)
-    T = min(obs.shape[0], actions.shape[0])
-    return obs[:T].reshape(T, -1), actions[:T]
+        raw_obs = grp.get("obs")
+        proprio = None
+        if raw_obs is not None and all(
+            key in raw_obs for key in ("ee_pos", "ee_ori", "gripper_states")
+        ):
+            proprio = np.concatenate(
+                [
+                    np.asarray(raw_obs[key][...], dtype=np.float32).reshape(
+                        int(raw_obs[key].shape[0]), -1
+                    )
+                    for key in ("ee_pos", "ee_ori", "gripper_states")
+                ],
+                axis=-1,
+            )
+    lengths = [int(obs.shape[0]), int(actions.shape[0])]
+    if proprio is not None:
+        lengths.append(int(proprio.shape[0]))
+    T = min(lengths)
+    return (
+        obs[:T],
+        actions[:T],
+        proprio[:T] if proprio is not None else None,
+        lang_emb,
+    )
 
 
 def truncate_demo_to_wm_context(
@@ -172,6 +229,9 @@ def rollout(
     actions: torch.Tensor,  # [T, action_dim]
     num_chunks: int,
     mode: str,  # "open" or "close"
+    *,
+    proprio: torch.Tensor | None = None,
+    lang_emb: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Returns (pred_seq[N*K,...], target_seq[N*K,...])."""
     H = wm.num_hist
@@ -181,7 +241,21 @@ def rollout(
     if N < 1:
         raise ValueError(f"demo too short: T={T} needs >= H+K = {H + K}")
 
-    obs_tokens = wm.obs_to_tokens(obs.unsqueeze(0))[0]
+    vision_tokens = wm.obs_to_tokens(obs.unsqueeze(0))
+    if wm.proprio_condition_dim > 0:
+        if proprio is None:
+            raise ValueError("conditioned WM evaluation requires proprio")
+        proprio_batch = proprio.unsqueeze(0)
+        obs_tokens = wm._observation_tokens(vision_tokens, proprio_batch)[0]
+    else:
+        proprio_batch = None
+        obs_tokens = vision_tokens[0]
+    if wm.lang_condition_dim > 0:
+        if lang_emb is None:
+            raise ValueError("conditioned WM evaluation requires lang_emb")
+        lang_batch = lang_emb.unsqueeze(0)
+    else:
+        lang_batch = None
     history = obs_tokens[:H].unsqueeze(0)
     action_history = torch.zeros(
         1, H, wm.action_dim, device=obs.device, dtype=obs.dtype
@@ -195,7 +269,10 @@ def rollout(
         "hidden": history[:, -1],
         "history": history,
         "actions": action_history,
+        "lang": lang_batch,
     }
+    if proprio_batch is not None:
+        cur_latent["proprio"] = proprio_batch[:, H - 1]
 
     for c in range(N):
         chunk_actions = actions[H - 1 + c * K : H - 1 + c * K + K].unsqueeze(
@@ -230,13 +307,19 @@ def rollout(
                 "hidden": new_history[:, -1],
                 "history": new_history,
                 "actions": new_action_history,
+                "lang": lang_batch,
             }
+            if proprio_batch is not None:
+                cur_latent["proprio"] = proprio_batch[:, end - 1]
         else:  # close
             cur_latent = {
                 "history": out["history"],
                 "actions": out["actions"],
                 "hidden": out["hidden"],
+                "lang": out.get("lang"),
             }
+            if isinstance(out.get("proprio"), torch.Tensor):
+                cur_latent["proprio"] = out["proprio"]
 
     return torch.cat(preds, dim=0), torch.cat(targets, dim=0)
 
@@ -307,16 +390,42 @@ def main() -> None:
         rec = load_demo(Path(raw_p), Path(hid_p), demo_key)
         if rec is None:
             continue
-        obs_np, act_np = rec
+        obs_np, act_np, proprio_np, lang_emb_np = rec
         obs_np, act_np = truncate_demo_to_wm_context(wm, obs_np, act_np)
         T = int(obs_np.shape[0])
         if T < H + K:
             continue
         obs_t = torch.from_numpy(obs_np).to(device=device, dtype=torch.float32)
         act_t = torch.from_numpy(act_np).to(device=device, dtype=torch.float32)
+        proprio_t = (
+            torch.from_numpy(proprio_np[:T]).to(device=device, dtype=torch.float32)
+            if proprio_np is not None
+            else None
+        )
+        lang_emb_t = (
+            torch.from_numpy(lang_emb_np).to(device=device, dtype=torch.float32)
+            if lang_emb_np is not None
+            else None
+        )
 
-        pred_o, tgt_o = rollout(wm, obs_t, act_t, args.num_chunks, mode="open")
-        pred_c, tgt_c = rollout(wm, obs_t, act_t, args.num_chunks, mode="close")
+        pred_o, tgt_o = rollout(
+            wm,
+            obs_t,
+            act_t,
+            args.num_chunks,
+            mode="open",
+            proprio=proprio_t,
+            lang_emb=lang_emb_t,
+        )
+        pred_c, tgt_c = rollout(
+            wm,
+            obs_t,
+            act_t,
+            args.num_chunks,
+            mode="close",
+            proprio=proprio_t,
+            lang_emb=lang_emb_t,
+        )
         per_demo_open.append(per_step_metrics(pred_o, tgt_o))
         per_demo_close.append(per_step_metrics(pred_c, tgt_c))
         print(

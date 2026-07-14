@@ -88,6 +88,99 @@ def test_validate_cfg_rejects_global_batch_not_divisible_by_world_size() -> None
         validate_cfg(cfg, world_size=4)
 
 
+def test_dino_token_wm_requires_shifted_one_step_sequence_length() -> None:
+    cfg = OmegaConf.create(
+        {
+            "world_model": {
+                "_target_": (
+                    "dreamervla.models.embodiment.world_model."
+                    "DinoTokenWorldModel"
+                ),
+                "num_hist": 3,
+                "num_pred": 1,
+            },
+            "online_rollout": {"sequence_length": 5},
+        }
+    )
+
+    with pytest.raises(ValueError, match=r"num_hist \+.*num_pred"):
+        validate_cfg(cfg)
+
+
+def test_dino_token_wm_accepts_four_frame_training_window() -> None:
+    cfg = OmegaConf.create(
+        {
+            "world_model": {
+                "_target_": (
+                    "dreamervla.models.embodiment.world_model."
+                    "DinoTokenWorldModel"
+                ),
+                "num_hist": 3,
+                "num_pred": 1,
+            },
+            "online_rollout": {"sequence_length": 4},
+        }
+    )
+
+    validate_cfg(cfg)
+
+
+def test_dino_token_runner_rejects_dataset_model_frameskip_mismatch() -> None:
+    cfg = OmegaConf.create(
+        {
+            "_target_": "dreamervla.runners.DinoTokenWorldModelTrainingRunner",
+            "training": {"global_batch_size": 32},
+            "optim": {"precision": "fp32"},
+            "world_model": {
+                "_target_": (
+                    "dreamervla.models.embodiment.world_model."
+                    "DinoTokenWorldModel"
+                ),
+                "action_dim": 35,
+                "num_hist": 3,
+                "num_pred": 1,
+            },
+            "task": {"action_dim": 7},
+            "dino_wm": {"frameskip": 5},
+            "dataset": {
+                "train": {"num_hist": 3, "num_pred": 1, "frameskip": 1},
+                "valid": {"num_hist": 3, "num_pred": 1, "frameskip": 5},
+            },
+        }
+    )
+
+    with pytest.raises(ValueError, match="dataset.train.frameskip"):
+        validate_cfg(cfg)
+
+
+def test_dino_token_runner_rejects_non_fp32_training() -> None:
+    cfg = OmegaConf.create(
+        {
+            "_target_": "dreamervla.runners.DinoTokenWorldModelTrainingRunner",
+            "training": {"global_batch_size": 32},
+            "optim": {"precision": "bf16"},
+            "world_model": {
+                "_target_": (
+                    "dreamervla.models.embodiment.world_model."
+                    "DinoTokenWorldModel"
+                ),
+                "action_dim": 35,
+                "num_hist": 3,
+                "num_pred": 1,
+            },
+            "task": {"action_dim": 7},
+            "dino_wm": {"frameskip": 5},
+            "dataset": {
+                "train": {"num_hist": 3, "num_pred": 1, "frameskip": 5},
+                "valid": {"num_hist": 3, "num_pred": 1, "frameskip": 5},
+            },
+        }
+    )
+
+    with pytest.raises(ValueError, match="optim.precision=fp32"):
+        validate_cfg(cfg)
+
+
 def test_validate_cfg_rejects_ray_auto_vram_knobs() -> None:
     cfg = OmegaConf.create(
         {

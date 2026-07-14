@@ -169,6 +169,8 @@ class ChunkAwareWorldModel(WorldModel):
         num_lang_repeat: int = 1,
         dim_head: int = 64,
         attn_impl: str = "manual",
+        token_normalization: str = "layer_norm",
+        token_norm_eps: float = 1.0e-6,
         task_conditioning: dict | None = None,
         **kwargs: Any,
     ) -> None:
@@ -295,6 +297,12 @@ class ChunkAwareWorldModel(WorldModel):
         self.grad_checkpoint = bool(grad_checkpoint)
         self.dim_head = int(dim_head)
         self.attn_impl = str(attn_impl)
+        self.token_normalization = str(token_normalization).strip().lower()
+        self.token_norm_eps = float(token_norm_eps)
+        if self.token_normalization not in {"layer_norm", "none"}:
+            raise ValueError("token_normalization must be 'layer_norm' or 'none'")
+        if self.token_norm_eps <= 0.0:
+            raise ValueError("token_norm_eps must be positive")
         task_cfg = dict(task_conditioning or {})
         self.task_conditioning_enabled = bool(task_cfg.get("enabled", False))
         self.supports_task_conditioning = bool(self.task_conditioning_enabled)
@@ -315,7 +323,15 @@ class ChunkAwareWorldModel(WorldModel):
             self.task_embedding = None
         self.slots_per_step = self.token_count
         self.pos_context_len = self.num_hist
-        self.obs_norm = nn.Identity()
+        self.obs_norm = (
+            nn.LayerNorm(
+                self.token_dim,
+                eps=self.token_norm_eps,
+                elementwise_affine=False,
+            )
+            if self.token_normalization == "layer_norm"
+            else nn.Identity()
+        )
         self.obs_proj = nn.Identity()
         self.action_proj = nn.Sequential(
             nn.LayerNorm(self.action_dim),
@@ -385,6 +401,80 @@ class ChunkAwareWorldModel(WorldModel):
         while task_emb.ndim < obs_tokens.ndim:
             task_emb = task_emb.unsqueeze(1)
         return obs_tokens + task_emb.to(obs_tokens.dtype)
+
+    def _normalize_raw_vision_tokens(self, obs_embedding: torch.Tensor) -> torch.Tensor:
+        """Apply the configured per-token norm at the external sidecar boundary."""
+
+        return self.obs_norm(self.obs_to_tokens(obs_embedding))
+
+    def encode_latent(self, hidden: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Normalize a real sidecar observation before creating online state."""
+
+        tokens = self._normalize_raw_vision_tokens(hidden)
+        batch_size = int(tokens.shape[0])
+        if tokens.shape[1] >= self.num_hist:
+            history = tokens[:, -self.num_hist :]
+        else:
+            pad = tokens[:, :1].expand(
+                -1,
+                self.num_hist - tokens.shape[1],
+                -1,
+                -1,
+            )
+            history = torch.cat([pad, tokens], dim=1)
+        return {
+            "hidden": history[:, -1],
+            "history": history,
+            "actions": torch.zeros(
+                batch_size,
+                self.num_hist,
+                self.action_dim,
+                device=history.device,
+                dtype=history.dtype,
+            ),
+        }
+
+    def observe_next(
+        self,
+        latent: dict[str, torch.Tensor] | torch.Tensor,
+        hidden: torch.Tensor,
+        actions: torch.Tensor,
+        is_first: bool | torch.Tensor = False,
+    ) -> dict[str, torch.Tensor]:
+        """Normalize each newly observed real token grid exactly once."""
+
+        reset = (
+            bool(is_first.detach().flatten()[0].item())
+            if isinstance(is_first, torch.Tensor)
+            else bool(is_first)
+        )
+        if reset:
+            return self.encode_latent(hidden)
+        history = self._latent_history(latent)
+        batch_size = int(history.shape[0])
+        next_hidden = self._normalize_raw_vision_tokens(hidden)[:, -1]
+        action_history = self._latent_actions(latent, batch_size).clone()
+        action = actions[:, 0] if actions.ndim == 3 else actions
+        if action.ndim != 2 or action.shape[-1] != self.action_dim:
+            raise ValueError(
+                f"observe_next action must be [B,{self.action_dim}], "
+                f"got {tuple(actions.shape)}"
+            )
+        action_history[:, -1] = action.to(
+            device=history.device,
+            dtype=history.dtype,
+        )
+        return {
+            "hidden": next_hidden,
+            "history": torch.cat([history[:, 1:], next_hidden[:, None]], dim=1),
+            "actions": torch.cat(
+                [
+                    action_history[:, 1:],
+                    action_history.new_zeros(batch_size, 1, self.action_dim),
+                ],
+                dim=1,
+            ),
+        }
 
     def _obs_tokens_from_obs(
         self, obs: dict[str, torch.Tensor] | torch.Tensor
@@ -504,7 +594,9 @@ class ChunkAwareWorldModel(WorldModel):
         self, batch: dict[str, torch.Tensor]
     ) -> dict[str, dict[str, torch.Tensor]]:
         """Encode replay windows into per-step latent starts for imagination."""
-        vision_tokens = self.obs_to_tokens(self._obs_embedding_from_obs(batch))
+        vision_tokens = self._normalize_raw_vision_tokens(
+            self._obs_embedding_from_obs(batch)
+        )
         vision_tokens = self._apply_task_conditioning(
             vision_tokens, batch.get("task_ids")
         )
@@ -537,8 +629,15 @@ class ChunkAwareWorldModel(WorldModel):
         obs: dict[str, torch.Tensor] | torch.Tensor,
         act: torch.Tensor,
         lang: torch.Tensor | None = None,
+        *,
+        normalize_observations: bool = True,
     ) -> torch.Tensor:
-        obs_tokens = self._obs_tokens_from_obs(obs)
+        if normalize_observations:
+            obs_tokens = self._normalize_raw_vision_tokens(
+                self._obs_embedding_from_obs(obs)
+            )
+        else:
+            obs_tokens = self._obs_tokens_from_obs(obs)
         proprio = obs.get("proprio") if isinstance(obs, dict) else None
         if obs_tokens.shape[-1] == self.token_dim and self.proprio_condition_dim > 0:
             obs_tokens = self._observation_tokens(
@@ -671,7 +770,12 @@ class ChunkAwareWorldModel(WorldModel):
                 model_history,
                 self._proprio_for_steps(proprio, int(model_history.shape[1])),
             )
-        z = self.encode(model_history, action_history, lang)
+        z = self.encode(
+            model_history,
+            action_history,
+            lang,
+            normalize_observations=False,
+        )
         pred_z = self.predict(z)
         next_hidden = pred_z[:, -1][..., : self.obs_token_dim]
         next_proprio = (
@@ -829,7 +933,7 @@ class ChunkAwareWorldModel(WorldModel):
     ) -> dict[str, torch.Tensor]:
         """Build the canonical rolling state used by chunked WM inference."""
 
-        visual = self._obs_tokens_from_obs(hidden)
+        visual = self._normalize_raw_vision_tokens(hidden)
         if visual.shape[1] >= self.num_hist:
             history = visual[:, -self.num_hist :]
         else:
@@ -883,7 +987,7 @@ class ChunkAwareWorldModel(WorldModel):
             actions = batch["actions"]
         H = self.num_hist
         K = self.chunk_size
-        vision_tokens = self.obs_to_tokens(obs)
+        vision_tokens = self._normalize_raw_vision_tokens(obs)
         vision_tokens = self._apply_task_conditioning(
             vision_tokens, batch.get("task_ids")
         )

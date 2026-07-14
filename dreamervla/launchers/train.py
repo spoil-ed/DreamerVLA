@@ -188,7 +188,11 @@ def _experiment_overrides(cfg: Mapping[str, Any], trailing: Sequence[str]) -> li
         overrides.append(f"task={task}")
     target_cfg = _compose_train_config(experiment_name, overrides)
     mapping = {
-        "batch_size": ("dataloader.batch_size", "training.batch_size"),
+        "batch_size": (
+            "training.global_batch_size",
+            "dataloader.batch_size",
+            "training.batch_size",
+        ),
         "num_workers": ("dataloader.num_workers", "training.num_workers"),
         "max_steps": ("training.max_steps", "training.max_train_steps"),
         "num_epochs": ("training.num_epochs",),

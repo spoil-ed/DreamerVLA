@@ -8,29 +8,34 @@ import torch
 from torch import nn
 
 
-def autocast_context(device: torch.device, precision: str):
-    """Return the Hydra-selected autocast context for a training update."""
+def precision_dtype(precision: str) -> torch.dtype:
+    """Resolve a Hydra precision name to the corresponding parameter dtype."""
 
     normalized = str(precision).strip().lower()
     aliases = {
-        "": "fp32",
-        "none": "fp32",
-        "float32": "fp32",
-        "fp32": "fp32",
-        "bfloat16": "bf16",
-        "bf16": "bf16",
-        "float16": "fp16",
-        "fp16": "fp16",
+        "": torch.float32,
+        "none": torch.float32,
+        "float32": torch.float32,
+        "fp32": torch.float32,
+        "bfloat16": torch.bfloat16,
+        "bf16": torch.bfloat16,
+        "float16": torch.float16,
+        "fp16": torch.float16,
     }
     if normalized not in aliases:
         raise ValueError(
             "precision must be one of fp32, bf16, or fp16; "
             f"got {precision!r}"
         )
-    resolved = aliases[normalized]
-    if resolved == "fp32":
+    return aliases[normalized]
+
+
+def autocast_context(device: torch.device, precision: str):
+    """Return the Hydra-selected autocast context for a training update."""
+
+    dtype = precision_dtype(precision)
+    if dtype is torch.float32:
         return nullcontext()
-    dtype = torch.bfloat16 if resolved == "bf16" else torch.float16
     return torch.amp.autocast(device_type=device.type, dtype=dtype)
 
 

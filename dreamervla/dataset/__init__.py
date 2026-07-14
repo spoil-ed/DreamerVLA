@@ -1,4 +1,5 @@
 from .base_dataset import BaseDataset
+from .dino_token_dataset import DinoTokenTrajectoryDataset
 from .one_trajectory_pretokenize_dataset import (
     OneTrajectoryPretokenizeActionChunkDataset,
 )
@@ -30,6 +31,7 @@ from .vla_sft_rlds_dataset import (
 
 __all__ = [
     "BaseDataset",
+    "DinoTokenTrajectoryDataset",
     "PixelHiddenSequenceDataset",
     "PixelSequenceDataset",
     "PixelSequenceSpec",

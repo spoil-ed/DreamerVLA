@@ -57,6 +57,70 @@ def test_grad_checkpoint_defaults_off() -> None:
     assert _tiny_chunk_wm().grad_checkpoint is False
 
 
+def test_chunk_wm_layer_normalizes_only_raw_vision_tokens() -> None:
+    wm = _tiny_chunk_wm(
+        proprio_dim=3,
+        proprio_emb_dim=2,
+        model_dim=8,
+        token_normalization="layer_norm",
+        token_norm_eps=1.0e-6,
+    )
+    raw = torch.arange(1, 1 + 1 * 3 * 2 * 4, dtype=torch.float32).reshape(
+        1, 3, 2, 4
+    )
+
+    normalized = wm._normalize_raw_vision_tokens(raw)
+
+    assert torch.allclose(normalized.mean(dim=-1), torch.zeros(1, 3, 2), atol=1e-6)
+    assert torch.allclose(
+        normalized.var(dim=-1, unbiased=False),
+        torch.ones(1, 3, 2),
+        atol=1e-5,
+    )
+
+    predicted_with_proprio = torch.randn(1, 3, 2, wm.obs_token_dim)
+    assert torch.equal(
+        wm._obs_tokens_from_obs(predicted_with_proprio),
+        predicted_with_proprio,
+    )
+
+
+def test_chunk_wm_normalizes_online_observations_but_not_imagined_history() -> None:
+    wm = _tiny_chunk_wm(token_normalization="layer_norm")
+    calls = 0
+
+    def count_norm(_module, _inputs, _output):
+        nonlocal calls
+        calls += 1
+
+    handle = wm.obs_norm.register_forward_hook(count_norm)
+    raw_history = torch.arange(
+        1,
+        1 + wm.num_hist * wm.token_count * wm.token_dim,
+        dtype=torch.float32,
+    ).reshape(1, wm.num_hist, wm.token_count, wm.token_dim)
+    latent = wm.encode_latent(raw_history)
+    assert calls == 1
+    assert torch.allclose(
+        latent["history"].mean(dim=-1),
+        torch.zeros(1, wm.num_hist, wm.token_count),
+        atol=1.0e-6,
+    )
+
+    next_raw = raw_history[:, :1] * 3.0 + 7.0
+    observed = wm.observe_next(latent, next_raw, torch.zeros(1, wm.action_dim))
+    assert calls == 2
+    assert torch.allclose(
+        observed["hidden"].mean(dim=-1),
+        torch.zeros(1, wm.token_count),
+        atol=1.0e-6,
+    )
+
+    wm.predict_next(observed, torch.zeros(1, wm.action_dim))
+    assert calls == 2
+    handle.remove()
+
+
 def test_chunk_rollout_grad_checkpoint_is_numerically_equivalent() -> None:
     # Gradient checkpointing the autoregressive rollout must not change the math
     # (it only trades compute for activation memory). dropout=0 in the fixture.
