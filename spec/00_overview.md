@@ -32,7 +32,7 @@ collect rollouts -> seed replay/data -> warm up world model + classifier -> onli
 ```text
 experiment=collect_rollouts
   -> independent WM/CLS warmup
-  -> experiment=dreamervla_wmcls_cotrain
+  -> experiment=openvla_libero
   -> experiment=eval_cotrain
 ```
 

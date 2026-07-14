@@ -305,7 +305,7 @@ def test_route_reference_documents_current_release_routes() -> None:
     )
 
     assert "collect_rollouts" in route_reference
-    assert "dreamervla_wmcls_cotrain" in route_reference
+    assert "openvla_libero" in route_reference
     assert "eval_cotrain" in route_reference
     assert "wm_full_dataset_train" in route_reference
     _assert_no_removed_wm_wording(route_reference)
@@ -364,7 +364,7 @@ def test_repository_structure_documents_current_release_routes() -> None:
 
     assert "collect_rollouts" in repository_structure
     assert "openvla_onetraj_libero_cotrain" in repository_structure
-    assert "dreamervla_wmcls_cotrain" in repository_structure
+    assert "openvla_libero" in repository_structure
     assert "eval_cotrain" in repository_structure
     _assert_no_removed_wm_wording(repository_structure)
 

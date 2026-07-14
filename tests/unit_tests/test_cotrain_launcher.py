@@ -158,3 +158,96 @@ def test_cotrain_launcher_reads_gpu_count_from_hydra(
 
     assert launch.cfg.manual_cotrain.ngpu == 2
     assert launch.env["CUDA_VISIBLE_DEVICES"] == "2,5"
+
+
+def test_cotrain_launcher_translates_public_cli_options(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wm = tmp_path / "wm.ckpt"
+    classifier = tmp_path / "classifier.ckpt"
+    wm.touch()
+    classifier.touch()
+    monkeypatch.delenv("WORLD_MODEL_CKPT", raising=False)
+    monkeypatch.delenv("CLASSIFIER_CKPT", raising=False)
+
+    launch = build_launch(
+        [
+            "--config",
+            "openvla_libero",
+            "--wm_ckpt",
+            str(wm),
+            f"--cls_ckpt={classifier}",
+            "manual_cotrain.global_steps=3",
+        ]
+    )
+
+    assert "experiment=openvla_libero" in launch.command
+    assert (
+        f"init.world_model_state_ckpt={json.dumps(str(wm.resolve()))}"
+        in launch.command
+    )
+    assert (
+        f"init.classifier_state_ckpt={json.dumps(str(classifier.resolve()))}"
+        in launch.command
+    )
+    assert launch.cfg.manual_cotrain.global_steps == 3
+
+
+def test_cotrain_launcher_rejects_partial_public_checkpoint_pair(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wm = tmp_path / "wm.ckpt"
+    wm.touch()
+    monkeypatch.delenv("WORLD_MODEL_CKPT", raising=False)
+    monkeypatch.delenv("CLASSIFIER_CKPT", raising=False)
+
+    with pytest.raises(ValueError, match="--wm_ckpt.*--cls_ckpt"):
+        build_launch(["--config", "openvla_libero", "--wm_ckpt", str(wm)])
+
+
+def test_cotrain_launcher_rejects_missing_public_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    missing_wm = tmp_path / "missing-wm.ckpt"
+    classifier = tmp_path / "classifier.ckpt"
+    classifier.touch()
+    monkeypatch.delenv("WORLD_MODEL_CKPT", raising=False)
+    monkeypatch.delenv("CLASSIFIER_CKPT", raising=False)
+
+    with pytest.raises(FileNotFoundError, match="--wm_ckpt"):
+        build_launch(
+            [
+                "--config=openvla_libero",
+                f"--wm_ckpt={missing_wm}",
+                "--cls_ckpt",
+                str(classifier),
+            ]
+        )
+
+
+def test_cotrain_launcher_rejects_duplicate_public_and_hydra_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wm = tmp_path / "wm.ckpt"
+    classifier = tmp_path / "classifier.ckpt"
+    wm.touch()
+    classifier.touch()
+    monkeypatch.delenv("WORLD_MODEL_CKPT", raising=False)
+    monkeypatch.delenv("CLASSIFIER_CKPT", raising=False)
+
+    with pytest.raises(ValueError, match="--wm_ckpt.*init.world_model_state_ckpt"):
+        build_launch(
+            [
+                "--config",
+                "openvla_libero",
+                "--wm_ckpt",
+                str(wm),
+                "--cls_ckpt",
+                str(classifier),
+                f"init.world_model_state_ckpt={wm}",
+            ]
+        )

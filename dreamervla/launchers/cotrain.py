@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shlex
@@ -19,7 +20,7 @@ from omegaconf import DictConfig, OmegaConf
 from dreamervla.config_resolvers import register_dreamervla_resolvers
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_EXPERIMENT = "dreamervla_wmcls_cotrain"
+DEFAULT_EXPERIMENT = "openvla_libero"
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,42 @@ def _overrides(argv: list[str]) -> list[str]:
         if "=" not in item:
             raise ValueError(f"expected a Hydra key=value override, got {item!r}")
     return list(argv)
+
+
+def _public_cli_overrides(argv: list[str]) -> list[str]:
+    """Translate the readable cotrain CLI into Hydra overrides."""
+
+    parser = argparse.ArgumentParser(
+        prog="dreamervla-cotrain",
+        description="Launch OpenVLA LIBERO cotrain from Hydra configuration.",
+    )
+    parser.add_argument("--config", help="Hydra experiment name")
+    parser.add_argument("--wm_ckpt", help="world-model checkpoint file or directory")
+    parser.add_argument("--cls_ckpt", help="classifier checkpoint file or directory")
+    args, remaining = parser.parse_known_args(argv)
+    values = _overrides(remaining)
+
+    if args.config is not None and _has_override(values, "experiment"):
+        raise ValueError("--config cannot be combined with the Hydra experiment override")
+    if not _has_override(values, "experiment"):
+        experiment = args.config or DEFAULT_EXPERIMENT
+        values.insert(0, f"experiment={experiment}")
+
+    if (args.wm_ckpt is None) != (args.cls_ckpt is None):
+        raise ValueError("--wm_ckpt and --cls_ckpt must be supplied together")
+    for option, raw, hydra_key in (
+        ("--wm_ckpt", args.wm_ckpt, "init.world_model_state_ckpt"),
+        ("--cls_ckpt", args.cls_ckpt, "init.classifier_state_ckpt"),
+    ):
+        if raw is None:
+            continue
+        if _has_override(values, hydra_key):
+            raise ValueError(f"{option} cannot be combined with the Hydra {hydra_key} override")
+        path = Path(raw).expanduser().resolve()
+        if not (path.is_file() or path.is_dir()):
+            raise FileNotFoundError(f"{option} checkpoint does not exist: {path}")
+        values.append(f"{hydra_key}={_hydra_string(path)}")
+    return values
 
 
 def _has_override(values: list[str], key: str) -> bool:
@@ -237,9 +274,7 @@ def _process_env(cfg: DictConfig) -> dict[str, str]:
 def build_launch(argv: list[str]) -> CotrainLaunch:
     """Build one direct train-only cotrain command from Hydra configuration."""
 
-    values = _overrides(argv)
-    if not _has_override(values, "experiment"):
-        values.insert(0, f"experiment={DEFAULT_EXPERIMENT}")
+    values = _public_cli_overrides(argv)
     _component_overrides(values)
     _runtime_overrides(values)
     cfg = _compose(values)

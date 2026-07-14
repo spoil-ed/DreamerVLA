@@ -105,6 +105,6 @@ Real LIBERO collection
 
 - Collection experiment：`collect_rollouts`
 - Cotrain base experiment：`openvla_onetraj_libero_cotrain`
-- Full WM/CLS cotrain experiment：`dreamervla_wmcls_cotrain`
+- Full WM/CLS cotrain experiment：`openvla_libero`
 - Eval experiment：`eval_cotrain`
 - Classifier role：`classifier=dreamer-cls`；具体 model/dataset 由 `task.classifier` 注入

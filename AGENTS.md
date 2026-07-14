@@ -10,7 +10,7 @@ mainline is the OpenVLA-OFT one-trajectory cold-start workflow:
 `collect rollouts -> seed replay -> warm up world model + success classifier -> online cotrain`
 
 The mainline experiments are `collect_rollouts`, independent WM/classifier warmup,
-`dreamervla_wmcls_cotrain`, and `eval_cotrain`. Ray is the implementation backend
+`openvla_libero`, and `eval_cotrain`. Ray is the implementation backend
 for collection and cotrain, so public route names do not carry a `ray` suffix.
 The command-level reference is [spec/04_complete_loop.md](spec/04_complete_loop.md).
 Architecture source documents live under [spec/](spec/), with
@@ -73,14 +73,17 @@ The retained shell surface exposes train and eval separately:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-  bash scripts/experiments/cotrain/train.sh
+  bash scripts/experiments/cotrain/train.sh \
+  --config openvla_libero \
+  --wm_ckpt /path/to/wm_warmup.ckpt \
+  --cls_ckpt /path/to/classifier_warmup.ckpt
 
 bash scripts/experiments/cotrain/eval.sh \
   eval.ckpt_path=/path/to/manual_cotrain.ckpt
 ```
 
 These scripts contain no training defaults. Train selects
-`experiment=dreamervla_wmcls_cotrain`; eval selects `eval_cotrain`. Collection is
+`experiment=openvla_libero`; eval selects `eval_cotrain`. Collection is
 `experiment=collect_rollouts` and writes reward/hidden shards plus
 `collection_manifest.json`. WM and classifier warmup use their independent runners;
 their checkpoints are passed to cotrain explicitly.

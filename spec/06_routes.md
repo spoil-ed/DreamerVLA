@@ -17,7 +17,7 @@ collect -> seed replay + warmup world model/classifier -> online cotrain -> eval
 | 采集 | `collect_rollouts` | `RolloutCollectionRunner` |
 | WM warmup | `dreamer-wm` / `dino-wm` | `WorldModelTrainingRunner` / `DinoTokenWorldModelTrainingRunner` |
 | classifier warmup | `classifier_official_upper_bound` | `SuccessClassifierTrainingRunner` |
-| cotrain | `dreamervla_wmcls_cotrain` | `CotrainRunner` |
+| cotrain | `openvla_libero` | `CotrainRunner` |
 | 评估 | `eval_cotrain` | `LIBEROVLAEvaluationRunner` |
 
 启动流程见 [`04_complete_loop.md`](04_complete_loop.md) 与 [`05_ray_runtime.md`](05_ray_runtime.md)；

@@ -23,7 +23,10 @@ bash scripts/download_assets.sh download.openvla_one_traj=true only=[10_openvla_
 bash scripts/download_assets.sh only=[20_libero_dataset] env.LIBERO_SUITES=libero_goal
 
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-  bash scripts/experiments/cotrain/train.sh
+  bash scripts/experiments/cotrain/train.sh \
+  --config openvla_libero \
+  --wm_ckpt /path/to/wm_warmup.ckpt \
+  --cls_ckpt /path/to/classifier_warmup.ckpt
 
 bash scripts/experiments/cotrain/eval.sh \
   eval.ckpt_path=/path/to/manual_cotrain.ckpt
@@ -90,7 +93,7 @@ docs/               documentation index, references, tutorials, reports, papers
 | Install | `bash scripts/install_env.sh` |
 | Download OpenVLA-OFT one-trajectory | `bash scripts/download_assets.sh download.openvla_one_traj=true only=[10_openvla_oft_one_trajectory]` |
 | Download LIBERO | `bash scripts/download_assets.sh only=[20_libero_dataset] env.LIBERO_SUITES=libero_goal` |
-| WM/CLS cotrain | `bash scripts/experiments/cotrain/train.sh` |
+| WM/CLS cotrain | `bash scripts/experiments/cotrain/train.sh --config openvla_libero --wm_ckpt <wm-ckpt> --cls_ckpt <cls-ckpt>` |
 | Full-dataset WM warmup | `bash scripts/experiments/world_model_training/train.sh` |
 | Pre-mainline frozen WM/CLS policy test | `python -m dreamervla.launchers.frozen_model_pre_mainline task=goal ngpu=8` |
 | Cotrain eval | `bash scripts/experiments/cotrain/eval.sh eval.ckpt_path=<ckpt>` |
@@ -100,6 +103,9 @@ Common overrides:
 ```bash
 DVLA_DATA_ROOT=data
 bash scripts/experiments/cotrain/train.sh \
+  --config openvla_libero \
+  --wm_ckpt /path/to/wm_warmup.ckpt \
+  --cls_ckpt /path/to/classifier_warmup.ckpt \
   manual_cotrain.global_steps=20000
 bash scripts/experiments/world_model_training/train.sh \
   training.out_dir="${DVLA_DATA_ROOT}/outputs/wm_full_dataset_train/run"

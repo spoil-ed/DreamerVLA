@@ -222,7 +222,7 @@ def test_openvla_onetraj_cotrain_uses_wmpo_classifier_protocol() -> None:
 
 
 def test_cotrain_components_are_selected_from_worldmodel_and_classifier_groups() -> None:
-    cfg = _compose(["experiment=dreamervla_wmcls_cotrain"])
+    cfg = _compose(["experiment=openvla_libero"])
 
     assert cfg.ray_components.world_model.target == cfg.world_model._target_
     assert cfg.ray_components.classifier.target == cfg.classifier._target_
@@ -247,7 +247,7 @@ def test_cotrain_components_are_selected_from_worldmodel_and_classifier_groups()
 
 
 def test_wmcls_cotrain_offloads_rollout_vla_only() -> None:
-    cfg = _compose(["experiment=dreamervla_wmcls_cotrain"])
+    cfg = _compose(["experiment=openvla_libero"])
 
     assert cfg.rollout.train_cfg.enable_offload is True
     assert cfg.actor.train_cfg.fsdp.cpu_offload is False

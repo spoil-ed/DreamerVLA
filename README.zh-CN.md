@@ -26,7 +26,10 @@ bash scripts/download_assets.sh download.openvla_one_traj=true only=[10_openvla_
 bash scripts/download_assets.sh only=[20_libero_dataset] env.LIBERO_SUITES=libero_goal
 
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-  bash scripts/experiments/cotrain/train.sh
+  bash scripts/experiments/cotrain/train.sh \
+  --config openvla_libero \
+  --wm_ckpt /path/to/wm_warmup.ckpt \
+  --cls_ckpt /path/to/classifier_warmup.ckpt
 
 bash scripts/experiments/cotrain/eval.sh \
   eval.ckpt_path=/path/to/manual_cotrain.ckpt

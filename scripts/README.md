@@ -96,15 +96,16 @@ Trainable VLA + world-model + classifier cotrain:
 - `experiments/cotrain/train.sh`
 - `experiments/cotrain/eval.sh`
 
-Cotrain starts WM/CLS from random weights when both checkpoint environment variables
-are absent. Set both `WORLD_MODEL_CKPT` and `CLASSIFIER_CKPT` to warm-start them:
+Cotrain starts WM/CLS from random weights when both checkpoint options are absent.
+Pass both `--wm_ckpt` and `--cls_ckpt` to warm-start them:
 
 ```bash
-bash scripts/experiments/cotrain/train.sh
+bash scripts/experiments/cotrain/train.sh --config openvla_libero
 
-WORLD_MODEL_CKPT=/path/to/wm.ckpt \
-CLASSIFIER_CKPT=/path/to/classifier.ckpt \
-  bash scripts/experiments/cotrain/train.sh
+bash scripts/experiments/cotrain/train.sh \
+  --config openvla_libero \
+  --wm_ckpt /path/to/wm.ckpt \
+  --cls_ckpt /path/to/classifier.ckpt
 ```
 
 Evaluation requires a policy checkpoint as a Hydra override. Its fixed 100-episode,

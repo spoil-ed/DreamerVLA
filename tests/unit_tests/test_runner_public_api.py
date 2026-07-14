@@ -220,7 +220,7 @@ def test_active_configs_target_route_specific_runner_classes() -> None:
         "wmpo_token_classifier_openvla_onetraj_libero_goal_h1": (
             "dreamervla.runners.SuccessClassifierTrainingRunner"
         ),
-        "dreamervla_wmcls_cotrain": "dreamervla.runners.CotrainRunner",
+        "openvla_libero": "dreamervla.runners.CotrainRunner",
     }
 
     config_dir = Path(__file__).resolve().parents[2] / "configs"

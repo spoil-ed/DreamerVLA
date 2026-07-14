@@ -43,7 +43,7 @@ def test_cotrain_train_script_uses_train_only_recipe_without_pinned_warm_states(
     )
 
     assert "dreamervla.launchers.cotrain" in text
-    assert "experiment=dreamervla_wmcls_cotrain" not in text
+    assert "experiment=openvla_libero" not in text
     assert "manual_cotrain.global_steps" not in text
     assert "/inspire/" not in text
     assert "20260712" not in text
@@ -93,7 +93,7 @@ def test_mainline_experiments_compose_only_the_components_their_stage_needs() ->
         )
         cotrain = compose(
             config_name="train",
-            overrides=["experiment=dreamervla_wmcls_cotrain"],
+            overrides=["experiment=openvla_libero"],
         )
 
     OmegaConf.resolve(classifier)

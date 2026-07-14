@@ -2,7 +2,7 @@
 
 ## Objective
 
-Add WoVR-style keyframe-initialized rollouts to DreamerVLA while preserving the
+Add reference-style keyframe-initialized rollouts to DreamerVLA while preserving the
 repository's online cotrain architecture. Failed real trajectories from cold-start
 collection and current-step collection become KIR sources. DreamerVLA must not
 copy RLinf's static `.npy` initialization pool.
@@ -104,4 +104,3 @@ Unit tests will prove:
 5. Chunk-WM initialization uses supplied real history/actions instead of repeated
    latent and zero actions.
 6. Hydra composition exposes KIR behavior without shell defaults.
-

@@ -109,7 +109,10 @@ warms up the world model and classifier, then optionally continues online:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-  bash scripts/experiments/cotrain/train.sh
+  bash scripts/experiments/cotrain/train.sh \
+  --config openvla_libero \
+  --wm_ckpt /path/to/wm_warmup.ckpt \
+  --cls_ckpt /path/to/classifier_warmup.ckpt
 ```
 
 Collection is a separate Hydra job:

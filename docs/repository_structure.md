@@ -78,7 +78,7 @@ Collection:
 
 Cotrain:
   openvla_onetraj_libero_cotrain
-  dreamervla_wmcls_cotrain
+  openvla_libero
 
 Eval:
   eval_cotrain
