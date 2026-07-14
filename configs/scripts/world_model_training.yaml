@@ -1,8 +1,5 @@
-defaults:
-  - _self_
-  - world_model_training: dino-wm
-
 name: world_model_training
+experiment: null
 data_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}
 python: python
 dry_run: false

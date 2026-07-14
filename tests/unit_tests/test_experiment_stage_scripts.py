@@ -66,6 +66,10 @@ def test_world_model_training_entrypoint_defers_model_choice_to_hydra() -> None:
     assert "--config-name world_model_training" in script
     assert "wm_dino_token_official" not in script
     assert "wm_official_upper_bound" not in script
+    script_config_dir = root / "configs" / "scripts" / "world_model_training"
+    assert not any(script_config_dir.glob("*.yaml"))
+    assert (root / "configs" / "experiment" / "dino-wm.yaml").is_file()
+    assert (root / "configs" / "experiment" / "dreamer-wm.yaml").is_file()
 
 
 def test_world_model_training_config_switch_selects_expected_recipe() -> None:
@@ -73,8 +77,8 @@ def test_world_model_training_config_switch_selects_expected_recipe() -> None:
     script = root / "scripts" / "experiments" / "world_model_training" / "train.sh"
 
     for config_name, experiment in (
-        ("dino-wm", "wm_dino_token_official"),
-        ("dreamer-wm", "wm_official_upper_bound"),
+        ("dino-wm", "dino-wm"),
+        ("dreamer-wm", "dreamer-wm"),
     ):
         result = subprocess.run(
             [
@@ -95,7 +99,7 @@ def test_world_model_training_config_switch_selects_expected_recipe() -> None:
         assert f"experiment={experiment}" in result.stdout
 
 
-def test_world_model_training_launcher_maps_batch_size_to_dino_global_batch() -> None:
+def test_world_model_training_launcher_maps_batch_size_to_dino_dataloader() -> None:
     root = Path(__file__).resolve().parents[2]
     result = subprocess.run(
         [
@@ -117,8 +121,8 @@ def test_world_model_training_launcher_maps_batch_size_to_dino_global_batch() ->
     )
 
     assert result.returncode == 0, result.stderr
-    assert "training.global_batch_size=7" in result.stdout
-    assert "dataloader.batch_size=7" not in result.stdout
+    assert "dataloader.batch_size=7" in result.stdout
+    assert "training.global_batch_size=7" not in result.stdout
 
 
 def test_cotrain_eval_protocol_lives_in_hydra_config() -> None:

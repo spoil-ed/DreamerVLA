@@ -94,7 +94,7 @@ def test_full_dataset_wm_experiment_owns_complete_training_recipe(tmp_path, monk
     assert cfg.world_model.token_norm_eps == 1.0e-6
 
 
-def test_dino_token_reproduction_is_an_isolated_exact_recipe(tmp_path, monkeypatch):
+def test_dino_token_architecture_and_data_protocol_recipe(tmp_path, monkeypatch):
     from pathlib import Path
 
     from hydra import compose, initialize_config_dir
@@ -134,17 +134,36 @@ def test_dino_token_reproduction_is_an_isolated_exact_recipe(tmp_path, monkeypat
     assert cfg.dataset.valid.split == "valid"
     assert "lang_dim" not in cfg.world_model
     assert "chunk_rollout_chunks" not in cfg.world_model
-    assert cfg.training.global_batch_size == 32
+    assert "global_batch_size" not in cfg.training
+    assert cfg.dataloader.batch_size == 16
     assert cfg.training.num_epochs == 100
     assert cfg.optim.precision == "fp32"
     assert cfg.optim.predictor.name == "adamw"
-    assert cfg.optim.predictor.lr == 5.0e-4
+    assert cfg.optim.predictor.lr == 3.0e-5
     assert cfg.optim.predictor.betas == [0.9, 0.999]
     assert cfg.optim.predictor.eps == 1.0e-8
     assert cfg.optim.predictor.weight_decay == 0.01
     assert cfg.optim.conditioning == cfg.optim.predictor
     assert cfg.dataset.train.raw_dir == cfg.task.hdf5_reward_dir
     assert cfg.dataset.train.hidden_dir == cfg.task.openvla_oft.hidden_token_dir
+
+
+def test_user_facing_dino_and_dreamer_configs_align_batch_and_lr(
+    tmp_path, monkeypatch
+):
+    from pathlib import Path
+
+    from hydra import compose, initialize_config_dir
+
+    monkeypatch.setenv("RUN_ROOT", str(tmp_path))
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        dino = compose(config_name="train", overrides=["experiment=dino-wm"])
+        dreamer = compose(config_name="train", overrides=["experiment=dreamer-wm"])
+
+    assert dino.dataloader.batch_size == dreamer.dataloader.batch_size == 16
+    assert dino.optim.predictor.lr == dreamer.optim.world_model.lr == 3.0e-5
+    assert dino.optim.conditioning.lr == dreamer.optim.world_model.lr
 
 
 def test_classifier_and_full_dataset_wm_share_mainline_success_sidecar(

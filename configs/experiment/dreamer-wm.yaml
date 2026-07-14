@@ -1,0 +1,5 @@
+# @package _global_
+# User-facing DreamerVLA Chunk-WM training recipe.
+defaults:
+  - wm_official_upper_bound
+  - _self_

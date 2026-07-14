@@ -48,7 +48,7 @@ backend with `logger=tensorboard` / `logger=wandb`.
 | --- | --- | --- |
 | Trainable WM/CLS cotrain | `scripts/experiments/cotrain/train.sh` | `dreamervla_wmcls_cotrain_ray` |
 | Cotrain policy eval | `scripts/experiments/cotrain/eval.sh` | `eval_cotrain` |
-| Official-data world model | `scripts/experiments/world_model_training/train.sh --config dino-wm\|dreamer-wm` | `wm_dino_token_official` / `wm_official_upper_bound` |
+| Official-data world model | `scripts/experiments/world_model_training/train.sh --config dino-wm\|dreamer-wm` | `dino-wm` / `dreamer-wm` |
 | Bounded WM timing profile | `scripts/experiments/world_model_training/profile.sh` | `wm_official_upper_bound_profile` |
 | Official-data classifier upper bound | `scripts/experiments/classifier_training/train.sh` | `classifier_official_upper_bound` |
 | Cold-start collect/warmup pipeline | `python -m dreamervla.launchers.coldstart_warmup_cotrain` | `configs/scripts/coldstart_warmup_cotrain.yaml` |
@@ -64,7 +64,9 @@ backend with `logger=tensorboard` / `logger=wandb`.
 | `openvla_onetraj_libero_cotrain_ray` | Ray manual cotrain |
 | `wm_full_dataset_train` | full-replay WM warmup |
 | `wm_official_upper_bound` | pre-mainline WM training from official data |
-| `wm_dino_token_official` | DINO-WM model/data/optimizer/epoch reproduction over official OpenVLA-OFT tokens |
+| `wm_dino_token_official` | DINO-WM architecture/data protocol over official OpenVLA-OFT tokens |
+| `dino-wm` | user-facing DINO-WM recipe with Dreamer-WM-aligned batch size and learning rate |
+| `dreamer-wm` | user-facing official-data Chunk-WM recipe |
 | `wm_official_upper_bound_profile` | bounded 8-GPU timing run of the same optimized WM route |
 | `classifier_official_upper_bound` | pre-mainline classifier training from official data |
 | `dreamervla_frozen_models_rl` | policy-only imagined RL with immutable WM/CLS |

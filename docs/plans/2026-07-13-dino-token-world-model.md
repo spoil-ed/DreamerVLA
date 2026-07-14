@@ -1,16 +1,16 @@
 # DINO Token World Model Reproduction Plan
 
 **Goal:** Reproduce DINO-WM's predictor, conditioning, shifted one-step MSE,
-trajectory slicing, optimizer regime, epoch loop, validation, and autoregressive
-rollout over DreamerVLA's existing OpenVLA-OFT hidden tokens. The only substituted
-DINO component is the frozen visual encoder/token geometry: the model receives the
-persisted `[256,4096]` tokens directly.
+trajectory slicing, epoch loop, validation, and autoregressive rollout over
+DreamerVLA's existing OpenVLA-OFT hidden tokens. The visual encoder/token geometry
+is replaced by persisted `[256,4096]` tokens, while batch size and learning rate
+are intentionally aligned with Dreamer-WM for comparison.
 
-**Integration boundary:** This is a new Hydra-selected model and experiment. It is
-the default recipe behind `scripts/experiments/world_model_training/train.sh`, while
-`ChunkAwareWorldModel` remains selectable explicitly. It is not yet selected by the
-online-cotrain recipe; that promotion remains gated on beating the persistence
-baseline after a converged training run.
+**Integration boundary:** This is a Hydra-selected model and experiment. Choose it
+with `train.sh --config dino-wm`; `--config dreamer-wm` selects
+`ChunkAwareWorldModel`. It is not yet selected by the online-cotrain recipe; that
+promotion remains gated on beating the persistence baseline after a converged
+training run.
 
 ## Implementation
 
@@ -34,7 +34,8 @@ baseline after a converged training run.
       concatenated five-step actions, and full-corpus action/proprio statistics.
 - [x] Add an isolated official-data experiment with history 3, prediction offset 1,
       depth 6, heads 16, head width 64, MLP width 2048, dropout 0.1, action/proprio
-      embedding width 10, AdamW at `5e-4`, FP32, 100 epochs, and global batch 32.
+      embedding width 10, AdamW at `3e-5`, FP32, 100 epochs, and per-rank batch 16
+      to match the Dreamer-WM recipe.
 - [x] Use a dedicated runner with separate predictor and action/proprio AdamW
       optimizers, fixed slice order, full train/valid epochs, and per-epoch resume
       checkpoints.

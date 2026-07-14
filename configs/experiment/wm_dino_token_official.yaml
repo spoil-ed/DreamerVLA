@@ -1,5 +1,5 @@
 # @package _global_
-# Isolated DINO-WM reproduction over persisted OpenVLA-OFT hidden tokens.
+# DINO-WM architecture and data protocol over persisted OpenVLA-OFT hidden tokens.
 defaults:
   - /task: openvla_onetraj_libero
   - override /pre_mainline: libero_goal_official
@@ -28,7 +28,6 @@ training:
   max_steps: 0
   eval_every: 1
   checkpoint_every: 1
-  global_batch_size: 32
 
 dino_wm:
   frameskip: 5
@@ -70,8 +69,8 @@ dataset:
     max_episodes: ${dino_wm.max_episodes}
 
 dataloader:
-  # Replaced at runtime by global_batch_size / world_size.
-  batch_size: 32
+  # Per-rank batch, aligned with the Dreamer-WM official-data recipe.
+  batch_size: 16
   shuffle: false
   drop_last: false
   num_workers: 16
@@ -83,13 +82,13 @@ optim:
   precision: fp32
   predictor:
     name: adamw
-    lr: 5.0e-4
+    lr: 3.0e-5
     betas: [0.9, 0.999]
     eps: 1.0e-8
     weight_decay: 0.01
   conditioning:
     name: adamw
-    lr: 5.0e-4
+    lr: 3.0e-5
     betas: [0.9, 0.999]
     eps: 1.0e-8
     weight_decay: 0.01

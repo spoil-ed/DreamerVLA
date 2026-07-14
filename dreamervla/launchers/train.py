@@ -107,13 +107,7 @@ def _parse_hydra_like_args(argv: Sequence[str]) -> tuple[str, list[str], list[st
             experiment_overrides.append(item)
         i += 1
     if config_choice is not None:
-        config_group = CONFIG_DIR / config_name
-        if not config_group.is_dir():
-            raise SystemExit(
-                f"--config is not supported by launcher config {config_name!r}: "
-                f"missing Hydra group {config_group}"
-            )
-        launcher_overrides.insert(0, f"{config_name}={config_choice}")
+        launcher_overrides.insert(0, f"experiment={config_choice}")
     return config_name, launcher_overrides, experiment_overrides
 
 

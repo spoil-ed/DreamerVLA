@@ -1,0 +1,5 @@
+# @package _global_
+# User-facing DINO-WM training recipe.
+defaults:
+  - wm_dino_token_official
+  - _self_

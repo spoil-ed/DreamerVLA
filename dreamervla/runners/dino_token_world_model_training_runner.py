@@ -48,7 +48,17 @@ class DinoTokenWorldModelTrainingRunner(WorldModelTrainingBase):
     include_keys = (*WorldModelTrainingBase.include_keys,)
 
     @staticmethod
-    def _per_rank_batch_size(global_batch_size: int, world_size: int) -> int:
+    def _per_rank_batch_size(
+        *,
+        configured_batch_size: int,
+        global_batch_size: int | None,
+        world_size: int,
+    ) -> int:
+        configured = int(configured_batch_size)
+        if configured < 1:
+            raise ValueError("dataloader.batch_size must be positive")
+        if global_batch_size is None:
+            return configured
         global_batch = int(global_batch_size)
         ranks = max(1, int(world_size))
         if global_batch < 1 or global_batch % ranks:
@@ -212,8 +222,16 @@ class DinoTokenWorldModelTrainingRunner(WorldModelTrainingBase):
             OmegaConf.to_container(cfg.dataloader, resolve=True)
         )
         dataloader_cfg.batch_size = self._per_rank_batch_size(
-            int(cfg.training.global_batch_size),
-            self.world_size,
+            configured_batch_size=int(dataloader_cfg.batch_size),
+            global_batch_size=OmegaConf.select(
+                cfg,
+                "training.global_batch_size",
+                default=None,
+            ),
+            world_size=self.world_size,
+        )
+        effective_global_batch_size = int(dataloader_cfg.batch_size) * max(
+            1, int(self.world_size)
         )
         train_dataloader = self.make_distributed_dataloader(
             train_dataset,
@@ -240,7 +258,8 @@ class DinoTokenWorldModelTrainingRunner(WorldModelTrainingBase):
                     "train_windows": len(train_dataset),
                     "valid_windows": len(valid_dataset),
                     "frameskip": int(train_dataset.frameskip),
-                    "global_batch_size": int(cfg.training.global_batch_size),
+                    "batch_size_per_rank": int(dataloader_cfg.batch_size),
+                    "global_batch_size": effective_global_batch_size,
                 }
             )
 

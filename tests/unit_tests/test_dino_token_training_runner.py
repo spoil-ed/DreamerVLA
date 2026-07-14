@@ -18,20 +18,19 @@ def _runner_config(tmp_path):
                 "fsdp_mixed_precision": "fp32",
                 "enable_activation_checkpointing": False,
                 "resume": False,
-                "global_batch_size": 32,
             },
             "optim": {
                 "precision": "fp32",
                 "predictor": {
                     "name": "adamw",
-                    "lr": 5.0e-4,
+                    "lr": 3.0e-5,
                     "betas": [0.9, 0.999],
                     "eps": 1.0e-8,
                     "weight_decay": 0.01,
                 },
                 "conditioning": {
                     "name": "adamw",
-                    "lr": 5.0e-4,
+                    "lr": 3.0e-5,
                     "betas": [0.9, 0.999],
                     "eps": 1.0e-8,
                     "weight_decay": 0.01,
@@ -61,8 +60,23 @@ def _runner_config(tmp_path):
     )
 
 
-def test_dino_runner_resolves_upstream_global_batch() -> None:
-    assert DinoTokenWorldModelTrainingRunner._per_rank_batch_size(32, 8) == 4
+def test_dino_runner_matches_dreamer_per_rank_batch_semantics() -> None:
+    assert (
+        DinoTokenWorldModelTrainingRunner._per_rank_batch_size(
+            configured_batch_size=16,
+            global_batch_size=None,
+            world_size=8,
+        )
+        == 16
+    )
+    assert (
+        DinoTokenWorldModelTrainingRunner._per_rank_batch_size(
+            configured_batch_size=16,
+            global_batch_size=32,
+            world_size=8,
+        )
+        == 4
+    )
 
 
 def test_dino_runner_uses_separate_disjoint_upstream_optimizers(tmp_path) -> None:
