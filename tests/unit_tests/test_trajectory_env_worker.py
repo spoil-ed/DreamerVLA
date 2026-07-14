@@ -1928,6 +1928,48 @@ def test_worker_batched_trajectory_keeps_bf16_hidden_payload() -> None:
     assert shard.forward_inputs["hidden"].dtype == torch.bfloat16
 
 
+def test_flush_worker_slots_splits_mixed_task_shards() -> None:
+    worker = BaseTrajectoryEnvWorker(
+        role="wm_env",
+        env_cfg=_counter_env_cfg(),
+        num_slots=2,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=2,
+        num_action_chunks=2,
+        task_id=0,
+    )
+
+    def chunk(slot_id: int, task_id: int) -> trajectory_env_worker._TrajectoryChunk:
+        result = replace(
+            _rollout_result_for_slot(slot_id),
+            slot_id=slot_id,
+            task_id=task_id,
+        )
+        return trajectory_env_worker._TrajectoryChunk(
+            result=result,
+            slot_id=slot_id,
+            actions_np=np.zeros((2, 3), dtype=np.float32),
+            rewards=np.zeros((2,), dtype=np.float32),
+            dones=np.zeros((2,), dtype=np.bool_),
+            action_dim=3,
+        )
+
+    worker._actor_shards_by_slot = [[chunk(0, 3)], [chunk(1, 7)]]
+    actor_channel = _MemoryChannel()
+
+    put_s, emitted = worker._flush_buffered_actor_slot_batch(
+        [0, 1],
+        actor_channel,
+        [],
+    )
+
+    assert put_s >= 0.0
+    assert emitted == 2
+    assert len(actor_channel.puts) == 2
+    assert {item.task_id for _key, item in actor_channel.puts} == {3, 7}
+    assert all(item.actions.shape[1] == 1 for _key, item in actor_channel.puts)
+
+
 class _SplitCounterSlot(CounterEnv):
     """CounterEnv whose step is split into send/recv and logs its call order.
 

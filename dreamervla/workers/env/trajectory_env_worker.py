@@ -2258,16 +2258,18 @@ class BaseTrajectoryEnvWorker(Worker):
                 put_s = self._queue_actor_shard(actor_channel, shard, pending)
                 return put_s, 1
 
-        materialized: list[TrajectoryShard] = []
+        materialized_by_task: dict[int, list[TrajectoryShard]] = {}
         for slot_id in slot_ids:
             shard = self._materialize_buffered_actor_shard(int(slot_id))
             if shard is not None:
-                materialized.append(shard)
-        if not materialized:
+                materialized_by_task.setdefault(int(shard.task_id), []).append(shard)
+        if not materialized_by_task:
             return 0.0, 0
-        shard = _concat_worker_slot_shards(materialized)
-        put_s = self._queue_actor_shard(actor_channel, shard, pending)
-        return put_s, 1
+        put_s = 0.0
+        for task_shards in materialized_by_task.values():
+            shard = _concat_worker_slot_shards(task_shards)
+            put_s += self._queue_actor_shard(actor_channel, shard, pending)
+        return put_s, len(materialized_by_task)
 
     def _flush_actor_puts(self, pending: list[Any]) -> float:
         if not pending:
