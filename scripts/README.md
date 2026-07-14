@@ -61,13 +61,18 @@ Full-dataset world-model training, profiling, and evaluation:
 - `experiments/world_model_training/profile.sh`
 - `experiments/world_model_training/eval.sh`
 
-The default training entrypoint reproduces DINO-WM dynamics directly over the
-persisted OpenVLA-OFT token grid. Its architecture, trajectory slicing
-(`frameskip=5` with concatenated actions), normalization, optimizer, and epoch
-parameters live in `configs/experiment/wm_dino_token_official.yaml`. The retained
-Chunk-WM recipe can still be selected explicitly with
-`experiment=wm_official_upper_bound`; its mainline config normalizes raw sidecar
-tokens once before transition modeling.
+Select the world-model implementation through the launcher's Hydra config group:
+
+```bash
+bash scripts/experiments/world_model_training/train.sh --config dino-wm
+bash scripts/experiments/world_model_training/train.sh --config dreamer-wm
+```
+
+`dino-wm` reproduces DINO-WM dynamics directly over the persisted OpenVLA-OFT
+token grid through `wm_dino_token_official`. `dreamer-wm` selects the retained
+Chunk-WM route through `wm_official_upper_bound`. Architecture, trajectory
+slicing, normalization, optimizer, and schedule parameters stay in those Hydra
+experiment configs; the shell launcher contains no training defaults.
 
 Trainable VLA + world-model + classifier cotrain:
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Train the official-data DINO token world model through Hydra.
+# Train a Hydra-selected world model over official LIBERO data.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"

@@ -57,16 +57,42 @@ def test_experiment_scripts_defer_defaults_and_messages_to_python() -> None:
         assert "echo " not in text
 
 
-def test_world_model_training_entrypoint_selects_dino_token_hydra_recipe() -> None:
+def test_world_model_training_entrypoint_defers_model_choice_to_hydra() -> None:
     root = Path(__file__).resolve().parents[2]
     script = (
         root / "scripts" / "experiments" / "world_model_training" / "train.sh"
     ).read_text(encoding="utf-8")
-    cfg = OmegaConf.load(root / "configs" / "scripts" / "world_model_training.yaml")
 
     assert "--config-name world_model_training" in script
     assert "wm_dino_token_official" not in script
-    assert cfg.experiment == "wm_dino_token_official"
+    assert "wm_official_upper_bound" not in script
+
+
+def test_world_model_training_config_switch_selects_expected_recipe() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = root / "scripts" / "experiments" / "world_model_training" / "train.sh"
+
+    for config_name, experiment in (
+        ("dino-wm", "wm_dino_token_official"),
+        ("dreamer-wm", "wm_official_upper_bound"),
+    ):
+        result = subprocess.run(
+            [
+                "bash",
+                str(script),
+                "--config",
+                config_name,
+                "dry_run=true",
+                "ngpu=1",
+            ],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert f"experiment={experiment}" in result.stdout
 
 
 def test_world_model_training_launcher_maps_batch_size_to_dino_global_batch() -> None:
@@ -78,6 +104,8 @@ def test_world_model_training_launcher_maps_batch_size_to_dino_global_batch() ->
             "dreamervla.launchers.train",
             "--config-name",
             "world_model_training",
+            "--config",
+            "dino-wm",
             "dry_run=true",
             "ngpu=1",
             "batch_size=7",

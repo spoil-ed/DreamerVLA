@@ -29,6 +29,8 @@ and smoke-run limits.
 python -m dreamervla.train experiment=openvla_onetraj_libero_cotrain_noray task=openvla_onetraj_coldstart_libero
 python -m dreamervla.train experiment=openvla_onetraj_libero_cotrain_ray task=openvla_onetraj_coldstart_libero
 python -m dreamervla.train experiment=wm_full_dataset_train task=openvla_onetraj_coldstart_libero
+bash scripts/experiments/world_model_training/train.sh --config dino-wm
+bash scripts/experiments/world_model_training/train.sh --config dreamer-wm
 python -m dreamervla.train experiment=dreamervla_frozen_models_rl task=openvla_onetraj_libero \
   init.world_model_state_ckpt=<wm.ckpt> init.classifier_state_ckpt=<classifier.ckpt>
 python -m dreamervla.train experiment=dreamervla_frozen_models_rl_ray task=openvla_onetraj_libero \
@@ -46,7 +48,7 @@ backend with `logger=tensorboard` / `logger=wandb`.
 | --- | --- | --- |
 | Trainable WM/CLS cotrain | `scripts/experiments/cotrain/train.sh` | `dreamervla_wmcls_cotrain_ray` |
 | Cotrain policy eval | `scripts/experiments/cotrain/eval.sh` | `eval_cotrain` |
-| Official-data DINO token WM | `scripts/experiments/world_model_training/train.sh` | `wm_dino_token_official` |
+| Official-data world model | `scripts/experiments/world_model_training/train.sh --config dino-wm\|dreamer-wm` | `wm_dino_token_official` / `wm_official_upper_bound` |
 | Bounded WM timing profile | `scripts/experiments/world_model_training/profile.sh` | `wm_official_upper_bound_profile` |
 | Official-data classifier upper bound | `scripts/experiments/classifier_training/train.sh` | `classifier_official_upper_bound` |
 | Cold-start collect/warmup pipeline | `python -m dreamervla.launchers.coldstart_warmup_cotrain` | `configs/scripts/coldstart_warmup_cotrain.yaml` |

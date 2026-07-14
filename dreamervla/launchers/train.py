@@ -44,6 +44,7 @@ _LAUNCHER_KEYS = {
 
 def _parse_hydra_like_args(argv: Sequence[str]) -> tuple[str, list[str], list[str]]:
     config_name = "train_vla"
+    config_choice: str | None = None
     launcher_overrides: list[str] = []
     experiment_overrides: list[str] = []
     i = 0
@@ -66,6 +67,16 @@ def _parse_hydra_like_args(argv: Sequence[str]) -> tuple[str, list[str], list[st
             continue
         if item.startswith("--config-name="):
             config_name = item.split("=", 1)[1]
+            i += 1
+            continue
+        if item == "--config":
+            if i + 1 >= len(argv):
+                raise SystemExit("--config requires a value")
+            config_choice = argv[i + 1]
+            i += 2
+            continue
+        if item.startswith("--config="):
+            config_choice = item.split("=", 1)[1]
             i += 1
             continue
 
@@ -95,6 +106,14 @@ def _parse_hydra_like_args(argv: Sequence[str]) -> tuple[str, list[str], list[st
         else:
             experiment_overrides.append(item)
         i += 1
+    if config_choice is not None:
+        config_group = CONFIG_DIR / config_name
+        if not config_group.is_dir():
+            raise SystemExit(
+                f"--config is not supported by launcher config {config_name!r}: "
+                f"missing Hydra group {config_group}"
+            )
+        launcher_overrides.insert(0, f"{config_name}={config_choice}")
     return config_name, launcher_overrides, experiment_overrides
 
 
