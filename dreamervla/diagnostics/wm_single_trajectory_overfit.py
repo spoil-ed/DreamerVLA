@@ -460,7 +460,7 @@ def _compose_config(task: str) -> DictConfig:
         cfg = compose(
             config_name="train",
             overrides=[
-                "experiment=openvla_onetraj_libero_cotrain_noray",
+                "experiment=openvla_onetraj_libero_cotrain",
                 f"task={task}",
                 "logger=tensorboard",
             ],

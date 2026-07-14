@@ -1,6 +1,0 @@
-defaults:
-  - world_model_training
-  - _self_
-
-name: world_model_profile
-experiment: wm_official_upper_bound_profile

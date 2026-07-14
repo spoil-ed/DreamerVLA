@@ -9,6 +9,24 @@ defaults:
 _target_: dreamervla.runners.DinoTokenWorldModelTrainingRunner
 seed: 0
 
+launch:
+  distributed: true
+  ngpu: 8
+  gpus: null
+  master_port: 29500
+  python: python
+  write_libero_config: true
+  required_target_values: []
+  env:
+    PYTHONUNBUFFERED: 1
+    OMP_NUM_THREADS: 8
+    MALLOC_ARENA_MAX: 4
+    CUDA_MODULE_LOADING: LAZY
+    PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    NCCL_NVLS_ENABLE: 0
+    NCCL_DEBUG: WARN
+    TORCH_NCCL_ASYNC_ERROR_HANDLING: 1
+
 hydra:
   run:
     dir: ${training.out_dir}
@@ -83,13 +101,13 @@ optim:
   precision: fp32
   predictor:
     name: adamw
-    lr: 3.0e-5
+    lr: 1.0e-4
     betas: [0.9, 0.999]
     eps: 1.0e-8
     weight_decay: 0.01
   conditioning:
     name: adamw
-    lr: 3.0e-5
+    lr: 1.0e-4
     betas: [0.9, 0.999]
     eps: 1.0e-8
     weight_decay: 0.01

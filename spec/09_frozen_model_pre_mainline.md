@@ -256,10 +256,11 @@ COTRAIN_RESUME_CKPT=/path/to/frozen_cotrain_run/checkpoints/manual_cotrain_step_
 The launcher infers the original run root from the checkpoint path; assign
 `COTRAIN_RUN_ROOT=/path/to/run` only when the checkpoint was relocated.
 
-`python -m dreamervla.launchers.frozen_model_pre_mainline` composes
-`configs/scripts/frozen_model_pre_mainline.yaml`. It owns one run root with
-subdirectories `wm/`, `classifier/`, `rl/`, `eval_baseline/`, `eval_rl/`, and
-`summary/`.
+This gate is not a `configs/scripts` workflow. Its retained WM and classifier
+stages enter through `configs/experiment/wm_official_upper_bound.yaml` and
+`configs/experiment/classifier_official_upper_bound.yaml`; any top-level
+orchestration must compose experiment recipes rather than add a script wrapper
+config.
 
 Supported stages are `all`, `wm`, `classifier`, `rl`, and `eval`. `dry_run=true`
 prints fully resolved commands without running training. Stage guards fail

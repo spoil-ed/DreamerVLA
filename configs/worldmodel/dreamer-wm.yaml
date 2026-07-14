@@ -1,45 +1,96 @@
-# @package world_model
+# @package _global_
 # DreamerVLA's native chunk world model over OpenVLA-OFT token grids.
-_target_: ${task.openvla_oft.wm_target}
-chunk_size: ${task.openvla_oft.hidden_token.chunk_size}
-obs_dim: ${task.openvla_oft.hidden_token.wm_obs_dim}
-action_dim: ${task.action_dim}
-token_count: ${task.openvla_oft.hidden_token.token_count}
-token_dim: ${task.openvla_oft.hidden_token.token_dim}
-token_normalization: layer_norm
-token_norm_eps: 1.0e-6
-time_horizon: ${task.openvla_oft.hidden_token.chunk_size}
-latent_stage: ${task.openvla_oft.hidden_token.latent_stage}
-latent_source: ${task.openvla_oft.hidden_token.latent_source}
-action_emb_dim: ${task.openvla_oft.hidden_token.action_emb_dim}
-num_action_repeat: ${task.openvla_oft.hidden_token.num_action_repeat}
-proprio_dim: ${task.openvla_oft.hidden_token.proprio_dim}
-proprio_emb_dim: ${task.openvla_oft.hidden_token.proprio_emb_dim}
-num_proprio_repeat: ${task.openvla_oft.hidden_token.num_proprio_repeat}
-proprio_reconstruction_loss_scale: 0.0
-lang_dim: ${task.openvla_oft.hidden_token.lang_dim}
-lang_emb_dim: ${task.openvla_oft.hidden_token.lang_emb_dim}
-num_lang_repeat: ${task.openvla_oft.hidden_token.num_lang_repeat}
-grad_checkpoint: true
-model_dim: ${task.openvla_oft.hidden_token.model_dim}
-num_hist: 3
-depth: 6
-heads: 16
-dim_head: 128
-attn_impl: sdpa
-mlp_dim: 2048
-dropout: 0.1
-num_pred: 1
-max_seq_len: 128
-hidden_loss_scale: 1.0
-cosine_loss_scale: 0.0
-chunk_rollout_chunks: 4
-chunk_rollout_loss_scale: 0.2
-reward_head_type: binary
-reward_loss_scale: 0.0
-reward_hidden_dim: 1024
-reward_init_logit: 0.0
-reward_pos_weight: 1.0
-return_predictions: false
-freeze_backbone: true
-task_conditioning: ${task_conditioning}
+#
+# ``world_model`` is the component source of truth. ``ray_components`` only
+# adapts the same Hydra component to the Ray worker target/kwargs contract.
+world_model:
+  _target_: ${task.openvla_oft.wm_target}
+  chunk_size: ${task.openvla_oft.hidden_token.chunk_size}
+  obs_dim: ${task.openvla_oft.hidden_token.wm_obs_dim}
+  action_dim: ${task.action_dim}
+  token_count: ${task.openvla_oft.hidden_token.token_count}
+  token_dim: ${task.openvla_oft.hidden_token.token_dim}
+  token_normalization: layer_norm
+  token_norm_eps: 1.0e-6
+  time_horizon: ${task.openvla_oft.hidden_token.chunk_size}
+  latent_stage: ${task.openvla_oft.hidden_token.latent_stage}
+  latent_source: ${task.openvla_oft.hidden_token.latent_source}
+  action_emb_dim: ${task.openvla_oft.hidden_token.action_emb_dim}
+  num_action_repeat: ${task.openvla_oft.hidden_token.num_action_repeat}
+  proprio_dim: ${task.openvla_oft.hidden_token.proprio_dim}
+  proprio_emb_dim: ${task.openvla_oft.hidden_token.proprio_emb_dim}
+  num_proprio_repeat: ${task.openvla_oft.hidden_token.num_proprio_repeat}
+  proprio_reconstruction_loss_scale: 0.0
+  lang_dim: ${task.openvla_oft.hidden_token.lang_dim}
+  lang_emb_dim: ${task.openvla_oft.hidden_token.lang_emb_dim}
+  num_lang_repeat: ${task.openvla_oft.hidden_token.num_lang_repeat}
+  grad_checkpoint: true
+  model_dim: ${task.openvla_oft.hidden_token.model_dim}
+  num_hist: 3
+  depth: 6
+  heads: 16
+  dim_head: 128
+  attn_impl: sdpa
+  mlp_dim: 4096
+  dropout: 0.1
+  num_pred: 1
+  max_seq_len: 128
+  hidden_loss_scale: 1.0
+  cosine_loss_scale: 0.0
+  chunk_rollout_chunks: 4
+  chunk_rollout_loss_scale: 0.2
+  reward_head_type: binary
+  reward_loss_scale: 0.0
+  reward_hidden_dim: 1024
+  reward_init_logit: 0.0
+  reward_pos_weight: 1.0
+  return_predictions: false
+  freeze_backbone: true
+  task_conditioning: ${oc.select:task_conditioning,null}
+
+ray_components:
+  world_model:
+    target: ${world_model._target_}
+    kwargs:
+      chunk_size: ${world_model.chunk_size}
+      obs_dim: ${world_model.obs_dim}
+      action_dim: ${world_model.action_dim}
+      token_count: ${world_model.token_count}
+      token_dim: ${world_model.token_dim}
+      token_normalization: ${world_model.token_normalization}
+      token_norm_eps: ${world_model.token_norm_eps}
+      time_horizon: ${world_model.time_horizon}
+      latent_stage: ${world_model.latent_stage}
+      latent_source: ${world_model.latent_source}
+      action_emb_dim: ${world_model.action_emb_dim}
+      num_action_repeat: ${world_model.num_action_repeat}
+      proprio_dim: ${world_model.proprio_dim}
+      proprio_emb_dim: ${world_model.proprio_emb_dim}
+      num_proprio_repeat: ${world_model.num_proprio_repeat}
+      proprio_reconstruction_loss_scale: ${world_model.proprio_reconstruction_loss_scale}
+      lang_dim: ${world_model.lang_dim}
+      lang_emb_dim: ${world_model.lang_emb_dim}
+      num_lang_repeat: ${world_model.num_lang_repeat}
+      grad_checkpoint: ${world_model.grad_checkpoint}
+      model_dim: ${world_model.model_dim}
+      num_hist: ${world_model.num_hist}
+      depth: ${world_model.depth}
+      heads: ${world_model.heads}
+      dim_head: ${world_model.dim_head}
+      attn_impl: ${world_model.attn_impl}
+      mlp_dim: ${world_model.mlp_dim}
+      dropout: ${world_model.dropout}
+      num_pred: ${world_model.num_pred}
+      max_seq_len: ${world_model.max_seq_len}
+      hidden_loss_scale: ${world_model.hidden_loss_scale}
+      cosine_loss_scale: ${world_model.cosine_loss_scale}
+      chunk_rollout_chunks: ${world_model.chunk_rollout_chunks}
+      chunk_rollout_loss_scale: ${world_model.chunk_rollout_loss_scale}
+      reward_head_type: ${world_model.reward_head_type}
+      reward_loss_scale: ${world_model.reward_loss_scale}
+      reward_hidden_dim: ${world_model.reward_hidden_dim}
+      reward_init_logit: ${world_model.reward_init_logit}
+      reward_pos_weight: ${world_model.reward_pos_weight}
+      return_predictions: ${world_model.return_predictions}
+      freeze_backbone: ${world_model.freeze_backbone}
+      task_conditioning: ${world_model.task_conditioning}

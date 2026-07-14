@@ -12,7 +12,6 @@ from typing import Any
 import pytest
 from omegaconf import OmegaConf
 
-from dreamervla.launchers import coldstart_warmup_cotrain as coldstart
 from dreamervla.workers.env import env_worker, trajectory_env_worker
 from dreamervla.workers.env.trajectory_env_worker import RealEnvWorker
 
@@ -157,55 +156,8 @@ def test_manual_real_env_rejects_egl_when_cfg_pool_absent(monkeypatch) -> None:
         worker.init()
 
 
-def test_post_step_eval_env_uses_libero_helper(monkeypatch, tmp_path) -> None:
-    if not hasattr(coldstart, "_post_step_eval_env"):
-        pytest.skip("post-step eval env helper is not present in this checkout")
-    calls: list[tuple[str, int, list[int]]] = []
-
-    def fake_apply(backend: str, shard_id: int, gpu_pool: list[int]) -> None:
-        calls.append((backend, int(shard_id), list(gpu_pool)))
-        os.environ["MUJOCO_GL"] = backend
-        os.environ["PYOPENGL_PLATFORM"] = backend
-        if backend == "egl":
-            os.environ["MUJOCO_EGL_DEVICE_ID"] = str(gpu_pool[int(shard_id) % len(gpu_pool)])
-            os.environ["RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES"] = "1"
-        else:
-            os.environ.pop("MUJOCO_EGL_DEVICE_ID", None)
-
-    for key in (
-        "MUJOCO_GL",
-        "PYOPENGL_PLATFORM",
-        "MUJOCO_EGL_DEVICE_ID",
-        "RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES",
-    ):
-        monkeypatch.delenv(key, raising=False)
-    monkeypatch.setattr(
-        coldstart, "apply_libero_render_regime", fake_apply, raising=False
-    )
-    plan = coldstart.PipelinePlan(
-        mode="ray",
-        profile="test",
-        task="goal",
-        run_root=tmp_path,
-        collected_root=tmp_path / "collect",
-        reward_dir=tmp_path / "reward",
-        hidden_dir=tmp_path / "hidden",
-        collect_cmd=[],
-        cotrain_cmd=[],
-        eval_cfg={"render_backend": "egl", "gpus": "7,0"},
-    )
-
-    env = coldstart._post_step_eval_env(plan)
-
-    assert calls == [("egl", 0, [0])]
-    assert env["MUJOCO_GL"] == "egl"
-    assert env["PYOPENGL_PLATFORM"] == "egl"
-    assert env["MUJOCO_EGL_DEVICE_ID"] == "0"
-    assert env["RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES"] == "1"
-
-
 def test_eval_loop_applies_libero_helper_from_configured_pool(monkeypatch) -> None:
-    from dreamervla.runners import pretokenize_vla_runner
+    from dreamervla.runtime import libero_vla_evaluation_base
 
     calls: list[tuple[str, int, list[int]]] = []
 
@@ -213,7 +165,7 @@ def test_eval_loop_applies_libero_helper_from_configured_pool(monkeypatch) -> No
         calls.append((backend, int(shard_id), list(gpu_pool)))
 
     monkeypatch.setattr(
-        pretokenize_vla_runner,
+        libero_vla_evaluation_base,
         "apply_libero_render_regime",
         fake_apply,
         raising=False,
@@ -229,7 +181,7 @@ def test_eval_loop_applies_libero_helper_from_configured_pool(monkeypatch) -> No
         }
     )
 
-    pretokenize_vla_runner._apply_libero_eval_render_regime(cfg, cfg.eval)
+    libero_vla_evaluation_base._apply_libero_eval_render_regime(cfg, cfg.eval)
 
     assert calls == [("egl", 3, [4, 6])]
 
@@ -240,33 +192,14 @@ def test_train_launcher_does_not_select_libero_render_backend(monkeypatch) -> No
     for key in ("MUJOCO_GL", "PYOPENGL_PLATFORM"):
         monkeypatch.delenv(key, raising=False)
 
-    env = _build_env({"data_root": "/tmp/dvla-data", "env": {}})
+    env = _build_env(
+        OmegaConf.create({"launch": {"env": {}}}),
+        {},
+        data_root="/tmp/dvla-data",
+    )
 
     assert "MUJOCO_GL" not in env
     assert "PYOPENGL_PLATFORM" not in env
-
-
-def test_sync_cotrain_env_kwargs_carry_libero_render_regime() -> None:
-    from dreamervla.runners.online_cotrain_runner import OnlineCotrainRunner
-
-    runner = OnlineCotrainRunner.__new__(OnlineCotrainRunner)
-    runner.distributed = SimpleNamespace(rank=0)
-    cfg = OmegaConf.create(
-        {
-            "seed": 7,
-            "env": {"task_suite_name": "libero_goal", "episode_horizon": 20},
-            "online_rollout": {
-                "render_backend": "egl",
-                "render_devices": [2, 5],
-            },
-        }
-    )
-
-    kwargs = runner._env_cfg_kwargs(cfg)
-
-    assert kwargs["_libero_render_backend"] == "egl"
-    assert kwargs["_libero_render_gpu_pool"] == [2, 5]
-    assert kwargs["_libero_render_shard_id"] == 0
 
 
 def test_libero_utils_module_import_does_not_import_libero_backend() -> None:

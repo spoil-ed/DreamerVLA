@@ -6,5 +6,5 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 cd "$(cd "${SCRIPT_DIR}/../../.." && pwd -P)"
 
 exec python -m dreamervla.launchers.train \
-  --config-name classifier_training \
+  --config classifier_official_upper_bound \
   "$@"

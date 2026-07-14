@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 from omegaconf import OmegaConf
 
-from dreamervla.runners.collect_rollouts_runner import CollectRolloutsRunner
+from dreamervla.runners import RolloutCollectionRunner
 from dreamervla.runtime.oft_collect import select_vla_image_keys
 
 
@@ -63,7 +63,7 @@ def _make_cfg(num_images=None):
 
 
 def _build(cfg):
-    runner = CollectRolloutsRunner.__new__(CollectRolloutsRunner)
+    runner = RolloutCollectionRunner.__new__(RolloutCollectionRunner)
     runner.cfg = cfg
     return runner._build_collect_cfg()
 

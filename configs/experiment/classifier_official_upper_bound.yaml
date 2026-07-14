@@ -1,8 +1,8 @@
 # @package _global_
 # Pre-mainline CLS capacity test trained only from official LIBERO data.
 defaults:
-  - latent_classifier_openvla_onetraj_libero_goal_h1
-  - override /classifier: openvla_oft_spatial
+  - wmpo_token_classifier_openvla_onetraj_libero_goal_h1
+  - override /classifier: dreamer-cls
   - override /pre_mainline: libero_goal_official
   - _self_
 

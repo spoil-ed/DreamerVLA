@@ -41,7 +41,11 @@ def test_openvla_oft_eval_entry_is_hydra_configured() -> None:
         project_root / "dreamervla" / "diagnostics" / "eval_openvla_oft_libero.py"
     ).read_text(encoding="utf-8")
     config_text = (
-        project_root / "configs" / "scripts" / "openvla_oft_official_eval.yaml"
+        project_root
+        / "configs"
+        / "experiment"
+        / "openvla_oft_official_eval"
+        / "eval.yaml"
     ).read_text(encoding="utf-8")
 
     assert "argparse" not in text
@@ -55,12 +59,14 @@ def test_openvla_oft_eval_entry_is_hydra_configured() -> None:
 def test_openvla_oft_eval_script_config_composes() -> None:
     project_root = Path(__file__).resolve().parents[2]
     with initialize_config_dir(
-        config_dir=str(project_root / "configs" / "scripts"),
+        config_dir=str(
+            project_root / "configs" / "experiment" / "openvla_oft_official_eval"
+        ),
         job_name="test_openvla_oft_eval_config",
         version_base=None,
     ):
         cfg = compose(
-            config_name="openvla_oft_official_eval",
+            config_name="eval",
             overrides=["task_ids=0-2", "use_proprio=0"],
         )
 

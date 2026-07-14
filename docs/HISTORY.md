@@ -14,8 +14,8 @@ detail lives in `git log`; architecture rules live in [AGENTS.md](../AGENTS.md).
   `collect rollouts -> seed replay -> warm up world model + classifier -> online cotrain -> eval`.
 - Main launcher configs:
   `configs/scripts/coldstart_warmup_cotrain.yaml`,
-  `openvla_onetraj_libero_cotrain_noray`,
-  `openvla_onetraj_libero_cotrain_ray`,
+  `openvla_onetraj_libero_cotrain`,
+  `openvla_onetraj_libero_cotrain`,
   `wm_full_dataset_train`, and `eval_libero_vla`.
 
 ## Ray Backend

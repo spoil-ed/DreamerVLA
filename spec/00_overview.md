@@ -15,7 +15,7 @@ collect rollouts -> seed replay/data -> warm up world model + classifier -> onli
 | --- | --- |
 | `dreamervla/train.py` | 统一 Hydra 训练入口：resolve config、validate、实例化 Runner。 |
 | `dreamervla/config.py` | 早期配置关系校验。 |
-| `dreamervla/launchers/` | 组合多阶段命令；主线是 `coldstart_warmup_cotrain.py`。 |
+| `dreamervla/launchers/` | cotrain、通用 train/eval 与 workflow 的薄 Python 入口。 |
 | `dreamervla/runners/` | 训练/评估 job 入口；Runner 负责 setup、execute、teardown。 |
 | `dreamervla/models/` | VLA、encoder、actor、critic、world model、reward/classifier。 |
 | `dreamervla/dataset/`, `dreamervla/preprocess/` | rollout、sidecar、HDF5、manifest 和预处理。 |
@@ -30,12 +30,14 @@ collect rollouts -> seed replay/data -> warm up world model + classifier -> onli
 当前主线围绕 OpenVLA-OFT one-trajectory cold start：
 
 ```text
-python -m dreamervla.launchers.coldstart_warmup_cotrain mode=noray
-python -m dreamervla.launchers.coldstart_warmup_cotrain mode=ray
+experiment=collect_rollouts
+  -> independent WM/CLS warmup
+  -> experiment=dreamervla_wmcls_cotrain
+  -> experiment=eval_cotrain
 ```
 
-launcher 根据
-`configs/scripts/coldstart_warmup_cotrain.yaml` 生成 collection 和 cotrain 阶段命令。
+collection 与 cotrain 均以 Ray 为实现后端，公开 experiment 不再使用 `ray` 后缀，
+也不保留同能力的 non-Ray 分支。
 
 ## Stable Boundaries
 

@@ -15,7 +15,7 @@ dependencies = [
 
 [project.optional-dependencies]
 ray = [
-    "ray[default]>=2.47.0",
+    "ray==2.55.1",
 ]
 
 [project.scripts]

@@ -4,6 +4,10 @@ Shell files in this directory are entrypoints, not configuration sources. Traini
 evaluation defaults live in `configs/`; pass changes as Hydra `key=value` overrides.
 Repository data paths are described in `docs/data_layout.md`.
 
+Training and evaluation entries under `scripts/experiments/` select recipes directly
+from `configs/experiment/`. The only configs under `configs/scripts/` are grouped as
+`install/`, `download/`, and `preprocess/` workflows.
+
 ## Frozen bootstrap surface
 
 The shell files in `download/`, `install/`, and `preprocess/` are the finalized
@@ -19,9 +23,12 @@ behavior belongs in `dreamervla/` and `configs/`, not in these frozen bootstrap 
 
 ## Workflow entrypoints
 
-- `install_env.sh` runs the Hydra install workflow.
-- `download_assets.sh` runs the Hydra download workflow.
-- `preprocess_libero.sh` runs the Hydra LIBERO preprocessing workflow.
+- `install_env.sh`
+- `download_assets.sh`
+- `preprocess_libero.sh`
+
+These run the Hydra install, download, and LIBERO preprocessing workflows,
+respectively.
 
 The workflow implementation steps are:
 
@@ -45,10 +52,18 @@ The workflow implementation steps are:
 
 ## Experiment entrypoints
 
+Mainline rollout collection:
+
+- `experiments/collect_rollouts/train.sh`
+
 Classifier training and artifact evaluation:
 
 - `experiments/classifier_training/train.sh`
 - `experiments/classifier_training/eval.sh`
+
+Official OpenVLA-OFT evaluation:
+
+- `experiments/openvla_oft_official_eval/eval.sh`
 
 Single-trajectory world-model overfit diagnostic:
 

@@ -22,8 +22,8 @@ git clone <repo> && cd DreamerVLA
 export DVLA_DATA_ROOT=data
 bash scripts/install_env.sh
 conda activate dreamervla
-bash scripts/download_assets.sh download.openvla_one_traj=true only=[30_openvla_oft_one_trajectory]
-bash scripts/download_assets.sh only=[40_libero_dataset] env.LIBERO_SUITES=libero_goal
+bash scripts/download_assets.sh download.openvla_one_traj=true only=[10_openvla_oft_one_trajectory]
+bash scripts/download_assets.sh only=[20_libero_dataset] env.LIBERO_SUITES=libero_goal
 
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   bash scripts/experiments/cotrain/train.sh
@@ -87,7 +87,8 @@ docs/               文档索引、参考、教程、报告和论文草稿
 ```
 
 `DVLA_DATA_ROOT` 和 `DVLA_ROOT` 相互独立；数据可以放在仓库之外的磁盘或共享存储。
-实验 shell 不保存训练或评估默认参数；默认值由 `configs/scripts/` 和
-`configs/experiment/` 中的 Hydra 配置提供，修改时使用 `key=value` override。
+实验 shell 不保存训练或评估默认参数；入口和默认值由 `configs/experiment/` 中的
+Hydra 配置提供，修改时使用 `key=value` override。`configs/scripts/` 只保留
+install、download、preprocess 三类工作流。
 
 完整流程见 [SETUP.md](SETUP.md)，路径约定见 [docs/data_layout.md](docs/data_layout.md)。

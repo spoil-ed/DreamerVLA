@@ -9,15 +9,18 @@ configs/
 ├── train.yaml
 ├── experiment/
 ├── dreamervla/
+├── worldmodel/
 ├── classifier/
 ├── pre_mainline/
 ├── evaluation/
 ├── task/
-├── logger/
-├── precision/
-├── parallelism/
-└── scheduler/
+└── logger/
 ```
+
+`configs/scripts/` is intentionally separate and contains only `install/`,
+`download/`, and `preprocess/`. Training/evaluation shell entries select
+`configs/experiment/` recipes directly; experiment `launch` blocks own local
+torchrun/GPU metadata.
 
 Shell launchers should stay thin. Put experiment behavior in config or Python
 runners, and keep shell overrides limited to GPUs, data roots, output roots,
@@ -26,15 +29,11 @@ and smoke-run limits.
 ## Common Commands
 
 ```bash
-python -m dreamervla.train experiment=openvla_onetraj_libero_cotrain_noray task=openvla_onetraj_coldstart_libero
-python -m dreamervla.train experiment=openvla_onetraj_libero_cotrain_ray task=openvla_onetraj_coldstart_libero
+python -m dreamervla.train experiment=openvla_onetraj_libero_cotrain task=openvla_onetraj_coldstart_libero
+bash scripts/experiments/collect_rollouts/train.sh task=openvla_onetraj_coldstart_libero
 python -m dreamervla.train experiment=wm_full_dataset_train task=openvla_onetraj_coldstart_libero
 bash scripts/experiments/world_model_training/train.sh --config dino-wm
 bash scripts/experiments/world_model_training/train.sh --config dreamer-wm
-python -m dreamervla.train experiment=dreamervla_frozen_models_rl task=openvla_onetraj_libero \
-  init.world_model_state_ckpt=<wm.ckpt> init.classifier_state_ckpt=<classifier.ckpt>
-python -m dreamervla.train experiment=dreamervla_frozen_models_rl_ray task=openvla_onetraj_libero \
-  init.world_model_state_ckpt=<wm.ckpt> init.classifier_state_ckpt=<classifier.ckpt>
 python -m dreamervla.train experiment=eval_libero_vla task=openvla_onetraj_libero
 ```
 
@@ -46,22 +45,19 @@ backend with `logger=tensorboard` / `logger=wandb`.
 
 | Stage | Script | Default Config |
 | --- | --- | --- |
-| Trainable WM/CLS cotrain | `scripts/experiments/cotrain/train.sh` | `dreamervla_wmcls_cotrain_ray` |
+| Trainable WM/CLS cotrain | `scripts/experiments/cotrain/train.sh` | `dreamervla_wmcls_cotrain` |
 | Cotrain policy eval | `scripts/experiments/cotrain/eval.sh` | `eval_cotrain` |
 | Official-data world model | `scripts/experiments/world_model_training/train.sh --config dino-wm\|dreamer-wm` | `dino-wm` / `dreamer-wm` |
 | Bounded WM timing profile | `scripts/experiments/world_model_training/profile.sh` | `wm_official_upper_bound_profile` |
 | Official-data classifier upper bound | `scripts/experiments/classifier_training/train.sh` | `classifier_official_upper_bound` |
-| Cold-start collect/warmup pipeline | `python -m dreamervla.launchers.coldstart_warmup_cotrain` | `configs/scripts/coldstart_warmup_cotrain.yaml` |
-| Pre-mainline frozen-model proof | `python -m dreamervla.launchers.frozen_model_pre_mainline` | `configs/scripts/frozen_model_pre_mainline.yaml` |
+| Rollout collection | `scripts/experiments/collect_rollouts/train.sh` | `collect_rollouts` |
 
 ## Experiments
 
 | Experiment | Module group |
 | --- | --- |
-| `collect_rollouts_onetraj` | rollout collection |
-| `collect_rollouts_ray` | Ray rollout collection |
-| `openvla_onetraj_libero_cotrain_noray` | sync warmup + cotrain |
-| `openvla_onetraj_libero_cotrain_ray` | Ray manual cotrain |
+| `collect_rollouts` | Ray rollout collection |
+| `openvla_onetraj_libero_cotrain` | canonical Ray cotrain base recipe |
 | `wm_full_dataset_train` | full-replay WM warmup |
 | `wm_official_upper_bound` | pre-mainline WM training from official data |
 | `wm_dino_token_official` | DINO-WM architecture/data protocol over official OpenVLA-OFT tokens |
@@ -69,20 +65,18 @@ backend with `logger=tensorboard` / `logger=wandb`.
 | `dreamer-wm` | user-facing official-data Chunk-WM recipe |
 | `wm_official_upper_bound_profile` | bounded 8-GPU timing run of the same optimized WM route |
 | `classifier_official_upper_bound` | pre-mainline classifier training from official data |
-| `dreamervla_frozen_models_rl` | policy-only imagined RL with immutable WM/CLS |
-| `dreamervla_frozen_models_rl_ray` | 8-GPU Ray/FSDP policy-only imagined RL with immutable WM/CLS |
-| `latent_classifier_openvla_onetraj_libero_goal_h1` | classifier warmup |
 | `wmpo_token_classifier_openvla_onetraj_libero_goal_h1` | token classifier recipe |
+| `dreamervla_wmcls_cotrain` | trainable WM/CLS cotrain (Ray backend) |
 | `eval_libero_vla` | LIBERO rollout eval |
 
 The release training path is OpenVLA-OFT one-trajectory cold-start cotrain.
-The two `*_official_upper_bound` stages plus the single-process and Ray
-`frozen_models_rl*` realizations form an isolated `libero_goal`-only
-pre-mainline feasibility gate and are not release-mainline aliases.
-The official classifier stage and frozen-RL stage both select
-`classifier=openvla_oft_spatial`; construction is shared as one Hydra component
-instead of being copied into experiment-specific Python classes.
-All three stages select `pre_mainline=libero_goal_official` for the immutable
+The two `*_official_upper_bound` stages form an isolated `libero_goal`-only
+pre-mainline capacity check and are not release-mainline aliases. World-model
+and classifier role construction live only in their component groups; experiments
+select those groups and cotrain recipes do not duplicate their parameters. The
+concrete classifier model, dataset targets, and input contract are owned together by
+`task.classifier`; `classifier=dreamer-cls` consumes that task contract.
+Both stages select `pre_mainline=libero_goal_official` for the immutable
 ten-task/ten-shard official-data manifest.
 
 ## Task Configs

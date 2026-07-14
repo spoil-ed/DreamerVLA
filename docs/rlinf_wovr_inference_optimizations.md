@@ -43,7 +43,7 @@ Ray 控制面只看到粗粒度 WorkerGroup 调用。
 
 ## 2. DreamerVLA 当前对应位置
 
-manual Ray cotrain 路线：`experiment=openvla_onetraj_libero_cotrain_ray`
+manual Ray cotrain 路线：`experiment=openvla_onetraj_libero_cotrain`
 （`dreamervla/runners/manual_cotrain_ray_runner.py::ManualCotrainRayRunner`）。
 拓扑为 Learner / Actor / Rollout / Env 四组（`_build_groups`，placement 由
 `dreamervla/workers/cotrain/placement.py::build_manual_cotrain_placement` 计算：
@@ -113,7 +113,7 @@ GPU0 = real_env + rollout0 + learner，GPU>0 = wm_env + rollout + actor）。
    （用户明确要求本文档使用该外部方案名）。
 3. 验证既有 diff 已满足三项运行时要求：
    - **每 global_step 一次 eval SR**：`manual_cotrain.eval_interval_global_steps: 1`
-     （`configs/dreamervla/openvla_onetraj_libero_cotrain_ray.yaml`），
+     （`configs/dreamervla/openvla_onetraj_libero_cotrain.yaml`），
      `_real_env_success_rate_metrics` 把真实 LIBERO episode 成功率镜像到 `eval/*`；
    - **per-rank 批量处理**：`ObservationBatchMsg`/`RolloutResultBatchMsg` 主链路 +
      `_cat_step_batch` 秩归一化 + `_one_forward_input_chunk_batch` 整形；
@@ -125,7 +125,7 @@ GPU0 = real_env + rollout0 + learner，GPU>0 = wm_env + rollout + actor）。
 `docs/superpowers/plans/2026-07-02-manual-cotrain-imagine-speedup.md` TDD 执行）：
 
 4. **imagine 批量对齐**：`manual_cotrain.wm_envs_per_worker` 8 -> 16
-   （`configs/dreamervla/openvla_onetraj_libero_cotrain_ray.yaml`；测试
+   （`configs/dreamervla/openvla_onetraj_libero_cotrain.yaml`；测试
    `test_manual_cotrain_oft_wm_env_num_envs_tracks_wm_envs_per_worker`）。
    实测（下文 run B）表明单纯扩大批量吞吐不变——每次迭代耗时随 payload
    线性增长，证实瓶颈是消息序列化/CPU 而非前向延迟。
@@ -164,7 +164,7 @@ pytest tests/unit_tests -q   # 全量见第 5 节后记
 - RLinf WoVR：`wan_libero_goal_grpo_openvlaoft`（GPU 2,3，2 卡，
   容器 `rlinf-wovr-local:wan`，`--security-opt seccomp=unconfined`，
   日志 `RLinf/logs/20260702-224023-wovr-goal-train-full/`）。
-- DreamerVLA：`openvla_onetraj_libero_cotrain_ray` 全量默认参数
+- DreamerVLA：`openvla_onetraj_libero_cotrain` 全量默认参数
   （GPU 6,7，2 卡，init = `ray6_wovr_full_20260628_020057` warmup ckpt，
   输出 `data/outputs/manual_g67_full_20260702_222900/`）。
 

@@ -64,6 +64,8 @@ class MultiStepRolloutWorker(Worker):
         self.policy_dtype = dtype_from_precision(
             self.train_cfg.get("precision", "fp32")
         )
+        self.enable_offload = bool(self.train_cfg.get("enable_offload", False))
+        self._model_offloaded = False
         self.encoder: Any | None = None
         self.policy: nn.Module | None = None
         self.syncer: PatchWeightSyncer | None = None
@@ -91,6 +93,8 @@ class MultiStepRolloutWorker(Worker):
             )
         policy.eval()
         self.policy = policy
+        if self.enable_offload:
+            self.offload_model()
 
     @torch.no_grad()
     def generate_once(self, obs_msg: ObservationMsg) -> RolloutResultMsg:
@@ -297,18 +301,26 @@ class MultiStepRolloutWorker(Worker):
     ) -> dict[str, float]:
         """Drain observations from a named channel until a stop message arrives."""
 
-        input_channel = Channel.connect(input_channel_name)
-        output_channel = Channel.connect(output_channel_name)
-        if input_key is not None:
-            return self._generate_from_key(input_channel, output_channel, str(input_key))
-        if num_slots is not None:
-            return self._generate_from_rank_batch_key(
-                input_channel,
-                output_channel,
-                int(num_slots),
-            )
+        try:
+            if self.enable_offload:
+                self.reload_model()
+            input_channel = Channel.connect(input_channel_name)
+            output_channel = Channel.connect(output_channel_name)
+            if input_key is not None:
+                return self._generate_from_key(
+                    input_channel, output_channel, str(input_key)
+                )
+            if num_slots is not None:
+                return self._generate_from_rank_batch_key(
+                    input_channel,
+                    output_channel,
+                    int(num_slots),
+                )
 
-        return self._generate_from_key(input_channel, output_channel, "default")
+            return self._generate_from_key(input_channel, output_channel, "default")
+        finally:
+            if self.enable_offload:
+                self.offload_model()
 
     def _generate_from_key(
         self,
@@ -561,6 +573,30 @@ class MultiStepRolloutWorker(Worker):
             name: value.detach().cpu().clone()
             for name, value in self._policy().state_dict().items()
         }
+
+    def offload_model(self) -> None:
+        """Move inference-only modules to CPU outside rollout generation."""
+
+        if self._model_offloaded:
+            return
+        self._policy().to(device="cpu")
+        if self.encoder is not None and hasattr(self.encoder, "to"):
+            self.encoder.to("cpu")
+        self._model_offloaded = True
+        if self.torch_device.type == "cuda" and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    def reload_model(self) -> None:
+        """Move inference-only modules back to their configured rollout device."""
+
+        if not self._model_offloaded:
+            return
+        # Clear the flag first so generate()'s finally block also cleans up a
+        # partially failed device transfer.
+        self._model_offloaded = False
+        self._policy().to(device=self.torch_device, dtype=self.policy_dtype)
+        if self.encoder is not None and hasattr(self.encoder, "to"):
+            self.encoder.to(self.torch_device)
 
     def set_global_step(self, global_step: int) -> None:
         """Set runner-visible progress metadata."""

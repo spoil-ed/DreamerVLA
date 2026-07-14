@@ -21,8 +21,8 @@ class OFTRolloutBundle:
         expected_include_state: bool | None = None,
         device: str = "cuda",
     ) -> None:
-        from dreamervla.runners import oft_collect_common
-        from dreamervla.runners import rollout_hidden_extractor as rhe
+        from dreamervla.runtime import oft_collect as oft_collect_common
+        from dreamervla.runtime import rollout_hidden_extractor as rhe
 
         device_ref = _device_ref_from_device(device)
         cfg = dict(policy_cfg)
@@ -70,7 +70,7 @@ class OFTRolloutBundle:
         return self
 
     def make_extractor(self) -> Any:
-        from dreamervla.runners import rollout_hidden_extractor as rhe
+        from dreamervla.runtime import rollout_hidden_extractor as rhe
 
         return rhe.OFTRolloutHiddenExtractor(
             self._policy,

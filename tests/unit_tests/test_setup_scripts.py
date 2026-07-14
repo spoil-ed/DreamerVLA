@@ -101,12 +101,8 @@ def test_release_shell_entrypoints_are_self_contained() -> None:
         assert "DVLA_ROOT" in text, relpath
         assert "DVLA_DATA_ROOT" in text, relpath
 
-    train_text = (root / "scripts/experiments/cotrain/train.sh").read_text(
-        encoding="utf-8"
-    )
-    eval_text = (root / "scripts/experiments/cotrain/eval.sh").read_text(
-        encoding="utf-8"
-    )
+    train_text = (root / "scripts/experiments/cotrain/train.sh").read_text(encoding="utf-8")
+    eval_text = (root / "scripts/experiments/cotrain/eval.sh").read_text(encoding="utf-8")
     assert "dreamervla.launchers.cotrain" in train_text
     assert "dreamervla.launchers.train" in eval_text
     assert "DVLA_ROOT" not in train_text
@@ -137,10 +133,10 @@ def test_setup_and_download_scripts_are_release_entrypoints() -> None:
     download_steps = [
         root / "scripts" / "download" / name
         for name in (
-            "20_openvla_oft.sh",
-            "30_openvla_oft_one_trajectory.sh",
-            "40_libero_dataset.sh",
-            "50_calvin_dataset.sh",
+            "00_openvla_oft.sh",
+            "10_openvla_oft_one_trajectory.sh",
+            "20_libero_dataset.sh",
+            "30_calvin_dataset.sh",
         )
     ]
 
@@ -199,7 +195,9 @@ def test_setup_and_download_scripts_are_release_entrypoints() -> None:
     assert "hf download" not in download_text
 
     download_step_text = "\n".join(step.read_text(encoding="utf-8") for step in download_steps)
-    download_cfg_text = (root / "configs" / "scripts" / "download.yaml").read_text(encoding="utf-8")
+    download_cfg_text = (
+        root / "configs" / "scripts" / "download" / "config.yaml"
+    ).read_text(encoding="utf-8")
     assert 'source "${SCRIPT_DIR}/_env.sh"' not in download_step_text
     assert 'DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"' in download_step_text
     assert "hf download" in download_step_text
@@ -208,7 +206,10 @@ def test_setup_and_download_scripts_are_release_entrypoints() -> None:
     assert "download_libero_datasets.py" in download_step_text
     assert '--download-dir "${LIBERO_DATASET_DIR}"' in download_step_text
     assert 'OPENVLA_OFT_CKPT_ROOT="${DVLA_DATA_ROOT}/checkpoints/OpenVLA-OFT"' in download_step_text
-    assert 'OPENVLA_ONE_TRAJ_ROOT="${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1"' in download_step_text
+    assert (
+        'OPENVLA_ONE_TRAJ_ROOT="${DVLA_DATA_ROOT}/checkpoints/Openvla-oft-SFT-traj1"'
+        in download_step_text
+    )
     assert "calvin" in download_step_text.lower()
     assert "CALVIN_DOWNLOAD_METHOD" in download_step_text
     assert "VyoJ/calvin-ABCD-D-shards" in download_step_text
@@ -264,16 +265,33 @@ def test_install_verify_exports_dvla_root_to_python_diagnostics(tmp_path: Path) 
     assert f"DVLA_ROOT={root}" in log_path.read_text(encoding="utf-8")
 
 
+def test_download_steps_fail_fast_when_selected_client_is_missing() -> None:
+    root = _project_root()
+    download_dir = root / "scripts" / "download"
+    generic_oft = (download_dir / "00_openvla_oft.sh").read_text(encoding="utf-8")
+    one_traj = (download_dir / "10_openvla_oft_one_trajectory.sh").read_text(encoding="utf-8")
+    calvin = (download_dir / "30_calvin_dataset.sh").read_text(encoding="utf-8")
+
+    for source in (generic_oft, one_traj):
+        assert "command -v hf" in source
+        assert "command -v git" in source
+        assert "git lfs version" in source
+    assert "command -v curl" in calvin
+    assert "command -v hf" in calvin
+    assert "command -v openxlab" in calvin
+    assert "pip install openxlab" in calvin
+
+
 def test_script_orchestration_is_hydra_centered() -> None:
     root = _project_root()
     workflow = root / "dreamervla" / "launchers" / "workflow.py"
     configs_dir = root / "configs" / "scripts"
     top_level = {
-        "scripts/install_env.sh": "install",
-        "scripts/download_assets.sh": "download",
-        "scripts/preprocess_libero.sh": "preprocess_libero",
-        "scripts/preprocess/prepare_libero_data.sh": "preprocess_suite",
-        "scripts/preprocess/process_all_libero_data.sh": "preprocess_all",
+        "scripts/install_env.sh": "install/config",
+        "scripts/download_assets.sh": "download/config",
+        "scripts/preprocess_libero.sh": "preprocess/preprocess_libero",
+        "scripts/preprocess/prepare_libero_data.sh": "preprocess/preprocess_suite",
+        "scripts/preprocess/process_all_libero_data.sh": "preprocess/preprocess_all",
     }
 
     assert workflow.is_file()
@@ -290,11 +308,11 @@ def test_script_orchestration_is_hydra_centered() -> None:
         assert "_STEPS=(" not in text, relpath
 
     for name in (
-        "install",
-        "download",
-        "preprocess_libero",
-        "preprocess_suite",
-        "preprocess_all",
+        "install/config",
+        "download/config",
+        "preprocess/preprocess_libero",
+        "preprocess/preprocess_suite",
+        "preprocess/preprocess_all",
     ):
         cfg = configs_dir / f"{name}.yaml"
         assert cfg.is_file(), name
@@ -341,13 +359,60 @@ def test_requirements_keep_runtime_dependency_set_curated() -> None:
     assert {"pytest", "ruff", "pre-commit"}.issubset(dev_deps)
 
 
+def test_install_contract_is_reproducible_without_patching_upstream() -> None:
+    root = _project_root()
+    requirements = (root / "requirements.txt").read_text(encoding="utf-8")
+    install_cfg = (
+        root / "configs" / "scripts" / "install" / "config.yaml"
+    ).read_text(encoding="utf-8")
+    third_party_step = (root / "scripts" / "install" / "40_third_party.sh").read_text(
+        encoding="utf-8"
+    )
+    special_step = (root / "scripts" / "install" / "50_special_packages.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "draccus==0.8.0" in requirements
+    assert "sentencepiece==0.1.99" in requirements
+    assert "INSTALL_RAY: true" in install_cfg
+    assert "INSTALL_OPENSORA_THIRD_PARTY: false" in install_cfg
+    assert "OPENVLA_OFT_REPO_URL:" in install_cfg
+    assert "OPENVLA_OFT_REVISION:" in install_cfg
+    assert "OPENSORA_REPO_URL:" in install_cfg
+    assert "OPENSORA_REVISION:" in install_cfg
+    assert "DLIMP_OPENVLA_SRC:" in install_cfg
+    assert "TRANSFORMERS_OFT_FORK_SRC:" in install_cfg
+    assert "OPENVLA_OFT_REPO_URL" in third_party_step
+    assert "OPENVLA_OFT_REVISION" in third_party_step
+    assert "OPENSORA_REPO_URL" in third_party_step
+    assert "OPENSORA_REVISION" in third_party_step
+    assert "040105d256bd28866cc6620621a3d5f7b6b91b46" in third_party_step
+    assert "bc339d9ad707454c0c115970db43c260067c61ab" in third_party_step
+    assert "dreamervla_libero.pth" in third_party_step
+    assert "dreamervla_openvla_oft.pth" not in third_party_step
+    assert "uv pip uninstall openvla-oft" in third_party_step
+    assert 'uv pip install --no-deps -e "${DVLA_ROOT}/third_party/openvla-oft"' not in (
+        third_party_step
+    )
+    assert "install_mujoco.sh" not in third_party_step
+    assert 'cat > "${DVLA_ROOT}/third_party/' not in third_party_step
+    assert "sed -i" not in special_step
+    assert "CMAKE_POLICY_VERSION_MINIMUM=3.5" in special_step
+    python_deps_step = (root / "scripts" / "install" / "30_python_deps.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "INSTALL_RAY" in python_deps_step
+    assert '"${DVLA_ROOT}[ray]"' in python_deps_step
+    assert "--extra ray" not in python_deps_step
+
+
 def test_libero_data_script_uses_only_hidden_token_mainline_and_filters_noops() -> None:
     root = _project_root()
     process_all = root / "scripts" / "preprocess" / "process_all_libero_data.sh"
     prepare = root / "scripts" / "preprocess" / "prepare_libero_data.sh"
-    hidden_token = root / "scripts" / "preprocess" / "35_oft_hidden_token.sh"
-    reward = root / "scripts" / "preprocess" / "10_hdf5_reward.sh"
-    preprocess_cfg = (root / "configs" / "scripts" / "preprocess_suite.yaml").read_text(
+    hidden_token = root / "scripts" / "preprocess" / "10_oft_hidden_token.sh"
+    reward = root / "scripts" / "preprocess" / "00_hdf5_reward.sh"
+    preprocess_cfg = (root / "configs" / "scripts" / "preprocess" / "preprocess_suite.yaml").read_text(
         encoding="utf-8"
     )
 
@@ -369,14 +434,14 @@ def test_libero_data_script_uses_only_hidden_token_mainline_and_filters_noops() 
     assert "no_noops_t_256" in reward_text
     assert "PREPROCESS_ONLY" not in prepare_text
     assert "HIDDEN_TOKEN" not in prepare_text
-    assert "--config-name preprocess_suite" in prepare_text
-    assert "--config-name preprocess_all" in process_text
+    assert "--config-name preprocess/preprocess_suite" in prepare_text
+    assert "--config-name preprocess/preprocess_all" in process_text
     assert "OFT_HISTORY: null" in preprocess_cfg
     assert "OFT_IMAGE_KEYS: null" in preprocess_cfg
     assert "OFT_HIDDEN_TOKEN_GPUS: ${ngpu}" in preprocess_cfg
-    assert "10_hdf5_reward.sh" in preprocess_cfg
-    assert "35_oft_hidden_token.sh" in preprocess_cfg
-    assert "40_validate.sh" in preprocess_cfg
+    assert "00_hdf5_reward.sh" in preprocess_cfg
+    assert "10_oft_hidden_token.sh" in preprocess_cfg
+    assert "20_validate.sh" in preprocess_cfg
     assert "20_pretokenize_dataset" not in preprocess_cfg
     assert ("OFT_INPUT_" + "TOKEN_GPUS") not in preprocess_cfg
 
@@ -385,14 +450,14 @@ def test_preprocess_steps_are_numbered_registered_and_individually_runnable() ->
     root = _project_root()
     preprocess_dir = root / "scripts" / "preprocess"
     registry = (root / "scripts" / "README.md").read_text(encoding="utf-8")
-    preprocess_cfg = (root / "configs" / "scripts" / "preprocess_suite.yaml").read_text(
+    preprocess_cfg = (root / "configs" / "scripts" / "preprocess" / "preprocess_suite.yaml").read_text(
         encoding="utf-8"
     )
 
     expected_steps = (
-        "10_hdf5_reward.sh",
-        "35_oft_hidden_token.sh",
-        "40_validate.sh",
+        "00_hdf5_reward.sh",
+        "10_oft_hidden_token.sh",
+        "20_validate.sh",
     )
     assert "PREPROCESS_ONLY" not in (preprocess_dir / "prepare_libero_data.sh").read_text(
         encoding="utf-8"
@@ -411,13 +476,50 @@ def test_preprocess_steps_are_numbered_registered_and_individually_runnable() ->
         assert step in preprocess_cfg, step
 
 
+def test_bootstrap_step_numbers_are_contiguous_and_frozen() -> None:
+    root = _project_root()
+    scripts = root / "scripts"
+
+    expected_by_workflow = {
+        "install": [
+            "00_apt_tools.sh",
+            "10_conda_env.sh",
+            "20_torch.sh",
+            "30_python_deps.sh",
+            "40_third_party.sh",
+            "50_special_packages.sh",
+            "60_verify.sh",
+        ],
+        "download": [
+            "00_openvla_oft.sh",
+            "10_openvla_oft_one_trajectory.sh",
+            "20_libero_dataset.sh",
+            "30_calvin_dataset.sh",
+        ],
+        "preprocess": [
+            "00_hdf5_reward.sh",
+            "10_oft_hidden_token.sh",
+            "20_validate.sh",
+        ],
+    }
+
+    for workflow, expected in expected_by_workflow.items():
+        actual = sorted(path.name for path in (scripts / workflow).glob("[0-9][0-9]_*.sh"))
+        assert actual == expected
+        assert [int(name[:2]) for name in actual] == list(range(0, len(actual) * 10, 10))
+
+    registry = (scripts / "README.md").read_text(encoding="utf-8")
+    assert "## Frozen bootstrap surface" in registry
+    assert "must not be modified, renamed, reordered, or copied in part" in registry
+
+
 def test_preprocess_scripts_are_direct_copyable_commands() -> None:
     root = _project_root()
     preprocess_dir = root / "scripts" / "preprocess"
     scripts = [
-        preprocess_dir / "10_hdf5_reward.sh",
-        preprocess_dir / "35_oft_hidden_token.sh",
-        preprocess_dir / "40_validate.sh",
+        preprocess_dir / "00_hdf5_reward.sh",
+        preprocess_dir / "10_oft_hidden_token.sh",
+        preprocess_dir / "20_validate.sh",
     ]
 
     assert not (preprocess_dir / "_env.sh").exists()
@@ -430,13 +532,13 @@ def test_preprocess_scripts_are_direct_copyable_commands() -> None:
         assert re.search(r"\n\s*python -m ", text), script.name
 
 
-def test_train_launcher_has_no_compat_project_flag_mapping() -> None:
+def test_train_launcher_accepts_only_experiment_config_flag() -> None:
     root = _project_root()
     text = (root / "dreamervla" / "launchers" / "train.py").read_text(encoding="utf-8")
 
-    assert "def _parse_args" not in text
+    assert "def _parse_args" in text
+    assert '"--config"' in text
     for compat_flag in (
-        "--config",
         "--task",
         "--gpus",
         "--ngpu",
@@ -453,12 +555,7 @@ def test_train_launcher_has_no_compat_project_flag_mapping() -> None:
 def test_preprocess_launchers_accept_common_cli_flags(tmp_path: Path) -> None:
     root = _project_root()
     data_root = tmp_path / "data"
-    reward_dir = (
-        data_root
-        / "processed_data"
-        / "libero_goal"
-        / "no_noops_t_256_remaining_reward"
-    )
+    reward_dir = data_root / "processed_data" / "libero_goal" / "no_noops_t_256_remaining_reward"
     reward_dir.mkdir(parents=True)
     (reward_dir / "demo.hdf5").touch()
     log_path = tmp_path / "python_calls.log"
@@ -495,7 +592,7 @@ def test_preprocess_launchers_accept_common_cli_flags(tmp_path: Path) -> None:
             "gpus=4,5",
             "num_procs=3",
             "overwrite=true",
-            "only=[35_oft_hidden_token]",
+            "only=[10_oft_hidden_token]",
         ],
         cwd=root,
         env=env,
@@ -508,19 +605,66 @@ def test_preprocess_launchers_accept_common_cli_flags(tmp_path: Path) -> None:
     workflow_output = result.stdout + result.stderr
     log_text = log_path.read_text(encoding="utf-8")
     assert "[workflow:preprocess_suite]" in workflow_output
-    assert "config=preprocess_suite" in workflow_output
-    assert "run 35_oft_hidden_token" in workflow_output
+    assert "config=preprocess/preprocess_suite" in workflow_output
+    assert "run 10_oft_hidden_token" in workflow_output
 
     dreamervla_calls = [
-        line
-        for line in log_text.splitlines()
-        if line.startswith("-m dreamervla.preprocess.")
+        line for line in log_text.splitlines() if line.startswith("-m dreamervla.preprocess.")
     ]
     assert dreamervla_calls
     assert "dreamervla.preprocess.preprocess_oft_hidden_token" in log_text
     assert not any(
         re.search(r"(?<![\w-])--[A-Za-z][A-Za-z0-9_-]*", line) for line in dreamervla_calls
     )
+
+
+def test_preprocess_steps_share_root_and_alias_artifact_mapping(tmp_path: Path) -> None:
+    root = _project_root()
+    preprocess_dir = root / "scripts" / "preprocess"
+    for name in ("00_hdf5_reward.sh", "10_oft_hidden_token.sh", "20_validate.sh"):
+        source = (preprocess_dir / name).read_text(encoding="utf-8")
+        assert 'export DVLA_ROOT="${DVLA_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd -P)}"' in source
+
+    data_root = tmp_path / "data"
+    artifact_name = "openvla_onetraj_libero_libero_goal"
+    reward_dir = data_root / "processed_data" / artifact_name / "no_noops_t_256_remaining_reward"
+    reward_dir.mkdir(parents=True)
+    (reward_dir / "demo.hdf5").touch()
+
+    log_path = tmp_path / "python_calls.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    python_stub = bin_dir / "python"
+    python_stub.write_text(
+        '#!/usr/bin/env bash\nset -euo pipefail\nprintf \'%s\\n\' "$*" >> "${PYTHON_STUB_LOG}"\n',
+        encoding="utf-8",
+    )
+    python_stub.chmod(0o755)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "DVLA_ROOT": str(root),
+            "DVLA_DATA_ROOT": str(data_root),
+            "TASK": "libero_goal",
+            "LIBERO_SUITE": "libero_goal",
+            "TASK_NAME": "openvla_onetraj_libero",
+            "OFT_FAKE_COMPONENTS": "1",
+            "PYTHON_STUB_LOG": str(log_path),
+            "PATH": f"{bin_dir}:{env.get('PATH', '')}",
+        }
+    )
+    result = subprocess.run(
+        ["bash", "scripts/preprocess/10_oft_hidden_token.sh"],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert str(reward_dir) in log_path.read_text(encoding="utf-8")
 
 
 def test_prepare_libero_data_rebuilds_empty_marked_dir(tmp_path: Path) -> None:
@@ -581,7 +725,7 @@ def test_prepare_libero_data_rebuilds_empty_marked_dir(tmp_path: Path) -> None:
     )
 
     result = subprocess.run(
-        ["bash", "scripts/preprocess/10_hdf5_reward.sh"],
+        ["bash", "scripts/preprocess/00_hdf5_reward.sh"],
         cwd=root,
         env=env,
         check=False,
@@ -633,7 +777,7 @@ def test_hdf5_reward_repairs_incomplete_filtered_stage_without_full_overwrite(
     )
 
     result = subprocess.run(
-        ["bash", "scripts/preprocess/10_hdf5_reward.sh"],
+        ["bash", "scripts/preprocess/00_hdf5_reward.sh"],
         cwd=root,
         env=env,
         check=False,
@@ -642,7 +786,7 @@ def test_hdf5_reward_repairs_incomplete_filtered_stage_without_full_overwrite(
     )
 
     assert result.returncode == 0, result.stderr
-    assert "[10_hdf5_reward] repair incomplete filtered stage" in result.stderr
+    assert "[00_hdf5_reward] repair incomplete filtered stage" in result.stderr
     assert hdf5_dir.joinpath("stub_demo.hdf5").is_file()
     assert not stale_hdf5.exists()
     calls = log_path.read_text(encoding="utf-8").splitlines()
@@ -689,7 +833,7 @@ def test_hdf5_reward_repairs_incomplete_reward_stage_without_full_overwrite(
     )
 
     result = subprocess.run(
-        ["bash", "scripts/preprocess/10_hdf5_reward.sh"],
+        ["bash", "scripts/preprocess/00_hdf5_reward.sh"],
         cwd=root,
         env=env,
         check=False,
@@ -698,7 +842,7 @@ def test_hdf5_reward_repairs_incomplete_reward_stage_without_full_overwrite(
     )
 
     assert result.returncode == 0, result.stderr
-    assert "[10_hdf5_reward] repair incomplete reward stage" in result.stderr
+    assert "[00_hdf5_reward] repair incomplete reward stage" in result.stderr
     assert reward_dir.joinpath("stub_demo.hdf5").is_file()
     assert not stale_reward.exists()
     calls = log_path.read_text(encoding="utf-8").splitlines()
@@ -709,7 +853,7 @@ def test_hdf5_reward_repairs_incomplete_reward_stage_without_full_overwrite(
 
 def test_hdf5_reward_marked_validation_allows_failed_replays_to_drop_demos() -> None:
     root = _project_root()
-    reward_text = (root / "scripts" / "preprocess" / "10_hdf5_reward.sh").read_text(
+    reward_text = (root / "scripts" / "preprocess" / "00_hdf5_reward.sh").read_text(
         encoding="utf-8"
     )
 
@@ -753,7 +897,7 @@ def test_prepare_libero_data_rejects_empty_raw_dir_before_generation(tmp_path: P
     )
 
     result = subprocess.run(
-        ["bash", "scripts/preprocess/10_hdf5_reward.sh"],
+        ["bash", "scripts/preprocess/00_hdf5_reward.sh"],
         cwd=root,
         env=env,
         check=False,
@@ -763,7 +907,7 @@ def test_prepare_libero_data_rejects_empty_raw_dir_before_generation(tmp_path: P
 
     assert result.returncode == 2
     assert f"No raw LIBERO HDF5 files found under: {raw_dir}" in result.stderr
-    assert "only=[40_libero_dataset]" in result.stderr
+    assert "only=[20_libero_dataset]" in result.stderr
     assert not log_path.exists()
 
 
@@ -798,7 +942,7 @@ def test_setup_docs_explain_libero_noop_preprocessing_order() -> None:
     root = _project_root()
     setup = (root / "SETUP.md").read_text(encoding="utf-8")
 
-    assert "1. `10_hdf5_reward`" in setup
+    assert "1. `00_hdf5_reward`" in setup
     assert "keep_noops=true" in setup
     assert "filter the marked files" in setup
     assert "filter_noops=true" in setup
@@ -824,11 +968,13 @@ def test_top_level_preprocess_libero_wrapper_uses_repo_root_and_data_root() -> N
 
     assert wrapper.is_file()
     text = wrapper.read_text(encoding="utf-8")
-    cfg_text = (root / "configs" / "scripts" / "preprocess_libero.yaml").read_text(encoding="utf-8")
+    cfg_text = (
+        root / "configs" / "scripts" / "preprocess" / "preprocess_libero.yaml"
+    ).read_text(encoding="utf-8")
 
     assert 'export DVLA_ROOT="${DVLA_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd -P)}"' in text
     assert 'DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"' in text
-    assert "--config-name preprocess_libero" in text
+    assert "--config-name preprocess/preprocess_libero" in text
     assert "libero_goal libero_object libero_spatial libero_10" in cfg_text
     assert "scripts/preprocess/prepare_libero_data.sh" in cfg_text
 
@@ -860,11 +1006,13 @@ def test_release_scripts_tree_is_curated() -> None:
     }
     assert sorted(path.name for path in (scripts / "experiments").iterdir()) == [
         "classifier_training",
+        "collect_rollouts",
         "cotrain",
+        "openvla_oft_official_eval",
         "single_trajectory_overfit",
         "world_model_training",
     ]
-    assert len(list(scripts.rglob("*.sh"))) == 29
+    assert len(list(scripts.rglob("*.sh"))) == 31
     gitignore = (root / ".gitignore").read_text(encoding="utf-8")
     assert "__pycache__/" in gitignore
     assert "*.pyc" in gitignore
@@ -884,9 +1032,7 @@ def test_scripts_tree_does_not_ship_python_modules() -> None:
 
 def test_release_shell_scripts_launch_package_modules_with_python_m() -> None:
     root = _project_root()
-    active_shells = sorted(
-        path for path in (root / "scripts").rglob("*.sh") if path.is_file()
-    )
+    active_shells = sorted(path for path in (root / "scripts").rglob("*.sh") if path.is_file())
     path_script_re = re.compile(r"dreamervla/[^\s\"']+\.py")
     offenders = {
         str(path.relative_to(root)): path_script_re.findall(path.read_text(encoding="utf-8"))
@@ -900,6 +1046,7 @@ def test_release_shell_scripts_launch_package_modules_with_python_m() -> None:
 def test_active_shell_scripts_use_hydra_overrides_for_dreamervla_modules() -> None:
     root = _project_root()
     allowed_flags = {
+        "--config",
         "--config-name",
         "--master-port",
         "--module",
@@ -948,7 +1095,7 @@ def test_release_scripts_are_registered() -> None:
     root = _project_root()
     scripts = root / "scripts"
     registry = (scripts / "README.md").read_text(encoding="utf-8")
-    registered = set(re.findall(r"`([^`]+)`", registry))
+    registered = set(re.findall(r"(?m)^- `([^`]+)`$", registry))
     allowed_unregistered = {"README.md"}
     script_files = sorted(
         path
@@ -978,9 +1125,9 @@ def test_portable_data_layout_manifest_exists_and_is_linked() -> None:
     assert "${DVLA_DATA_ROOT}/checkpoints" in manifest_text
     assert "${DVLA_DATA_ROOT}/processed_data" in manifest_text
     assert "scripts/download_assets.sh" in manifest_text
-    assert "scripts/download/40_libero_dataset.sh" in manifest_text
-    assert "scripts/download/20_openvla_oft.sh" in manifest_text
-    assert "scripts/download/30_openvla_oft_one_trajectory.sh" in manifest_text
+    assert "scripts/download/20_libero_dataset.sh" in manifest_text
+    assert "scripts/download/00_openvla_oft.sh" in manifest_text
+    assert "scripts/download/10_openvla_oft_one_trajectory.sh" in manifest_text
     assert "scripts/preprocess/prepare_libero_data.sh" in manifest_text
     assert "DVLA_DATA_ROOT does not need to live inside DVLA_ROOT" in manifest_text
     assert "docs/data_layout.md" in setup
@@ -992,9 +1139,7 @@ def test_release_scripts_fall_back_to_dvla_root_data() -> None:
     root = _project_root()
     old_relative_default = "${DVLA_DATA_ROOT:-" + "data}"
     active_paths = [
-        *(
-            path for path in (root / "scripts").rglob("*.sh") if path.is_file()
-        ),
+        *(path for path in (root / "scripts").rglob("*.sh") if path.is_file()),
     ]
     relative_defaults = [
         str(path.relative_to(root))
@@ -1024,9 +1169,7 @@ def test_release_text_does_not_reference_removed_setup_steps() -> None:
         *(
             path
             for path in (root / "scripts").rglob("*")
-            if path.is_file()
-            and path.suffix in {".sh", ".md"}
-            and "__pycache__" not in path.parts
+            if path.is_file() and path.suffix in {".sh", ".md"} and "__pycache__" not in path.parts
         ),
     ]
     removed_step_re = re.compile(
@@ -1050,9 +1193,7 @@ def test_active_shell_scripts_do_not_pin_machine_local_environment() -> None:
         "/" + "/".join(("mnt", "data", "spoil", "workspace", "DreamerVLA")),
         "/" + "/".join(("home", "user01", "miniconda3", "envs", "dreamervla")),
     )
-    active_scripts = sorted(
-        path for path in (root / "scripts").rglob("*.sh") if path.is_file()
-    )
+    active_scripts = sorted(path for path in (root / "scripts").rglob("*.sh") if path.is_file())
 
     offenders: dict[str, list[str]] = {}
     for script in active_scripts:
@@ -1076,9 +1217,7 @@ def test_active_entrypoints_use_canonical_data_directory_names() -> None:
         *(
             path
             for path in (root / "scripts").rglob("*")
-            if path.is_file()
-            and path.suffix in {".sh", ".md"}
-            and "__pycache__" not in path.parts
+            if path.is_file() and path.suffix in {".sh", ".md"} and "__pycache__" not in path.parts
         ),
     ]
     old_path_re = re.compile(r"(?:data|\$\{DVLA_DATA_ROOT\})/(?:ckpts|dataset)\b")
@@ -1131,9 +1270,7 @@ def test_stable_docs_use_release_language() -> None:
 
 def test_active_scripts_do_not_include_machine_specific_wrappers() -> None:
     root = _project_root()
-    active_shells = [
-        path for path in (root / "scripts").rglob("*.sh") if path.is_file()
-    ]
+    active_shells = [path for path in (root / "scripts").rglob("*.sh") if path.is_file()]
     machine_specific_name_re = re.compile(r"(?:_45|g\d+)\.sh$")
     offenders = [
         str(path.relative_to(root))

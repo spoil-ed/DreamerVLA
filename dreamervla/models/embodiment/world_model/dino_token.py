@@ -492,6 +492,18 @@ class DinoTokenWorldModel(nn.Module):
                 visual_target.detach().float(),
                 dim=-1,
             ).mean()
+            # Only the last shifted prediction has the complete configured
+            # history, matching Chunk-WM's history -> next-target diagnostic.
+            one_step_cosine_similarity = F.cosine_similarity(
+                visual_pred[:, -1].detach().float(),
+                visual_target[:, -1].detach().float(),
+                dim=-1,
+            ).mean()
+            persistence_cosine_similarity = F.cosine_similarity(
+                source[:, -1, ..., : self.token_dim].detach().float(),
+                visual_target[:, -1].detach().float(),
+                dim=-1,
+            ).mean()
             cosine_loss = 1.0 - cosine_similarity
         losses: dict[str, torch.Tensor] = {
             "_loss": z_loss,
@@ -504,6 +516,9 @@ class DinoTokenWorldModel(nn.Module):
             "hidden_rec_loss": visual_loss,
             "hidden_cosine_loss": cosine_loss,
             "hidden_cosine_similarity": cosine_similarity,
+            "one_step_cosine_similarity": one_step_cosine_similarity,
+            "persistence_cosine_similarity": persistence_cosine_similarity,
+            "chunk_cosine_similarity": one_step_cosine_similarity,
             "hidden_pred_norm": visual_pred.float().norm(dim=-1).mean(),
             "hidden_target_norm": visual_target.float().norm(dim=-1).mean(),
             "proprio_reconstruction_loss": proprio_loss,

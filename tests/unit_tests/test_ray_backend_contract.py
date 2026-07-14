@@ -32,8 +32,9 @@ def test_ray_dependency_is_declared_for_fresh_installs() -> None:
 
     assert "[project.optional-dependencies]" in pyproject
     assert "ray = [" in pyproject
-    assert '"ray[default]>=2.47.0"' in pyproject
-    assert "ray[default]" not in requirements
+    assert '"ray==2.55.1"' in pyproject
+    assert "ray[default]" not in pyproject
+    assert "ray" not in requirements
 
 
 def test_cluster_defaults_ray_task_event_capacity(monkeypatch) -> None:

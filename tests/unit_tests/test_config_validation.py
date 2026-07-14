@@ -28,7 +28,7 @@ def _compose_mainline(*overrides: str):
     register_dreamervla_resolvers()
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     base = [
-        "experiment=openvla_onetraj_libero_cotrain_noray",
+        "experiment=openvla_onetraj_libero_cotrain",
         "task=openvla_onetraj_libero",
     ]
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
@@ -184,7 +184,7 @@ def test_dino_token_runner_rejects_non_fp32_training() -> None:
 def test_validate_cfg_rejects_ray_auto_vram_knobs() -> None:
     cfg = OmegaConf.create(
         {
-            "_target_": "dreamervla.runners.online_cotrain_ray_runner.OnlineCotrainRayRunner",
+            "_target_": "dreamervla.runners.CotrainRunner",
             "training": {"auto_vram_batch": True},
             "collect": {"auto_vram_envs": True},
         }
@@ -197,7 +197,7 @@ def test_validate_cfg_rejects_ray_auto_vram_knobs() -> None:
 def test_validate_cfg_accepts_manual_ray_precision_and_batch_knobs() -> None:
     cfg = OmegaConf.create(
         {
-            "_target_": "dreamervla.runners.online_cotrain_ray_runner.OnlineCotrainRayRunner",
+            "_target_": "dreamervla.runners.CotrainRunner",
             "env": {"num_workers": 2},
             "rollout": {"steps": 4},
             "replay": {"cfg": {"sequence_length": 3}},
@@ -217,7 +217,7 @@ def test_validate_cfg_accepts_manual_ray_precision_and_batch_knobs() -> None:
 def test_validate_cfg_rejects_ray_multinode_cluster_request() -> None:
     cfg = OmegaConf.create(
         {
-            "_target_": "dreamervla.runners.online_cotrain_ray_runner.OnlineCotrainRayRunner",
+            "_target_": "dreamervla.runners.CotrainRunner",
             "cluster": {"num_nodes": 2},
         }
     )
@@ -229,7 +229,7 @@ def test_validate_cfg_rejects_ray_multinode_cluster_request() -> None:
 def test_validate_cfg_rejects_invalid_ray_learner_placement() -> None:
     cfg = OmegaConf.create(
         {
-            "_target_": "dreamervla.runners.online_cotrain_ray_runner.OnlineCotrainRayRunner",
+            "_target_": "dreamervla.runners.CotrainRunner",
             "learner": {
                 "num_workers": 2,
                 "placement": {
@@ -249,7 +249,7 @@ def test_validate_cfg_rejects_invalid_ray_learner_placement() -> None:
 def test_validate_cfg_rejects_unknown_ray_precision() -> None:
     cfg = OmegaConf.create(
         {
-            "_target_": "dreamervla.runners.online_cotrain_ray_runner.OnlineCotrainRayRunner",
+            "_target_": "dreamervla.runners.CotrainRunner",
             "learner": {"train_cfg": {"precision": "auto"}},
         }
     )
@@ -461,7 +461,7 @@ def test_validate_cfg_rejects_removed_geometry_at_any_nested_path(
     value: Any,
 ) -> None:
     cfg = _compose_mainline(
-        "experiment=openvla_onetraj_libero_cotrain_ray",
+        "experiment=openvla_onetraj_libero_cotrain",
     )
     OmegaConf.update(cfg, path, value, force_add=True)
 
@@ -479,7 +479,7 @@ def test_validate_cfg_rejects_world_model_latent_stage_mismatch() -> None:
 
 def test_validate_cfg_rejects_wm_env_token_grid_mismatch() -> None:
     cfg = _compose_mainline(
-        "experiment=openvla_onetraj_libero_cotrain_ray",
+        "experiment=openvla_onetraj_libero_cotrain",
     )
     cfg.env.wm.cfg.kwargs.token_count = 128
 
@@ -631,7 +631,7 @@ def test_tensorboard_wandb_logger_route_composes_and_validates() -> None:
         cfg = compose(
             config_name="train",
             overrides=[
-                "experiment=collect_rollouts_ray",
+                "experiment=collect_rollouts",
                 "logger=tensorboard_wandb",
             ],
         )

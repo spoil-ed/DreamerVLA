@@ -1,6 +1,6 @@
 # Ray Runtime
 
-Ray/manual cotrain 是当前 async cotrain 后端。目标不是新增训练语义，而是把 env、rollout、actor、
+Ray/manual cotrain 是当前主线 cotrain 后端。目标不是新增训练语义，而是把 env、rollout、actor、
 learner 分成可并行调度的 runtime group。
 
 ## Groups
@@ -37,6 +37,6 @@ GPU1..GPU(N-1):
 
 ## Entrypoints
 
-- `experiment=openvla_onetraj_libero_cotrain_ray`
-- `_target_=dreamervla.runners.ManualCotrainRayRunner`
+- `experiment=openvla_onetraj_libero_cotrain`
+- `_target_=dreamervla.runners.CotrainRunner`
 - shell 入口：`scripts/experiments/cotrain/train.sh`

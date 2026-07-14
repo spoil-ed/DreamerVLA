@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 import h5py
+from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
 from dreamervla.diagnostics import experiment_stage_checks
@@ -19,7 +20,9 @@ def test_cotrain_experiment_directory_contains_train_and_eval() -> None:
 
     assert sorted(path.name for path in experiments.iterdir()) == [
         "classifier_training",
+        "collect_rollouts",
         "cotrain",
+        "openvla_oft_official_eval",
         "single_trajectory_overfit",
         "world_model_training",
     ]
@@ -40,7 +43,7 @@ def test_cotrain_train_script_uses_train_only_recipe_without_pinned_warm_states(
     )
 
     assert "dreamervla.launchers.cotrain" in text
-    assert "experiment=dreamervla_wmcls_cotrain_ray" not in text
+    assert "experiment=dreamervla_wmcls_cotrain" not in text
     assert "manual_cotrain.global_steps" not in text
     assert "/inspire/" not in text
     assert "20260712" not in text
@@ -63,15 +66,50 @@ def test_world_model_training_entrypoint_defers_model_choice_to_hydra() -> None:
         root / "scripts" / "experiments" / "world_model_training" / "train.sh"
     ).read_text(encoding="utf-8")
 
-    assert "--config-name world_model_training" in script
+    assert "--config dreamer-wm" in script
     assert "wm_dino_token_official" not in script
     assert "wm_official_upper_bound" not in script
-    script_config_dir = root / "configs" / "scripts" / "world_model_training"
-    assert not any(script_config_dir.glob("*.yaml"))
+    assert {path.name for path in (root / "configs" / "scripts").iterdir()} == {
+        "download",
+        "install",
+        "preprocess",
+    }
     assert (root / "configs" / "experiment" / "dino-wm.yaml").is_file()
     assert (root / "configs" / "experiment" / "dreamer-wm.yaml").is_file()
     assert (root / "configs" / "worldmodel" / "dino-wm.yaml").is_file()
     assert (root / "configs" / "worldmodel" / "dreamer-wm.yaml").is_file()
+
+
+def test_mainline_experiments_compose_only_the_components_their_stage_needs() -> None:
+    root = Path(__file__).resolve().parents[2]
+    with initialize_config_dir(config_dir=str(root / "configs"), version_base=None):
+        classifier = compose(
+            config_name="train",
+            overrides=["experiment=classifier_official_upper_bound"],
+        )
+        world_model = compose(
+            config_name="train",
+            overrides=["experiment=dreamer-wm"],
+        )
+        cotrain = compose(
+            config_name="train",
+            overrides=["experiment=dreamervla_wmcls_cotrain"],
+        )
+
+    OmegaConf.resolve(classifier)
+    OmegaConf.resolve(world_model)
+    OmegaConf.resolve(cotrain)
+
+    assert classifier._target_ == "dreamervla.runners.SuccessClassifierTrainingRunner"
+    assert classifier.classifier._target_
+    assert classifier.task.classifier.dataset.train._target_
+    assert world_model._target_ == "dreamervla.runners.WorldModelTrainingRunner"
+    assert world_model.world_model._target_
+    assert cotrain._target_ == "dreamervla.runners.CotrainRunner"
+    assert cotrain.world_model._target_
+    assert cotrain.classifier._target_
+    assert cotrain.manual_cotrain.real_env_enabled is True
+    assert cotrain.task.openvla_oft.hidden_token.token_dim == 4096
 
 
 def test_world_model_training_config_switch_selects_expected_recipe() -> None:
@@ -108,8 +146,6 @@ def test_world_model_training_launcher_maps_batch_size_to_dino_dataloader() -> N
             "python",
             "-m",
             "dreamervla.launchers.train",
-            "--config-name",
-            "world_model_training",
             "--config",
             "dino-wm",
             "dry_run=true",
@@ -134,7 +170,7 @@ def test_cotrain_eval_protocol_lives_in_hydra_config() -> None:
     )
     cfg = OmegaConf.load(root / "configs/experiment/eval_cotrain.yaml")
 
-    assert "--config-name cotrain_eval" in script
+    assert "--config eval_cotrain" in script
     assert "eval.num_episodes_per_task" not in script
     assert cfg.eval.ckpt_path is None
     assert cfg.eval.ckpt_kind == "vla_policy"

@@ -1036,6 +1036,28 @@ class ChunkAwareWorldModel(WorldModel):
         loss, hidden_mse, hidden_cosine = self._hidden_loss_terms(
             hidden_pred, hidden_target
         )
+        # Comparable visual diagnostics deliberately exclude proprio/language
+        # conditioning and never contribute to the optimized objective.  A
+        # "model step" is one replay transition for Chunk-WM (environment
+        # t -> t+1); multi-step chunk and closed-loop quality stay separate.
+        with torch.no_grad():
+            visual_pred = hidden_pred.detach()[..., : self.token_dim].float()
+            visual_target = hidden_target.detach()[..., : self.token_dim].float()
+            one_step_cosine_similarity = F.cosine_similarity(
+                visual_pred[:, 0],
+                visual_target[:, 0],
+                dim=-1,
+            ).mean()
+            chunk_cosine_similarity = F.cosine_similarity(
+                visual_pred,
+                visual_target,
+                dim=-1,
+            ).mean()
+            persistence_cosine_similarity = F.cosine_similarity(
+                vision_tokens[:, H - 1].detach().float(),
+                vision_tokens[:, H].detach().float(),
+                dim=-1,
+            ).mean()
         proprio_out: dict[str, torch.Tensor] = {}
         if self.proprio_condition_dim > 0 and isinstance(out.get("proprio_seq"), torch.Tensor):
             proprio_target = batch.get("proprio")
@@ -1144,6 +1166,9 @@ class ChunkAwareWorldModel(WorldModel):
             "hidden_loss": hidden_mse.detach(),
             "hidden_mse": hidden_mse.detach(),
             "hidden_cosine_loss": hidden_cosine.detach(),
+            "one_step_cosine_similarity": one_step_cosine_similarity,
+            "persistence_cosine_similarity": persistence_cosine_similarity,
+            "chunk_cosine_similarity": chunk_cosine_similarity,
             "hidden_pred_norm": hidden_pred.detach().float().norm(dim=-1).mean(),
             "hidden_target_norm": hidden_target.detach().float().norm(dim=-1).mean(),
             "chunk_size": loss.new_tensor(float(self.chunk_size)),

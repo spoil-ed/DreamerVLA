@@ -195,3 +195,27 @@ def test_eval_chunkwm_rollout_uses_proprio_and_language_conditioning() -> None:
 
     assert prediction.shape == (4, 2, 6)
     assert target.shape == prediction.shape
+
+
+def test_eval_chunkwm_rollout_scores_layer_normalized_visual_targets() -> None:
+    cfg = _tiny_wm_cfg()
+    cfg.update({"token_normalization": "layer_norm", "token_norm_eps": 1.0e-6})
+    wm = ChunkAwareWorldModel(**{k: v for k, v in cfg.items() if k != "_target_"})
+    observations = torch.arange(1, 1 + 6 * 2 * 4, dtype=torch.float32).reshape(
+        6, 2, 4
+    )
+
+    _prediction, target = rollout(
+        wm,
+        observations,
+        torch.zeros(6, 2),
+        num_chunks=2,
+        mode="open",
+    )
+
+    assert torch.allclose(target.mean(dim=-1), torch.zeros(4, 2), atol=1.0e-6)
+    assert torch.allclose(
+        target.var(dim=-1, unbiased=False),
+        torch.ones(4, 2),
+        atol=1.0e-5,
+    )

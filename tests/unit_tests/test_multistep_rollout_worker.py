@@ -597,6 +597,24 @@ def test_rollout_worker_uses_configured_bfloat16_policy_dtype() -> None:
     }
 
 
+def test_rollout_worker_offload_state_tracks_device_lifecycle() -> None:
+    worker = MultiStepRolloutWorker(
+        policy_cfg=_policy_cfg(),
+        encoder_cfg=None,
+        init_ckpt={},
+        train_cfg={"device": "cpu", "enable_offload": True},
+    )
+
+    worker.init()
+    assert worker._model_offloaded is True
+
+    worker.reload_model()
+    assert worker._model_offloaded is False
+
+    worker.offload_model()
+    assert worker._model_offloaded is True
+
+
 def test_sync_model_from_actor_applies_patch_syncer() -> None:
     if ray.is_initialized():
         ray.shutdown()
@@ -608,16 +626,19 @@ def test_sync_model_from_actor_applies_patch_syncer() -> None:
             init_ckpt={},
             train_cfg={
                 "device": "cpu",
+                "enable_offload": True,
                 "syncer": {"store_name": f"test-rollout-patch-{uuid.uuid4().hex}"},
             },
         )
         worker.init()
+        assert worker._model_offloaded is True
         state = worker.state_dict()
         changed = {key: value + 1.0 for key, value in state.items()}
         worker._syncer().push("policy", changed, 1)
 
         sync_metrics = worker.sync_model_from_actor("policy", local_version=0)
         assert sync_metrics["sync/rollout_policy_version"] == 1.0
+        assert worker._model_offloaded is True
         assert sync_metrics["sync/rollout_policy_updated"] == 1.0
         assert sync_metrics["sync/rollout_policy_pull_s"] >= 0.0
         synced = worker.state_dict()
@@ -662,6 +683,87 @@ def test_generate_reads_channel_writes_results_and_stops() -> None:
         assert first.step == 0
         assert second.step == 1
         assert first.actions.shape == (2, 3)
+    finally:
+        cluster.shutdown()
+
+
+def test_generate_reloads_then_offloads_rollout_policy() -> None:
+    class LifecycleRolloutWorker(MultiStepRolloutWorker):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            self.lifecycle: list[str] = []
+
+        def reload_model(self) -> None:
+            self.lifecycle.append("reload")
+
+        def offload_model(self) -> None:
+            self.lifecycle.append("offload")
+
+    if ray.is_initialized():
+        ray.shutdown()
+    cluster = Cluster()
+    try:
+        input_name = f"test-rollout-offload-in-{uuid.uuid4().hex}"
+        output_name = f"test-rollout-offload-out-{uuid.uuid4().hex}"
+        input_channel = Channel.create(input_name)
+        Channel.create(output_name)
+        input_channel.put(StopMsg(reason="unit-test"))
+
+        worker = LifecycleRolloutWorker(
+            policy_cfg=_policy_cfg(),
+            encoder_cfg=None,
+            init_ckpt={},
+            train_cfg={"device": "cpu", "enable_offload": True},
+        )
+        worker.init()
+        worker.lifecycle.clear()
+
+        worker.generate(input_name, output_name)
+
+        assert worker.lifecycle == ["reload", "offload"]
+    finally:
+        cluster.shutdown()
+
+
+def test_generate_offloads_rollout_policy_after_failure() -> None:
+    class FailingLifecycleRolloutWorker(MultiStepRolloutWorker):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            self.lifecycle: list[str] = []
+
+        def reload_model(self) -> None:
+            self.lifecycle.append("reload")
+
+        def offload_model(self) -> None:
+            self.lifecycle.append("offload")
+
+        def _generate_from_key(self, *args, **kwargs):
+            del args
+            del kwargs
+            raise RuntimeError("rollout failed")
+
+    if ray.is_initialized():
+        ray.shutdown()
+    cluster = Cluster()
+    try:
+        input_name = f"test-rollout-offload-fail-in-{uuid.uuid4().hex}"
+        output_name = f"test-rollout-offload-fail-out-{uuid.uuid4().hex}"
+        Channel.create(input_name)
+        Channel.create(output_name)
+
+        worker = FailingLifecycleRolloutWorker(
+            policy_cfg=_policy_cfg(),
+            encoder_cfg=None,
+            init_ckpt={},
+            train_cfg={"device": "cpu", "enable_offload": True},
+        )
+        worker.init()
+        worker.lifecycle.clear()
+
+        with pytest.raises(RuntimeError, match="rollout failed"):
+            worker.generate(input_name, output_name)
+
+        assert worker.lifecycle == ["reload", "offload"]
     finally:
         cluster.shutdown()
 

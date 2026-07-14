@@ -52,16 +52,3 @@ def test_base_checkpoint_roundtrips_optimizer_and_scalars(tmp_path):
     assert b.global_step == 7
     assert abs(b.classifier_threshold - 0.73) < 1e-9
     assert b.policy_optimizer.state_dict()["state"]  # momentum restored
-
-
-def test_online_cotrain_checkpoint_keys_extend_parent():
-    # R1 wiring: cotrain rounds-trips its scalar threshold + step and never
-    # checkpoints the frozen reference policy / encoder.
-    from dreamervla.runtime.world_model_training_base import WorldModelTrainingBase
-    from dreamervla.runners.online_cotrain_runner import OnlineCotrainRunner
-
-    assert set(WorldModelTrainingBase.include_keys) <= set(OnlineCotrainRunner.include_keys)
-    assert "classifier_threshold" in OnlineCotrainRunner.include_keys
-    assert "global_step" in OnlineCotrainRunner.include_keys
-    assert "ref_policy" in OnlineCotrainRunner.exclude_keys
-    assert "encoder" in OnlineCotrainRunner.exclude_keys

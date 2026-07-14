@@ -18,35 +18,27 @@ python -m dreamervla.train experiment=<name> task=<suite>
 3. 根据 `cfg._target_` 加载 Runner。
 4. 执行 `setup -> execute -> teardown`。
 
-## Pipeline Entry
-
-完整 cold-start pipeline 入口：
+## Mainline Entries
 
 ```bash
-python -m dreamervla.launchers.coldstart_warmup_cotrain mode=ray task=goal
-```
-
-常用 shell 包装：
-
-```bash
-python -m dreamervla.launchers.coldstart_warmup_cotrain mode=ray task=goal
-python -m dreamervla.launchers.coldstart_warmup_cotrain mode=noray task=goal
+python -m dreamervla.train \
+  experiment=collect_rollouts task=openvla_onetraj_coldstart_libero
+bash scripts/experiments/cotrain/train.sh
+bash scripts/experiments/cotrain/eval.sh eval.ckpt_path=/path/to/checkpoint
 ```
 
 ## Main Runner Targets
 
 当前仓库导出的关键 Runner 包括：
 
-- `CollectRolloutsRunner`：no-Ray collection。
-- `ColdStartRayCollectRunner`：Ray collection。
-- `OnlineCotrainPipelineRunner`：sync warmup + online cotrain pipeline。
-- `ManualCotrainRayRunner`：当前 manual Ray cotrain route。
-- `OnlineCotrainRunner` / `OnlineCotrainRayRunner`：同步与可选 Ray online cotrain 路线。
-- `LatentClassifierRunner`：classifier 单组件训练。
-- `EmbodiedEvalRunner`：VLA / DreamerVLA 统一评估入口。
+- `RolloutCollectionRunner`：Ray-backed collection。
+- `CotrainRunner`：当前 staged cotrain 主线。
+- `WorldModelTrainingRunner`：world model 单组件训练。
+- `SuccessClassifierTrainingRunner`：classifier 单组件训练。
+- `LIBEROVLAEvaluationRunner`：VLA / DreamerVLA 统一评估入口。
 
-完整 replay 的 world-model 单组件训练复用
-`OnlineCotrainPipelineRunner` 的 warmup 路径，不另设第二套 WM Runner 接口。
+具体 classifier model 和 dataset target 由 `configs/task` 的
+`task.classifier` 统一选择；`classifier=dreamer-cls` 不绑定数据集名称。
 
 ## Run Artifacts
 

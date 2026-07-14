@@ -8,4 +8,4 @@ export DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"
 export PYTHONPATH="${DVLA_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 cd "${DVLA_ROOT}"
 
-python -m dreamervla.launchers.workflow --config-name validate_libero_data "$@"
+python -m dreamervla.launchers.workflow --config-name preprocess/validate_libero_data "$@"

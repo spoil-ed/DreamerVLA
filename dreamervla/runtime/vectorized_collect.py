@@ -13,7 +13,7 @@ is RLinf's ``group_size`` grouping.  Slots desync in time (different init_states
 different episode lengths) but stay on the same task, so the batch is always valid.  When
 a task's episodes are exhausted the slots drain and the loop advances to the next task.
 
-Per-step record pairing mirrors ``collect_parallel_rollouts._run_episode``: the record at
+Per-step record pairing follows the rollout collection contract: the record at
 tick t holds the pre-step ``full_record`` (state s_t), the ``obs_embedding`` computed from
 that same observation, and the action executed at t (``info['wm_action']``, raw env scale).
 ``dones``/``sparse_rewards`` are filled on the terminal frame.

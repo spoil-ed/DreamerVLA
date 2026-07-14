@@ -19,7 +19,7 @@ from omegaconf import DictConfig, OmegaConf
 from dreamervla.config_resolvers import register_dreamervla_resolvers
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_EXPERIMENT = "dreamervla_wmcls_cotrain_ray"
+DEFAULT_EXPERIMENT = "dreamervla_wmcls_cotrain"
 
 
 @dataclass(frozen=True)
@@ -72,11 +72,6 @@ def _component_overrides(values: list[str]) -> None:
     classifier_supplied = _has_override(values, classifier_key) or bool(
         os.environ.get("CLASSIFIER_CKPT", "").strip()
     )
-    if not wm_supplied and not classifier_supplied:
-        raise ValueError(
-            "set WORLD_MODEL_CKPT and CLASSIFIER_CKPT to pretrained component "
-            "checkpoints before launching cotrain"
-        )
     if wm_supplied != classifier_supplied:
         raise ValueError(
             "set both WORLD_MODEL_CKPT and CLASSIFIER_CKPT for a warm start, "

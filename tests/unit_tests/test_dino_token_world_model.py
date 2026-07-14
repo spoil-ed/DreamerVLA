@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import types
 from pathlib import Path
 
@@ -148,8 +149,21 @@ def test_forward_matches_dino_shifted_target_and_excludes_action_from_loss() -> 
         z_target[..., : model.token_dim].float(),
         dim=-1,
     ).mean()
+    expected_one_step_cosine = torch.nn.functional.cosine_similarity(
+        z_src[:, -1, ..., : model.token_dim].float(),
+        z_target[:, -1, ..., : model.token_dim].float(),
+        dim=-1,
+    ).mean()
     assert torch.allclose(losses["hidden_cosine_similarity"], expected_cosine)
+    assert torch.allclose(
+        losses["one_step_cosine_similarity"], expected_one_step_cosine
+    )
+    assert torch.allclose(
+        losses["persistence_cosine_similarity"], expected_one_step_cosine
+    )
     assert not losses["hidden_cosine_similarity"].requires_grad
+    assert not losses["one_step_cosine_similarity"].requires_grad
+    assert not losses["persistence_cosine_similarity"].requires_grad
     assert not losses["hidden_cosine_loss"].requires_grad
     assert losses["teacher_forced_steps"].item() == 3
 
@@ -206,7 +220,11 @@ def test_forward_requires_exact_dino_training_window() -> None:
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="upstream DINO mask is CUDA-only")
 def test_predictor_is_numerically_identical_to_local_upstream_dino_wm() -> None:
     source = Path(
-        "/mnt/data/spoil/workspace/Related_Work/worldmodel/dino_wm/models/vit.py"
+        os.environ.get(
+            "DINO_WM_REFERENCE_VIT",
+            Path(__file__).resolve().parents[3]
+            / "Related_Work/worldmodel/dino_wm/models/vit.py",
+        )
     )
     if not source.is_file():
         pytest.skip("local DINO-WM reference checkout is unavailable")

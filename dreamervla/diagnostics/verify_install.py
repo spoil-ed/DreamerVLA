@@ -1,15 +1,59 @@
 from __future__ import annotations
 
 import importlib
+import importlib.metadata
 import os
+import sys
+from collections.abc import Callable
 from pathlib import Path
 
-import h5py  # noqa: F401
-import hydra  # noqa: F401
-import libero
-import omegaconf  # noqa: F401
-import torch
-import transformers  # noqa: F401
+CRITICAL_DISTRIBUTION_VERSIONS = {
+    "diffusers": "0.33.0",
+    "draccus": "0.8.0",
+    "numpy": "1.26.4",
+    "peft": "0.11.0",
+    "ray": "2.55.1",
+    "sentencepiece": "0.1.99",
+    "tensorflow": "2.15.0",
+    "tensorflow-datasets": "4.9.3",
+    "tensorflow-graphics": "2021.12.3",
+    "timm": "0.9.10",
+    "tokenizers": "0.19.1",
+    "torch": "2.5.1",
+    "torchaudio": "2.5.1",
+    "torchvision": "0.20.1",
+    "transformers": "4.40.1",
+}
+PYTORCH_DISTRIBUTIONS = {"torch", "torchaudio", "torchvision"}
+
+
+def verify_distribution_versions(
+    version_getter: Callable[[str], str] = importlib.metadata.version,
+) -> None:
+    """Fail when a critical runtime distribution is missing or has drifted."""
+    failures: list[str] = []
+    for distribution, expected in CRITICAL_DISTRIBUTION_VERSIONS.items():
+        try:
+            installed = version_getter(distribution)
+        except (importlib.metadata.PackageNotFoundError, KeyError):
+            failures.append(f"{distribution} is missing; expected {expected}")
+            continue
+        comparable_installed = (
+            installed.split("+", maxsplit=1)[0]
+            if distribution in PYTORCH_DISTRIBUTIONS
+            else installed
+        )
+        if comparable_installed != expected:
+            failures.append(f"{distribution}=={installed}; expected {expected}")
+
+    if failures:
+        details = "\n".join(f"  - {failure}" for failure in failures)
+        raise SystemExit(
+            "[verify_install] critical distribution version mismatch:\n"
+            f"{details}\n"
+            "Re-run scripts/install_env.sh with force=true for the affected install stages."
+        )
+    print("critical distribution versions ok")
 
 
 def _import_paths(package_name: str) -> list[Path]:
@@ -26,6 +70,17 @@ def _import_paths(package_name: str) -> list[Path]:
 
 
 def main() -> int:
+    if sys.version_info[:2] != (3, 11):
+        raise SystemExit(
+            f"[verify_install] Python {sys.version.split()[0]} is active; expected Python 3.11"
+        )
+    verify_distribution_versions()
+
+    for package_name in ("h5py", "hydra", "omegaconf", "transformers"):
+        importlib.import_module(package_name)
+    libero = importlib.import_module("libero")
+    torch = importlib.import_module("torch")
+
     dvla_root = Path(os.environ["DVLA_ROOT"]).resolve()
     expected_third_party_imports = {
         "libero": dvla_root / "third_party/LIBERO",

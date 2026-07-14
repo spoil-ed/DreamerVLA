@@ -45,20 +45,20 @@ def test_actor_update_registry_reports_available_names() -> None:
         get_actor_update_route("not_a_route")
 
 
-def test_online_runner_uses_actor_update_registry() -> None:
+def test_world_model_runtime_uses_actor_update_registry() -> None:
     project_root = Path(__file__).resolve().parents[2]
     source = (
-        project_root / "dreamervla" / "runners" / "online_cotrain_runner.py"
+        project_root / "dreamervla" / "runtime" / "world_model_training_common.py"
     ).read_text(encoding="utf-8")
 
     assert "get_actor_update_route" in source
     assert "from dreamervla.algorithms.ppo import" not in source
 
 
-def test_online_runner_branches_lumos_by_route_metadata() -> None:
+def test_world_model_runtime_branches_lumos_by_route_metadata() -> None:
     project_root = Path(__file__).resolve().parents[2]
     source = (
-        project_root / "dreamervla" / "runners" / "online_cotrain_runner.py"
+        project_root / "dreamervla" / "runtime" / "world_model_training_common.py"
     ).read_text(encoding="utf-8")
 
     assert 'actor_update_route.world_model_arg != "chunk_world_model"' in source

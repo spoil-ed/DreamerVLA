@@ -25,12 +25,11 @@ Shell launchers expose a small set of convenience keys and pass remaining
 | --- | --- |
 | `experiment/` | top-level recipes for collect, warmup, cotrain, eval |
 | `dreamervla/` | cotrain runner recipes |
+| `worldmodel/` | world-model construction and Ray worker adapter |
+| `classifier/` | classifier construction and Ray worker adapter |
 | `evaluation/` | LIBERO rollout eval |
 | `task/` | LIBERO suite + checkpoint + sidecar metadata |
 | `logger/` | `tensorboard`, `wandb`, `tensorboard_wandb` |
-| `precision/` | manual learner AMP precision |
-| `parallelism/` | manual learner sharding knobs |
-| `scheduler/` | single-node Ray placement metadata |
 
 ## Warmup and Cotrain
 

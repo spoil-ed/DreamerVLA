@@ -7,17 +7,17 @@ source of truth; this table is a reader index.
 
 | Stage | Entry | Config / runner | Status |
 | --- | --- | --- | --- |
-| collect, Ray | `experiment=collect_rollouts_ray` | `ColdStartRayCollectRunner` | current |
-| collect, no-Ray | `experiment=collect_rollouts_onetraj` | `CollectRolloutsRunner` | current |
-| sync warmup + cotrain baseline | `experiment=openvla_onetraj_libero_cotrain_noray` | `OnlineCotrainPipelineRunner` | current baseline |
-| async manual cotrain | `experiment=openvla_onetraj_libero_cotrain_ray` | `ManualCotrainRayRunner` | current manual route |
+| collect | `experiment=collect_rollouts` | `RolloutCollectionRunner` | current; Ray backend |
+| world-model warmup | `experiment=dreamer-wm` or `dino-wm` | WM runner selected by recipe | current |
+| classifier warmup | `experiment=classifier_official_upper_bound` | `SuccessClassifierTrainingRunner` | current |
+| cotrain | `experiment=dreamervla_wmcls_cotrain` | `CotrainRunner` | current; Ray backend |
+| eval | `experiment=eval_cotrain` | `LIBEROVLAEvaluationRunner` | current |
 
-Pipeline launcher:
+Collection:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-  python -m dreamervla.launchers.coldstart_warmup_cotrain \
-  task=goal profile=multi_gpu cotrain_engine=async render_backend=osmesa
+python -m dreamervla.train \
+  experiment=collect_rollouts task=openvla_onetraj_coldstart_libero
 ```
 
 The reduced shell surface uses `scripts/experiments/cotrain/train.sh` and
@@ -27,13 +27,13 @@ The reduced shell surface uses `scripts/experiments/cotrain/train.sh` and
 
 | Family | Experiments | Runner |
 | --- | --- | --- |
-| world model | `wm_full_dataset_train` | `OnlineCotrainPipelineRunner` warmup path |
-| eval | `eval_libero_vla` | `EmbodiedEvalRunner` |
+| world model | `wm_full_dataset_train` | `WorldModelTrainingRunner` |
+| eval | `eval_libero_vla` | `LIBEROVLAEvaluationRunner` |
 
 ## Config Ownership
 
 - `configs/train.yaml` composes the top-level Hydra groups.
 - `configs/experiment/*.yaml` selects a complete route.
 - `configs/dreamervla/*.yaml` owns DreamerVLA/manual cotrain component wiring.
-- `configs/scripts/coldstart_warmup_cotrain.yaml` owns launcher-level pipeline controls.
-- `configs/task/*.yaml` owns LIBERO suite, checkpoint, image/history, and sidecar metadata.
+- `configs/classifier/dreamer-cls.yaml` owns the classifier role recipe.
+- `configs/task/*.yaml` owns LIBERO metadata and the concrete classifier model/dataset/input contract.

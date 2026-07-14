@@ -16,6 +16,7 @@ def test_dataset_public_api_exports_only_retained_routes() -> None:
         "PixelSequenceSpec",
         "TokenSequenceDataset",
         "TokenSequenceSpec",
+        "DinoTokenTrajectoryDataset",
         "OneTrajectoryPretokenizeActionChunkDataset",
         "VLASFTHDF5Dataset",
         "VLASFTHDF5DatasetFactory",

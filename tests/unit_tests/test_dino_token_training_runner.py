@@ -81,7 +81,7 @@ def test_dino_runner_matches_dreamer_per_rank_batch_semantics() -> None:
 
 def test_dino_runner_progress_displays_step_loss_and_diagnostic_cosine() -> None:
     status = DinoTokenWorldModelTrainingRunner._progress_status(
-        {"loss": 0.25, "hidden_cosine_similarity": 0.9375},
+        {"loss": 0.25, "one_step_cosine_similarity": 0.9375},
         global_step=123,
     )
 

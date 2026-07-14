@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dreamervla.runners.cold_start_ray_collect_runner import _shard_env_ids_by_worker
+from dreamervla.runtime.rollout_collection_ray import _shard_env_ids_by_worker
 
 
 def test_single_worker_owns_all_in_order():

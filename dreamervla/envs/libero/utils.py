@@ -100,7 +100,7 @@ def build_libero_eval_record(obs, resolution: int) -> dict[str, np.ndarray]:
     """Build the per-step eval inputs (third/wrist image + proprio state).
 
     Mirrors the sequential LIBERO eval loop's per-step construction in
-    ``dreamervla/runners/pretokenize_vla_runner.py`` (``get_libero_image`` for
+    the canonical OpenVLA-OFT rollout path (``get_libero_image`` for
     both camera views + the ``eef_pos/axisangle/gripper_qpos`` state concat) so a
     parallel slot's observation record is byte-identical to the sequential path
     for the same ``(task, init_state)``.

@@ -81,6 +81,9 @@ _WM_LOG_METRIC_KEYS = (
     "hidden_mse",
     "next_latent_mse",
     "hidden_cosine_loss",
+    "one_step_cosine_similarity",
+    "persistence_cosine_similarity",
+    "chunk_cosine_similarity",
     "full_hidden_rec_loss",
     "full_hidden_cosine_loss",
     "proprio_reconstruction_loss",
@@ -214,6 +217,14 @@ def world_model_pretrain_step(
                 "loss": loss_tensor.detach(),
                 "grad_norm": torch.as_tensor(grad_norm).detach(),
             }
+            for key in (
+                "one_step_cosine_similarity",
+                "persistence_cosine_similarity",
+                "chunk_cosine_similarity",
+            ):
+                value = losses.get(key)
+                if isinstance(value, torch.Tensor):
+                    metrics[key] = value.detach()
         else:
             loss_value = float(loss_tensor.detach().cpu())
             grad_norm_value = float(torch.as_tensor(grad_norm).detach().cpu())
@@ -250,6 +261,13 @@ def world_model_pretrain_step(
                 "next_latent_mse": next_latent_mse,
                 "hidden_rec_scaled_loss": _f("hidden_rec_scaled_loss"),
                 "hidden_cosine_loss": _f("hidden_cosine_loss"),
+                "one_step_cosine_similarity": _f(
+                    "one_step_cosine_similarity"
+                ),
+                "persistence_cosine_similarity": _f(
+                    "persistence_cosine_similarity"
+                ),
+                "chunk_cosine_similarity": _f("chunk_cosine_similarity"),
                 "full_hidden_rec_loss": _f("full_hidden_rec_loss"),
                 "full_hidden_rec_scaled_loss": _f("full_hidden_rec_scaled_loss"),
                 "full_hidden_cosine_loss": _f("full_hidden_cosine_loss"),

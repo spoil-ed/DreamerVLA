@@ -38,11 +38,8 @@ if [[ "${INSTALL_EGL_PROBE}" == "1" ]]; then
   if [[ ! -d "${DVLA_ROOT}/third_party/egl_probe/.git" ]]; then git clone https://github.com/StanfordVL/egl_probe.git "${DVLA_ROOT}/third_party/egl_probe"; fi
   git -C "${DVLA_ROOT}/third_party/egl_probe" fetch --all --tags
   git -C "${DVLA_ROOT}/third_party/egl_probe" checkout 3ddf90d
-  if [[ -f "${DVLA_ROOT}/third_party/egl_probe/egl_probe/CMakeLists.txt" ]]; then
-    sed -i 's/cmake_minimum_required(VERSION 2.8.12)/cmake_minimum_required(VERSION 3.5)/' \
-      "${DVLA_ROOT}/third_party/egl_probe/egl_probe/CMakeLists.txt" || true
-  fi
-  uv pip install --no-build-isolation "${DVLA_ROOT}/third_party/egl_probe"
+  CMAKE_ARGS="${CMAKE_ARGS:+${CMAKE_ARGS} }-DCMAKE_POLICY_VERSION_MINIMUM=3.5" \
+    uv pip install --no-build-isolation "${DVLA_ROOT}/third_party/egl_probe"
 fi
 
 if [[ "${INSTALL_OPTIONAL_THIRD_PARTY}" == "1" ]]; then

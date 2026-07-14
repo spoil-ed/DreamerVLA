@@ -1,10 +1,29 @@
 # @package _global_
 defaults:
   - /task: openvla_onetraj_libero
+  - override /classifier: dreamer-cls
   - _self_
 
 _target_: dreamervla.runners.SuccessClassifierTrainingRunner
 seed: 7
+
+launch:
+  distributed: true
+  ngpu: 8
+  gpus: null
+  master_port: 29501
+  python: python
+  write_libero_config: true
+  required_target_values: []
+  env:
+    PYTHONUNBUFFERED: 1
+    OMP_NUM_THREADS: 8
+    MALLOC_ARENA_MAX: 4
+    CUDA_MODULE_LOADING: LAZY
+    PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    NCCL_NVLS_ENABLE: 0
+    NCCL_DEBUG: WARN
+    TORCH_NCCL_ASYNC_ERROR_HANDLING: 1
 
 training:
   out_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/classifier/wmpo_token_cls_openvla_onetraj_libero_goal_h1/${now:%Y%m%d_%H%M%S}
@@ -54,28 +73,3 @@ data:
   lang_emb_key: lang_emb
   sampling_protocol: wmpo
   balance_batches: true
-
-classifier:
-  _target_: dreamervla.algorithms.critic.latent_success_classifier.LatentSuccessClassifier
-  latent_dim: ${task.openvla_oft.hidden_token.classifier_latent_dim}
-  action_dim: ${task.action_dim}
-  time_horizon: ${task.openvla_oft.hidden_token.chunk_size}
-  token_dim: ${task.openvla_oft.hidden_token.token_dim}
-  token_count: ${task.openvla_oft.hidden_token.token_count}
-  head_type: spatial_tf
-  proprio_dim: ${task.openvla_oft.hidden_token.proprio_dim}
-  proprio_emb_dim: ${task.openvla_oft.hidden_token.proprio_emb_dim}
-  num_proprio_repeat: ${task.openvla_oft.hidden_token.num_proprio_repeat}
-  lang_dim: ${task.openvla_oft.hidden_token.lang_dim}
-  lang_emb_dim: ${task.openvla_oft.hidden_token.lang_emb_dim}
-  num_lang_repeat: ${task.openvla_oft.hidden_token.num_lang_repeat}
-  window: ${data.window}
-  hidden_dim: 1024
-  num_layers: 12
-  num_heads: 8
-  mlp_ratio: 4.0
-  dropout: 0.1
-  output_dim: 1
-  granularity: chunk
-  chunk_size: ${data.chunk_subsample}
-  chunk_pool: ${data.chunk_pool}

@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from inspect import signature
 from pathlib import Path
@@ -223,8 +223,8 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         *,
         optim_cfg: Any,
         profile_timings: dict[str, float] | None,
-    ) -> Any:
-        m = world_model_pretrain_step(
+    ) -> dict[str, Any]:
+        return world_model_pretrain_step(
             policy=self.policy,
             world_model=self.world_model,
             optimizer=self.world_model_optimizer,
@@ -234,7 +234,86 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             profile_timings=profile_timings,
             metrics_mode="loss_tensor",
         )
-        return m.get("loss", 0.0)
+
+    @staticmethod
+    def _progress_status(
+        metrics: Mapping[str, Any],
+        *,
+        global_step: int,
+    ) -> str:
+        """Format the same loss/one-step-cosine status used by DINO-WM."""
+
+        loss = float(metrics.get("loss", float("nan")))
+        cosine = float(
+            metrics.get("one_step_cosine_similarity", float("nan"))
+        )
+        return f"global_step={int(global_step)} loss={loss:.6f} cos={cosine:.6f}"
+
+    def _reduce_wm_warmup_metrics(
+        self,
+        metrics: Mapping[str, Any],
+    ) -> dict[str, float]:
+        """Average detached scalar diagnostics across ranks once per update."""
+
+        tensors = {
+            key: value.detach().float()
+            for key, value in metrics.items()
+            if isinstance(value, torch.Tensor) and value.numel() == 1
+        }
+        distributed = getattr(self, "distributed", None)
+        if distributed is not None and hasattr(distributed, "reduce_mean_dict"):
+            reduced = distributed.reduce_mean_dict(tensors)
+        else:
+            reduced = tensors
+        output = {key: float(value) for key, value in reduced.items()}
+        for key, value in metrics.items():
+            if key in output or isinstance(value, torch.Tensor):
+                continue
+            try:
+                output[key] = float(value)
+            except (TypeError, ValueError):
+                continue
+        return output
+
+    def _wm_warmup_progress(
+        self,
+        replay: Any,
+        *,
+        step_index: int,
+        total_steps: int,
+        batch_size: int,
+    ) -> tuple[int, int, str, str]:
+        """Map replay-update budgets onto epoch-style progress coordinates."""
+
+        cfg = getattr(self, "cfg", None)
+        replay_epochs = int(
+            OmegaConf.select(
+                cfg,
+                "training.warmup_replay_epochs",
+                default=0,
+            )
+            or 0
+        ) if cfg is not None else 0
+        count_fn = getattr(replay, "sampleable_window_count", None)
+        if replay_epochs <= 0 or not callable(count_fn):
+            return (
+                int(step_index) + 1,
+                int(total_steps),
+                "wm-warmup",
+                "update",
+            )
+        windows = int(count_fn())
+        world_size = max(1, int(getattr(self, "_world_size", 1)))
+        global_batch = int(batch_size) * world_size
+        steps_per_epoch = max(1, (windows + global_batch - 1) // global_batch)
+        epoch = min(replay_epochs, int(step_index) // steps_per_epoch + 1)
+        step_in_epoch = int(step_index) % steps_per_epoch + 1
+        return (
+            step_in_epoch,
+            steps_per_epoch,
+            f"dreamer-wm epoch {epoch}/{replay_epochs}",
+            "step",
+        )
 
     def _offline_warmup_wm(
         self,
@@ -248,7 +327,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         start_step: int = 0,
     ) -> float:
         self.world_model.train()
-        last: Any = 0.0
+        last = 0.0
         profile_steps = self._wm_profile_steps()
         start_i = int(start_step)
         total_steps = int(steps)
@@ -264,14 +343,29 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             update_started_at: float,
         ) -> None:
             nonlocal last
+            progress_current, progress_total, progress_desc, progress_unit = (
+                self._wm_warmup_progress(
+                    replay,
+                    step_index=i,
+                    total_steps=total_steps,
+                    batch_size=batch_size,
+                )
+            )
             if wm_batch is None:
-                self.console_progress(i + 1, total_steps, "wm-warmup", unit="update")
+                self.console_progress(
+                    progress_current,
+                    progress_total,
+                    progress_desc,
+                    unit=progress_unit,
+                )
                 return
-            last = self._run_wm_warmup_batch(
+            raw_metrics = self._run_wm_warmup_batch(
                 wm_batch,
                 optim_cfg=optim_cfg,
                 profile_timings=profile_timings,
             )
+            metrics = self._reduce_wm_warmup_metrics(raw_metrics)
+            last = float(metrics.get("loss", 0.0))
             if profile_timings is not None:
                 profile_timings["total"] = time.perf_counter() - update_started_at
                 self._record_wm_profile(
@@ -280,28 +374,39 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                     total_steps=total_steps,
                 )
             if i % self._replay_warmup_log_every() == 0:
-                last_value = (
-                    float(last.detach().cpu())
-                    if isinstance(last, torch.Tensor)
-                    else float(last)
-                )
-                self._log_replay_warmup_metrics(
-                    {"train/wm_warmup_loss": last_value},
-                    step=i,
+                log_metrics = {"train/wm_warmup_loss": last}
+                for name in (
+                    "one_step_cosine_similarity",
+                    "persistence_cosine_similarity",
+                    "chunk_cosine_similarity",
+                ):
+                    if name in metrics:
+                        log_metrics[f"train/wm_{name}"] = metrics[name]
+                self._log_replay_warmup_metrics(log_metrics, step=i)
+                cosine_suffix = (
+                    f" cos={metrics['one_step_cosine_similarity']:.4f}"
+                    if "one_step_cosine_similarity" in metrics
+                    else ""
                 )
                 self._print_pipeline_event(
                     f"[pipeline][wm-warmup] step={i}/{total_steps} "
-                    f"loss={last_value:.4f}"
+                    f"loss={last:.4f}{cosine_suffix}"
                 )
             self._maybe_warmup_checkpoint(
                 current=i + 1,
                 total=total_steps,
                 every=checkpoint_every,
                 checkpoint_fn=checkpoint_fn,
-                metrics={"loss": last},
+                metrics=metrics,
                 label="wm-warmup",
             )
-            self.console_progress(i + 1, total_steps, "wm-warmup", unit="update")
+            self.console_progress(
+                progress_current,
+                progress_total,
+                progress_desc,
+                unit=progress_unit,
+                status=self._progress_status(metrics, global_step=i + 1),
+            )
 
         if prefetch_workers > 0 and start_i < total_steps:
             with ThreadPoolExecutor(max_workers=prefetch_workers) as executor:
@@ -332,11 +437,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                         profile_timings,
                         update_started_at,
                     )
-            return (
-                float(last.detach().cpu())
-                if isinstance(last, torch.Tensor)
-                else float(last)
-            )
+            return float(last)
 
         for i in range(start_i, total_steps):
             update_started_at = time.perf_counter()
@@ -355,11 +456,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 profile_timings,
                 update_started_at,
             )
-        return (
-            float(last.detach().cpu())
-            if isinstance(last, torch.Tensor)
-            else float(last)
-        )
+        return float(last)
 
     def _offline_warmup_classifier(
         self,
@@ -1108,7 +1205,11 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             }
             total = sum(trainable.values())
             self.append_model_summary(
-                {"total_trainable": total, "trainable_params": trainable}
+                {
+                    "total_trainable": total,
+                    "trainable_params": trainable,
+                    "model_step_frames": 1,
+                }
             )
             print(f"[ok] model ready · {total/1e6:.1f}M trainable", flush=True)
         os.makedirs(os.path.join(self.output_dir, "ckpt"), exist_ok=True)

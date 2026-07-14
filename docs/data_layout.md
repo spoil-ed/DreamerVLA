@@ -42,11 +42,11 @@ ${DVLA_DATA_ROOT}/
 Download current model assets with:
 
 ```bash
-bash scripts/download_assets.sh download.openvla_one_traj=true only=[30_openvla_oft_one_trajectory]
+bash scripts/download_assets.sh download.openvla_one_traj=true only=[10_openvla_oft_one_trajectory]
 ```
 
-The registered checkpoint steps are `scripts/download/20_openvla_oft.sh` and
-`scripts/download/30_openvla_oft_one_trajectory.sh`.
+The registered checkpoint steps are `scripts/download/00_openvla_oft.sh` and
+`scripts/download/10_openvla_oft_one_trajectory.sh`.
 
 ## Datasets
 
@@ -62,12 +62,12 @@ libero_10/
 Download LIBERO data into the canonical tree with:
 
 ```bash
-bash scripts/download_assets.sh only=[40_libero_dataset] env.LIBERO_SUITES=libero_goal
-bash scripts/download_assets.sh only=[40_libero_dataset] \
+bash scripts/download_assets.sh only=[20_libero_dataset] env.LIBERO_SUITES=libero_goal
+bash scripts/download_assets.sh only=[20_libero_dataset] \
   env.LIBERO_SUITES='"libero_goal libero_object libero_spatial libero_10"'
 ```
 
-The LIBERO download implementation is `scripts/download/40_libero_dataset.sh`.
+The LIBERO download implementation is `scripts/download/20_libero_dataset.sh`.
 
 CALVIN data is optional and resolves under `${DVLA_DATA_ROOT}/datasets/calvin/`:
 

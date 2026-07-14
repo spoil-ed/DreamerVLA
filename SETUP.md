@@ -46,15 +46,15 @@ Download the OpenVLA-OFT one-trajectory checkpoints and LIBERO data used by the
 current cotrain path:
 
 ```bash
-bash scripts/download_assets.sh download.openvla_one_traj=true only=[30_openvla_oft_one_trajectory]
-bash scripts/download_assets.sh only=[40_libero_dataset] env.LIBERO_SUITES=libero_goal
+bash scripts/download_assets.sh download.openvla_one_traj=true only=[10_openvla_oft_one_trajectory]
+bash scripts/download_assets.sh only=[20_libero_dataset] env.LIBERO_SUITES=libero_goal
 ```
 
 For the full four-suite matrix:
 
 ```bash
-bash scripts/download_assets.sh download.openvla_one_traj=true only=[30_openvla_oft_one_trajectory]
-bash scripts/download_assets.sh only=[40_libero_dataset] \
+bash scripts/download_assets.sh download.openvla_one_traj=true only=[10_openvla_oft_one_trajectory]
+bash scripts/download_assets.sh only=[20_libero_dataset] \
   env.LIBERO_SUITES='"libero_goal libero_object libero_spatial libero_10"'
 ```
 
@@ -81,15 +81,15 @@ bash scripts/preprocess/prepare_libero_data.sh task=libero_goal gpus=0 ngpu=1
 
 The workflow executes these stages in order:
 
-1. `10_hdf5_reward`: replay LIBERO data, mark no-ops with `keep_noops=true`,
+1. `00_hdf5_reward`: replay LIBERO data, mark no-ops with `keep_noops=true`,
    filter the marked files with `filter_noops=true` through
    `dreamervla.preprocess.filter_marked_libero_hdf5`, then add rewards. Its
    intermediate paths are
    `${DVLA_DATA_ROOT}/processed_data/${TASK}/marked_t_256` and
    `${DVLA_DATA_ROOT}/processed_data/${TASK}/no_noops_t_256`.
-2. `35_oft_hidden_token`: write the exact projected OpenVLA hidden-token
+2. `10_oft_hidden_token`: write the exact projected OpenVLA hidden-token
    sidecar.
-3. `40_validate`: verify metadata plus every `obs_embedding` dataset before the
+3. `20_validate`: verify metadata plus every `obs_embedding` dataset before the
    artifact can be used for training.
 
 Run all four suites in one command:
@@ -112,17 +112,15 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   bash scripts/experiments/cotrain/train.sh
 ```
 
-The older collect/warmup pipeline remains available as a Python launcher:
+Collection is a separate Hydra job:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-  python -m dreamervla.launchers.coldstart_warmup_cotrain \
-  mode=noray task=goal ngpu=8 profile=multi_gpu render_backend=osmesa
+python -m dreamervla.train \
+  experiment=collect_rollouts task=openvla_onetraj_coldstart_libero
 ```
 
-Common task shorthands are `goal`, `object`, `spatial`, and `10`. The launcher
-config is `configs/scripts/coldstart_warmup_cotrain.yaml`; training recipes live
-under `configs/experiment/`.
+Suite variants are selected by replacing the task config. Training recipes live
+under `configs/experiment/`; collection and cotrain use Ray as their canonical backend.
 
 ## World-Model Full-Replay Warmup
 

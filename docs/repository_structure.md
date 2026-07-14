@@ -46,23 +46,24 @@ dreamervla/
 │       ├── chameleon_model/ # Chameleon model components
 │       └── world_model/  # BaseWorldModel and retained WM architectures
 ├── preprocess/           # Canonical reward and OpenVLA hidden-token preprocessing
-├── scheduler/            # Optional Ray backend scheduling primitives
-├── workers/              # Optional Ray backend workers
-├── hybrid_engines/       # Optional Ray backend object-store / weight-sync helpers
+├── scheduler/            # Ray backend scheduling primitives
+├── workers/              # Ray backend workers
+├── hybrid_engines/       # Ray backend object-store / weight-sync helpers
 ├── utils/                # Checkpoints, logging, optim, EMA, visualization
 └── runners/              # Public route runners, distributed and online-training helpers
 ```
 
 There is no active `src/` or `workspace/` tree. The training unit is a runner.
-Ray-specific scheduler / worker modules are optional backend internals and
+Ray-specific scheduler / worker modules are mainline backend internals and
 should not define a separate model, dataset, checkpoint, or logging contract.
 
 ## Execution Path
 
 ```text
 scripts/*.sh
-  -> python -m dreamervla.train --config-name <route>
-  -> configs/<route>.yaml with _target_: dreamervla.runners.<Runner>
+  -> python -m dreamervla.launchers.train --config <experiment>
+  -> configs/train.yaml + configs/experiment/<experiment>.yaml
+  -> component groups (classifier/worldmodel/dreamervla/task)
   -> runner.setup() -> runner.execute() -> runner.teardown()
 ```
 
@@ -73,15 +74,14 @@ configs should target those public names rather than implementation classes.
 
 ```text
 Collection:
-  collect_rollouts_ray
-  collect_rollouts_onetraj
+  collect_rollouts
 
 Cotrain:
-  openvla_onetraj_libero_cotrain_noray
-  openvla_onetraj_libero_cotrain_ray
+  openvla_onetraj_libero_cotrain
+  dreamervla_wmcls_cotrain
 
 Eval:
-  eval_libero_vla
+  eval_cotrain
 ```
 
 Release launchers stay in `scripts/`; route experiments should graduate to a

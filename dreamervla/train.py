@@ -59,8 +59,8 @@ def _parse_hydra_like_args(argv: list[str]) -> tuple[str, list[str]]:
             print(
                 "Usage: python -m dreamervla.train --config-name CONFIG [overrides]\n\n"
                 "Examples:\n"
-                "  python -m dreamervla.train experiment=openvla_onetraj_libero_cotrain_ray task=openvla_onetraj_coldstart_libero\n"
-                "  python -m dreamervla.train experiment=collect_rollouts_ray\n"
+                "  python -m dreamervla.train experiment=openvla_onetraj_libero_cotrain task=openvla_onetraj_coldstart_libero\n"
+                "  python -m dreamervla.train experiment=collect_rollouts\n"
                 "  python -m dreamervla.train experiment=eval_libero_vla"
             )
             raise SystemExit(0)

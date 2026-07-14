@@ -1046,10 +1046,6 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
         (
             "CotrainRunner",
             "RolloutCollectionRunner",
-            # Reject invalid settings in persisted pre-consolidation configs too.
-            "OnlineCotrainRayRunner",
-            "ManualCotrainRayRunner",
-            "ColdStartRayCollectRunner",
         )
     )
     if not is_ray_runner:

@@ -137,30 +137,6 @@ def test_missing_identity_raises(tmp_path):
             writer.write_demo(index=0, steps=_make_steps(1, False))
 
 
-def test_make_dump_writer_routes_one_to_per_traj(tmp_path):
-    from dreamervla.dataset.rollout_dump_writer import (
-        RolloutDumpWriter,
-        RotatingRolloutDumpWriter,
-    )
-    from dreamervla.runtime.collect_parallel_rollouts import _make_dump_writer
-
-    kwargs = dict(shard_name="s_000.hdf5", shard_prefix="s", start_index=0)
-    per_traj = _make_dump_writer(
-        tmp_path / "r1", tmp_path / "h1", demos_per_shard=1, **kwargs
-    )
-    assert isinstance(per_traj, PerTrajectoryDumpWriter)
-    rotating = _make_dump_writer(
-        tmp_path / "r2", tmp_path / "h2", demos_per_shard=2, **kwargs
-    )
-    assert isinstance(rotating, RotatingRolloutDumpWriter)
-    rotating.close()
-    single = _make_dump_writer(
-        tmp_path / "r3", tmp_path / "h3", demos_per_shard=0, **kwargs
-    )
-    assert isinstance(single, RolloutDumpWriter)
-    single.close()
-
-
 def test_no_canonical_file_left_when_write_crashes(tmp_path, monkeypatch):
     from dreamervla.dataset import rollout_dump_writer as rdw
 

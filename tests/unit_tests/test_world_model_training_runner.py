@@ -7,11 +7,11 @@ import numpy as np
 import torch
 
 
-def test_online_cotrain_runner_has_extracted_methods():
-    from dreamervla.runners.online_cotrain_runner import OnlineCotrainRunner
+def test_world_model_training_common_has_extracted_methods():
+    from dreamervla.runtime.world_model_training_common import _WorldModelTrainingCommon
 
-    assert hasattr(OnlineCotrainRunner, "_build_components")
-    assert hasattr(OnlineCotrainRunner, "_online_cotrain_loop")
+    assert hasattr(_WorldModelTrainingCommon, "_build_components")
+    assert hasattr(_WorldModelTrainingCommon, "_online_cotrain_loop")
 
 
 def test_wm_pretrain_batch_omits_images_when_hidden_token_exist():
@@ -280,13 +280,99 @@ def test_world_model_warmup_can_defer_loss_device_to_host_transfer():
     assert isinstance(metrics["grad_norm"], torch.Tensor)
 
 
+def test_world_model_warmup_keeps_detached_cosine_diagnostics_on_device():
+    from omegaconf import OmegaConf
+
+    from dreamervla.algorithms.dreamervla import world_model_pretrain_step
+
+    class TinyWM(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.ones(()))
+
+        def forward(self, batch):
+            del batch
+            loss = self.weight.square()
+            return {
+                "_loss": loss,
+                "loss": loss.detach(),
+                "one_step_cosine_similarity": loss.detach() * 0.0 + 0.75,
+                "persistence_cosine_similarity": loss.detach() * 0.0 + 0.5,
+                "chunk_cosine_similarity": loss.detach() * 0.0 + 0.625,
+            }
+
+    wm = TinyWM()
+    metrics = world_model_pretrain_step(
+        policy=torch.nn.Identity(),
+        world_model=wm,
+        optimizer=torch.optim.SGD(wm.parameters(), lr=0.01),
+        batch={"obs_embedding": torch.zeros(1, 1)},
+        device=torch.device("cpu"),
+        optim_cfg=OmegaConf.create({"precision": "fp32", "grad_clip_norm": 1.0}),
+        metrics_mode="loss_tensor",
+    )
+
+    assert set(metrics) == {
+        "loss",
+        "grad_norm",
+        "one_step_cosine_similarity",
+        "persistence_cosine_similarity",
+        "chunk_cosine_similarity",
+    }
+    assert abs(metrics["one_step_cosine_similarity"].item() - 0.75) < 1.0e-7
+    assert all(not value.requires_grad for value in metrics.values())
+
+
+def test_dreamer_wm_progress_status_uses_unified_one_step_cosine():
+    from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
+
+    status = WorldModelTrainingRunner._progress_status(
+        {
+            "loss": 0.1234567,
+            "one_step_cosine_similarity": 0.9876543,
+            "chunk_cosine_similarity": 0.5,
+        },
+        global_step=39,
+    )
+
+    assert status == "global_step=39 loss=0.123457 cos=0.987654"
+
+
+def test_dreamer_wm_replay_budget_uses_dino_style_epoch_progress():
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
+
+    class Replay:
+        @staticmethod
+        def sampleable_window_count():
+            return 40_000
+
+    runner = WorldModelTrainingRunner.__new__(WorldModelTrainingRunner)
+    runner.cfg = OmegaConf.create({"training": {"warmup_replay_epochs": 100}})
+    runner.distributed = SimpleNamespace(world_size=8)
+
+    assert runner._wm_warmup_progress(
+        Replay(),
+        step_index=230,
+        total_steps=31_300,
+        batch_size=16,
+    ) == (231, 313, "dreamer-wm epoch 1/100", "step")
+    assert runner._wm_warmup_progress(
+        Replay(),
+        step_index=313,
+        total_steps=31_300,
+        batch_size=16,
+    ) == (1, 313, "dreamer-wm epoch 2/100", "step")
+
+
 def test_online_cotrain_actor_update_uses_registry():
     import inspect
 
-    import dreamervla.runners.online_cotrain_runner as mod
+    import dreamervla.runtime.world_model_training_common as mod
 
-    loop_src = inspect.getsource(mod.OnlineCotrainRunner._online_cotrain_loop)
-    burst_src = inspect.getsource(mod.OnlineCotrainRunner._run_training_bursts)
+    loop_src = inspect.getsource(mod._WorldModelTrainingCommon._online_cotrain_loop)
+    burst_src = inspect.getsource(mod._WorldModelTrainingCommon._run_training_bursts)
 
     assert "get_actor_update_route" in loop_src
     assert "actor_update_route.step_fn" in burst_src
@@ -301,9 +387,9 @@ def test_online_cotrain_actor_update_uses_registry():
 
 
 def test_training_bursts_episode_trigger_waits_for_completed_episode(monkeypatch):
-    import dreamervla.runners.online_cotrain_runner as mod
+    import dreamervla.runtime.world_model_training_common as mod
 
-    runner = mod.OnlineCotrainRunner.__new__(mod.OnlineCotrainRunner)
+    runner = mod._WorldModelTrainingCommon.__new__(mod._WorldModelTrainingCommon)
     runner.device = torch.device("cpu")
     runner.distributed = _FakeDistributed()
     runner.global_step = 0
@@ -349,9 +435,9 @@ def test_training_bursts_episode_trigger_waits_for_completed_episode(monkeypatch
 
 
 def test_training_bursts_env_step_trigger_keeps_train_every_gate(monkeypatch):
-    import dreamervla.runners.online_cotrain_runner as mod
+    import dreamervla.runtime.world_model_training_common as mod
 
-    runner = mod.OnlineCotrainRunner.__new__(mod.OnlineCotrainRunner)
+    runner = mod._WorldModelTrainingCommon.__new__(mod._WorldModelTrainingCommon)
     runner.device = torch.device("cpu")
     runner.distributed = _FakeDistributed()
     runner.global_step = 0
@@ -397,9 +483,9 @@ def test_training_bursts_env_step_trigger_keeps_train_every_gate(monkeypatch):
 def test_training_bursts_rl_samples_without_images(monkeypatch):
     from omegaconf import OmegaConf
 
-    import dreamervla.runners.online_cotrain_runner as mod
+    import dreamervla.runtime.world_model_training_common as mod
 
-    runner = mod.OnlineCotrainRunner.__new__(mod.OnlineCotrainRunner)
+    runner = mod._WorldModelTrainingCommon.__new__(mod._WorldModelTrainingCommon)
     runner.device = torch.device("cpu")
     runner.distributed = _FakeDistributed()
     runner.global_step = 0
@@ -491,9 +577,9 @@ def test_training_bursts_rl_samples_without_images(monkeypatch):
 def test_trainable_classifier_preserves_hydra_target(monkeypatch):
     from omegaconf import OmegaConf
 
-    import dreamervla.runners.online_cotrain_runner as mod
+    import dreamervla.runtime.world_model_training_common as mod
 
-    runner = mod.OnlineCotrainRunner.__new__(mod.OnlineCotrainRunner)
+    runner = mod._WorldModelTrainingCommon.__new__(mod._WorldModelTrainingCommon)
     runner.device = torch.device("cpu")
     runner.distributed = _FakeDistributed()
 
@@ -526,9 +612,9 @@ def test_trainable_classifier_preserves_hydra_target(monkeypatch):
 def test_trainable_classifier_restores_swept_threshold_from_ckpt(tmp_path, monkeypatch):
     from omegaconf import OmegaConf
 
-    import dreamervla.runners.online_cotrain_runner as mod
+    import dreamervla.runtime.world_model_training_common as mod
 
-    runner = mod.OnlineCotrainRunner.__new__(mod.OnlineCotrainRunner)
+    runner = mod._WorldModelTrainingCommon.__new__(mod._WorldModelTrainingCommon)
     runner.device = torch.device("cpu")
     runner.distributed = _FakeDistributed()
     classifier = torch.nn.Linear(3, 2)
@@ -559,7 +645,7 @@ def test_trainable_classifier_restores_swept_threshold_from_ckpt(tmp_path, monke
 def test_task_conditioning_validation_is_disabled_by_default():
     from omegaconf import OmegaConf
 
-    from dreamervla.runners.online_cotrain_runner import validate_task_conditioning_cfg
+    from dreamervla.runtime.world_model_training_common import validate_task_conditioning_cfg
 
     validate_task_conditioning_cfg(
         OmegaConf.create({}),
@@ -572,7 +658,7 @@ def test_task_conditioning_validation_fails_without_module_support():
     import pytest
     from omegaconf import OmegaConf
 
-    from dreamervla.runners.online_cotrain_runner import validate_task_conditioning_cfg
+    from dreamervla.runtime.world_model_training_common import validate_task_conditioning_cfg
 
     cfg = OmegaConf.create(
         {"task_conditioning": {"enabled": True, "num_tasks": 10, "embedding_dim": 64}}
@@ -589,7 +675,7 @@ def test_task_conditioning_validation_fails_without_module_support():
 def test_task_conditioning_validation_accepts_capable_modules():
     from omegaconf import OmegaConf
 
-    from dreamervla.runners.online_cotrain_runner import validate_task_conditioning_cfg
+    from dreamervla.runtime.world_model_training_common import validate_task_conditioning_cfg
 
     class Capable(torch.nn.Linear):
         supports_task_conditioning = True
@@ -1344,6 +1430,9 @@ def test_world_model_metrics_namespace_includes_hidden_losses():
             "hidden_cosine_loss": 3.0,
             "full_hidden_rec_loss": 4.0,
             "full_hidden_cosine_loss": 5.0,
+            "one_step_cosine_similarity": 0.9,
+            "persistence_cosine_similarity": 0.8,
+            "chunk_cosine_similarity": 0.7,
             "ignored": 6.0,
         }
     ) == {
@@ -1352,6 +1441,9 @@ def test_world_model_metrics_namespace_includes_hidden_losses():
         "wm/hidden_cosine_loss": 3.0,
         "wm/full_hidden_rec_loss": 4.0,
         "wm/full_hidden_cosine_loss": 5.0,
+        "wm/one_step_cosine_similarity": 0.9,
+        "wm/persistence_cosine_similarity": 0.8,
+        "wm/chunk_cosine_similarity": 0.7,
     }
 
 
@@ -1431,10 +1523,10 @@ class _FakeDistributed:
 
 
 def test_online_cotrain_loop_passes_full_ready_gates(monkeypatch):
-    import dreamervla.runners.online_cotrain_runner as mod
+    import dreamervla.runtime.world_model_training_common as mod
 
     captured = {}
-    runner = mod.OnlineCotrainRunner.__new__(mod.OnlineCotrainRunner)
+    runner = mod._WorldModelTrainingCommon.__new__(mod._WorldModelTrainingCommon)
     runner.device = torch.device("cpu")
     runner.distributed = _FakeDistributed()
     runner.global_step = 0
@@ -1663,12 +1755,14 @@ def test_release_pipeline_warmup_uses_all_collected_episodes_by_default():
         cfg = compose(
             config_name="train",
             overrides=[
-                "experiment=openvla_onetraj_libero_cotrain_noray",
+                "experiment=wm_full_dataset_train",
                 "task=openvla_onetraj_coldstart_libero",
             ],
         )
 
-    assert cfg.offline_warmup.max_episodes_per_task is None
+    from omegaconf import OmegaConf
+
+    assert OmegaConf.select(cfg, "offline_warmup.max_episodes_per_task") is None
 
 
 def test_run_fails_fast_when_collected_dump_missing(tmp_path, monkeypatch):
@@ -1820,9 +1914,9 @@ def test_warmup_topk_checkpoint_keeps_best_metric_values(tmp_path):
 def test_warmup_only_component_build_skips_rollout_encoder(monkeypatch):
     from omegaconf import OmegaConf
 
-    import dreamervla.runners.online_cotrain_runner as mod
+    import dreamervla.runtime.world_model_training_common as mod
 
-    runner = mod.OnlineCotrainRunner.__new__(mod.OnlineCotrainRunner)
+    runner = mod._WorldModelTrainingCommon.__new__(mod._WorldModelTrainingCommon)
     runner.device = torch.device("cpu")
     runner.distributed = _FakeDistributed()
     calls: list[str] = []
@@ -1842,7 +1936,7 @@ def test_warmup_only_component_build_skips_rollout_encoder(monkeypatch):
 
     monkeypatch.setattr(runner, "_build_frozen_encoder_cfg", fail_if_encoder_cfg)
     monkeypatch.setattr(mod.hydra.utils, "instantiate", fake_instantiate)
-    monkeypatch.setattr(mod.OnlineCotrainRunner, "_build_trainable_classifier", fake_build_classifier)
+    monkeypatch.setattr(mod._WorldModelTrainingCommon, "_build_trainable_classifier", fake_build_classifier)
 
     cfg = OmegaConf.create({
         "online_rollout": {"total_env_steps": 0},
@@ -1851,6 +1945,7 @@ def test_warmup_only_component_build_skips_rollout_encoder(monkeypatch):
         "critic": {"_target_": "critic"},
         "algorithm": {},
         "optim": {
+            "precision": "fp32",
             "world_model": {"name": "adam", "lr": 1e-3, "weight_decay": 0.0, "betas": [0.9, 0.999], "eps": 1e-8},
             "policy": {"name": "adam", "lr": 1e-3, "weight_decay": 0.0, "betas": [0.9, 0.999], "eps": 1e-8},
             "critic": {"name": "adam", "lr": 1e-3, "weight_decay": 0.0, "betas": [0.9, 0.999], "eps": 1e-8},
@@ -1862,15 +1957,15 @@ def test_warmup_only_component_build_skips_rollout_encoder(monkeypatch):
 
     assert runner.encoder is None
     assert runner.processor is None
-    assert calls == ["world_model", "policy", "critic"]
+    assert calls == ["world_model"]
 
 
 def test_online_cotrain_env_preserves_hidden_token_discrete_contract(monkeypatch):
     from omegaconf import OmegaConf
 
-    import dreamervla.runners.online_cotrain_runner as mod
+    import dreamervla.runtime.world_model_training_common as mod
 
-    runner = mod.OnlineCotrainRunner.__new__(mod.OnlineCotrainRunner)
+    runner = mod._WorldModelTrainingCommon.__new__(mod._WorldModelTrainingCommon)
     runner.distributed = _FakeDistributed()
     captured: dict[str, object] = {}
 
@@ -1924,9 +2019,9 @@ def test_online_env_validation_accepts_oft_discrete_hidden_token_contract():
 
 
 def test_online_rollout_uses_only_oft_hidden_token_extractor():
-    import dreamervla.runners.online_cotrain_runner as mod
+    import dreamervla.runtime.world_model_training_common as mod
 
-    runner = mod.OnlineCotrainRunner.__new__(mod.OnlineCotrainRunner)
+    runner = mod._WorldModelTrainingCommon.__new__(mod._WorldModelTrainingCommon)
     runner.device = torch.device("cpu")
     calls: list[str] = []
 
@@ -1988,7 +2083,7 @@ def test_online_rollout_uses_only_oft_hidden_token_extractor():
 def test_single_env_rollout_executes_full_chunk_and_clears_on_reset(monkeypatch):
     from omegaconf import OmegaConf
 
-    import dreamervla.runners.online_cotrain_runner as mod
+    import dreamervla.runtime.world_model_training_common as mod
 
     class FakeReplay:
         num_transitions = 0
@@ -2052,7 +2147,7 @@ def test_single_env_rollout_executes_full_chunk_and_clears_on_reset(monkeypatch)
 
     fake_env = FakeEnv()
     monkeypatch.setattr(mod, "OnlineReplay", FakeReplay)
-    runner = mod.OnlineCotrainRunner.__new__(mod.OnlineCotrainRunner)
+    runner = mod._WorldModelTrainingCommon.__new__(mod._WorldModelTrainingCommon)
     runner.device = torch.device("cpu")
     runner.distributed = _FakeDistributed()
     runner.processor = None

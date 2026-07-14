@@ -1,0 +1,50 @@
+# @package _global_
+name: install
+data_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}
+python: python
+dry_run: false
+force: false
+only: []
+state_dir: ${data_root}/install_state
+env:
+  CONDA_ENV_NAME: dreamervla
+  PYTHON_VERSION: "3.11"
+  CUDA_INDEX_URL: https://download.pytorch.org/whl/cu124
+  FLASH_ATTN_VERSION: 2.7.1.post1
+  FLASH_ATTN_WHEEL_URL: https://github.com/Dao-AILab/flash-attention/releases/download/v${env.FLASH_ATTN_VERSION}/flash_attn-${env.FLASH_ATTN_VERSION}+cu12torch2.5cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
+  INSTALL_APT_TOOLS: true
+  INSTALL_FLASH_ATTN: true
+  INSTALL_OPTIONAL_THIRD_PARTY: false
+  INSTALL_OPENSORA_THIRD_PARTY: false
+  INSTALL_OPENVLA_OFT_THIRD_PARTY: true
+  INSTALL_EGL_PROBE: true
+  INSTALL_DEV_TOOLS: true
+  INSTALL_RAY: true
+  OPENVLA_OFT_REPO_URL: https://github.com/moojink/openvla-oft.git
+  OPENVLA_OFT_REVISION: e4287e94541f459edc4feabc4e181f537cd569a8
+  OPENSORA_REPO_URL: https://github.com/hpcaitech/Open-Sora.git
+  OPENSORA_REVISION: 17cce908b22283acc3c946816c81f46dd442a453
+  DLIMP_OPENVLA_SRC: git+https://github.com/moojink/dlimp_openvla@040105d256bd28866cc6620621a3d5f7b6b91b46
+  TRANSFORMERS_OFT_FORK_SRC: git+https://github.com/moojink/transformers-openvla-oft.git@bc339d9ad707454c0c115970db43c260067c61ab
+steps:
+  - id: 00_apt_tools
+    script: scripts/install/00_apt_tools.sh
+    marker: true
+  - id: 10_conda_env
+    script: scripts/install/10_conda_env.sh
+    marker: true
+  - id: 20_torch
+    script: scripts/install/20_torch.sh
+    marker: true
+  - id: 30_python_deps
+    script: scripts/install/30_python_deps.sh
+    marker: true
+  - id: 40_third_party
+    script: scripts/install/40_third_party.sh
+    marker: true
+  - id: 50_special_packages
+    script: scripts/install/50_special_packages.sh
+    marker: true
+  - id: 60_verify
+    script: scripts/install/60_verify.sh
+    marker: true

@@ -53,12 +53,12 @@ def test_coldstart_suite_binds_own_ckpt_and_suite(task, ckpt_suffix, unnorm_key,
     with initialize_config_dir(config_dir=config_dir, version_base=None):
         cfg = compose(
             config_name="train",
-            overrides=["experiment=collect_rollouts_onetraj", f"task={task}"],
+            overrides=["experiment=collect_rollouts", f"task={task}"],
         )
     OmegaConf.resolve(cfg)
     validate_cfg(cfg)
 
-    assert cfg._target_ == "dreamervla.runners.CollectRolloutsRunner"
+    assert cfg._target_ == "dreamervla.runners.RolloutCollectionRunner"
     assert cfg.task.suite == suite
     oft = cfg.task.openvla_oft
 

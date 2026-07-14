@@ -19,8 +19,8 @@ git clone <repo> && cd DreamerVLA
 export DVLA_DATA_ROOT=data
 bash scripts/install_env.sh
 conda activate dreamervla
-bash scripts/download_assets.sh download.openvla_one_traj=true only=[30_openvla_oft_one_trajectory]
-bash scripts/download_assets.sh only=[40_libero_dataset] env.LIBERO_SUITES=libero_goal
+bash scripts/download_assets.sh download.openvla_one_traj=true only=[10_openvla_oft_one_trajectory]
+bash scripts/download_assets.sh only=[20_libero_dataset] env.LIBERO_SUITES=libero_goal
 
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   bash scripts/experiments/cotrain/train.sh
@@ -88,8 +88,8 @@ docs/               documentation index, references, tutorials, reports, papers
 | Stage | Command |
 | --- | --- |
 | Install | `bash scripts/install_env.sh` |
-| Download OpenVLA-OFT one-trajectory | `bash scripts/download_assets.sh download.openvla_one_traj=true only=[30_openvla_oft_one_trajectory]` |
-| Download LIBERO | `bash scripts/download_assets.sh only=[40_libero_dataset] env.LIBERO_SUITES=libero_goal` |
+| Download OpenVLA-OFT one-trajectory | `bash scripts/download_assets.sh download.openvla_one_traj=true only=[10_openvla_oft_one_trajectory]` |
+| Download LIBERO | `bash scripts/download_assets.sh only=[20_libero_dataset] env.LIBERO_SUITES=libero_goal` |
 | WM/CLS cotrain | `bash scripts/experiments/cotrain/train.sh` |
 | Full-dataset WM warmup | `bash scripts/experiments/world_model_training/train.sh` |
 | Pre-mainline frozen WM/CLS policy test | `python -m dreamervla.launchers.frozen_model_pre_mainline task=goal ngpu=8` |
@@ -108,9 +108,9 @@ bash scripts/experiments/world_model_training/train.sh \
 `DVLA_DATA_ROOT` is independent of `DVLA_ROOT`; use a separate disk or shared
 storage path when that is more convenient.
 
-Shell entrypoints do not define training or evaluation defaults. Their launcher
-configs under `configs/scripts/` select complete recipes under
-`configs/experiment/`; use Hydra `key=value` overrides for changes.
+Shell entrypoints do not define training or evaluation defaults. They select complete
+recipes directly under `configs/experiment/`; use Hydra `key=value` overrides for
+changes. `configs/scripts/` is reserved for install, download, and preprocess.
 
 ## Config Fields
 

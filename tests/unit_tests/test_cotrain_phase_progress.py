@@ -183,7 +183,7 @@ def test_cotrain_eval_defaults_to_25_parallel_osmesa_slots() -> None:
         project_root
         / "configs"
         / "dreamervla"
-        / "openvla_onetraj_libero_cotrain_ray.yaml"
+        / "openvla_onetraj_libero_cotrain.yaml"
     )
 
     assert cfg.manual_cotrain.eval_protocol.render_backend == "osmesa"

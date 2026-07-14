@@ -11,6 +11,7 @@ pre_mainline:
 training:
   out_dir: ${oc.env:RUN_ROOT,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/pre_mainline/wm/${now:%Y%m%d_%H%M%S}}
   classifier_warmup_steps: 0
+  warmup_replay_epochs: 100
 
 offline_warmup:
   data_dir: ${task.hdf5_reward_dir}

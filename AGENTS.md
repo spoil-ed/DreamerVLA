@@ -9,21 +9,16 @@ mainline is the OpenVLA-OFT one-trajectory cold-start workflow:
 
 `collect rollouts -> seed replay -> warm up world model + success classifier -> online cotrain`
 
-The mainline experiments are `collect_rollouts_ray` / `collect_rollouts_onetraj`,
-`openvla_onetraj_libero_cotrain_noray` (sync pipeline) and
-`openvla_onetraj_libero_cotrain_ray` (Ray async manual cotrain), then `eval_libero_vla`.
+The mainline experiments are `collect_rollouts`, independent WM/classifier warmup,
+`dreamervla_wmcls_cotrain`, and `eval_cotrain`. Ray is the implementation backend
+for collection and cotrain, so public route names do not carry a `ray` suffix.
 The command-level reference is [spec/04_complete_loop.md](spec/04_complete_loop.md).
 Architecture source documents live under [spec/](spec/), with
 [spec/99_manual_notes.md](spec/99_manual_notes.md) as the highest-priority user
 guidance. Keep this file as the repository brief.
 
-The separate **pre-mainline feasibility test** is
-`python -m dreamervla.launchers.frozen_model_pre_mainline`: train WM and classifier from official
-LIBERO data, freeze both, run policy-only imagined RL with
-`dreamervla_frozen_models_rl`, then compare the base VLA and learned policy with a
-matched real-LIBERO protocol. Its first route is canonical `libero_goal` only. It
-is a gate before the mainline, not a replacement for the
-collect/warmup/online-cotrain flow.
+The official-data WM and classifier recipes remain supporting capacity checks; they
+do not replace the collect/warmup/online-cotrain flow.
 
 ---
 
@@ -34,13 +29,11 @@ collect/warmup/online-cotrain flow.
     then runs `setup -> execute -> teardown`.
   - `config.py` - early validation for logger backends, actor-update routes, batch
     shape, resume paths, sidecar contracts, latent dimensions, Ray resources, and FSDP.
-  - `launchers/` - Python launchers. The main pipeline launcher is
-    `coldstart_warmup_cotrain.py`; `frozen_model_pre_mainline.py` owns the isolated
-    official-data/frozen-model feasibility test.
+  - `launchers/` - thin Python launchers for one command, generic train/eval dispatch,
+    and shell workflow execution.
   - `runners/` - `BaseRunner` plus public runner targets. Current mainline runners are
-    `CollectRolloutsRunner`, `ColdStartRayCollectRunner`,
-    `OnlineCotrainPipelineRunner`, `OnlineCotrainRunner`, `ManualCotrainRayRunner`,
-    and `OnlineCotrainRayRunner`.
+    `RolloutCollectionRunner`, `CotrainRunner`, `WorldModelTrainingRunner`,
+    `SuccessClassifierTrainingRunner`, and `LIBEROVLAEvaluationRunner`.
     WM, classifier, VLA SFT, and eval runners are also here.
   - `models/` - embodiment model implementations only. `models/embodiment/`
     contains VLA/encoder code and world-model modules; VLA and encoder are the
@@ -53,16 +46,16 @@ collect/warmup/online-cotrain flow.
     hidden sidecars, and validation utilities.
   - `envs/` - `envs/libero/{libero_env.py,utils.py,venv.py}` plus
     `envs/world_model/LatentWorldModelEnv`.
-  - `workers/`, `scheduler/`, `hybrid_engines/` - opt-in Ray async cotrain backend:
+  - `workers/`, `scheduler/`, `hybrid_engines/` - Ray mainline backend:
     env, inference, replay, learner, rollout dump, placement, channels, and weight sync.
   - `diagnostics/` - importable smoke checks and measurement CLIs.
   - `utils/` - checkpoint, logging, metrics, paths, timers, EGL, HF modules, shared helpers.
 - **`configs/`** - Hydra source of truth:
   - `train.yaml` composes `VLA/`, `worldmodel/`, `classifier/`, `dreamervla/`,
     `evaluation/`, `logger/`, and `experiment/`.
-  - `configs/scripts/coldstart_warmup_cotrain.yaml` defines the launcher-level pipeline.
   - `configs/experiment/` selects complete recipes.
-  - `configs/task/` carries LIBERO suite, checkpoint, image/history, and sidecar metadata.
+  - `configs/task/` carries LIBERO suite, checkpoint, image/history, sidecar metadata,
+    and the task-owned classifier model, data target, and input contract.
 - **`scripts/`** - thin shell launchers. Implementation belongs in `dreamervla/` and
   runs via `python -m`; defaults belong to Hydra, not shell variables.
 - **`tests/`** - `unit_tests/` for contracts and focused behavior; `e2e_tests/` for
@@ -86,56 +79,16 @@ bash scripts/experiments/cotrain/eval.sh \
   eval.ckpt_path=/path/to/manual_cotrain.ckpt
 ```
 
-These scripts contain no training defaults. The train route selects
-`experiment=dreamervla_wmcls_cotrain_ray`; eval selects `eval_cotrain`.
-The older collect/warmup pipeline remains available directly through
-`python -m dreamervla.launchers.coldstart_warmup_cotrain`.
+These scripts contain no training defaults. Train selects
+`experiment=dreamervla_wmcls_cotrain`; eval selects `eval_cotrain`. Collection is
+`experiment=collect_rollouts` and writes reward/hidden shards plus
+`collection_manifest.json`. WM and classifier warmup use their independent runners;
+their checkpoints are passed to cotrain explicitly.
 
-The launcher composes `configs/scripts/coldstart_warmup_cotrain.yaml`:
-
-- `mode=noray` uses `experiment=collect_rollouts_onetraj`
-  (`CollectRolloutsRunner`) for vectorized collection.
-- `mode=ray` uses `experiment=collect_rollouts_ray`
-  (`ColdStartRayCollectRunner`) for worker-fanout collection.
-- Collection always renders with osmesa and writes
-  `${DVLA_DATA_ROOT}/collected_rollouts/<suite>/{reward,hidden}` plus
-  `collection_manifest.json`.
-- The sync cotrain path uses
-  `experiment=openvla_onetraj_libero_cotrain_noray`, which composes
-  `dreamervla=openvla_onetraj_libero_cotrain_noray`.
-- The pipeline runner seeds `OnlineReplay` from collected reward + hidden HDF5 shards,
-  warms up the world model and classifier with the same update functions used online,
-  then runs online cotrain.
-- `cotrain_phase=warmup` writes split warmup checkpoints under
-  `${RUN_ROOT}/cotrain/ckpt/`.
-- `cotrain_phase=online` resumes those warmup checkpoints and skips collection/warmup.
-- `cotrain_engine=async` runs sync warmup first, consolidates a Ray init checkpoint,
-  then starts `experiment=openvla_onetraj_libero_cotrain_ray`
-  (`ManualCotrainRayRunner`).
-
-Ray async cotrain is explicit and single-node. The target route is manual-notes style:
+Cotrain is a single-node Ray implementation with manual-notes-style groups:
 `LearnerGroup` owns world-model/classifier updates, `ActorGroup` owns VLA FSDP
 training, `RolloutGroup` owns no-grad policy inference, and `EnvGroup` owns real/WM
 environment interaction.
-
-## Pre-Mainline Frozen-Model Test
-
-Run the complete causal test with:
-
-```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-  python -m dreamervla.launchers.frozen_model_pre_mainline \
-  task=goal ngpu=8
-```
-
-The WM and classifier stages use official
-`task.hdf5_reward_dir` + `task.openvla_oft.hidden_token_dir`. The RL stage is
-single-process, constructs only a policy optimizer, reads official replay for
-initial sequences, and performs no real rollout. WM/CLS state hashes must remain
-unchanged, the policy hash and optimizer-step count must change, and the final
-real-LIBERO success rate must strictly exceed the unmodified one-trajectory
-OpenVLA-OFT baseline under identical evaluation metadata. See
-[spec/09_frozen_model_pre_mainline.md](spec/09_frozen_model_pre_mainline.md).
 
 ## 参考实现与学习要求
 
@@ -221,8 +174,8 @@ sub-roots under `RUN_ROOT`; do not scatter extra artifacts elsewhere.
   `${RUN_ROOT}/cotrain/ckpt/classifier_warmup.ckpt`.
 - Use `BaseRunner.get_global_step_checkpoint_dir` and component checkpoint helpers
   instead of hand-built paths.
-- Cotrain evaluation goes through `scripts/experiments/cotrain/eval.sh`,
-  `configs/scripts/cotrain_eval.yaml`, and `configs/experiment/eval_cotrain.yaml`.
+- Cotrain evaluation goes through `scripts/experiments/cotrain/eval.sh` and
+  `configs/experiment/eval_cotrain.yaml`.
 
 ---
 
@@ -250,12 +203,10 @@ sub-roots under `RUN_ROOT`; do not scatter extra artifacts elsewhere.
 
 ---
 
-## Optional Components
+## Backend Components
 
-- Ray async cotrain (`ManualCotrainRayRunner`) is available through
-  `experiment=openvla_onetraj_libero_cotrain_ray`.
-- `scheduler/`, `workers/`, and `hybrid_engines/` are backend primitives. Keep them
-  behind Hydra-selected runners.
+- `scheduler/`, `workers/`, and `hybrid_engines/` are Ray backend primitives. Keep
+  them behind Hydra-selected public runners; do not create a parallel non-Ray route.
 
 ---
 

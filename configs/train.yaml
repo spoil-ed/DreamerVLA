@@ -8,4 +8,4 @@ defaults:
   - dreamervla: null
   - evaluation: null
   - logger: tensorboard_wandb
-  - experiment: openvla_onetraj_libero_cotrain_ray
+  - experiment: openvla_onetraj_libero_cotrain

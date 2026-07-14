@@ -12,8 +12,8 @@ Normal changes are Hydra overrides, e.g.
 
 | Pipeline | Hydra `task=` | Main configs |
 | --- | --- | --- |
-| [OpenVLA one-traj cold-start cotrain](OpenVLA_Onetraj_LIBERO.md) | `goal\|object\|spatial\|10` launcher shorthand | `collect_rollouts_ray`, `openvla_onetraj_libero_cotrain_ray`, `wm_full_dataset_train`, `eval_libero_vla` |
-| [Ray/manual cotrain backend](../../../spec/04_complete_loop.md) | synthetic / gated real smoke | `manual_cotrain_ray_*`, `openvla_onetraj_libero_cotrain_ray` |
+| [OpenVLA one-traj cold-start cotrain](OpenVLA_Onetraj_LIBERO.md) | `goal\|object\|spatial\|10` launcher shorthand | `collect_rollouts`, `openvla_onetraj_libero_cotrain`, `wm_full_dataset_train`, `eval_libero_vla` |
+| [Ray/manual cotrain backend](../../../spec/04_complete_loop.md) | synthetic / gated real smoke | `manual_cotrain_ray_*`, `openvla_onetraj_libero_cotrain` |
 | [WM single-trajectory overfit probe](../../../scripts/experiments/single_trajectory_overfit/train.sh) | `libero_goal` HDF5 + hidden sidecar | diagnostic script with a check before training |
 
 The `task=` token is snake_case; on-disk data artifacts keep their

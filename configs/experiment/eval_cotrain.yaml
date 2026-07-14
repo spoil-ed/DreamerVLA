@@ -3,6 +3,9 @@ defaults:
   - eval_libero_vla
   - _self_
 
+launch:
+  required_target_values: [eval.ckpt_path]
+
 training:
   out_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/eval/cotrain/${now:%Y%m%d_%H%M%S}
 

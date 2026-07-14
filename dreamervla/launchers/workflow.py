@@ -18,7 +18,7 @@ CONFIG_DIR = PROJECT_ROOT / "configs" / "scripts"
 
 
 def _parse_hydra_like_args(argv: Sequence[str]) -> tuple[str, list[str]]:
-    config_name = "preprocess_suite"
+    config_name = "preprocess/preprocess_suite"
     overrides: list[str] = []
     i = 0
     while i < len(argv):

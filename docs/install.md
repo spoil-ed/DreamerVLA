@@ -35,8 +35,8 @@ bash scripts/install_env.sh only=[20_torch] force=true
 Download the current LIBERO cotrain assets:
 
 ```bash
-bash scripts/download_assets.sh download.openvla_one_traj=true only=[30_openvla_oft_one_trajectory]
-bash scripts/download_assets.sh only=[40_libero_dataset] env.LIBERO_SUITES=libero_goal
+bash scripts/download_assets.sh download.openvla_one_traj=true only=[10_openvla_oft_one_trajectory]
+bash scripts/download_assets.sh only=[20_libero_dataset] env.LIBERO_SUITES=libero_goal
 ```
 
 Optional CALVIN downloads:

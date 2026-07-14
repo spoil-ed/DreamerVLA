@@ -145,7 +145,7 @@ def test_hidden_token_accepts_only_canonical_projected_shape() -> None:
 
 def test_rollout_hidden_extractor_docs_use_role_based_wm_wording() -> None:
     source = (
-        PROJECT_ROOT / "dreamervla" / "runners" / "rollout_hidden_extractor.py"
+        PROJECT_ROOT / "dreamervla" / "runtime" / "rollout_hidden_extractor.py"
     ).read_text(encoding="utf-8")
     assert ("DINO" + "-WM") not in source
     assert ("dino" + "_wm") not in source.lower()

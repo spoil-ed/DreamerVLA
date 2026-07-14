@@ -190,7 +190,7 @@ def test_chunk_wm_declares_task_conditioning_support_when_enabled() -> None:
 def test_validate_task_conditioning_rejects_missing_capability() -> None:
     from omegaconf import OmegaConf
 
-    from dreamervla.runners.online_cotrain_runner import validate_task_conditioning_cfg
+    from dreamervla.runtime.world_model_training_common import validate_task_conditioning_cfg
 
     cfg = OmegaConf.create(
         {
@@ -218,7 +218,7 @@ def test_validate_task_conditioning_rejects_missing_capability() -> None:
 def test_validate_task_conditioning_accepts_default_off() -> None:
     from omegaconf import OmegaConf
 
-    from dreamervla.runners.online_cotrain_runner import validate_task_conditioning_cfg
+    from dreamervla.runtime.world_model_training_common import validate_task_conditioning_cfg
 
     cfg = OmegaConf.create({"task_conditioning": {"enabled": False}})
 

@@ -40,7 +40,7 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-CONFIG_DIR = _project_root() / "configs" / "scripts"
+CONFIG_DIR = _project_root() / "configs" / "experiment" / "openvla_oft_official_eval"
 
 
 def _timestamp() -> str:
@@ -215,7 +215,7 @@ def _config_from_mapping(cfg: Mapping[str, Any]) -> EvalOpenVLAOFTConfig:
 
 
 def _parse_hydra_like_argv(argv: Sequence[str]) -> tuple[str, list[str]]:
-    config_name = "openvla_oft_official_eval"
+    config_name = "eval"
     overrides: list[str] = []
     i = 0
     while i < len(argv):

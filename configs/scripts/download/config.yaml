@@ -1,0 +1,54 @@
+# @package _global_
+name: download
+data_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}
+python: python
+dry_run: false
+only: []
+download:
+  openvla_oft: false
+  openvla_one_traj: false
+  libero: true
+  calvin: false
+env:
+  LIBERO_SUITES:
+    - libero_goal
+    - libero_object
+    - libero_spatial
+    - libero_10
+  OPENVLA_OFT_REPOS: []
+  OPENVLA_ONE_TRAJ_REPOS:
+    - Haozhan72/Openvla-oft-SFT-libero-spatial-traj1:Openvla-oft-SFT-libero-spatial-traj1
+    - Haozhan72/Openvla-oft-SFT-libero-object-traj1:Openvla-oft-SFT-libero-object-traj1
+    - Haozhan72/Openvla-oft-SFT-libero-goal-traj1:Openvla-oft-SFT-libero-goal-traj1
+    - Haozhan72/Openvla-oft-SFT-libero10-traj1:Openvla-oft-SFT-libero10-traj1
+  OPENVLA_OFT_DOWNLOAD_METHOD: hf
+  OPENVLA_ONE_TRAJ_DOWNLOAD_METHOD: hf
+  CALVIN_DOWNLOAD_METHOD: official
+  CALVIN_TASKS:
+    - task_ABCD_D
+  EXTRACT_CALVIN: false
+steps:
+  - id: 00_openvla_oft
+    script: scripts/download/00_openvla_oft.sh
+    enabled: ${download.openvla_oft}
+    for_each: ${env.OPENVLA_OFT_REPOS}
+    env:
+      OPENVLA_OFT_REPO: "{item}"
+  - id: 10_openvla_oft_one_trajectory
+    script: scripts/download/10_openvla_oft_one_trajectory.sh
+    enabled: ${download.openvla_one_traj}
+    for_each: ${env.OPENVLA_ONE_TRAJ_REPOS}
+    env:
+      OPENVLA_ONE_TRAJ_REPO: "{item}"
+  - id: 20_libero_dataset
+    script: scripts/download/20_libero_dataset.sh
+    enabled: ${download.libero}
+    for_each: ${env.LIBERO_SUITES}
+    env:
+      SUITE: "{item}"
+  - id: 30_calvin_dataset
+    script: scripts/download/30_calvin_dataset.sh
+    enabled: ${download.calvin}
+    for_each: ${env.CALVIN_TASKS}
+    env:
+      CALVIN_TASK: "{item}"

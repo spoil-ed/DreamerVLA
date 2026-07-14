@@ -23,7 +23,7 @@ def test_gpu_placement_matches_manual_notes_for_five_gpus() -> None:
     plan = build_manual_cotrain_placement(5)
 
     assert plan.env_specs[0].role == "real_env"
-    assert plan.env_specs[0].gpu_ids == [0]
+    assert plan.env_specs[0].gpu_ids == []
     assert [spec.gpu_ids for spec in plan.env_specs[1:]] == [[1], [2], [3], [4]]
     assert [spec.role for spec in plan.env_specs[1:]] == ["wm_env"] * 4
     assert plan.learner_spec.gpu_ids == [0]
@@ -37,7 +37,7 @@ def test_one_gpu_placement_keeps_actor_spec_on_gpu_zero() -> None:
     plan = build_manual_cotrain_placement(1)
 
     assert plan.env_specs[0].role == "real_env"
-    assert plan.env_specs[0].gpu_ids == [0]
+    assert plan.env_specs[0].gpu_ids == []
     assert plan.learner_spec.gpu_ids == [0]
     assert [spec.gpu_ids for spec in plan.rollout_specs] == [[0]]
     assert [spec.gpu_ids for spec in plan.actor_specs] == [[0]]

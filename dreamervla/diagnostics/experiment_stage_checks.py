@@ -24,10 +24,10 @@ from dreamervla.dataset.collection_manifest import summarize_collection, write_m
 from dreamervla.preprocess.sidecar_schema import validate_hidden_token_sidecar_dir
 from dreamervla.utils.paths import PROJECT_ROOT, data_path
 
-DEFAULT_COLLECT_EXPERIMENT = "collect_rollouts_ray"
+DEFAULT_COLLECT_EXPERIMENT = "collect_rollouts"
 DEFAULT_COLLECT_TASK = "openvla_onetraj_coldstart_libero"
 DEFAULT_CLASSIFIER_EXPERIMENT = "wmpo_token_classifier_openvla_onetraj_libero_goal_h1"
-DEFAULT_ORIGINAL_COTRAIN_EXPERIMENT = "openvla_onetraj_libero_cotrain_noray"
+DEFAULT_ORIGINAL_COTRAIN_EXPERIMENT = "openvla_onetraj_libero_cotrain"
 DEFAULT_ORIGINAL_TASK = "openvla_onetraj_libero"
 DEFAULT_ORIGINAL_TASK_IDS = "[0,1,2,3,4,5,6,7,8,9]"
 

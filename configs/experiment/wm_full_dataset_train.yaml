@@ -1,11 +1,29 @@
 # @package _global_
 defaults:
   - /task: openvla_onetraj_libero
-  - override /dreamervla: openvla_onetraj_libero_cotrain_ray_base
+  - override /dreamervla: openvla_onetraj_libero_cotrain_base
   - override /worldmodel: dreamer-wm
   - _self_
 
 _target_: dreamervla.runners.WorldModelTrainingRunner
+
+launch:
+  distributed: true
+  ngpu: 8
+  gpus: null
+  master_port: 29500
+  python: python
+  write_libero_config: true
+  required_target_values: []
+  env:
+    PYTHONUNBUFFERED: 1
+    OMP_NUM_THREADS: 8
+    MALLOC_ARENA_MAX: 4
+    CUDA_MODULE_LOADING: LAZY
+    PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    NCCL_NVLS_ENABLE: 0
+    NCCL_DEBUG: WARN
+    TORCH_NCCL_ASYNC_ERROR_HANDLING: 1
 
 # Complete 8xH100 recipe for full-dataset Chunk-WM replay training.
 training:
@@ -53,7 +71,7 @@ optim:
   zero_grad_set_to_none: true
   world_model:
     name: adamw
-    lr: 3.0e-5
+    lr: 1.0e-4
     betas: [0.9, 0.999]
     eps: 1.0e-20
     weight_decay: 0.0

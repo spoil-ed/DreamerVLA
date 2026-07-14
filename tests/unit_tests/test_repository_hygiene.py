@@ -6,14 +6,12 @@ from pathlib import Path
 
 _REMOVED_UNDERSCORE_WM_ROUTE = "dino" + "_wm"
 _REMOVED_COMPACT_WM_ROUTE = "dino" + "wm"
-_REMOVED_DASHED_WM_LABEL = "DINO" + "-WM"
 
 
 def _assert_no_removed_wm_wording(text: str) -> None:
     lower = text.lower()
     assert _REMOVED_UNDERSCORE_WM_ROUTE not in lower
     assert _REMOVED_COMPACT_WM_ROUTE not in lower
-    assert _REMOVED_DASHED_WM_LABEL not in text
 
 
 def _tracked_source_paths(
@@ -132,7 +130,7 @@ def test_openvla_mainline_uses_only_hidden_token_public_names() -> None:
         project_root / "dreamervla" / "runners" / "rollout_hidden_extractor.py",
         project_root / "dreamervla" / "runners" / "embodied_eval_runner.py",
         project_root / "dreamervla" / "preprocess" / "preprocess_oft_hidden_token.py",
-        project_root / "scripts" / "preprocess" / "35_oft_hidden_token.sh",
+        project_root / "scripts" / "preprocess" / "10_oft_hidden_token.sh",
     ]
     globbed_paths = [
         *sorted((project_root / "configs" / "task").glob("openvla_onetraj*.yaml")),
@@ -165,10 +163,14 @@ def test_openvla_mainline_uses_only_hidden_token_public_names() -> None:
         project_root / "dreamervla" / "preprocess" / "preprocess_oft_hidden_token.py"
     ).is_file()
     assert (
-        project_root / "configs" / "scripts" / "preprocess_oft_hidden_token.yaml"
+        project_root
+        / "configs"
+        / "scripts"
+        / "preprocess"
+        / "preprocess_oft_hidden_token.yaml"
     ).is_file()
     assert (
-        project_root / "scripts" / "preprocess" / "35_oft_hidden_token.sh"
+        project_root / "scripts" / "preprocess" / "10_oft_hidden_token.sh"
     ).is_file()
     assert not (
         project_root
@@ -177,7 +179,11 @@ def test_openvla_mainline_uses_only_hidden_token_public_names() -> None:
         / f"preprocess_oft_{legacy_namespace}.py"
     ).exists()
     assert not (
-        project_root / "configs" / "scripts" / f"preprocess_oft_{legacy_namespace}.yaml"
+        project_root
+        / "configs"
+        / "scripts"
+        / "preprocess"
+        / f"preprocess_oft_{legacy_namespace}.yaml"
     ).exists()
     assert not (
         project_root / "scripts" / "preprocess" / f"35_oft_{legacy_namespace}.sh"
@@ -239,48 +245,12 @@ def test_active_sources_do_not_use_removed_rl_route_wording() -> None:
     assert offenders == []
 
 
-def test_active_sources_do_not_use_removed_world_model_naming() -> None:
+def test_world_model_recipe_names_use_public_hyphenated_form() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    removed_fragments = (
-        "dino" + "_wm",
-        "dino" + "wm",
-        "dino" + "-wm",
-        "dino" + "wm" + "world" + "model",
-        "chunkaware" + "dino" + "wm" + "world" + "model",
-        "wm" + "world" + "model",
-    )
-    active_roots = [
-        project_root / "AGENTS.md",
-        project_root / "README.md",
-        project_root / "README.zh-CN.md",
-        project_root / "SETUP.md",
-        project_root / "configs",
-        project_root / "docs",
-        project_root / "dreamervla",
-        project_root / "scripts",
-        project_root / "spec",
-        project_root / "tests" / "unit_tests",
-    ]
-    skip_paths = {
-        project_root / "spec" / "99_manual_notes.md",
-    }
-    skip_parts = {"__pycache__"}
-    checked_suffixes = {".py", ".yaml", ".yml", ".md", ".sh", ".tex"}
-
-    offenders: list[str] = []
-    for path in _tracked_source_paths(
-        project_root,
-        active_roots,
-        skip_paths=skip_paths,
-        skip_parts=skip_parts,
-        checked_suffixes=checked_suffixes,
-    ):
-        text = path.read_text(encoding="utf-8", errors="ignore").lower()
-        path_name = path.name.lower()
-        if any(fragment in text or fragment in path_name for fragment in removed_fragments):
-            offenders.append(str(path.relative_to(project_root)))
-
-    assert offenders == []
+    assert (project_root / "configs" / "worldmodel" / "dino-wm.yaml").is_file()
+    assert (project_root / "configs" / "experiment" / "dino-wm.yaml").is_file()
+    assert not (project_root / "configs" / "worldmodel" / "dino_wm.yaml").exists()
+    assert not (project_root / "configs" / "experiment" / "dino_wm.yaml").exists()
 
 
 def test_readme_documents_current_cotrain_entrypoints() -> None:
@@ -310,8 +280,8 @@ def test_configs_readme_documents_current_cotrain_recipes() -> None:
         encoding="utf-8"
     )
 
-    assert "openvla_onetraj_libero_cotrain_ray" in configs_readme
-    assert "openvla_onetraj_libero_cotrain_noray" in configs_readme
+    assert "openvla_onetraj_libero_cotrain" in configs_readme
+    assert "openvla_onetraj_libero_cotrain" in configs_readme
     assert "wm_full_dataset_train" in configs_readme
     assert "eval_libero_vla" in configs_readme
     _assert_no_removed_wm_wording(configs_readme)
@@ -334,8 +304,9 @@ def test_route_reference_documents_current_release_routes() -> None:
         encoding="utf-8"
     )
 
-    assert "collect_rollouts_ray" in route_reference
-    assert "openvla_onetraj_libero_cotrain_ray" in route_reference
+    assert "collect_rollouts" in route_reference
+    assert "dreamervla_wmcls_cotrain" in route_reference
+    assert "eval_cotrain" in route_reference
     assert "wm_full_dataset_train" in route_reference
     _assert_no_removed_wm_wording(route_reference)
 
@@ -346,7 +317,7 @@ def test_experiment_tutorial_index_documents_current_recipes() -> None:
         project_root / "docs" / "tutorials" / "experiments" / "README.md"
     ).read_text(encoding="utf-8")
 
-    assert "openvla_onetraj_libero_cotrain_ray" in tutorial_index
+    assert "openvla_onetraj_libero_cotrain" in tutorial_index
     assert "wm_full_dataset_train" in tutorial_index
     assert "eval_libero_vla" in tutorial_index
     _assert_no_removed_wm_wording(tutorial_index)
@@ -370,7 +341,7 @@ def test_openvla_onetraj_tutorial_prefers_role_based_wm_route_examples() -> None
 
     assert "scripts/experiments/cotrain/train.sh" in tutorial
     assert "scripts/experiments/cotrain/eval.sh" in tutorial
-    assert "experiment=collect_rollouts_ray" in tutorial
+    assert "experiment=collect_rollouts" in tutorial
     _assert_no_removed_wm_wording(tutorial)
 
 
@@ -391,9 +362,10 @@ def test_repository_structure_documents_current_release_routes() -> None:
         project_root / "docs" / "repository_structure.md"
     ).read_text(encoding="utf-8")
 
-    assert "collect_rollouts_ray" in repository_structure
-    assert "openvla_onetraj_libero_cotrain_ray" in repository_structure
-    assert "eval_libero_vla" in repository_structure
+    assert "collect_rollouts" in repository_structure
+    assert "openvla_onetraj_libero_cotrain" in repository_structure
+    assert "dreamervla_wmcls_cotrain" in repository_structure
+    assert "eval_cotrain" in repository_structure
     _assert_no_removed_wm_wording(repository_structure)
 
 
@@ -728,19 +700,19 @@ def test_production_experiments_do_not_embed_test_only_workers() -> None:
 
 def test_online_replay_is_library_module_not_cli_local_class() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    runner_path = project_root / "dreamervla" / "runners" / "online_cotrain_runner.py"
+    runner_path = project_root / "dreamervla" / "runners" / "world_model_training_runner.py"
     runner_text = runner_path.read_text(encoding="utf-8")
 
-    assert (project_root / "dreamervla" / "runners" / "online_replay.py").is_file()
+    assert (project_root / "dreamervla" / "runtime" / "online_replay.py").is_file()
     assert "from dreamervla.runtime.online_replay import" in runner_text
     assert "class OnlineReplay" not in runner_text
     assert "def pack_replay_task_stats_for_ddp" not in runner_text
     assert "def unpack_replay_task_stats_from_ddp" not in runner_text
 
 
-def test_distributed_training_helper_lives_with_runners() -> None:
+def test_distributed_training_helper_lives_with_runtime() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    helper_path = project_root / "dreamervla" / "runners" / "distributed.py"
+    helper_path = project_root / "dreamervla" / "runtime" / "distributed.py"
 
     assert helper_path.is_file()
     assert "class NopretokenizeSFTDistributedHelper" in helper_path.read_text(encoding="utf-8")

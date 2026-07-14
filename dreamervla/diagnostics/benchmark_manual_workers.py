@@ -4,7 +4,7 @@ Example:
   CUDA_VISIBLE_DEVICES=1 python -m dreamervla.diagnostics.benchmark_manual_workers \
     --component wm-env --profile config \
     --output-json logs/debug_logs/wm_env_worker_bench.json \
-    experiment=openvla_onetraj_libero_cotrain_ray \
+    experiment=openvla_onetraj_libero_cotrain \
     task=openvla_onetraj_coldstart_libero
 """
 

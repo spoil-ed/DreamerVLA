@@ -2,6 +2,16 @@
 _target_: dreamervla.runners.LIBEROVLAEvaluationRunner
 seed: 7
 
+launch:
+  distributed: false
+  ngpu: 1
+  gpus: 0
+  master_port: 29503
+  python: python
+  write_libero_config: true
+  required_target_values: []
+  env: {}
+
 hydra:
   run:
     dir: ${training.out_dir}

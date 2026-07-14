@@ -19,7 +19,7 @@ import ray
 def test_ray_real_oft_collect_writes_reward_and_matching_sidecar(tmp_path) -> None:
     from hydra import compose, initialize_config_dir
 
-    from dreamervla.runners.cold_start_ray_collect_runner import ColdStartRayCollectRunner
+    from dreamervla.runners import RolloutCollectionRunner
 
     oft_ckpt = os.environ.get("DVLA_OFT_CKPT")
     if not oft_ckpt:
@@ -34,7 +34,7 @@ def test_ray_real_oft_collect_writes_reward_and_matching_sidecar(tmp_path) -> No
         cfg = compose(
             config_name="train",
             overrides=[
-                "experiment=collect_rollouts_ray",
+                "experiment=collect_rollouts",
                 f"task.openvla_oft.ckpt_path={oft_ckpt}",
                 f"task.openvla_oft.hidden_token_dir={hidden_dir}",
                 f"task.openvla_oft.hdf5_reward_dir={reward_dir}",
@@ -47,7 +47,7 @@ def test_ray_real_oft_collect_writes_reward_and_matching_sidecar(tmp_path) -> No
             ],
         )
 
-    history = ColdStartRayCollectRunner(cfg).run()
+    history = RolloutCollectionRunner(cfg).run()
 
     assert history["rollout/episodes"] == 1
     reward_path = reward_dir / "ray_shard_000.hdf5"

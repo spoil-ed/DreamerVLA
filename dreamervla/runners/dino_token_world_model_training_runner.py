@@ -148,6 +148,9 @@ class DinoTokenWorldModelTrainingRunner(WorldModelTrainingBase):
             "z_proprio_loss",
             "hidden_cosine_loss",
             "hidden_cosine_similarity",
+            "one_step_cosine_similarity",
+            "persistence_cosine_similarity",
+            "chunk_cosine_similarity",
             "hidden_pred_norm",
             "hidden_target_norm",
         )
@@ -179,7 +182,7 @@ class DinoTokenWorldModelTrainingRunner(WorldModelTrainingBase):
         """Format detached, diagnostic-only values for the epoch progress bar."""
 
         loss = float(metrics.get("loss", float("nan")))
-        cosine = float(metrics.get("hidden_cosine_similarity", float("nan")))
+        cosine = float(metrics.get("one_step_cosine_similarity", float("nan")))
         return f"global_step={int(global_step)} loss={loss:.6f} cos={cosine:.6f}"
 
     @torch.no_grad()
@@ -271,6 +274,7 @@ class DinoTokenWorldModelTrainingRunner(WorldModelTrainingBase):
                     "train_windows": len(train_dataset),
                     "valid_windows": len(valid_dataset),
                     "frameskip": int(train_dataset.frameskip),
+                    "model_step_frames": int(train_dataset.frameskip),
                     "batch_size_per_rank": int(dataloader_cfg.batch_size),
                     "global_batch_size": effective_global_batch_size,
                 }
@@ -330,14 +334,14 @@ class DinoTokenWorldModelTrainingRunner(WorldModelTrainingBase):
                     train_loss = float(train_metrics.get("train/loss", float("nan")))
                     train_cos = float(
                         train_metrics.get(
-                            "train/hidden_cosine_similarity",
+                            "train/one_step_cosine_similarity",
                             float("nan"),
                         )
                     )
                     val_loss = float(epoch_metrics.get("eval/loss", float("nan")))
                     val_cos = float(
                         epoch_metrics.get(
-                            "eval/hidden_cosine_similarity",
+                            "eval/one_step_cosine_similarity",
                             float("nan"),
                         )
                     )

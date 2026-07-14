@@ -2,7 +2,7 @@
 
 Launch path:
     python -m dreamervla.train \
-        experiment=latent_classifier_openvla_onetraj_libero_goal_h1 \
+        experiment=wmpo_token_classifier_openvla_onetraj_libero_goal_h1 \
         task=openvla_onetraj_libero
         → dreamervla.runners.SuccessClassifierTrainingRunner.run()
             → dreamervla.dataset.lumos_aligned_latent_dataset
@@ -49,10 +49,6 @@ from torch.utils.data import DataLoader, IterableDataset
 from dreamervla.algorithms.critic import (
     LatentSuccessClassifier,
     LatentSuccessClassifierConfig,
-)
-from dreamervla.dataset.lumos_aligned_latent_dataset import (
-    LumosAlignedLatentTrainDataset,
-    LumosAlignedLatentValDataset,
 )
 from dreamervla.preprocess.sidecar_schema import validate_hidden_token_sidecar_dir
 from dreamervla.runners.base_runner import BaseRunner
@@ -207,8 +203,8 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         self.device = self.distributed.resolve_device(
             str(OmegaConf.select(self.cfg, "training.device") or "cuda")
         )
-        self.train_ds: LumosAlignedLatentTrainDataset | None = None
-        self.val_ds: LumosAlignedLatentValDataset | None = None
+        self.train_ds: object | None = None
+        self.val_ds: object | None = None
         self.train_loader: DataLoader | None = None
         self.val_loader: DataLoader | None = None
         self.model: LatentSuccessClassifier | None = None
@@ -375,7 +371,17 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                 default=OmegaConf.select(self.cfg, "training.seed", default=0),
             )
         )
-        self.train_ds = LumosAlignedLatentTrainDataset(
+        train_dataset_cfg = OmegaConf.select(self.cfg, "task.classifier.dataset.train")
+        validation_dataset_cfg = OmegaConf.select(
+            self.cfg, "task.classifier.dataset.validation"
+        )
+        if train_dataset_cfg is None or validation_dataset_cfg is None:
+            raise ValueError(
+                "classifier training requires Hydra-selected "
+                "task.classifier.dataset.train and task.classifier.dataset.validation"
+            )
+        self.train_ds = hydra.utils.instantiate(
+            train_dataset_cfg,
             success_dir_raw=d.success_dir_raw,
             success_dir_hidden=d.success_dir_hidden,
             failure_dir_raw=OmegaConf.select(d, "failure_dir_raw"),
@@ -394,7 +400,8 @@ class SuccessClassifierTrainingRunner(BaseRunner):
             val_fraction=val_fraction,
             split_seed=split_seed,
         )
-        self.val_ds = LumosAlignedLatentValDataset(
+        self.val_ds = hydra.utils.instantiate(
+            validation_dataset_cfg,
             success_dir_raw=d.success_dir_raw,
             success_dir_hidden=d.success_dir_hidden,
             failure_dir_raw=OmegaConf.select(d, "failure_dir_raw"),

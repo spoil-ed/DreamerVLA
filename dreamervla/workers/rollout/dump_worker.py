@@ -49,7 +49,7 @@ class RolloutDumpWorker(Worker):
         )
         self.keep_last_global_steps = int(keep_last_global_steps)
         # Resume-aware: start rotation at the next free index so a relaunch appends new
-        # shards instead of overwriting ``ray_shard_000`` (mirrors the no-Ray collector).
+        # shards instead of overwriting ``ray_shard_000``.
         self._shard_idx = int(start_shard_index)
         self._shard_demos = 0
 
@@ -192,9 +192,9 @@ class RolloutDumpWorker(Worker):
         if task_id is None or episode_id is None:
             return f"{base}_{step_token}_{outcome}_{int(shard_idx):03d}.hdf5"
         if global_step is None:
-            # Coldstart collect: identity-only naming, unified with the no-Ray
-            # collector (per_trajectory_shard_name) so numbering matches the
-            # globally-assigned work list.
+            # Coldstart collect: identity-only naming via
+            # per_trajectory_shard_name so numbering matches the globally
+            # assigned work list.
             return per_trajectory_shard_name("traj", task_id, episode_id)
         return (
             f"{base}_{step_token}_t{int(task_id):02d}_"

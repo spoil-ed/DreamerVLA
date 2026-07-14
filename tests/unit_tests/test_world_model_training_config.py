@@ -10,17 +10,18 @@ def test_hidden_token_pipeline_uses_traj1_proprio_language_wm_profile():
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         cfg = compose(
             config_name="train",
-            overrides=["experiment=openvla_onetraj_libero_cotrain_noray"],
+            overrides=["experiment=wm_full_dataset_train"],
         )
 
     wm = cfg.world_model
-    classifier = cfg.classifier
+    assert "classifier" not in cfg
     assert "latent_type" not in cfg
-    assert cfg.env.obs_hidden_source == "hidden_token"
+    assert cfg.task.openvla_oft.hidden_token.expected_obs_hidden_source == "hidden_token"
     assert wm.token_count == 256
     assert wm.token_dim == 4096
     assert wm.token_normalization == "layer_norm"
     assert wm.token_norm_eps == 1.0e-6
+    assert wm.mlp_dim == 4096
     assert cfg.training.wm_warmup_steps == 20000
     assert cfg.training.warmup_replay_epochs == 10
     assert cfg.training.warmup_checkpoint_every == 500
@@ -28,7 +29,7 @@ def test_hidden_token_pipeline_uses_traj1_proprio_language_wm_profile():
     assert cfg.training.wm_profile_steps == 8
     assert cfg.training.wm_prefetch_workers == 1
     assert cfg.dataloader.batch_size == 16
-    assert cfg.optim.world_model.lr == 3.0e-5
+    assert cfg.optim.world_model.lr == 1.0e-4
     assert cfg.online_rollout.sequence_length == 36
     assert wm.model_dim == 4148
     assert wm.proprio_dim == 8
@@ -48,8 +49,6 @@ def test_hidden_token_pipeline_uses_traj1_proprio_language_wm_profile():
     assert wm.chunk_rollout_chunks == 4
     assert wm.chunk_rollout_loss_scale == 0.2
     assert wm.proprio_reconstruction_loss_scale == 0.0
-    assert classifier.head_type == "spatial_tf"
-    assert classifier.num_layers == 12
 
 
 def test_full_dataset_wm_experiment_owns_complete_training_recipe(tmp_path, monkeypatch):
@@ -81,7 +80,7 @@ def test_full_dataset_wm_experiment_owns_complete_training_recipe(tmp_path, monk
     assert cfg.training.world_model_ddp.static_graph is True
     assert cfg.training.world_model_ddp.gradient_as_bucket_view is True
     assert cfg.dataloader.batch_size == 16
-    assert cfg.optim.world_model.lr == 3.0e-5
+    assert cfg.optim.world_model.lr == 1.0e-4
     assert cfg.online_rollout.buffer_size == 160000
     assert cfg.online_rollout.sequence_length == 36
     assert cfg.online_rollout.total_env_steps == 0
@@ -139,7 +138,7 @@ def test_dino_token_architecture_and_data_protocol_recipe(tmp_path, monkeypatch)
     assert cfg.training.num_epochs == 100
     assert cfg.optim.precision == "fp32"
     assert cfg.optim.predictor.name == "adamw"
-    assert cfg.optim.predictor.lr == 3.0e-5
+    assert cfg.optim.predictor.lr == 1.0e-4
     assert cfg.optim.predictor.betas == [0.9, 0.999]
     assert cfg.optim.predictor.eps == 1.0e-8
     assert cfg.optim.predictor.weight_decay == 0.01
@@ -162,8 +161,9 @@ def test_user_facing_dino_and_dreamer_configs_align_batch_and_lr(
         dreamer = compose(config_name="train", overrides=["experiment=dreamer-wm"])
 
     assert dino.dataloader.batch_size == dreamer.dataloader.batch_size == 16
-    assert dino.optim.predictor.lr == dreamer.optim.world_model.lr == 3.0e-5
+    assert dino.optim.predictor.lr == dreamer.optim.world_model.lr == 1.0e-4
     assert dino.optim.conditioning.lr == dreamer.optim.world_model.lr
+    assert dreamer.training.warmup_replay_epochs == 100
 
 
 def test_classifier_and_full_dataset_wm_share_mainline_success_sidecar(

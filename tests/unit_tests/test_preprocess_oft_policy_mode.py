@@ -155,7 +155,7 @@ def test_oft_preprocess_uses_lumos_prismatic_constants() -> None:
 
 
 def test_oft_preprocess_script_checks_env_and_repairs_partial_sidecars() -> None:
-    source = _project_path("scripts/preprocess/35_oft_hidden_token.sh").read_text(
+    source = _project_path("scripts/preprocess/10_oft_hidden_token.sh").read_text(
         encoding="utf-8"
     )
 

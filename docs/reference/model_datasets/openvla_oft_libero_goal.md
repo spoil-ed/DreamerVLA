@@ -34,7 +34,7 @@ data/processed_data/OpenVLA_Onetraj_LIBERO_libero_goal/no_noops_t_256_oft_hidden
 TASK=libero_goal \
 OFT_CKPT=data/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1 \
 OFT_HISTORY=1 OFT_IMAGE_KEYS=agentview_rgb \
-bash scripts/preprocess/35_oft_hidden_token.sh
+bash scripts/preprocess/10_oft_hidden_token.sh
 ```
 
 ## Downstream Chain

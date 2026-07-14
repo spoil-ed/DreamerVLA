@@ -156,6 +156,23 @@ def complete_episode_ids_per_task(
     return complete
 
 
+def missing_episode_work_list(
+    task_ids: list[int],
+    target_episodes_per_task: int,
+    complete_episode_ids_by_task: dict[int, set[int]],
+) -> list[tuple[int, int]]:
+    """Return missing ``(task_id, episode_id)`` pairs below a target."""
+
+    target = int(target_episodes_per_task)
+    return [
+        (int(task_id), episode_id)
+        for task_id in task_ids
+        for episode_id in range(target)
+        if episode_id
+        not in complete_episode_ids_by_task.get(int(task_id), set())
+    ]
+
+
 def _attr_is_complete(group: Any) -> bool:
     return bool(group.attrs.get("complete", True))
 

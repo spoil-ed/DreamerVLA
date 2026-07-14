@@ -2,7 +2,7 @@
 
 Mirrors the Ray-side RolloutDumpWorker rotation but as a drop-in
 RolloutDumpWriter (same write_demo/close/context-manager interface), so the
-no-Ray collector can honour ``collect.demos_per_shard`` too.
+the collection writer can honour ``collect.demos_per_shard`` too.
 """
 
 from __future__ import annotations

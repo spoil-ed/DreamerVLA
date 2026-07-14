@@ -16,12 +16,12 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_ray_coldstart_real_oft_matches_nonray_schema(tmp_path) -> None:
+def test_collection_real_oft_matches_sidecar_schema(tmp_path) -> None:
     import h5py
     import ray
     from hydra import compose, initialize_config_dir
 
-    from dreamervla.runners.cold_start_ray_collect_runner import ColdStartRayCollectRunner
+    from dreamervla.runners import RolloutCollectionRunner
     from dreamervla.runtime.oft_collect import load_policy, vla_hidden_token_spec
     from dreamervla.train import run
 
@@ -32,7 +32,7 @@ def test_ray_coldstart_real_oft_matches_nonray_schema(tmp_path) -> None:
         cfg = compose(
             config_name="train",
             overrides=[
-                "experiment=collect_rollouts_ray",
+                "experiment=collect_rollouts",
                 "collect.task_ids=[0]",
                 "collect.episodes_per_task=2",
                 "collect.episode_horizon=64",
@@ -48,7 +48,7 @@ def test_ray_coldstart_real_oft_matches_nonray_schema(tmp_path) -> None:
     with h5py.File(sidecar, "r") as handle:
         demo0 = handle["data"]["demo_0"]["obs_embedding"]
         assert preprocess_cfg["obs_hidden_source"] == "hidden_token"
-        plan = ColdStartRayCollectRunner(cfg).build_oft_worker_plan()
+        plan = RolloutCollectionRunner(cfg).build_oft_worker_plan()
         policy = load_policy(dict(plan["collect"], _rank=0), 0)
         spec = vla_hidden_token_spec(
             policy.vla,

@@ -50,6 +50,7 @@ def test_runner_public_api_exports_only_canonical_mainline_roles() -> None:
     import dreamervla.runners as runners
 
     expected = [
+        "DinoTokenWorldModelTrainingRunner",
         "RolloutCollectionRunner",
         "WorldModelTrainingRunner",
         "SuccessClassifierTrainingRunner",
@@ -155,6 +156,15 @@ def test_removed_route_files_are_absent() -> None:
         "configs/rynn_backbone_dreamerv3_pixel_wm_libero_goal.yaml",
         "configs/rynn_backbone_dreamerv3_pixel_wm_libero_goal_precomputed.yaml",
         "configs/semantic_bottleneck_wm_libero_goal.yaml",
+        "configs/experiment/latent_classifier_openvla_onetraj_libero_goal_h1.yaml",
+        "configs/parallelism/fsdp.yaml",
+        "configs/parallelism/none.yaml",
+        "configs/precision/bf16.yaml",
+        "configs/precision/fp16.yaml",
+        "configs/precision/fp32.yaml",
+        "configs/scheduler/local.yaml",
+        "configs/scheduler/ray_auto.yaml",
+        "configs/scripts/train_dreamervla.yaml",
         "dreamervla/algorithms/dino_lumos.py",
         "dreamervla/algorithms/dino_lumos_chunk.py",
         "scripts/diagnose_wm.sh",
@@ -207,10 +217,10 @@ def test_active_configs_target_route_specific_runner_classes() -> None:
     expected = {
         "eval_libero_vla": "dreamervla.runners.LIBEROVLAEvaluationRunner",
         "wm_full_dataset_train": "dreamervla.runners.WorldModelTrainingRunner",
-        "latent_classifier_openvla_onetraj_libero_goal_h1": (
+        "wmpo_token_classifier_openvla_onetraj_libero_goal_h1": (
             "dreamervla.runners.SuccessClassifierTrainingRunner"
         ),
-        "dreamervla_wmcls_cotrain_ray": "dreamervla.runners.CotrainRunner",
+        "dreamervla_wmcls_cotrain": "dreamervla.runners.CotrainRunner",
     }
 
     config_dir = Path(__file__).resolve().parents[2] / "configs"
@@ -233,21 +243,12 @@ def test_train_config_experiments_compose_through_stage_modules() -> None:
             assert "workspace" not in new_cfg
 
 
-def test_train_dreamervla_script_uses_role_based_wm_default() -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-    train_dreamervla_config = (
-        config_dir / "scripts" / "train_dreamervla.yaml"
-    ).read_text(encoding="utf-8")
-
-    assert "experiment: openvla_onetraj_libero_cotrain_noray" in train_dreamervla_config
-
-
 def test_train_config_exposes_tensorboard_and_wandb_logger_routes() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        default_cfg = _compose_experiment("collect_rollouts_ray")
+        default_cfg = _compose_experiment("collect_rollouts")
         wandb_cfg = _compose_experiment(
-            "collect_rollouts_ray",
+            "collect_rollouts",
             extra_overrides=["logger=wandb"],
         )
 
@@ -266,12 +267,12 @@ def test_train_config_resolves_public_default_experiment() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
 
     train_config = (config_dir / "train.yaml").read_text(encoding="utf-8")
-    assert "experiment: openvla_onetraj_libero_cotrain_ray" in train_config
+    assert "experiment: openvla_onetraj_libero_cotrain" in train_config
 
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         cfg = compose(config_name="train")
         assert cfg._target_ == "dreamervla.runners.CotrainRunner"
-        assert "ray_cotrain" in cfg.training.out_dir
+        assert "cotrain_oft_hidden_token" in cfg.training.out_dir
 
 
 def test_cli_default_uses_current_public_runner_target() -> None:
@@ -290,8 +291,8 @@ def test_train_help_uses_role_based_wm_examples(capsys) -> None:
 
     assert exc_info.value.code == 0
     help_text = capsys.readouterr().out
-    assert "experiment=openvla_onetraj_libero_cotrain_ray" in help_text
-    assert "experiment=collect_rollouts_ray" in help_text
+    assert "experiment=openvla_onetraj_libero_cotrain" in help_text
+    assert "experiment=collect_rollouts" in help_text
     _assert_no_removed_wm_wording(help_text)
 
 

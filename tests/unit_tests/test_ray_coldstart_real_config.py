@@ -62,7 +62,7 @@ def test_vla_hidden_token_spec_derives_loaded_policy_geometry() -> None:
 
 
 def test_runner_builds_bundle_cfg_from_central_config(tmp_path) -> None:
-    from dreamervla.runners.cold_start_ray_collect_runner import ColdStartRayCollectRunner
+    from dreamervla.runners import RolloutCollectionRunner
 
     cfg = {
         "mode": "oft",
@@ -102,7 +102,7 @@ def test_runner_builds_bundle_cfg_from_central_config(tmp_path) -> None:
             },
         },
     }
-    plan = ColdStartRayCollectRunner(cfg).build_oft_worker_plan()
+    plan = RolloutCollectionRunner(cfg).build_oft_worker_plan()
     assert plan["inference"]["decoder"]["target"].endswith("oft_rollout:OFTRolloutBundle")
     assert (
         plan["inference"]["action_steps"]
@@ -129,7 +129,7 @@ def test_runner_builds_bundle_cfg_from_central_config(tmp_path) -> None:
 
 
 def test_oft_collect_plan_respects_cpu_inference_device_override(tmp_path) -> None:
-    from dreamervla.runners.cold_start_ray_collect_runner import ColdStartRayCollectRunner
+    from dreamervla.runners import RolloutCollectionRunner
 
     cfg = {
         "mode": "oft",
@@ -171,28 +171,28 @@ def test_oft_collect_plan_respects_cpu_inference_device_override(tmp_path) -> No
         },
     }
 
-    plan = ColdStartRayCollectRunner(cfg).build_oft_worker_plan()
+    plan = RolloutCollectionRunner(cfg).build_oft_worker_plan()
 
     assert plan["inference"]["device"] == "cpu"
     assert plan["inference"]["decoder"]["kwargs"]["device"] == "cpu"
 
 
-def test_collect_rollouts_ray_experiment_composes() -> None:
+def test_collect_rollouts_experiment_composes() -> None:
     from pathlib import Path
 
     from hydra import compose, initialize_config_dir
 
     config_dir = str(Path(__file__).resolve().parents[2] / "configs")
     with initialize_config_dir(config_dir=config_dir, version_base=None):
-        cfg = compose(config_name="train", overrides=["experiment=collect_rollouts_ray"])
+        cfg = compose(config_name="train", overrides=["experiment=collect_rollouts"])
 
-    assert cfg._target_.endswith("ColdStartRayCollectRunner")
+    assert cfg._target_.endswith("RolloutCollectionRunner")
     assert cfg.mode == "oft"
     assert cfg.collect.num_images_in_input == 1
 
 
 def test_collect_egl_render_pool_defaults_to_non_inference_gpus() -> None:
-    from dreamervla.runners.cold_start_ray_collect_runner import (
+    from dreamervla.runtime.rollout_collection_ray import (
         _ensure_collect_render_device_pool,
     )
 
@@ -214,7 +214,7 @@ def test_collect_egl_render_pool_defaults_to_non_inference_gpus() -> None:
 def test_collect_egl_render_pool_rejects_inference_overlap_without_spare_gpu() -> None:
     import pytest
 
-    from dreamervla.runners.cold_start_ray_collect_runner import (
+    from dreamervla.runtime.rollout_collection_ray import (
         _ensure_collect_render_device_pool,
     )
 
@@ -230,7 +230,7 @@ def test_collect_egl_render_pool_rejects_inference_overlap_without_spare_gpu() -
 
 
 def test_collect_egl_render_pool_preserves_explicit_pool() -> None:
-    from dreamervla.runners.cold_start_ray_collect_runner import (
+    from dreamervla.runtime.rollout_collection_ray import (
         _ensure_collect_render_device_pool,
     )
 
@@ -249,7 +249,7 @@ def test_collect_egl_render_pool_preserves_explicit_pool() -> None:
 
 
 def test_ray_task_scheduler_expands_all_and_reserves_round_robin() -> None:
-    from dreamervla.runners.cold_start_ray_collect_runner import (
+    from dreamervla.runtime.rollout_collection_ray import (
         _next_ray_task_id,
         _resolve_ray_task_ids,
     )
@@ -268,7 +268,7 @@ def test_ray_task_scheduler_expands_all_and_reserves_round_robin() -> None:
 
 
 def test_ray_start_episode_id_adds_resume_offset_to_scheduled_index() -> None:
-    from dreamervla.runners.cold_start_ray_collect_runner import _ray_start_episode_id
+    from dreamervla.runtime.rollout_collection_ray import _ray_start_episode_id
 
     # fresh: episode_id == scheduled index (distinct init_states 0,1,2,...)
     assert [_ray_start_episode_id({}, 0, i) for i in range(3)] == [0, 1, 2]
@@ -277,7 +277,7 @@ def test_ray_start_episode_id_adds_resume_offset_to_scheduled_index() -> None:
 
 
 def test_ray_dump_step_records_episode_id() -> None:
-    from dreamervla.runners.cold_start_ray_collect_runner import _build_oft_dump_step
+    from dreamervla.runtime.rollout_collection_ray import _build_oft_dump_step
 
     class _Env:
         def full_record(self):
@@ -306,7 +306,7 @@ def test_ray_dump_step_records_episode_id() -> None:
 def test_wait_worker_results_batches_ray_get(monkeypatch) -> None:
     import ray
 
-    from dreamervla.runners.cold_start_ray_collect_runner import _wait_worker_results
+    from dreamervla.runtime.rollout_collection_ray import _wait_worker_results
 
     calls = []
 

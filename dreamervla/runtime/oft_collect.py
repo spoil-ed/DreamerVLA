@@ -108,7 +108,7 @@ def oft_open_loop_action(
     action_steps: int | None = None,
 ) -> OFTOpenLoopStep:
     """One SINGLE-ENV OFT open-loop rollout step — the shared implementation used
-    by the collector (``collect_parallel_rollouts``) and the online cotrain rollout
+    by rollout collection and the online cotrain rollout
     (``OnlineCotrainRunner._rollout_action``) so the two can never drift. Runs the
     OFT forward (``extractor.step``) for this frame's hidden state (= the
     ``obs_embedding`` the WM/classifier consume), then takes the open-loop action

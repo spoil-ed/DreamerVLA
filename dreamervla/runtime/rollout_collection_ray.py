@@ -9,10 +9,11 @@ from omegaconf import DictConfig, ListConfig, OmegaConf
 
 from dreamervla.dataset.collection_manifest import (
     complete_episode_ids_per_task,
+    missing_episode_work_list,
     next_shard_index,
 )
 from dreamervla.runners.base_runner import BaseRunner
-from dreamervla.runtime.collect_parallel_rollouts import _build_resume_work_list
+from dreamervla.runtime.rollout_collection_config import build_oft_collect_config
 from dreamervla.scheduler.cluster import Cluster
 from dreamervla.scheduler.placement import NodePlacementStrategy, PackedPlacementStrategy
 from dreamervla.scheduler.worker_group import WorkerGroup
@@ -82,7 +83,7 @@ def _ensure_collect_render_device_pool(
 class _RayRolloutCollection(BaseRunner):
     """Collect rollout episodes with Ray env actors and write HDF5 sidecars."""
 
-    runner_name = "collect_rollouts_ray"
+    runner_name = "rollout_collection"
     runner_status = "current"
     runner_family = "rollout"
 
@@ -172,10 +173,9 @@ class _RayRolloutCollection(BaseRunner):
 
     def build_oft_worker_plan(self) -> dict[str, Any]:
         """Assemble real OFT Ray worker configs without loading Ray or a model."""
-        from dreamervla.runtime.rollout_collection_vectorized import _VectorizedRolloutCollection
         from dreamervla.runtime.oft_collect import make_preprocess_config
 
-        collect_cfg = _VectorizedRolloutCollection._build_collect_cfg(self)
+        collect_cfg = self._build_collect_cfg()
         if collect_cfg["expected_action_head_type"] != "oft_discrete_token":
             raise ValueError("L1/action-query checkpoints are closed")
         mode = "discrete"
@@ -249,6 +249,11 @@ class _RayRolloutCollection(BaseRunner):
             },
         }
 
+    def _build_collect_cfg(self) -> dict[str, Any]:
+        """Resolve Hydra task/collection groups into the Ray worker contract."""
+
+        return build_oft_collect_config(self.cfg)
+
     def _build_oft_components(self, cluster: Cluster) -> dict[str, Any]:
         plan = self.build_oft_worker_plan()
         collect_cfg = plan["collect"]
@@ -265,10 +270,14 @@ class _RayRolloutCollection(BaseRunner):
         reward_dir = str(dump_cfg["reward_dir"])
         hidden_dir = str(dump_cfg["hidden_dir"])
         complete_ids = complete_episode_ids_per_task(reward_dir, hidden_dir)
-        full_work = _build_resume_work_list(task_ids, episodes_per_task, complete_ids)
+        full_work = missing_episode_work_list(
+            task_ids,
+            episodes_per_task,
+            complete_ids,
+        )
         pending_work = list(full_work)
         # Resume-aware shard naming: append at the next free index instead of overwriting
-        # ray_shard_000 on a relaunch (the no-Ray collector does the same).
+        # ray_shard_000 on a relaunch.
         shard_start = next_shard_index(reward_dir, prefix="ray_shard")
         dump_group = WorkerGroup(
             RolloutDumpWorker,

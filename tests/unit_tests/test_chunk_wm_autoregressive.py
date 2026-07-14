@@ -85,6 +85,98 @@ def test_chunk_wm_layer_normalizes_only_raw_vision_tokens() -> None:
     )
 
 
+def test_chunk_loss_reports_visual_one_step_and_persistence_cosines() -> None:
+    """Comparable cosine metrics use one normalized visual transition only."""
+
+    torch.manual_seed(7)
+    wm = _tiny_chunk_wm(token_normalization="layer_norm")
+    time_steps = wm.num_hist + wm.chunk_size
+    obs = torch.randn(2, time_steps, wm.token_count, wm.token_dim)
+    normalized = wm._normalize_raw_vision_tokens(obs)
+    target = normalized[:, wm.num_hist : wm.num_hist + wm.chunk_size]
+
+    def perfect_chunk(self, latent, action_chunk):
+        del action_chunk
+        hidden_seq = target.to(
+            device=latent["history"].device,
+            dtype=latent["history"].dtype,
+        )
+        return {
+            "hidden": hidden_seq[:, -1],
+            "hidden_seq": hidden_seq,
+            "history": latent["history"],
+            "actions": latent["actions"],
+            "lang": latent.get("lang"),
+        }
+
+    wm.predict_next_chunk = types.MethodType(perfect_chunk, wm)
+    metrics = wm.chunk_loss(
+        {
+            "obs_embedding": obs,
+            "actions": torch.randn(2, time_steps, wm.action_dim),
+        }
+    )
+
+    expected_persistence = torch.nn.functional.cosine_similarity(
+        normalized[:, wm.num_hist - 1].float(),
+        normalized[:, wm.num_hist].float(),
+        dim=-1,
+    ).mean()
+    assert torch.allclose(metrics["one_step_cosine_similarity"], torch.ones(()))
+    assert torch.allclose(metrics["chunk_cosine_similarity"], torch.ones(()))
+    assert torch.allclose(
+        metrics["persistence_cosine_similarity"],
+        expected_persistence,
+    )
+    assert not metrics["one_step_cosine_similarity"].requires_grad
+    assert not metrics["persistence_cosine_similarity"].requires_grad
+
+
+def test_comparable_chunk_cosine_excludes_proprio_dimensions() -> None:
+    """Proprio reconstruction quality must not contaminate visual-token cosine."""
+
+    torch.manual_seed(11)
+    wm = _tiny_chunk_wm(
+        proprio_dim=3,
+        proprio_emb_dim=2,
+        model_dim=8,
+        token_normalization="layer_norm",
+    )
+    time_steps = wm.num_hist + wm.chunk_size
+    obs = torch.randn(2, time_steps, wm.token_count, wm.token_dim)
+    proprio = torch.randn(2, time_steps, wm.proprio_dim)
+    normalized = wm._normalize_raw_vision_tokens(obs)
+    obs_tokens = wm._observation_tokens(normalized, proprio)
+    target = obs_tokens[:, wm.num_hist : wm.num_hist + wm.chunk_size].clone()
+    target[..., wm.token_dim :] *= -1.0
+
+    def wrong_proprio_chunk(self, latent, action_chunk):
+        del action_chunk
+        hidden_seq = target.to(
+            device=latent["history"].device,
+            dtype=latent["history"].dtype,
+        )
+        return {
+            "hidden": hidden_seq[:, -1],
+            "hidden_seq": hidden_seq,
+            "history": latent["history"],
+            "actions": latent["actions"],
+            "lang": latent.get("lang"),
+        }
+
+    wm.predict_next_chunk = types.MethodType(wrong_proprio_chunk, wm)
+    metrics = wm.chunk_loss(
+        {
+            "obs_embedding": obs,
+            "proprio": proprio,
+            "actions": torch.randn(2, time_steps, wm.action_dim),
+        }
+    )
+
+    assert torch.allclose(metrics["one_step_cosine_similarity"], torch.ones(()))
+    assert metrics["hidden_cosine_loss"] > 0.0
+
+
 def test_chunk_wm_normalizes_online_observations_but_not_imagined_history() -> None:
     wm = _tiny_chunk_wm(token_normalization="layer_norm")
     calls = 0

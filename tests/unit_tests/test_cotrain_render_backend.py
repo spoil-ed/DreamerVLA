@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from dreamervla.runners import online_cotrain_runner as ocr
+from dreamervla.runtime import world_model_training_common as wm_runtime
 
 
 class _FakeEgl:
@@ -40,7 +40,7 @@ def patched(monkeypatch):
 
 def test_egl_backend_uses_vendored_adapter_with_device_pool(patched, monkeypatch):
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "4,5")
-    out = ocr.build_rollout_vec_env(
+    out = wm_runtime.build_rollout_vec_env(
         render_backend="egl",
         num_envs=3,
         cfg_kwargs={"a": 1},
@@ -59,7 +59,7 @@ def test_egl_backend_uses_vendored_adapter_with_device_pool(patched, monkeypatch
 def test_osmesa_backend_uses_vecrolloutenv_unchanged(patched, monkeypatch):
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "4,5")
     env_vars = {"MUJOCO_GL": "osmesa", "PYOPENGL_PLATFORM": "osmesa"}
-    out = ocr.build_rollout_vec_env(
+    out = wm_runtime.build_rollout_vec_env(
         render_backend="osmesa",
         num_envs=2,
         cfg_kwargs={},
@@ -73,7 +73,7 @@ def test_osmesa_backend_uses_vecrolloutenv_unchanged(patched, monkeypatch):
 
 def test_egl_backend_does_not_infer_pool_from_cuda_visible_devices(patched, monkeypatch):
     monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
-    ocr.build_rollout_vec_env(
+    wm_runtime.build_rollout_vec_env(
         render_backend="egl",
         num_envs=1,
         cfg_kwargs={},

@@ -13,8 +13,7 @@ collection 在真实 LIBERO 中运行当前 VLA/OFT policy，写出 reward shard
 
 当前入口：
 
-- no-Ray：`experiment=collect_rollouts_onetraj` -> `CollectRolloutsRunner`
-- Ray：`experiment=collect_rollouts_ray` -> `ColdStartRayCollectRunner`
+- `experiment=collect_rollouts` -> `RolloutCollectionRunner`（Ray backend）
 
 collection 只负责产生初始真实数据，不负责训练 world model 或 actor。
 
@@ -25,8 +24,8 @@ cotrain 前先用 collected reward + hidden HDF5 shard 训练：
 - world model
 - classifier/reward model
 
-sync pipeline 使用 `OnlineCotrainPipelineRunner`。async pipeline 先跑 sync warmup，再把 warmup checkpoint
-合并成 manual Ray cotrain 的 init checkpoint。
+world model 和 classifier 使用各自独立 runner 训练；cotrain 通过显式 checkpoint
+输入加载二者，不在 shell 中复制训练默认参数。
 
 ## 3. Online Cotrain
 
@@ -104,15 +103,8 @@ Real LIBERO collection
 
 ## Main Configs
 
-- Launcher config：`configs/scripts/coldstart_warmup_cotrain.yaml`
-- Sync cotrain experiment：`openvla_onetraj_libero_cotrain_noray`
-- Manual Ray experiment：`openvla_onetraj_libero_cotrain_ray`
-- Eval config：`configs/scripts/eval_libero_vla.yaml`
-
-## TODO
-
-- 编排解耦：各 stage 的 runner 已经进程级解耦（每个 stage = 一次 `python -m dreamervla.train
-  experiment=<x>` -> 一个 `_target_`，无进程内耦合）。对固定、无跨阶段穿线的 recipe，可考虑用薄 shell
-  `cmd1 && cmd2 && cmd3` 顺序激活各 runner（更直观）。但跨阶段胶水（路径穿线、`ngpu>1` 的 torchrun 包裹、
-  ray/noray collect 选择、episode 级续采、async warmup/online 拆相、manifest）仍应留在可单测的 Python
-  launcher，遵循「薄 shell、逻辑走 `python -m`」。落地范围 = 无胶水路径的 shell 便捷封装，不是替换 launcher。
+- Collection experiment：`collect_rollouts`
+- Cotrain base experiment：`openvla_onetraj_libero_cotrain`
+- Full WM/CLS cotrain experiment：`dreamervla_wmcls_cotrain`
+- Eval experiment：`eval_cotrain`
+- Classifier role：`classifier=dreamer-cls`；具体 model/dataset 由 `task.classifier` 注入

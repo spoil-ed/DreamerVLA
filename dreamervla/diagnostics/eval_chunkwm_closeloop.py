@@ -241,7 +241,9 @@ def rollout(
     if N < 1:
         raise ValueError(f"demo too short: T={T} needs >= H+K = {H + K}")
 
-    vision_tokens = wm.obs_to_tokens(obs.unsqueeze(0))
+    # Training compares predictions against tokens after the configured visual
+    # boundary normalization. Evaluation must use that identical target space.
+    vision_tokens = wm._normalize_raw_vision_tokens(obs.unsqueeze(0))
     if wm.proprio_condition_dim > 0:
         if proprio is None:
             raise ValueError("conditioned WM evaluation requires proprio")

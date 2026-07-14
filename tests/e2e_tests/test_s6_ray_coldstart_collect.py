@@ -9,11 +9,9 @@ import ray
 
 def test_ray_coldstart_runner_writes_reward_and_sidecar(tmp_path) -> None:
     try:
-        from dreamervla.runners.cold_start_ray_collect_runner import (
-            ColdStartRayCollectRunner,
-        )
+        from dreamervla.runners import RolloutCollectionRunner
     except ModuleNotFoundError as exc:
-        raise AssertionError("ColdStartRayCollectRunner module should exist") from exc
+        raise AssertionError("RolloutCollectionRunner should be exported") from exc
 
     if ray.is_initialized():
         ray.shutdown()
@@ -59,7 +57,7 @@ def test_ray_coldstart_runner_writes_reward_and_sidecar(tmp_path) -> None:
         },
     }
 
-    history = ColdStartRayCollectRunner(cfg).run()
+    history = RolloutCollectionRunner(cfg).run()
 
     assert history["rollout/episodes"] == 4
     assert history["env/num_env_workers"] == 2
@@ -88,7 +86,7 @@ def test_ray_coldstart_runner_writes_reward_and_sidecar(tmp_path) -> None:
 
 
 def test_ray_coldstart_overlaps_env_and_inference(tmp_path) -> None:
-    from dreamervla.runners.cold_start_ray_collect_runner import ColdStartRayCollectRunner
+    from dreamervla.runners import RolloutCollectionRunner
 
     if ray.is_initialized():
         ray.shutdown()
@@ -131,7 +129,7 @@ def test_ray_coldstart_overlaps_env_and_inference(tmp_path) -> None:
             }
         },
     }
-    history = ColdStartRayCollectRunner(cfg).run()
+    history = RolloutCollectionRunner(cfg).run()
     assert history["rollout/episodes"] == 4
     assert history["time/overlap_events"] >= (
         history["rollout/steps"] - history["env/num_env_workers"]
@@ -147,7 +145,7 @@ def test_fake_coldstart_50pct_success_seeds_cotrain_warmup(tmp_path, monkeypatch
     import h5py
     import torch
 
-    from dreamervla.runners.cold_start_ray_collect_runner import ColdStartRayCollectRunner
+    from dreamervla.runners import RolloutCollectionRunner
     from dreamervla.runtime.offline_seed import seed_replay_from_offline
     from dreamervla.runtime.online_replay import OnlineReplay
 
@@ -194,7 +192,7 @@ def test_fake_coldstart_50pct_success_seeds_cotrain_warmup(tmp_path, monkeypatch
             }
         },
     }
-    history = ColdStartRayCollectRunner(cfg).run()
+    history = RolloutCollectionRunner(cfg).run()
     assert history["rollout/episodes"] == 4
     assert not ray.is_initialized()
 

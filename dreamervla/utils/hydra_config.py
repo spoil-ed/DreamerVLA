@@ -14,7 +14,7 @@ from omegaconf import DictConfig, ListConfig, OmegaConf
 from dreamervla.config_resolvers import register_dreamervla_resolvers
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT_CONFIG_DIR = PROJECT_ROOT / "configs" / "scripts"
+SCRIPT_CONFIG_DIR = PROJECT_ROOT / "configs" / "scripts" / "preprocess"
 
 
 def split_config_name(

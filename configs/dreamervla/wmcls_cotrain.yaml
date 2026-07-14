@@ -1,0 +1,64 @@
+# @package _global_
+# Staged full-policy cotrain with trainable WM/CLS. Every global step collects
+# fresh real trajectories, updates the native OpenVLA encoder, replaces replay,
+# refits WM/CLS in the new token space, then runs imagined-only PPO.
+defaults:
+  - openvla_onetraj_libero_cotrain
+  - _self_
+
+_target_: dreamervla.runners.CotrainRunner
+
+cluster:
+  num_nodes: 1
+  num_gpus: 8
+  component_placement: null
+
+training:
+  out_dir: ${oc.env:RUN_ROOT,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs/pre_mainline/wmcls_cotrain/${now:%Y%m%d_%H%M%S}}
+  debug: false
+  device: cuda
+  distributed_strategy: single
+  resume: false
+  resume_dir: null
+  require_policy_update: true
+
+manual_cotrain:
+  ngpu: 8
+  global_steps: 20000
+  checkpoint_every: 10
+  save_replay_state: false
+  real_env_enabled: true
+  real_env_workers: 1
+  learner_updates_enabled: true
+  refresh_wm_initial_conditions_per_lease: true
+  wm_rollout_target_trajectories: 1024
+  wm_rollout_lease_epochs: 1
+  max_steps_per_rollout_epoch: 512
+  wm_envs_per_worker: 16
+  eval_interval_global_steps: 10
+  eval_initial_global_step: true
+  eval_protocol:
+    num_envs: 25
+
+replay:
+  cfg:
+    capacity: ${ray_data.replay_capacity}
+    sequence_length: ${ray_data.sequence_length}
+    task_ids: ${ray_data.task_ids}
+    rank: 0
+    capacity_mode: total_sharded
+    task_balanced: true
+    replay_sampling:
+      enabled: false
+  # Warm checkpoints initialise WM/CLS weights, but no old trajectory survives
+  # into a staged step. replace_real_trajectories() installs exactly the 32
+  # current-policy real trajectories before either learner is called.
+  seed: null
+
+env:
+  wm:
+    cfg:
+      bootstrap_task_ids: ${ray_data.task_ids}
+      bootstrap_group_size: ${manual_cotrain.wm_envs_per_worker}
+      defer_initial_condition_bootstrap: true
+      require_balanced_initial_conditions: true
