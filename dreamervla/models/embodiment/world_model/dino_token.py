@@ -484,11 +484,15 @@ class DinoTokenWorldModel(nn.Module):
         )
         visual_loss = self.emb_criterion(visual_pred, visual_target)
         proprio_loss = self.emb_criterion(proprio_pred, proprio_target)
-        cosine_loss = 1.0 - F.cosine_similarity(
-            visual_pred.float(),
-            visual_target.float(),
-            dim=-1,
-        ).mean()
+        # Cosine is diagnostic-only. Keep it outside the autograd graph so it
+        # cannot contribute to the optimized DINO shifted-MSE objective.
+        with torch.no_grad():
+            cosine_similarity = F.cosine_similarity(
+                visual_pred.detach().float(),
+                visual_target.detach().float(),
+                dim=-1,
+            ).mean()
+            cosine_loss = 1.0 - cosine_similarity
         losses: dict[str, torch.Tensor] = {
             "_loss": z_loss,
             "loss": z_loss,
@@ -499,6 +503,7 @@ class DinoTokenWorldModel(nn.Module):
             "next_latent_mse": visual_loss,
             "hidden_rec_loss": visual_loss,
             "hidden_cosine_loss": cosine_loss,
+            "hidden_cosine_similarity": cosine_similarity,
             "hidden_pred_norm": visual_pred.float().norm(dim=-1).mean(),
             "hidden_target_norm": visual_target.float().norm(dim=-1).mean(),
             "proprio_reconstruction_loss": proprio_loss,

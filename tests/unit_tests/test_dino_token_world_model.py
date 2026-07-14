@@ -143,6 +143,14 @@ def test_forward_matches_dino_shifted_target_and_excludes_action_from_loss() -> 
     assert torch.allclose(losses["_loss"], expected_loss)
     assert torch.allclose(losses["z_loss"], expected_loss)
     assert torch.allclose(losses["hidden_mse"], expected_visual_mse)
+    expected_cosine = torch.nn.functional.cosine_similarity(
+        z_src[..., : model.token_dim].float(),
+        z_target[..., : model.token_dim].float(),
+        dim=-1,
+    ).mean()
+    assert torch.allclose(losses["hidden_cosine_similarity"], expected_cosine)
+    assert not losses["hidden_cosine_similarity"].requires_grad
+    assert not losses["hidden_cosine_loss"].requires_grad
     assert losses["teacher_forced_steps"].item() == 3
 
 

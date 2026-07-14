@@ -147,6 +147,7 @@ class DinoTokenWorldModelTrainingRunner(WorldModelTrainingBase):
             "z_visual_loss",
             "z_proprio_loss",
             "hidden_cosine_loss",
+            "hidden_cosine_similarity",
             "hidden_pred_norm",
             "hidden_target_norm",
         )
@@ -168,6 +169,18 @@ class DinoTokenWorldModelTrainingRunner(WorldModelTrainingBase):
         self.predictor_optimizer.step()
         self.conditioning_optimizer.step()
         return self._loss_metrics(losses)
+
+    @staticmethod
+    def _progress_status(
+        metrics: Mapping[str, float],
+        *,
+        global_step: int,
+    ) -> str:
+        """Format detached, diagnostic-only values for the epoch progress bar."""
+
+        loss = float(metrics.get("loss", float("nan")))
+        cosine = float(metrics.get("hidden_cosine_similarity", float("nan")))
+        return f"global_step={int(global_step)} loss={loss:.6f} cos={cosine:.6f}"
 
     @torch.no_grad()
     def _evaluate(self, dataloader: Any) -> dict[str, float]:
@@ -276,6 +289,8 @@ class DinoTokenWorldModelTrainingRunner(WorldModelTrainingBase):
                 self.set_dataloader_epoch(train_dataloader, epoch)
                 sums: dict[str, float] = {}
                 batches = 0
+                epoch_steps = len(train_dataloader)
+                progress_desc = f"dino-wm epoch {epoch}/{num_epochs}"
                 for batch in train_dataloader:
                     metrics = self._train_batch(batch)
                     reduced = self.distributed.reduce_mean_dict(metrics)
@@ -285,6 +300,18 @@ class DinoTokenWorldModelTrainingRunner(WorldModelTrainingBase):
                     self.global_step += 1
                     if max_steps > 0 and self.global_step >= max_steps:
                         stop = True
+                    self.console_progress(
+                        batches,
+                        epoch_steps,
+                        progress_desc,
+                        unit="step",
+                        status=self._progress_status(
+                            reduced,
+                            global_step=self.global_step,
+                        ),
+                        force=stop,
+                    )
+                    if stop:
                         break
                 train_metrics = {
                     f"train/{name}": total / max(1, batches)
@@ -301,11 +328,24 @@ class DinoTokenWorldModelTrainingRunner(WorldModelTrainingBase):
                 history.append(epoch_metrics)
                 if self.is_main_process:
                     train_loss = float(train_metrics.get("train/loss", float("nan")))
+                    train_cos = float(
+                        train_metrics.get(
+                            "train/hidden_cosine_similarity",
+                            float("nan"),
+                        )
+                    )
                     val_loss = float(epoch_metrics.get("eval/loss", float("nan")))
+                    val_cos = float(
+                        epoch_metrics.get(
+                            "eval/hidden_cosine_similarity",
+                            float("nan"),
+                        )
+                    )
                     print(
                         f"[dino-wm] epoch={epoch}/{num_epochs} "
                         f"step={self.global_step} train_loss={train_loss:.6f} "
-                        f"val_loss={val_loss:.6f}",
+                        f"train_cos={train_cos:.6f} val_loss={val_loss:.6f} "
+                        f"val_cos={val_cos:.6f}",
                         flush=True,
                     )
                 if checkpoint_every > 0 and epoch % checkpoint_every == 0:
