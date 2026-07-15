@@ -6,7 +6,7 @@ defaults:
   - openvla_onetraj_libero_cotrain
   - _self_
 
-_target_: dreamervla.runners.CotrainRunner
+_target_: dreamervla.runners.DreamerRunner
 
 cluster:
   num_nodes: 1
@@ -62,3 +62,9 @@ env:
       initial_condition_selector: ${manual_cotrain.initial_condition_selector}
       defer_initial_condition_bootstrap: true
       require_balanced_initial_conditions: true
+
+actor:
+  train_cfg:
+    # Preserve the 16384 effective global batch while bounding per-forward
+    # Llama attention activations during imagined-trajectory PPO.
+    micro_batch_size: 8
