@@ -4,6 +4,17 @@ Shell files in this directory are entrypoints, not configuration sources. Traini
 evaluation defaults live in `configs/`; pass changes as Hydra `key=value` overrides.
 Repository data paths are described in `docs/data_layout.md`.
 
+Upload one completed offline W&B run after authenticating once:
+
+```bash
+wandb login
+bash scripts/utils/wandb_sync.sh /path/to/run_root/wandb
+```
+
+For noninteractive authentication, provide `WANDB_API_KEY` instead. No entity or
+project argument is required because the uploader reads that metadata from the
+offline run.
+
 Training and evaluation entries under `scripts/experiments/` select recipes directly
 from `configs/experiment/`. The only configs under `configs/scripts/` are grouped as
 `install/`, `download/`, and `preprocess/` workflows.
