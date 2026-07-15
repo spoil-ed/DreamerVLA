@@ -51,13 +51,42 @@ class _FakeDistributed:
         return self.gathered
 
 
+def _assert_nested_state_equal(actual, expected):
+    if isinstance(expected, torch.Tensor):
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+        return
+    if isinstance(expected, dict):
+        assert actual.keys() == expected.keys()
+        for key in expected:
+            _assert_nested_state_equal(actual[key], expected[key])
+        return
+    if isinstance(expected, (list, tuple)):
+        assert type(actual) is type(expected)
+        assert len(actual) == len(expected)
+        for actual_item, expected_item in zip(actual, expected, strict=True):
+            _assert_nested_state_equal(actual_item, expected_item)
+        return
+    assert actual == expected
+
+
 def test_base_checkpoint_roundtrips_optimizer_scalars_and_rng(tmp_path):
     cfg = OmegaConf.create({})
     a = _Mini(cfg, tmp_path)
-    # take an optimizer step so momentum buffers are non-empty
+    with torch.no_grad():
+        a.policy.weight.copy_(torch.tensor([[0.25, -0.5, 0.75], [1.0, -1.25, 1.5]]))
+        a.policy.bias.copy_(torch.tensor([-0.125, 0.375]))
+
+    # Take an optimizer step so Adam's step and moment tensors are checkpointed.
     loss = a.policy(torch.ones(1, 3)).sum()
     loss.backward()
     a.policy_optimizer.step()
+    expected_policy = {
+        name: parameter.detach().clone() for name, parameter in a.policy.named_parameters()
+    }
+    expected_optimizer = a.policy_optimizer.state_dict()
+    assert expected_optimizer["state"]
+    for parameter_state in expected_optimizer["state"].values():
+        assert {"step", "exp_avg", "exp_avg_sq"}.issubset(parameter_state)
     a.global_step = 7
     a.epoch = 4
     a.classifier_threshold = 0.73
@@ -77,11 +106,21 @@ def test_base_checkpoint_roundtrips_optimizer_scalars_and_rng(tmp_path):
     np.random.seed(999)
     torch.manual_seed(999)
     b = _Mini(cfg, tmp_path)
+    with torch.no_grad():
+        b.policy.weight.fill_(-9.0)
+        b.policy.bias.fill_(9.0)
+    assert any(
+        not torch.equal(parameter, expected_policy[name])
+        for name, parameter in b.policy.named_parameters()
+    )
+
     b.load_checkpoint(path=path)
     assert b.global_step == 7
     assert b.epoch == 4
     assert abs(b.classifier_threshold - 0.73) < 1e-9
-    assert b.policy_optimizer.state_dict()["state"]  # momentum restored
+    for name, parameter in b.policy.named_parameters():
+        torch.testing.assert_close(parameter, expected_policy[name], rtol=0, atol=0)
+    _assert_nested_state_equal(b.policy_optimizer.state_dict(), expected_optimizer)
     assert random.random() == expected_python
     assert np.random.random() == expected_numpy
     torch.testing.assert_close(torch.rand(()), expected_torch, rtol=0, atol=0)
