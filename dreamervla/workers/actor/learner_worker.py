@@ -22,6 +22,7 @@ from dreamervla.hybrid_engines.weight_syncer.objectstore import (
     _independent_cpu,
 )
 from dreamervla.scheduler.worker import Worker
+from dreamervla.utils.seed import capture_rng_state, restore_rng_state, select_rank_rng_state
 from dreamervla.utils.torch_utils import precision_dtype
 
 
@@ -283,6 +284,19 @@ class LearnerWorker(Worker):
             for name, optimizer in self.optimizers.items():
                 state_dicts[f"{name}_optimizer"] = _cpu_tree(optimizer.state_dict())
         return state_dicts
+
+    def rng_state_dict(self) -> dict[str, Any]:
+        """Return this learner rank's Python, NumPy, torch, and CUDA RNG state."""
+
+        return capture_rng_state()
+
+    def load_rng_state_dict(self, states: object) -> None:
+        """Strictly restore this learner's RNG state from a group-wide rank list."""
+
+        state = select_rank_rng_state(states, int(self.rank))
+        if state is None:
+            raise RuntimeError(f"LearnerGroup RNG checkpoint has no state for rank {self.rank}")
+        restore_rng_state(state, strict=True)
 
     def _build_components(self) -> dict[str, nn.Module]:
         components: dict[str, nn.Module] = {}

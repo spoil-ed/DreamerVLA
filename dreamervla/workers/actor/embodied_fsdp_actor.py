@@ -22,6 +22,7 @@ from dreamervla.hybrid_engines.weight_syncer import PatchWeightSyncer
 from dreamervla.scheduler.channel import Channel
 from dreamervla.scheduler.worker import Worker
 from dreamervla.utils.progress import ProgressReporter
+from dreamervla.utils.seed import capture_rng_state, restore_rng_state, select_rank_rng_state
 from dreamervla.workers.cotrain.messages import (
     RealTrajectoryBatch,
     StopMsg,
@@ -1014,6 +1015,19 @@ class EmbodiedFSDPActor(Worker):
 
         state = _export_policy_state_dict(self._policy())
         return {name: value.detach().cpu().clone() for name, value in state.items()}
+
+    def rng_state_dict(self) -> dict[str, Any]:
+        """Return this actor rank's Python, NumPy, torch, and CUDA RNG state."""
+
+        return capture_rng_state()
+
+    def load_rng_state_dict(self, states: object) -> None:
+        """Strictly restore this actor's RNG state from a group-wide rank list."""
+
+        state = select_rank_rng_state(states, int(self.rank))
+        if state is None:
+            raise RuntimeError(f"ActorGroup RNG checkpoint has no state for rank {self.rank}")
+        restore_rng_state(state, strict=True)
 
     def optimizer_state_dict(self) -> dict[str, Any]:
         """Export the full policy optimizer state on actor rank zero."""

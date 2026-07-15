@@ -16,8 +16,10 @@ import pytest
 import torch
 from omegaconf import OmegaConf
 
+from dreamervla.constants import CHECKPOINT_FORMAT_VERSION
 from dreamervla.runners.base_runner import BaseRunner
-from dreamervla.runners.cotrain_runner import CotrainRunner
+from dreamervla.runners.cotrain_runner import CotrainRunner, _load_manual_resume_payload
+from dreamervla.utils.seed import capture_rng_state
 
 
 class _Mini(BaseRunner):
@@ -57,6 +59,9 @@ class _FakeDistributed:
 def _assert_nested_state_equal(actual, expected):
     if isinstance(expected, torch.Tensor):
         torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+        return
+    if isinstance(expected, np.ndarray):
+        np.testing.assert_array_equal(actual, expected)
         return
     if isinstance(expected, dict):
         assert actual.keys() == expected.keys()
@@ -312,14 +317,23 @@ class _Ready:
 
 
 class _ActorGroup:
+    def __init__(self):
+        self.rng_states = [capture_rng_state()]
+
     def state_dict(self):
         return _Ready([{"weight": torch.ones(1)}])
 
     def optimizer_state_dict(self):
         return _Ready([{"state": {0: {"step": torch.tensor(1.0)}}}])
 
+    def rng_state_dict(self):
+        return _Ready(self.rng_states)
+
 
 class _LearnerGroup:
+    def __init__(self):
+        self.rng_states = [capture_rng_state()]
+
     def state_dicts(self, _include_optimizers):
         return _Ready(
             [
@@ -332,6 +346,9 @@ class _LearnerGroup:
                 }
             ]
         )
+
+    def rng_state_dict(self):
+        return _Ready(self.rng_states)
 
 
 def test_cotrain_checkpoint_uses_one_canonical_step_dir_and_latest(tmp_path):
@@ -349,8 +366,10 @@ def test_cotrain_checkpoint_uses_one_canonical_step_dir_and_latest(tmp_path):
     runner._policy_final_hash = ""
     runner._applied_policy_steps = 3
 
+    actor_group = _ActorGroup()
+    learner_group = _LearnerGroup()
     path = runner._maybe_save_manual_checkpoint(
-        {"ActorGroup": _ActorGroup(), "LearnerGroup": _LearnerGroup()},
+        {"ActorGroup": actor_group, "LearnerGroup": learner_group},
         global_step=3,
         metrics={"sync/policy_version": 3.0},
     )
@@ -363,6 +382,126 @@ def test_cotrain_checkpoint_uses_one_canonical_step_dir_and_latest(tmp_path):
     )
     assert manifest["run"]["hydra_config"] == "../../.hydra/config.yaml"
     assert "resolved_config" not in manifest["run"]
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    assert payload["format_version"] == CHECKPOINT_FORMAT_VERSION
+    assert set(payload["rng"]) == {"python", "numpy", "torch", "cuda"}
+    _assert_nested_state_equal(payload["actor_rng_by_rank"], actor_group.rng_states)
+    _assert_nested_state_equal(payload["learner_rng_by_rank"], learner_group.rng_states)
+
+
+class _RngRestoreGroup:
+    def __init__(self):
+        self.loaded = []
+
+    def load_rng_state_dict(self, states):
+        self.loaded.append(states)
+        return _Ready([None])
+
+
+class _UntouchedReplayGroup:
+    def __init__(self):
+        self.load_state_calls = 0
+        self.load_sampling_calls = 0
+
+    def load_state_dict(self, _state):
+        self.load_state_calls += 1
+        return _Ready([None])
+
+    def load_sampling_state_dict(self, _state):
+        self.load_sampling_calls += 1
+        return _Ready([None])
+
+
+def test_cotrain_restore_restores_controller_actor_and_learner_rng():
+    random.seed(31)
+    np.random.seed(31)
+    torch.manual_seed(31)
+    controller_rng = capture_rng_state()
+    expected = (random.random(), np.random.random(), torch.rand(()))
+    actor_rng = [capture_rng_state(), capture_rng_state()]
+    learner_rng = [capture_rng_state()]
+    random.seed(999)
+    np.random.seed(999)
+    torch.manual_seed(999)
+
+    actor_group = _RngRestoreGroup()
+    learner_group = _RngRestoreGroup()
+    replay_group = _UntouchedReplayGroup()
+    runner = object.__new__(CotrainRunner)
+    runner._restore_manual_resume_state(
+        {
+            "ActorGroup": actor_group,
+            "LearnerGroup": learner_group,
+            "ReplayGroup": replay_group,
+        },
+        {
+            "format_version": CHECKPOINT_FORMAT_VERSION,
+            "global_step": 7,
+            "state_dicts": {},
+            "rng": controller_rng,
+            "actor_rng_by_rank": actor_rng,
+            "learner_rng_by_rank": learner_rng,
+        },
+    )
+
+    assert actor_group.loaded == [actor_rng]
+    assert learner_group.loaded == [learner_rng]
+    assert replay_group.load_state_calls == 0
+    assert replay_group.load_sampling_calls == 0
+    assert random.random() == expected[0]
+    assert np.random.random() == expected[1]
+    torch.testing.assert_close(torch.rand(()), expected[2], rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("missing", ["rng", "actor_rng_by_rank", "learner_rng_by_rank"])
+@pytest.mark.parametrize("missing_value", [pytest.param(..., id="absent"), None])
+def test_cotrain_v2_resume_requires_all_rng_states(missing, missing_value):
+    payload = {
+        "format_version": CHECKPOINT_FORMAT_VERSION,
+        "global_step": 7,
+        "state_dicts": {},
+        "rng": capture_rng_state(),
+        "actor_rng_by_rank": [capture_rng_state()],
+        "learner_rng_by_rank": [capture_rng_state()],
+    }
+    if missing_value is ...:
+        del payload[missing]
+    else:
+        payload[missing] = missing_value
+    runner = object.__new__(CotrainRunner)
+
+    with pytest.raises(RuntimeError, match=missing):
+        runner._restore_manual_resume_state(
+            {
+                "ActorGroup": _RngRestoreGroup(),
+                "LearnerGroup": _RngRestoreGroup(),
+            },
+            payload,
+        )
+
+
+def test_cotrain_legacy_resume_without_rng_warns_once(monkeypatch):
+    import dreamervla.runners.cotrain_runner as cotrain_runner_module
+
+    monkeypatch.setattr(cotrain_runner_module, "_LEGACY_RNG_WARNING_EMITTED", False)
+    runner = object.__new__(CotrainRunner)
+    groups = {
+        "ActorGroup": _RngRestoreGroup(),
+        "LearnerGroup": _RngRestoreGroup(),
+    }
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        runner._restore_manual_resume_state(groups, {"global_step": 1, "state_dicts": {}})
+        runner._restore_manual_resume_state(
+            groups,
+            {"format_version": 1, "global_step": 1, "state_dicts": {}},
+        )
+
+    matching = [item for item in caught if issubclass(item.category, RuntimeWarning)]
+    assert len(matching) == 1
+    assert "RNG" in str(matching[0].message)
+    assert groups["ActorGroup"].loaded == []
+    assert groups["LearnerGroup"].loaded == []
 
 
 def test_cotrain_common_resume_path_loads_manual_payload(tmp_path):
@@ -381,3 +520,18 @@ def test_cotrain_common_resume_path_loads_manual_payload(tmp_path):
 
     assert payload is not None
     assert payload["global_step"] == 7
+
+
+def test_cotrain_manual_loader_rejects_future_format_version(tmp_path):
+    checkpoint = tmp_path / "manual_cotrain.ckpt"
+    torch.save(
+        {
+            "format_version": CHECKPOINT_FORMAT_VERSION + 1,
+            "global_step": 7,
+            "state_dicts": {},
+        },
+        checkpoint,
+    )
+
+    with pytest.raises(ValueError, match="format_version"):
+        _load_manual_resume_payload(str(checkpoint), required=True)

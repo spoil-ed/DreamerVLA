@@ -12,8 +12,10 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import threading
 import time
 import uuid
+import warnings
 from dataclasses import dataclass
 from math import gcd
 from pathlib import Path
@@ -24,6 +26,7 @@ import ray
 import torch
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
+from dreamervla.constants import CHECKPOINT_FORMAT_VERSION
 from dreamervla.runners.base_runner import BaseRunner
 from dreamervla.runtime.render_device import (
     cuda_visible_devices_from_env,
@@ -39,6 +42,8 @@ from dreamervla.scheduler.placement import (
 from dreamervla.scheduler.worker_group import WorkerGroup
 from dreamervla.utils.component_checkpoint import load_component_checkpoint, state_dict_sha256
 from dreamervla.utils.egl_device import _ZERO_GPU_EGL_ERROR
+from dreamervla.utils.hf_checkpoint import load_runner_payload
+from dreamervla.utils.seed import capture_rng_state, restore_rng_state
 from dreamervla.workers.actor.embodied_fsdp_actor import EmbodiedFSDPActor
 from dreamervla.workers.actor.learner_worker import LearnerWorker
 from dreamervla.workers.cotrain.handshake_trace import trace as _hs_trace
@@ -51,6 +56,9 @@ from dreamervla.workers.env.evaluation_env_worker import EvaluationEnvironmentWo
 from dreamervla.workers.env.trajectory_env_worker import RealEnvWorker, WMEnvWorker
 from dreamervla.workers.replay.replay_worker import ReplayWorker
 from dreamervla.workers.rollout.multistep_rollout_worker import MultiStepRolloutWorker
+
+_LEGACY_RNG_WARNING_EMITTED = False
+_LEGACY_RNG_WARNING_LOCK = threading.Lock()
 
 
 class CotrainRunner(BaseRunner):
@@ -2674,6 +2682,18 @@ class CotrainRunner(BaseRunner):
         groups: dict[str, Any],
         payload: dict[str, Any],
     ) -> None:
+        version = int(payload.get("format_version", 1) or 1)
+        rng_keys = ("rng", "actor_rng_by_rank", "learner_rng_by_rank")
+        if version >= CHECKPOINT_FORMAT_VERSION:
+            missing = [
+                key for key in rng_keys if key not in payload or payload[key] is None
+            ]
+            if missing:
+                raise RuntimeError(
+                    f"format v{CHECKPOINT_FORMAT_VERSION} manual cotrain checkpoint "
+                    f"is missing {', '.join(missing)}"
+                )
+
         resume_step = int(payload.get("global_step", 0) or 0)
         replay_state = payload.get("replay")
         replay_sampling_state = payload.get("replay_sampling_state")
@@ -2709,6 +2729,21 @@ class CotrainRunner(BaseRunner):
                     shared_component_states,
                     resume_step,
                 ).wait()
+
+        if version < CHECKPOINT_FORMAT_VERSION and not any(
+            key in payload for key in rng_keys
+        ):
+            _warn_legacy_manual_rng_once()
+            return
+
+        actor_rng = payload.get("actor_rng_by_rank")
+        learner_rng = payload.get("learner_rng_by_rank")
+        controller_rng = payload.get("rng")
+        if actor_rng is not None:
+            groups["ActorGroup"].load_rng_state_dict(actor_rng).wait()
+        if learner_rng is not None:
+            groups["LearnerGroup"].load_rng_state_dict(learner_rng).wait()
+        restore_rng_state(controller_rng, strict=version >= CHECKPOINT_FORMAT_VERSION)
 
     def _maybe_save_manual_checkpoint(
         self,
@@ -2788,7 +2823,10 @@ class CotrainRunner(BaseRunner):
             if "classifier_threshold" in learner_states
             else None
         )
+        actor_rng_by_rank = groups["ActorGroup"].rng_state_dict().wait()
+        learner_rng_by_rank = learner_group.rng_state_dict().wait()
         payload = {
+            "format_version": CHECKPOINT_FORMAT_VERSION,
             "global_step": int(global_step),
             "cfg": _plain(self.cfg),
             "metrics": dict(metrics),
@@ -2798,6 +2836,9 @@ class CotrainRunner(BaseRunner):
             "policy_initial_hash": str(self._policy_initial_hash),
             "policy_final_hash": str(self._policy_final_hash),
             "applied_policy_steps": int(self._applied_policy_steps),
+            "rng": capture_rng_state(),
+            "actor_rng_by_rank": actor_rng_by_rank,
+            "learner_rng_by_rank": learner_rng_by_rank,
         }
         if classifier_threshold is not None:
             payload["classifier_threshold"] = classifier_threshold
@@ -3580,6 +3621,22 @@ def _plain(value: Any) -> Any:
     return value
 
 
+def _warn_legacy_manual_rng_once() -> None:
+    global _LEGACY_RNG_WARNING_EMITTED
+    if _LEGACY_RNG_WARNING_EMITTED:
+        return
+    with _LEGACY_RNG_WARNING_LOCK:
+        if _LEGACY_RNG_WARNING_EMITTED:
+            return
+        warnings.warn(
+            "legacy manual cotrain checkpoint has no RNG state; resume continues "
+            "from the currently configured seed",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+        _LEGACY_RNG_WARNING_EMITTED = True
+
+
 def _select_plain_str(cfg: DictConfig, path: str) -> str | None:
     value = OmegaConf.select(cfg, path, default=None)
     if value in (None, ""):
@@ -3715,7 +3772,7 @@ def _load_manual_resume_payload(
         if required:
             raise FileNotFoundError(f"manual cotrain resume checkpoint not found: {path}")
         return None
-    payload = torch.load(path, map_location="cpu", weights_only=False)
+    payload = load_runner_payload(path)
     if not isinstance(payload, dict):
         if required:
             raise TypeError("manual cotrain resume checkpoint must contain a mapping")
