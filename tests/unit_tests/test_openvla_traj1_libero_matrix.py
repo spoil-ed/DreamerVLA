@@ -55,10 +55,7 @@ def _assert_openvla_traj1_contract(cfg) -> None:
     assert oft.use_proprio is False
     assert oft.use_wrist_image is False
     assert oft.use_l1_regression is False
-    assert (
-        oft.actor_target
-        == "dreamervla.algorithms.actor.LatentToOpenVLAHiddenStateActor"
-    )
+    assert oft.actor_target == "dreamervla.algorithms.actor.LatentToOpenVLAHiddenStateActor"
     assert oft.actor_head_type == "oft_discrete_token"
 
     hidden_token = oft.hidden_token
@@ -111,10 +108,7 @@ def test_every_mainline_route_suite_composition_has_exact_hidden_token_contract(
         assert cfg.ray_components.world_model.kwargs.obs_dim == 1_048_576
         assert cfg.ray_components.classifier.kwargs.token_count == 256
         assert cfg.ray_components.classifier.kwargs.token_dim == 4096
-        assert (
-            cfg.ray_components.policy.target
-            == "dreamervla.models.embodiment.OpenVLAOFTPolicy"
-        )
+        assert cfg.ray_components.policy.target == "dreamervla.models.embodiment.OpenVLAOFTPolicy"
         assert cfg.ray_components.policy.kwargs.model_path == cfg.task.openvla_oft.ckpt_path
         assert cfg.ray_components.policy.kwargs.num_images_in_input == 1
         assert cfg.ray_components.policy.kwargs.use_lora is False
@@ -157,10 +151,7 @@ def test_wmpo_token_h1_classifier_experiment_composes() -> None:
     assert cfg.training.episode_eval_enabled is True
     assert cfg.training.lr == 3.0e-5
     assert cfg.classifier.head_type == "spatial_tf"
-    assert (
-        cfg.classifier._target_
-        == "dreamervla.algorithms.critic.LatentSuccessClassifier"
-    )
+    assert cfg.classifier._target_ == "dreamervla.algorithms.critic.LatentSuccessClassifier"
     assert (
         cfg.task.classifier.dataset.train._target_
         == "dreamervla.dataset.LumosAlignedLatentTrainDataset"
@@ -187,14 +178,10 @@ def test_wmpo_token_h1_classifier_experiment_composes() -> None:
 
 
 def test_dreamer_classifier_model_and_dataset_are_hydra_selected() -> None:
-    cfg = _compose_unresolved(
-        ["experiment=wmpo_token_classifier_openvla_onetraj_libero_goal_h1"]
-    )
+    cfg = _compose_unresolved(["experiment=wmpo_token_classifier_openvla_onetraj_libero_goal_h1"])
     classifier_recipe = Path(__file__).resolve().parents[2] / "configs" / "classifier"
 
-    assert {path.name for path in classifier_recipe.glob("*.yaml")} == {
-        "dreamer-cls.yaml"
-    }
+    assert {path.name for path in classifier_recipe.glob("*.yaml")} == {"dreamer-cls.yaml"}
     raw = OmegaConf.to_container(cfg, resolve=False)
     assert raw["classifier"]["_target_"] == "${task.classifier.model._target_}"
     assert cfg.task.classifier.model._target_ == (

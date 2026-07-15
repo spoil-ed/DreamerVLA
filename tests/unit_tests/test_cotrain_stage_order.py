@@ -277,8 +277,8 @@ def test_staged_global_step_has_explicit_real_model_imagination_barriers(monkeyp
     events: list[str] = []
     runner = CotrainRunner(_cfg())
     progress_names: list[str] = []
-    runner.console_progress = (
-        lambda _done, _total, desc, **_kwargs: progress_names.append(str(desc))
+    runner.console_progress = lambda _done, _total, desc, **_kwargs: progress_names.append(
+        str(desc)
     )
     actor = _Actor(events)
     rollout = _Rollout(events)

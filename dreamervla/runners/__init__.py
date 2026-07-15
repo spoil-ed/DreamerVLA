@@ -4,21 +4,16 @@ import importlib
 
 from dreamervla.runners.base_runner import BaseRunner
 
-
 _RUNNER_MODULES = {
     "DinoTokenWorldModelTrainingRunner": (
         "dreamervla.runners.dino_token_world_model_training_runner"
     ),
     "RolloutCollectionRunner": "dreamervla.runners.rollout_collection_runner",
     "WorldModelTrainingRunner": "dreamervla.runners.world_model_training_runner",
-    "SuccessClassifierTrainingRunner": (
-        "dreamervla.runners.success_classifier_training_runner"
-    ),
+    "SuccessClassifierTrainingRunner": ("dreamervla.runners.success_classifier_training_runner"),
     "CotrainRunner": "dreamervla.runners.cotrain_runner",
     "DreamerRunner": "dreamervla.runners.dreamer_runner",
-    "LIBEROVLAEvaluationRunner": (
-        "dreamervla.runners.libero_vla_evaluation_runner"
-    ),
+    "LIBEROVLAEvaluationRunner": ("dreamervla.runners.libero_vla_evaluation_runner"),
 }
 
 PUBLIC_RUNNERS = list(_RUNNER_MODULES)

@@ -768,9 +768,7 @@ class DreamerRunner(BaseRunner):
             )
             stage_start = mark_stage("append_real_replay", stage_start)
             selector = self._initial_condition_selector()
-            eligible = int(
-                replay_group.eligible_initial_condition_count(selector).wait()[0]
-            )
+            eligible = int(replay_group.eligible_initial_condition_count(selector).wait()[0])
             replay_metrics["replay_buffer/eligible_failure_anchors"] = float(eligible)
             if eligible <= 0:
                 return self._finish_no_failure_imagination_step(
@@ -785,9 +783,7 @@ class DreamerRunner(BaseRunner):
                     sync_metrics=sync_metrics,
                     stage_times=stage_times,
                 )
-            refresh_metrics = _merge_metric_lists(
-                [wm_env.refresh_wm_initial_conditions().wait()]
-            )
+            refresh_metrics = _merge_metric_lists([wm_env.refresh_wm_initial_conditions().wait()])
             stage_start = mark_stage("refresh_wm_initial_conditions", stage_start)
         else:
             if max_policy_kl is not None:
@@ -824,18 +820,10 @@ class DreamerRunner(BaseRunner):
                         for key, value in encoder_transaction_metrics.items()
                     }
                 )
-            encoder_sft_metrics["actor/encoder_sft_kl_effective"] = (
-                encoder_kl_effective
-            )
+            encoder_sft_metrics["actor/encoder_sft_kl_effective"] = encoder_kl_effective
             encoder_updates = max(
                 0,
-                int(
-                    float(
-                        encoder_sft_metrics.get(
-                            "actor/encoder_sft_optimizer_steps", 0.0
-                        )
-                    )
-                ),
+                int(float(encoder_sft_metrics.get("actor/encoder_sft_optimizer_steps", 0.0))),
             )
             self._report_phase_completion(
                 "cotrain-vla-real-sft",
@@ -904,17 +892,13 @@ class DreamerRunner(BaseRunner):
 
             state_start = time.perf_counter()
             state_dicts = _first_result(learner.state_dicts().wait())
-            sync_metrics["sync/learner_state_dicts_s"] = float(
-                time.perf_counter() - state_start
-            )
+            sync_metrics["sync/learner_state_dicts_s"] = float(time.perf_counter() - state_start)
             if not isinstance(state_dicts, dict):
                 raise TypeError("LearnerGroup.state_dicts() must return a mapping")
             component_states = {
                 "world_model": dict(state_dicts.get("world_model", {})),
                 "classifier": dict(state_dicts.get("classifier", {})),
-                "classifier_threshold": float(
-                    state_dicts.get("classifier_threshold", 0.5)
-                ),
+                "classifier_threshold": float(state_dicts.get("classifier_threshold", 0.5)),
             }
             shared_component_states = _share_ray_value(
                 component_states,
@@ -927,17 +911,11 @@ class DreamerRunner(BaseRunner):
             sync_metrics.update(_aggregate_sync_metric_lists([load_metrics]))
             stage_start = mark_stage("learner_to_wm_env_sync", stage_start)
 
-            refresh_metrics = _merge_metric_lists(
-                [wm_env.refresh_wm_initial_conditions().wait()]
-            )
+            refresh_metrics = _merge_metric_lists([wm_env.refresh_wm_initial_conditions().wait()])
             stage_start = mark_stage("refresh_wm_initial_conditions", stage_start)
 
-            post_sft_version = self._staged_policy_sync_version(
-                global_step, post_sft=True
-            )
-            sync_metrics.update(
-                self._sync_policy_groups(actor, rollout, version=post_sft_version)
-            )
+            post_sft_version = self._staged_policy_sync_version(global_step, post_sft=True)
+            sync_metrics.update(self._sync_policy_groups(actor, rollout, version=post_sft_version))
             stage_start = mark_stage("sync_post_sft_policy", stage_start)
 
         if max_policy_kl is not None:
@@ -1722,8 +1700,7 @@ class DreamerRunner(BaseRunner):
         allowed = {"failure_imagined_rl", "staged_full_cotrain"}
         if mode not in allowed:
             raise ValueError(
-                "manual_cotrain.training_mode must be one of "
-                f"{sorted(allowed)}, got {mode!r}"
+                f"manual_cotrain.training_mode must be one of {sorted(allowed)}, got {mode!r}"
             )
         return mode
 

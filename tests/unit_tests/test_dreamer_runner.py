@@ -27,9 +27,7 @@ def test_dreamer_runner_places_frozen_learner_on_cpu() -> None:
     runner = DreamerRunner(cfg)
     plan = runner._placement_plan()
 
-    assert [spec.gpu_ids for spec in plan.actor_specs] == [
-        [gpu] for gpu in range(8)
-    ]
+    assert [spec.gpu_ids for spec in plan.actor_specs] == [[gpu] for gpu in range(8)]
     assert plan.learner_spec is not None
     assert plan.learner_spec.gpu_ids == []
 
