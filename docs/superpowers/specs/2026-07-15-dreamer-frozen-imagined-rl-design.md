@@ -9,10 +9,11 @@ micro-batch CUDA OOM without changing the retained `CotrainRunner` behavior.
 
 ## Preserved implementation
 
-`dreamervla/runners/cotrain_runner.py` remains unchanged. The copied implementation
-in `dreamervla/runners/dreamer_runner.py` retains `CotrainRunner` and adds
-`DreamerRunner` as its frozen imagined-RL specialization. Existing full-cotrain
-behavior therefore remains available and unchanged.
+`dreamervla/runners/cotrain_runner.py` remains unchanged and continues to export
+`CotrainRunner`. Its copied implementation in
+`dreamervla/runners/dreamer_runner.py` is renamed to `DreamerRunner` and specialized
+for frozen imagined RL. Existing full-cotrain behavior therefore remains available
+through the original module and unchanged.
 
 ## Training semantics
 
@@ -67,4 +68,3 @@ Tests will prove that:
 - the active route keeps encoder, WM, and classifier update stages disabled;
 - the configured actor micro-batch is 8 while the global batch remains 16384;
 - the focused runner/config/stage-order tests and lint checks pass.
-
