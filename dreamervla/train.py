@@ -2,18 +2,15 @@
 from __future__ import annotations
 
 import os
-import sys
-from pathlib import Path
 
 import hydra
-from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 
 from dreamervla.config import validate_cfg
 from dreamervla.config_resolvers import register_dreamervla_resolvers
 from dreamervla.runners.base_runner import BaseRunner
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+register_dreamervla_resolvers()
 
 
 def _auto_apply_distributed(cfg: DictConfig) -> None:
@@ -49,45 +46,8 @@ def run(cfg: DictConfig) -> None:
         runner.teardown()
 
 
-def _parse_hydra_like_args(argv: list[str]) -> tuple[str, list[str]]:
-    config_name = "train"
-    overrides: list[str] = []
-    i = 0
-    while i < len(argv):
-        arg = argv[i]
-        if arg in ("-h", "--help"):
-            print(
-                "Usage: python -m dreamervla.train --config-name CONFIG [overrides]\n\n"
-                "Examples:\n"
-                "  python -m dreamervla.train experiment=openvla_onetraj_libero_cotrain task=openvla_onetraj_coldstart_libero\n"
-                "  python -m dreamervla.train experiment=collect_rollouts\n"
-                "  python -m dreamervla.train experiment=eval_libero_vla"
-            )
-            raise SystemExit(0)
-        if arg in ("--config-name", "-cn"):
-            if i + 1 >= len(argv):
-                raise SystemExit(f"{arg} requires a value")
-            config_name = argv[i + 1]
-            i += 2
-            continue
-        if arg.startswith("--config-name="):
-            config_name = arg.split("=", 1)[1]
-            i += 1
-            continue
-        overrides.append(arg)
-        i += 1
-    return config_name, overrides
-
-
-def main(argv: list[str] | None = None) -> None:
-    register_dreamervla_resolvers()
-    config_name, overrides = _parse_hydra_like_args(
-        list(sys.argv[1:] if argv is None else argv)
-    )
-    with initialize_config_dir(
-        config_dir=str(PROJECT_ROOT / "configs"), version_base=None
-    ):
-        cfg = compose(config_name=config_name, overrides=overrides)
+@hydra.main(version_base=None, config_path="../configs", config_name="train")
+def main(cfg: DictConfig) -> None:
     run(cfg)
 
 

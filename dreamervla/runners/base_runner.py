@@ -139,9 +139,6 @@ class BaseRunner(ABC):
     def get_diagnostics_dir(self) -> pathlib.Path:
         return self.get_artifact_dir("diagnostics")
 
-    def get_resolved_config_path(self) -> pathlib.Path:
-        return self.get_artifact_dir("resolved_config.yaml")
-
     def get_run_manifest_path(self) -> pathlib.Path:
         return self.get_artifact_dir("run_manifest.json")
 
@@ -166,8 +163,8 @@ class BaseRunner(ABC):
         return self.get_log_dir().joinpath(name)
 
     def print_config(self) -> None:
-        # Config dump — suppressed by default; the resolved config is always
-        # persisted to resolved_config.yaml + .hydra/, so nothing is lost.
+        # Config dump — suppressed by default; .hydra/config.yaml is the
+        # canonical configuration source for native Hydra runs.
         if not bool(OmegaConf.select(self.cfg, "training.print_config", default=False)):
             return
         pprint(OmegaConf.to_container(self.config, resolve=True))
@@ -188,21 +185,7 @@ class BaseRunner(ABC):
             return None
 
         self.get_run_dir().mkdir(parents=True, exist_ok=True)
-        for artifact_dir in (
-            self.get_checkpoint_dir(),
-            self.get_log_dir(),
-            self.get_tensorboard_dir(),
-            self.get_wandb_dir(),
-            self.get_video_dir("train"),
-            self.get_video_dir("eval"),
-            self.get_diagnostics_dir(),
-        ):
-            artifact_dir.mkdir(parents=True, exist_ok=True)
-        OmegaConf.save(
-            config=self.cfg,
-            f=str(self.get_resolved_config_path()),
-            resolve=True,
-        )
+        self.get_checkpoint_dir().mkdir(parents=True, exist_ok=True)
         manifest = self.build_run_manifest()
         self.get_run_manifest_path().write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n",
@@ -237,27 +220,13 @@ class BaseRunner(ABC):
 
         distributed = getattr(self, "distributed", None)
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "created_at_utc": datetime.now(UTC).isoformat(),
             "runner": {
                 "class": type(self).__name__,
                 "name": str(self.runner_name),
                 "family": str(self.runner_family),
                 "status": str(self.runner_status),
-            },
-            "run_dir": str(self.get_run_dir()),
-            "artifact_dirs": {
-                "checkpoints": str(self.get_checkpoint_dir()),
-                "diagnostics": str(self.get_diagnostics_dir()),
-                "logs": str(self.get_log_dir()),
-                "tensorboard": str(self.get_tensorboard_dir()),
-                "wandb": str(self.get_wandb_dir()),
-                "video_train": str(self.get_video_dir("train")),
-                "video_eval": str(self.get_video_dir("eval")),
-            },
-            "state": {
-                "global_step": int(self.global_step),
-                "epoch": int(self.epoch),
             },
             "distributed": {
                 "strategy": str(
@@ -271,13 +240,7 @@ class BaseRunner(ABC):
                 "local_rank": int(getattr(distributed, "local_rank", 0) or 0),
                 "world_size": int(getattr(distributed, "world_size", 1) or 1),
             },
-            "logging": {
-                "backends": backends,
-                "log_path": str(self.get_run_dir()),
-            },
-            "config": {
-                "resolved_config_path": str(self.get_resolved_config_path()),
-            },
+            "logging": {"backends": backends},
             "git": self._git_metadata(),
         }
 

@@ -33,9 +33,9 @@ def test_print_config_emitted_when_enabled(capsys):
 
 def test_append_model_summary_updates_manifest(tmp_path):
     path = tmp_path / "run_manifest.json"
-    path.write_text(json.dumps({"schema_version": 1}) + "\n", encoding="utf-8")
+    path.write_text(json.dumps({"schema_version": 2}) + "\n", encoding="utf-8")
     cfg = OmegaConf.create({})
     _fake(cfg, path).append_model_summary({"total_trainable": 12_300_000})
     data = json.loads(path.read_text(encoding="utf-8"))
-    assert data["schema_version"] == 1
+    assert data["schema_version"] == 2
     assert data["model"]["total_trainable"] == 12_300_000

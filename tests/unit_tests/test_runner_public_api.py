@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
-import pytest
 from hydra import compose, initialize_config_dir
 from hydra.utils import get_class
 from omegaconf import OmegaConf
@@ -292,25 +292,11 @@ def test_train_config_resolves_public_default_experiment() -> None:
     assert Path(cfg.training.out_dir).parent.name == cfg.run.name
 
 
-def test_cli_default_uses_current_public_runner_target() -> None:
-    from dreamervla.train import _parse_hydra_like_args
+def test_train_main_is_native_hydra_entrypoint() -> None:
+    from dreamervla.train import main
 
-    config_name, overrides = _parse_hydra_like_args([])
-    assert config_name == "train"
-    assert overrides == []
-
-
-def test_train_help_uses_role_based_wm_examples(capsys) -> None:
-    from dreamervla.train import _parse_hydra_like_args
-
-    with pytest.raises(SystemExit) as exc_info:
-        _parse_hydra_like_args(["--help"])
-
-    assert exc_info.value.code == 0
-    help_text = capsys.readouterr().out
-    assert "experiment=openvla_onetraj_libero_cotrain" in help_text
-    assert "experiment=collect_rollouts" in help_text
-    _assert_no_removed_wm_wording(help_text)
+    assert hasattr(main, "__wrapped__")
+    assert list(inspect.signature(main.__wrapped__).parameters) == ["cfg"]
 
 
 def test_implementation_runner_classes_are_not_public_aliases() -> None:

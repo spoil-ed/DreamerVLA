@@ -3,6 +3,7 @@ optimizer state + scalar attributes round-trip, and exclude_keys keeps frozen
 modules out of the payload.
 """
 
+import json
 import pathlib
 
 import torch
@@ -110,6 +111,11 @@ def test_cotrain_checkpoint_uses_one_canonical_step_dir_and_latest(tmp_path):
     assert path == tmp_path / "checkpoints" / "global_step_3" / "manual_cotrain.ckpt"
     assert (tmp_path / "checkpoints" / "latest.ckpt").is_file()
     assert not (tmp_path / "checkpoints" / "manual_cotrain_step_3").exists()
+    manifest = json.loads(
+        (path.parent / "manual_cotrain_manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["run"]["hydra_config"] == "../../.hydra/config.yaml"
+    assert "resolved_config" not in manifest["run"]
 
 
 def test_cotrain_common_resume_path_loads_manual_payload(tmp_path):

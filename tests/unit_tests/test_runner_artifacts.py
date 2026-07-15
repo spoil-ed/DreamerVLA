@@ -9,9 +9,6 @@ from dreamervla.runners.base_runner import BaseRunner
 
 
 class _ConcreteRunner(BaseRunner):
-    def setup(self) -> None:
-        return None
-
     def execute(self) -> None:
         return None
 
@@ -81,7 +78,7 @@ def test_base_runner_resume_reuses_checkpoint_owning_run_root(tmp_path: Path) ->
     assert runner.get_run_dir() == run_dir.resolve()
 
 
-def test_base_runner_writes_reproducible_run_artifacts(tmp_path: Path) -> None:
+def test_base_runner_setup_writes_only_shallow_run_artifacts(tmp_path: Path) -> None:
     out_dir = tmp_path / "run"
     cfg = OmegaConf.create(
         {
@@ -99,32 +96,35 @@ def test_base_runner_writes_reproducible_run_artifacts(tmp_path: Path) -> None:
     )
     runner = _ConcreteRunner(cfg)
 
-    runner.write_run_artifacts()
+    runner.setup()
 
-    resolved_config = out_dir / "resolved_config.yaml"
     manifest_path = out_dir / "run_manifest.json"
-    assert resolved_config.is_file()
     assert manifest_path.is_file()
-    for artifact_dir in (
-        "checkpoints",
+    assert (out_dir / "checkpoints").is_dir()
+    for absent_artifact in (
+        "resolved_config.yaml",
         "logs",
         "tensorboard",
         "wandb",
-        "video/train",
-        "video/eval",
+        "video",
         "diagnostics",
     ):
-        assert (out_dir / artifact_dir).is_dir()
+        assert not (out_dir / absent_artifact).exists()
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert manifest["schema_version"] == 1
+    assert set(manifest) == {
+        "schema_version",
+        "created_at_utc",
+        "runner",
+        "distributed",
+        "logging",
+        "git",
+    }
+    assert manifest["schema_version"] == 2
     assert manifest["runner"]["class"] == "_ConcreteRunner"
     assert manifest["runner"]["name"] == "base"
-    assert manifest["run_dir"] == str(out_dir.resolve())
-    assert manifest["artifact_dirs"]["checkpoints"] == str(out_dir.resolve() / "checkpoints")
-    assert manifest["artifact_dirs"]["logs"] == str(out_dir.resolve() / "logs")
-    assert manifest["artifact_dirs"]["tensorboard"] == str(out_dir.resolve() / "tensorboard")
+    assert manifest["runner"]["family"] == "runner"
+    assert manifest["runner"]["status"] == "abstract"
     assert manifest["logging"]["backends"] == ["tensorboard", "wandb"]
-    assert manifest["logging"]["log_path"] == str(out_dir.resolve())
     assert manifest["distributed"]["strategy"] == "ddp"
     assert "git" in manifest

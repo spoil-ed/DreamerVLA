@@ -2825,8 +2825,8 @@ class CotrainRunner(BaseRunner):
     def _manual_checkpoint_run_metadata(self, manifest_dir: Path) -> dict[str, str]:
         return {
             "root": _relative_path(self.get_run_dir(), manifest_dir),
-            "resolved_config": _relative_path(
-                self.get_resolved_config_path(),
+            "hydra_config": _relative_path(
+                self.get_artifact_dir(".hydra", "config.yaml"),
                 manifest_dir,
             ),
             "run_manifest": _relative_path(
