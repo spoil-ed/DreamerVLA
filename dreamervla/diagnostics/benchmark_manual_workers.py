@@ -26,9 +26,9 @@ import torch
 from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 
-from dreamervla.config_resolvers import register_dreamervla_resolvers
-from dreamervla.train import PROJECT_ROOT
 import dreamervla.workers.env.trajectory_env_worker as trajectory_env_worker
+from dreamervla.config_resolvers import register_dreamervla_resolvers
+from dreamervla.utils.paths import PROJECT_ROOT
 from dreamervla.workers.cotrain.messages import (
     ObservationMsg,
     RolloutResultBatchMsg,
