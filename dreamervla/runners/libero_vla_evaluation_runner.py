@@ -35,14 +35,14 @@ from omegaconf import DictConfig, OmegaConf, open_dict
 from PIL import Image
 from transformers import GenerationConfig
 
-from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
-from dreamervla.diagnostics.eval_cotrain_transaction import CotrainEvalObserver
 import dreamervla.runtime.libero_vla_eval_helpers as _eh
+from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
+from dreamervla.runtime.cotrain_eval import CotrainEvalObserver
+from dreamervla.runtime.eval_metrics import summarize_libero_task_success
 from dreamervla.runtime.libero_vla_eval_action import EmbodiedEvalActionMixin
 from dreamervla.runtime.libero_vla_eval_export import EmbodiedEvalExportMixin
 from dreamervla.runtime.libero_vla_eval_image_token import EmbodiedEvalImageTokenMixin
 from dreamervla.runtime.libero_vla_eval_latent import EmbodiedEvalLatentMixin
-from dreamervla.runtime.eval_metrics import summarize_libero_task_success
 from dreamervla.runtime.libero_vla_evaluation_base import (
     LIBEROVLAEvaluationBase,
     _eval_render_regime_params,
@@ -1771,12 +1771,8 @@ class LIBEROVLAEvaluationRunner(
                             "return_chunk": True,
                         }
                     )
-                action_chunk_raw = (
-                    action_chunk_tensor.detach().cpu().float().numpy()
-                )
-                action_chunk_raw = action_chunk_raw.reshape(
-                    -1, action_chunk_raw.shape[-1]
-                )
+                action_chunk_raw = action_chunk_tensor.detach().cpu().float().numpy()
+                action_chunk_raw = action_chunk_raw.reshape(-1, action_chunk_raw.shape[-1])
                 unnormalize_actions = getattr(
                     oft_extractor,
                     "unnormalize_actions",

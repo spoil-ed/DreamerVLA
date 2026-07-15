@@ -1,4 +1,4 @@
-"""Read-only trajectory diagnostics for staged OpenVLA cotrain checkpoints.
+"""Read-only trajectory evaluation for staged OpenVLA cotrain checkpoints.
 
 The diagnostic boundary is deliberately independent from replay and optimizers.
 It consumes one already encoded real trajectory at a time, rolls the world model
