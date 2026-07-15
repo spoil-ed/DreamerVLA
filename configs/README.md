@@ -46,8 +46,11 @@ event file in the same `tensorboard/` directory and purges the abandoned tail at
 the restored step. W&B persists its stable ID in `wandb/run_id.txt`; online mode
 resumes that run directly and, on SDKs with `resume_from`, truncates its abandoned
 tail at the restored step. Offline mode writes one local `offline-run-*` segment per
-process with the same ID. Sync the oldest segment normally, then sync every later
-segment to that ID with `wandb sync --id <ID> --append <SEGMENT_DIR>`.
+process with the same ID. Upload every segment for one logical run with one command:
+
+```bash
+bash scripts/utils/wandb_sync.sh /path/to/run_root/wandb
+```
 
 ## Entry Points
 
@@ -116,7 +119,6 @@ Runners write under one `${training.out_dir}`:
 
 ```text
 ${training.out_dir}/
-├── resolved_config.yaml
 ├── run_manifest.json
 ├── checkpoints/
 ├── logs/

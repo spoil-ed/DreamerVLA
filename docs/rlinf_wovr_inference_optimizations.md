@@ -43,8 +43,8 @@ Ray 控制面只看到粗粒度 WorkerGroup 调用。
 
 ## 2. DreamerVLA 当前对应位置
 
-manual Ray cotrain 路线：`experiment=openvla_onetraj_libero_cotrain`
-（`dreamervla/runners/manual_cotrain_ray_runner.py::ManualCotrainRayRunner`）。
+Ray cotrain 路线：`experiment=openvla_libero`
+（`dreamervla/runners/cotrain_runner.py::CotrainRunner`）。
 拓扑为 Learner / Actor / Rollout / Env 四组（`_build_groups`，placement 由
 `dreamervla/workers/cotrain/placement.py::build_manual_cotrain_placement` 计算：
 GPU0 = real_env + rollout0 + learner，GPU>0 = wm_env + rollout + actor）。
@@ -152,7 +152,7 @@ pytest tests/unit_tests/test_cotrain_messages.py \
        tests/unit_tests/test_latent_world_model_env.py \
        tests/unit_tests/test_trajectory_env_worker.py \
        tests/unit_tests/test_multistep_rollout_worker.py \
-       tests/unit_tests/test_manual_cotrain_ray_runner.py -q
+       tests/unit_tests/test_cotrain_resume.py -q
 # 116 passed（第二轮改动后）
 pytest tests/unit_tests -q   # 全量见第 5 节后记
 ```

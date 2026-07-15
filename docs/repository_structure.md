@@ -38,7 +38,7 @@ dreamervla/
 │   └── ...
 ├── train.py              # Canonical Hydra train/eval entrypoint
 ├── dataset/              # Offline datasets and online rollout dumpers
-├── diagnostics/          # Diagnostics, eval CLIs, smoke checks
+├── diagnostics/          # Executable install, eval, smoke, and measurement CLIs
 ├── envs/                 # LIBERO three-file env surface plus world-model env
 ├── models/               # Embodiment models only
 │   └── embodiment/       # VLA/encoder code plus retained world-model architectures
@@ -46,6 +46,7 @@ dreamervla/
 │       ├── chameleon_model/ # Chameleon model components
 │       └── world_model/  # BaseWorldModel and retained WM architectures
 ├── preprocess/           # Canonical reward and OpenVLA hidden-token preprocessing
+├── runtime/              # Shared runner metrics, warmup, collection, and eval support
 ├── scheduler/            # Ray backend scheduling primitives
 ├── workers/              # Ray backend workers
 ├── hybrid_engines/       # Ray backend object-store / weight-sync helpers

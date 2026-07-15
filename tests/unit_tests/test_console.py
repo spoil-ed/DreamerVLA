@@ -73,8 +73,8 @@ def test_cotrain_box_strings_are_wellformed_for_a_synthetic_step():
     ]
     box = console.metric_box("cotrain · step 1600", rows, width=65)
     assert all(len(ln) == 65 for ln in box.splitlines())
-    skip = console.phase_banner("[3/3] ONLINE COTRAIN", subtitle="skipped · total_env_steps=0", done=True)
-    assert "skipped" in skip and len(skip) == 65
+    done = console.phase_banner("[2/2] CLASSIFIER WARMUP", subtitle="acc 0.950", done=True)
+    assert "acc 0.950" in done and len(done) == 65
 
 
 def test_format_progress_line_with_total():

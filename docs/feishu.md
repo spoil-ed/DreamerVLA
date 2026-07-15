@@ -50,8 +50,8 @@ token grid；多步训练会把自己的预测放回历史，从而直接测量 
 ### Success classifier
 
 Classifier 在多帧 `[256,4096]` token grid 上使用空间 Transformer head，输出二元
-成功 logit。classifier warm-up、sync cotrain 和 Ray learner 使用同一个 update
-实现，并共享 WMPO 平衡采样协议。
+成功 logit。classifier warm-up 和 Ray learner 使用同一个 update 实现，并共享
+WMPO 平衡采样协议。
 
 ### Actor
 
@@ -76,29 +76,30 @@ ${DVLA_DATA_ROOT}/collected_rollouts/<suite>/collection_manifest.json
 - offline replay seed；
 - standalone world-model train；
 - standalone classifier train；
-- sync/Ray warm-up。
+- standalone warm-up 与 Ray checkpoint handoff。
 
 校验覆盖 `preprocess_config.json`、全部 HDF5 shard、全部 demo、数据集键、rank、
 尾部维度以及 reward/sidecar 对齐关系，不做自动转换或兼容回退。
 
-## 同步与异步训练
+## Warm-up 与 Ray online cotrain
 
-同步路线由 `OnlineCotrainPipelineRunner` 完成 warm-up 和 online cotrain。Ray 手动
-路线将职责拆成：
+`WorldModelTrainingRunner` 只负责 world-model warm-up，
+`SuccessClassifierTrainingRunner` 只负责 classifier warm-up。online cotrain 统一由
+Ray `CotrainRunner` 承担，并将职责拆成：
 
 - `ActorGroup`：FSDP actor training；
 - `RolloutGroup`：no-grad policy inference 和 actor weight pull；
 - `EnvGroup`：real/imagined stepping 与 trajectory assembly；
 - `LearnerGroup`：world model/classifier update 与权重发布。
 
-两条路线使用相同的 replay、模型和 update contract。最终质量只用真实 LIBERO
-success rate 判断；想象环境的 classifier score 只是训练信号。
+warm-up checkpoint 显式传给 `CotrainRunner`。最终质量只用真实 LIBERO success
+rate 判断；想象环境的 classifier score 只是训练信号。
 
 ## 当前验证标准
 
 主线改动完成前必须同时满足：
 
-- goal/object/spatial/10 四个 suite 的 collect、sync cotrain、Ray cotrain 配置均能
+- goal/object/spatial/10 四个 suite 的 collect、warm-up、Ray cotrain 配置均能
   完整 compose；
 - classifier 与 world model 分别完成至少一次真实 optimizer update 并写出 checkpoint；
 - synthetic 非主线 sidecar 在 resume 和 train 之前被拒绝；

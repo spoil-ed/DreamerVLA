@@ -23,17 +23,15 @@ detail lives in `git log`; architecture rules live in [AGENTS.md](../AGENTS.md).
 - Single-node Ray placement, worker groups, channels, learner workers, rollout
   workers, and weight sync live under `scheduler/`, `workers/`, and
   `hybrid_engines/`.
-- `ManualCotrainRayRunner` is the current async cotrain runner.
-- The sync pipeline remains the parity baseline for warmup and checkpoint
-  handoff.
+- `CotrainRunner` is the sole online-cotrain runner.
+- Standalone WM/classifier runners own warmup and checkpoint handoff.
 
 ## Warmup And Replay
 
 - `CollectRolloutsRunner` and `ColdStartRayCollectRunner` write reward and
   hidden HDF5 shards under `collected_rollouts/<suite>/{reward,hidden}`.
-- `OnlineCotrainPipelineRunner` seeds replay from those shards, warms up the
-  world model and classifier, writes split warmup checkpoints, and can launch
-  online cotrain.
+- `WorldModelTrainingRunner` and `SuccessClassifierTrainingRunner` consume the
+  collected shards and write their split warmup checkpoints.
 
 ## Diagnostics
 

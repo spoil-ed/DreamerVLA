@@ -48,7 +48,9 @@ do not replace the collect/warmup/online-cotrain flow.
     `envs/world_model/LatentWorldModelEnv`.
   - `workers/`, `scheduler/`, `hybrid_engines/` - Ray mainline backend:
     env, inference, replay, learner, rollout dump, placement, channels, and weight sync.
-  - `diagnostics/` - importable smoke checks and measurement CLIs.
+  - `diagnostics/` - executable install, eval, smoke, and measurement CLIs.
+  - `runtime/` - shared local runner support, including metrics, offline warmup,
+    collection adapters, and cotrain evaluation.
   - `utils/` - checkpoint, logging, metrics, paths, timers, EGL, HF modules, shared helpers.
 - **`configs/`** - Hydra source of truth:
   - `train.yaml` composes `VLA/`, `worldmodel/`, `classifier/`, `dreamervla/`,
@@ -122,7 +124,6 @@ stepping 和 trajectory assembly。DreamerVLA manual route 额外增加 `Learner
 
 `BaseRunner` writes reproducibility artifacts under `${training.out_dir}`:
 
-- `resolved_config.yaml`
 - `run_manifest.json`
 - `checkpoints/`
 - `logs/`

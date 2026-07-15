@@ -127,7 +127,7 @@ changes. `configs/scripts/` is reserved for install, download, and preprocess.
 - `training.classifier_warmup_steps`: success-classifier warmup update budget.
 - `dataloader.batch_size`: per-rank replay batch size.
 - `online_rollout.sequence_length`: replay window length.
-- `online_rollout.total_env_steps`: online cotrain budget.
+- `manual_cotrain.global_steps`: Ray online-cotrain update budget.
 
 ## Verify
 

@@ -26,7 +26,7 @@
    `rollout/active_episode_step_max`, `rollout/episode_progress_max`
    Source: active real rollout progress. Debug diagnostic; not success evidence.
 
-Removed from current sync and Ray runner scalar metrics:
+Removed from current Ray runner scalar metrics:
 `rollout/avg_success_rate` and `rollout/current_success_rate` because they duplicate or
 muddy the cumulative/recent semantics.
 

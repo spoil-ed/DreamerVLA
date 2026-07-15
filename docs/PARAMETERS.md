@@ -42,7 +42,7 @@ Shell launchers expose a small set of convenience keys and pass remaining
 | `training.wm_warmup_steps` | world-model update budget |
 | `training.classifier_warmup_steps` | classifier update budget |
 | `training.warmup_replay_epochs` | replay-pass derived update budget |
-| `training.warmup_checkpoint_every` | warmup checkpoint cadence |
+| `training.warmup_checkpoint_every_epochs` | warmup checkpoint cadence in complete replay epochs |
 | `training.wm_profile_steps` | bounded WM update profile budget; `-1` is diagnostic-only all-step profiling |
 | `training.wm_prefetch_workers` | CPU replay batches built ahead of the current WM update |
 | `training.world_model_ddp.*` | opt-in WM-only DDP flags; the offline fixed-graph recipe enables `static_graph` and `gradient_as_bucket_view` |
@@ -51,16 +51,15 @@ Shell launchers expose a small set of convenience keys and pass remaining
 | `training.precision` | standalone classifier autocast precision (`bf16` on H100) |
 | `training.classifier_batch_size` | local classifier batch |
 | `dataloader.batch_size` | local WM replay batch |
-| `online_rollout.sequence_length` | replay window length |
-| `online_rollout.total_env_steps` | online cotrain budget |
-| `online_rollout.num_envs` | vector env count for sync path |
-| `online_rollout.buffer_size` | replay capacity |
+| `online_rollout.sequence_length` | offline warmup replay window length |
+| `online_rollout.buffer_size` | offline warmup replay capacity |
 
 ### Manual Ray failure-conditioned imagined RL
 
 | Key | Meaning |
 | --- | --- |
 | `manual_cotrain.training_mode` | active mainline is `failure_imagined_rl` |
+| `manual_cotrain.global_steps` | Ray online-cotrain update budget |
 | `manual_cotrain.initial_condition_selector` | active selector is `failed_episode_start`; future selectors remain config extensions |
 | `manual_cotrain.staged_policy_update` | legacy full-cotrain barrier switch; `false` in imagined-only mode |
 | `manual_cotrain.learner_updates_enabled` | WM/CLS optimizer switch; `false` in imagined-only mode |

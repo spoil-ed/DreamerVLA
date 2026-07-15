@@ -1,4 +1,4 @@
-"""Shared success-classifier optimizer update for sync and Ray cotrain."""
+"""Shared success-classifier update for standalone warmup and Ray cotrain."""
 
 from __future__ import annotations
 
@@ -7,11 +7,11 @@ from typing import Any, Protocol
 import numpy as np
 import torch
 
-from dreamervla.runtime.distributed import unwrap_module
 from dreamervla.runners.success_classifier_training_runner import (
     _classifier_loss_and_predictions,
     _success_probabilities_from_logits,
 )
+from dreamervla.runtime.distributed import unwrap_module
 
 
 class ClassifierReplay(Protocol):

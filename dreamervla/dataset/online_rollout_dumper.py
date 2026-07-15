@@ -8,8 +8,7 @@ Writes one episode at a time into sharded HDF5 files that match the
 
 Designed to piggy-back on existing training loops: each completed episode is
 already a ``list[dict]`` with ``obs_embedding`` / ``wm_action`` / ``reward``
-/ ``done`` / ``is_terminal`` keys (see
-the sync or Ray cotrain runner). Wire the dumper next
+/ ``done`` / ``is_terminal`` keys (see the Ray cotrain runner). Wire the dumper next
 to ``replay.add_episode(episode)`` and rollouts get persisted to disk for free
 — no extra GPU time, no separate collection pass.
 
