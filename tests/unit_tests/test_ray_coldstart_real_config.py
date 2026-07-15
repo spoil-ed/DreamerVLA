@@ -248,6 +248,17 @@ def test_collect_egl_render_pool_preserves_explicit_pool() -> None:
     assert resolved["render_devices"] == [7]
 
 
+def test_ray_task_ids_expand_all_without_legacy_scheduler() -> None:
+    from dreamervla.runtime.rollout_collection_ray import _resolve_ray_task_ids
+
+    assert _resolve_ray_task_ids(
+        "all", num_tasks=3, suite="libero_goal"
+    ) == [0, 1, 2]
+    assert _resolve_ray_task_ids(
+        [4, 1], num_tasks=None, suite="libero_goal"
+    ) == [4, 1]
+
+
 def test_ray_dump_step_records_episode_id() -> None:
     from dreamervla.runtime.rollout_collection_ray import _build_oft_dump_step
 
