@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import re
 import subprocess
 from pathlib import Path
@@ -392,6 +393,50 @@ def test_removed_observation_diagnostics_are_absent() -> None:
         "diagnose_residual_cosine.py",
     ):
         assert not (diagnostics / name).exists(), name
+
+
+def test_retired_diagnostics_and_runtime_helpers_are_absent() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    retired_files = (
+        Path("dreamervla/diagnostics/_common.py"),
+        Path("dreamervla/diagnostics/wandb_relay_sync.py"),
+        Path("dreamervla/diagnostics/wm_single_trajectory_raw_overfit.py"),
+        Path("dreamervla/diagnostics/wm_single_trajectory_vla_overfit.py"),
+    )
+    retired_definitions = {
+        Path("dreamervla/runtime/oft_collect.py"): {
+            "OFTOpenLoopStep",
+            "oft_open_loop_action",
+        },
+        Path("dreamervla/runtime/libero_rollout.py"): {
+            "build_grid_work_list",
+            "SuccessTally",
+        },
+        Path("dreamervla/runtime/rollout_collection_ray.py"): {
+            "_next_ray_task_id",
+            "_ray_start_episode_id",
+        },
+        Path("dreamervla/runtime/libero_vla_evaluation_base.py"): {"_EvalInferResult"},
+        Path("dreamervla/runtime/libero_vla_eval_latent.py"): {"_dreamer_action_from_latent"},
+        Path("dreamervla/runtime/world_model_training_base.py"): {"_make_obs_dict"},
+        Path("dreamervla/diagnostics/eval_dino_token_wm.py"): {"load_dino_token_world_model"},
+    }
+
+    existing_files = [str(path) for path in retired_files if (project_root / path).exists()]
+    existing_definitions: dict[str, list[str]] = {}
+    for path, names in retired_definitions.items():
+        tree = ast.parse((project_root / path).read_text(encoding="utf-8"))
+        defined_names = {
+            node.name
+            for node in tree.body
+            if isinstance(node, (ast.AsyncFunctionDef, ast.ClassDef, ast.FunctionDef))
+        }
+        found = sorted(names & defined_names)
+        if found:
+            existing_definitions[str(path)] = found
+
+    assert existing_files == []
+    assert existing_definitions == {}
 
 
 def test_chunkwm_closeloop_diagnostic_usage_uses_role_based_wm_path() -> None:

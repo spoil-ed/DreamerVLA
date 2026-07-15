@@ -161,15 +161,6 @@ def build_libero_env_cfg(
     )
 
 
-class _EvalInferResult:
-    """Minimal ``infer_fn`` output the rollout core decodes via ``.action_chunk``."""
-
-    __slots__ = ("action_chunk",)
-
-    def __init__(self, action_chunk: Any) -> None:
-        self.action_chunk = action_chunk
-
-
 class _EvalFrameHistoryExtractor:
     """Per-slot frame-history preparer for the parallel LIBERO eval path.
 

@@ -248,34 +248,6 @@ def test_collect_egl_render_pool_preserves_explicit_pool() -> None:
     assert resolved["render_devices"] == [7]
 
 
-def test_ray_task_scheduler_expands_all_and_reserves_round_robin() -> None:
-    from dreamervla.runtime.rollout_collection_ray import (
-        _next_ray_task_id,
-        _resolve_ray_task_ids,
-    )
-
-    task_ids = _resolve_ray_task_ids("all", num_tasks=3, suite="libero_goal")
-    assert task_ids == [0, 1, 2]
-
-    counts = {task_id: 0 for task_id in task_ids}
-    assigned = [
-        _next_ray_task_id(task_ids, counts, episodes_per_task=2)
-        for _ in range(7)
-    ]
-    # (task_id, scheduled_index): each task's index advances 0 then 1 across the rounds.
-    assert assigned == [(0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1), None]
-    assert counts == {0: 2, 1: 2, 2: 2}
-
-
-def test_ray_start_episode_id_adds_resume_offset_to_scheduled_index() -> None:
-    from dreamervla.runtime.rollout_collection_ray import _ray_start_episode_id
-
-    # fresh: episode_id == scheduled index (distinct init_states 0,1,2,...)
-    assert [_ray_start_episode_id({}, 0, i) for i in range(3)] == [0, 1, 2]
-    # resume: task 0 already has 5 on disk -> continue at 5,6,7 (no init_state re-collect)
-    assert [_ray_start_episode_id({0: 5}, 0, i) for i in range(3)] == [5, 6, 7]
-
-
 def test_ray_dump_step_records_episode_id() -> None:
     from dreamervla.runtime.rollout_collection_ray import _build_oft_dump_step
 

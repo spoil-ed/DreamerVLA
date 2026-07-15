@@ -139,32 +139,3 @@ def run_vectorized_rollout(
             _start_slot(k)
 
     return done_count
-
-
-def build_grid_work_list(task_ids: Sequence[int], num_episodes_per_task: int) -> list[tuple[int, int]]:
-    """Deterministic task-major (task_id, init_state_index) grid == the sequential eval order."""
-    return [(int(t), e) for t in task_ids for e in range(int(num_episodes_per_task))]
-
-
-class SuccessTally:
-    """Per-task episode/success accumulator → macro-average SR via eval_metrics."""
-    def __init__(self) -> None:
-        self._episodes: dict[int, int] = {}
-        self._successes: dict[int, int] = {}
-        self._order: list[int] = []
-
-    def on_episode(self, task_id: int, episode_id: int, steps: list[Any], success: bool) -> None:
-        if task_id not in self._episodes:
-            self._episodes[task_id] = 0
-            self._successes[task_id] = 0
-            self._order.append(task_id)
-        self._episodes[task_id] += 1
-        self._successes[task_id] += 1 if success else 0
-
-    def summarize(self, *, episodes_per_task: int) -> dict[str, float]:
-        from dreamervla.runtime.eval_metrics import summarize_libero_task_success
-        records = [
-            {"task_id": t, "episodes": self._episodes[t], "successes": self._successes[t]}
-            for t in self._order
-        ]
-        return summarize_libero_task_success(records, episodes_per_task=episodes_per_task)

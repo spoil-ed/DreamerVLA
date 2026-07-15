@@ -821,36 +821,6 @@ def _default_num_tasks(suite: str) -> int:
     return 1
 
 
-def _next_ray_task_id(
-    task_ids: list[int],
-    task_counts: dict[int, int],
-    episodes_per_task: int,
-) -> tuple[int, int] | None:
-    """Reserve the next task below target; return ``(task_id, scheduled_index)``.
-
-    ``scheduled_index`` is this pass's 0-based episode index for the task (the count
-    before the increment). The caller adds the on-disk resume offset to turn it into the
-    episode_id / init_state, so every reserved episode gets a DISTINCT init_state.
-    """
-    candidates = [
-        (int(task_counts.get(int(task_id), 0)), index, int(task_id))
-        for index, task_id in enumerate(task_ids)
-        if int(task_counts.get(int(task_id), 0)) < int(episodes_per_task)
-    ]
-    if not candidates:
-        return None
-    current, _index, task_id = min(candidates)
-    task_counts[task_id] = current + 1
-    return task_id, current
-
-
-def _ray_start_episode_id(
-    offset_per_task: dict[int, int], task_id: int, scheduled_index: int
-) -> int:
-    """init_state / episode_id for a reserved episode = resume offset + this-pass index."""
-    return int(offset_per_task.get(int(task_id), 0)) + int(scheduled_index)
-
-
 def _build_oft_dump_step(
     env: Any,
     obs: dict[str, Any],

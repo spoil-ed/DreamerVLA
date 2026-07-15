@@ -1,9 +1,4 @@
-from dreamervla.runtime.eval_metrics import summarize_libero_task_success
-from dreamervla.runtime.libero_rollout import (
-    SuccessTally,
-    build_grid_work_list,
-    run_vectorized_rollout,
-)
+from dreamervla.runtime.libero_rollout import run_vectorized_rollout
 
 
 class _FakeVecEnv:
@@ -62,30 +57,6 @@ def test_core_runs_every_work_item_once():
     assert {(t, e): ok for t, e, ok in seen} == {  # success = (t+e) even
         (t, e): (t + e) % 2 == 0 for t, e in work
     }
-
-
-def test_grid_matches_sequential_episode_order():
-    # sequential loop is: for task in task_ids: for episode_idx in range(n): (task, episode_idx)
-    assert build_grid_work_list([5, 2, 9], num_episodes_per_task=3) == [
-        (5, 0), (5, 1), (5, 2), (2, 0), (2, 1), (2, 2), (9, 0), (9, 1), (9, 2)
-    ]
-
-
-def test_success_tally_macro_average_matches_eval_metrics():
-    tally = SuccessTally()
-    # task 5: 2/3 ; task 2: 0/3
-    for ep, ok in enumerate([True, True, False]):
-        tally.on_episode(5, ep, [], ok)
-    for ep in range(3):
-        tally.on_episode(2, ep, [], False)
-    metrics = tally.summarize(episodes_per_task=3)
-    expected = summarize_libero_task_success(
-        [{"task_id": 5, "episodes": 3, "successes": 2},
-         {"task_id": 2, "episodes": 3, "successes": 0}],
-        episodes_per_task=3,
-    )
-    assert metrics["eval_success_rate"] == expected["eval_success_rate"]
-    assert metrics["eval_task_5_success_rate"] == expected["eval_task_5_success_rate"]
 
 
 class _StubOFTExtractor:
@@ -149,25 +120,3 @@ def test_parallel_oft_slots_isolate_per_slot_call_count():
     # reset() zeroed each slot's step counter in lockstep with a new episode.
     slots[0].reset()
     assert slots[0].prepare(rec(0), "task")["env_step"] == 0
-
-
-def test_parallel_sr_equals_sequential_sr():
-    # Same work-list run through 1 slot (sequential) and 4 slots (parallel); the
-    # _FakeVecEnv success depends only on (task, episode), not slot, so the
-    # macro-average SR must be exactly equal (parallel ≡ sequential invariant).
-    work = build_grid_work_list([0, 1, 2, 3, 4], num_episodes_per_task=3)
-
-    def run(k):
-        tally = SuccessTally()
-        run_vectorized_rollout(
-            _FakeVecEnv(k, ep_len=2),
-            [_StubExtractor() for _ in range(k)],
-            _stub_infer,
-            work,
-            episode_horizon=10,
-            on_episode=tally.on_episode,
-        )
-        return tally.summarize(episodes_per_task=3)
-
-    assert run(1)["eval_success_rate"] == run(4)["eval_success_rate"]
-    assert run(1) == run(4)

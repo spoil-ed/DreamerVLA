@@ -172,12 +172,6 @@ class WorldModelTrainingBase(BaseRunner):
         )
         return pooled.float().detach()
 
-    def _make_obs_dict(
-        self, input_ids_list: list[list[int]]
-    ) -> dict[str, torch.Tensor]:
-        """Encode tokenized obs → {obs_embedding: tensor} for policy/WM passthrough."""
-        return {"obs_embedding": self._encode_hidden_from_tokenized(input_ids_list)}
-
     # ──────────────────────────────────────────────────────────────────────
     # Batch assembly
     # ──────────────────────────────────────────────────────────────────────

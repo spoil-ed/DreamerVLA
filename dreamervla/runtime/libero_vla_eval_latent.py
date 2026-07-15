@@ -128,23 +128,6 @@ class EmbodiedEvalLatentMixin:
         )
         return input_ids, attention_mask
 
-    def _dreamer_action_from_latent(
-        self,
-        latent: Any,
-        input_ids: list[int] | None = None,
-        action_steps: int = 1,
-        live_hidden: Any | None = None,
-    ) -> np.ndarray:
-        env_actions, _latent_actions = self._dreamer_action_chunk_from_latent(
-            latent=latent,
-            input_ids=input_ids,
-            action_steps=action_steps,
-            live_hidden=live_hidden,
-        )
-        if not env_actions:
-            raise RuntimeError("Dreamer policy produced an empty action chunk")
-        return env_actions[0]
-
     def _dreamer_action_chunk_from_latent(
         self,
         latent: Any,

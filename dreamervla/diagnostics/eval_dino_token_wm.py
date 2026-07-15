@@ -92,41 +92,6 @@ def token_prediction_metrics(
     }
 
 
-def load_dino_token_world_model(
-    checkpoint: str,
-    *,
-    device: torch.device,
-    config_path: str | None = None,
-) -> DinoTokenWorldModel:
-    """Load a split warmup or regular checkpoint using its persisted Hydra config."""
-
-    checkpoint_path = Path(checkpoint).expanduser()
-    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    world_model_cfg = _load_world_model_config(
-        payload,
-        checkpoint_path,
-        config_path,
-    )
-    config = (
-        world_model_cfg
-        if OmegaConf.is_config(world_model_cfg)
-        else OmegaConf.create(world_model_cfg)
-    )
-    model = hydra.utils.instantiate(config)
-    if not isinstance(model, DinoTokenWorldModel):
-        raise TypeError(
-            "DINO token evaluation requires DinoTokenWorldModel, got "
-            f"{type(model).__name__}"
-        )
-    model.load_state_dict(_load_world_model_state(payload, checkpoint_path), strict=True)
-    print(
-        f"[load] global_step={payload.get('global_step')} "
-        f"epoch={payload.get('epoch')} target={config.get('_target_')}",
-        flush=True,
-    )
-    return model.to(device=device, dtype=torch.float32).eval()
-
-
 def _payload_runner_config(value: object, *, key: str) -> DictConfig | None:
     if value is None:
         return None
