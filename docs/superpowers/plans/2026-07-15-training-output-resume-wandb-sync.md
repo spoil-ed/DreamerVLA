@@ -667,13 +667,14 @@
 
 **Files:**
 
+- Create: `dreamervla/launchers/wandb_sync.py`
 - Create: `scripts/utils/wandb_sync.sh`
-- Create: `tests/unit_tests/test_wandb_sync_script.py`
+- Create: `tests/unit_tests/test_wandb_sync_launcher.py`
 - Modify: `scripts/README.md`
 
 - [ ] **Step 1: Write a fake-CLI test harness**
 
-  The test creates canonical and legacy offline segments and puts an executable fake `wandb` first on `PATH`. The fake records every argument and optionally returns a requested nonzero status. Cover:
+  The test imports `dreamervla.launchers.wandb_sync`, creates canonical and legacy offline segments, and places an executable fake `wandb` first on `PATH`. The fake records every argument and optionally returns a requested nonzero status. Cover:
 
   - one canonical segment;
   - multiple chronological segments (`--append` only after the first logical upload);
@@ -687,14 +688,14 @@
 
   ```bash
   /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
-    tests/unit_tests/test_wandb_sync_script.py -q
+    tests/unit_tests/test_wandb_sync_launcher.py -q
   ```
 
-  Expected: FAIL because the script does not exist.
+  Expected: FAIL because the launcher module does not exist.
 
-- [ ] **Step 3: Implement the one-argument shell interface**
+- [ ] **Step 3: Implement the one-argument Python launcher**
 
-  The script must use `set -euo pipefail`, require exactly one argument, verify `command -v wandb`, and validate IDs against `^[A-Za-z0-9_-]+$`. Discovery must include only:
+  `dreamervla/launchers/wandb_sync.py` owns all validation and upload behavior. It must require exactly one W&B-directory argument, verify the `wandb` CLI with `shutil.which`, and validate IDs against `^[A-Za-z0-9_-]+$`. Discovery must include only:
 
   ```text
   "$wandb_dir"/{offline-run,run}-*/run-*.wandb
@@ -703,30 +704,43 @@
 
   Include `.wandb.synced` files only as markers, not upload inputs. Sort by run-directory timestamp/name, use `run_id.txt` when present, otherwise derive the ID from the earliest stream filename, and reject any other segment ID that disagrees.
 
-  Invoke the CLI as argument arrays, never `eval`:
+  Invoke the CLI with `subprocess.run(..., check=True)` and argument lists, never a shell string:
 
-  ```bash
-  if [[ "$logical_run_already_synced" == true ]]; then
-      wandb sync --append --id "$run_id" "$stream"
-  else
-      wandb sync --id "$run_id" "$stream"
-      logical_run_already_synced=true
-  fi
+  ```python
+  command = [wandb_cli, "sync", "--id", run_id]
+  if logical_run_already_synced:
+      command.append("--append")
+  command.append(str(stream))
+  subprocess.run(command, check=True)
   ```
 
   Do not pass entity/project flags; W&B reads offline metadata. Do not perform login, delete files, or rename files.
 
-- [ ] **Step 4: Verify shell behavior**
+- [ ] **Step 4: Add the thin Bash entrypoint**
+
+  `scripts/utils/wandb_sync.sh` contains no upload logic or argument parser:
+
+  ```bash
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+  cd "$(cd "${SCRIPT_DIR}/../.." && pwd -P)"
+
+  exec python -m dreamervla.launchers.wandb_sync "$@"
+  ```
+
+- [ ] **Step 5: Verify launcher and shell behavior**
 
   ```bash
   bash -n scripts/utils/wandb_sync.sh
   /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
-    tests/unit_tests/test_wandb_sync_script.py -q
+    tests/unit_tests/test_wandb_sync_launcher.py -q
   ```
 
   Expected: PASS.
 
-- [ ] **Step 5: Document and commit**
+- [ ] **Step 6: Document and commit**
 
   Add exactly this primary usage to `scripts/README.md`:
 
@@ -738,8 +752,8 @@
   Mention `WANDB_API_KEY` as the noninteractive login alternative and nothing else as required configuration.
 
   ```bash
-  git add scripts/utils/wandb_sync.sh \
-    tests/unit_tests/test_wandb_sync_script.py scripts/README.md
+  git add dreamervla/launchers/wandb_sync.py scripts/utils/wandb_sync.sh \
+    tests/unit_tests/test_wandb_sync_launcher.py scripts/README.md
   git commit -s -m "feat: sync offline wandb runs"
   ```
 
@@ -816,7 +830,7 @@
     tests/unit_tests/test_success_classifier_training_runner.py \
     tests/unit_tests/test_cotrain_resume.py \
     tests/unit_tests/test_cotrain_worker_rng.py \
-    tests/unit_tests/test_wandb_sync_script.py -q
+    tests/unit_tests/test_wandb_sync_launcher.py -q
   ```
 
 - [ ] **Step 3: Run broader unit coverage**
