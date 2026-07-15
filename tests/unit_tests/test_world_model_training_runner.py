@@ -1661,6 +1661,9 @@ def test_classifier_resume_offsets_metric_axis_by_total_wm_steps(
         "step": 1,
         "complete": False,
     }
+    runner._latest_warmup_progress_path = lambda component: (
+        tmp_path / "classifier-progress.ckpt" if component == "classifier" else None
+    )
     monkeypatch.setattr(mod, "load_runner_payload", lambda _path: {"global_step": 2})
 
     runner.run()
@@ -1668,6 +1671,80 @@ def test_classifier_resume_offsets_metric_axis_by_total_wm_steps(
     assert runner._metric_logger is None
     assert runner._metric_resume_step == 3
     assert resume_setter_calls == [3]
+
+
+def test_classifier_resume_starts_at_zero_after_complete_wm_without_cls_checkpoint(
+    tmp_path, monkeypatch
+):
+    import dreamervla.runners.world_model_training_runner as mod
+
+    calls: list[str] = []
+    runner = _make_orchestration_runner(tmp_path, monkeypatch, calls, resume=True)
+    runner._metric_logger = None
+    runner._metric_resume_step = None
+    runner._canonical_warmup_is_complete = lambda component: component == "wm"
+    wm_checkpoint = tmp_path / "checkpoints" / "wm_warmup.ckpt"
+    wm_checkpoint.parent.mkdir(parents=True, exist_ok=True)
+    wm_checkpoint.touch()
+    runner._existing_warmup_checkpoint = lambda name: (
+        wm_checkpoint if name == "wm_warmup.ckpt" else None
+    )
+    wm_restore_rng: list[bool] = []
+    runner._load_wm_warmup_checkpoint = lambda *_args, **kwargs: (
+        wm_restore_rng.append(bool(kwargs["restore_rng"]))
+        or {"epoch": 1, "step": 2, "complete": True}
+    )
+    cls_start: dict[str, int] = {}
+
+    def run_classifier(_replay, **kwargs):
+        cls_start.update(
+            start_step=int(kwargs["start_step"]),
+            start_epoch=int(kwargs["start_epoch"]),
+        )
+        return 0.0
+
+    runner._run_cls_warmup_epochs = run_classifier
+    resume_steps: list[int] = []
+    runner.set_metric_resume_step = lambda step: resume_steps.append(int(step))
+    monkeypatch.setattr(mod, "load_runner_payload", lambda _path: {"global_step": 2})
+
+    runner.run()
+
+    assert wm_restore_rng == [True]
+    assert cls_start == {"start_step": 0, "start_epoch": 0}
+    assert resume_steps == [2]
+
+
+def test_classifier_starts_at_zero_after_resumed_wm_finishes_without_cls_checkpoint(
+    tmp_path, monkeypatch
+):
+    calls: list[str] = []
+    runner = _make_orchestration_runner(tmp_path, monkeypatch, calls, resume=True)
+    runner._metric_logger = None
+    runner._metric_resume_step = None
+    runner._canonical_warmup_is_complete = lambda _component: False
+    runner._load_latest_wm_warmup_progress = lambda **_kwargs: {
+        "epoch": 0,
+        "step": 1,
+        "complete": False,
+    }
+    cls_start: dict[str, int] = {}
+
+    def run_classifier(_replay, **kwargs):
+        cls_start.update(
+            start_step=int(kwargs["start_step"]),
+            start_epoch=int(kwargs["start_epoch"]),
+        )
+        return 0.0
+
+    runner._run_cls_warmup_epochs = run_classifier
+    resume_steps: list[int] = []
+    runner.set_metric_resume_step = lambda step: resume_steps.append(int(step))
+
+    runner.run()
+
+    assert cls_start == {"start_step": 0, "start_epoch": 0}
+    assert resume_steps == [1]
 
 
 def test_offline_warmup_requires_every_hydra_declared_task(
