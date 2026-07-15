@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 from omegaconf import OmegaConf
 
 from dreamervla.runners.cotrain_runner import CotrainRunner
+from dreamervla.runners.dreamer_runner import DreamerRunner
 from dreamervla.workers.cotrain.messages import (
     RealTrajectory,
     RealTrajectoryBatch,
@@ -339,16 +341,27 @@ def test_staged_global_step_has_explicit_real_model_imagination_barriers(monkeyp
     ]
 
 
-def test_failure_imagined_rl_skips_encoder_and_learner_updates(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("runner_cls", "share_target"),
+    [
+        (CotrainRunner, "dreamervla.runners.cotrain_runner._share_ray_value"),
+        (DreamerRunner, "dreamervla.runners.dreamer_runner._share_ray_value"),
+    ],
+)
+def test_failure_imagined_rl_skips_encoder_and_learner_updates(
+    monkeypatch,
+    runner_cls,
+    share_target: str,
+) -> None:
     events: list[str] = []
     cfg = _cfg(training_mode="failure_imagined_rl")
     cfg.manual_cotrain.staged_policy_update = False
     cfg.manual_cotrain.learner_updates_enabled = False
-    runner = CotrainRunner(cfg)
+    runner = runner_cls(cfg)
     runner.console_progress = lambda *_args, **_kwargs: None
     env_channel = _Channel()
     monkeypatch.setattr(
-        "dreamervla.runners.cotrain_runner._share_ray_value",
+        share_target,
         lambda value, *, cluster: value,
     )
     groups = {
