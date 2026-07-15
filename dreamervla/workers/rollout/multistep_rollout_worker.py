@@ -12,7 +12,7 @@ from omegaconf import OmegaConf
 from torch import nn
 
 from dreamervla.hybrid_engines.fsdp.strategy import dtype_from_precision
-from dreamervla.hybrid_engines.weight_syncer import PatchWeightSyncer
+from dreamervla.hybrid_engines.weight_syncer import BucketWeightSyncer
 from dreamervla.scheduler.channel import Channel
 from dreamervla.scheduler.worker import Worker
 from dreamervla.workers.cotrain.handshake_trace import trace as _hs_trace
@@ -25,7 +25,7 @@ from dreamervla.workers.cotrain.messages import (
     rollout_result_batch_to_messages,
 )
 
-_DEFAULT_PATCH_STORE = "DreamerVLAActorRolloutPatchStore"
+_DEFAULT_WEIGHT_STORE = "DreamerVLAActorRolloutWeightStore"
 _EXTRA_FORWARD_KEYS = (
     "action_token_ids",
     "input_ids",
@@ -68,7 +68,7 @@ class MultiStepRolloutWorker(Worker):
         self._model_offloaded = False
         self.encoder: Any | None = None
         self.policy: nn.Module | None = None
-        self.syncer: PatchWeightSyncer | None = None
+        self.syncer: BucketWeightSyncer | None = None
         self.extractors: dict[str, Any] = {}
         self.global_step = 0
         self.versions: dict[str, int] = {
@@ -541,6 +541,7 @@ class MultiStepRolloutWorker(Worker):
         self,
         key: str = "policy",
         local_version: int | None = None,
+        expected_version: int | None = None,
     ) -> dict[str, float]:
         """Apply the latest ActorGroup policy patch to the local rollout copy."""
 
@@ -551,7 +552,23 @@ class MultiStepRolloutWorker(Worker):
         )
         pull_start = time.perf_counter()
         syncer = self._syncer()
-        version = syncer.pull(str(key), self._policy(), resolved_local_version)
+        version = None
+        expected = None if expected_version is None else int(expected_version)
+        timeout_s = float(
+            _as_plain_dict(self.train_cfg.get("syncer", {})).get("wait_timeout_s", 900.0)
+        )
+        while True:
+            version = syncer.pull(str(key), self._policy(), resolved_local_version)
+            observed = resolved_local_version if version is None else int(version)
+            if expected is None or observed >= expected:
+                break
+            resolved_local_version = max(resolved_local_version, observed)
+            if time.perf_counter() - pull_start >= timeout_s:
+                raise TimeoutError(
+                    f"timed out waiting for Actor policy version {expected}; "
+                    f"latest rollout version is {observed}"
+                )
+            time.sleep(0.05)
         pull_s = float(time.perf_counter() - pull_start)
         if version is not None:
             self.versions[str(key)] = int(version)
@@ -740,11 +757,14 @@ class MultiStepRolloutWorker(Worker):
             raise RuntimeError("MultiStepRolloutWorker has no encoder configured")
         return self.encoder
 
-    def _syncer(self) -> PatchWeightSyncer:
+    def _syncer(self) -> BucketWeightSyncer:
         if self.syncer is None:
             syncer_cfg = _as_plain_dict(self.train_cfg.get("syncer", {}))
-            store_name = str(syncer_cfg.get("store_name", _DEFAULT_PATCH_STORE))
-            self.syncer = PatchWeightSyncer(store_name=store_name)
+            store_name = str(syncer_cfg.get("store_name", _DEFAULT_WEIGHT_STORE))
+            self.syncer = BucketWeightSyncer(
+                store_name=store_name,
+                bucket_bytes=int(syncer_cfg.get("bucket_bytes", 128 * 1024 * 1024)),
+            )
         return self.syncer
 
 

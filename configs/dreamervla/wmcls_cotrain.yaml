@@ -58,6 +58,8 @@ replay:
 env:
   wm:
     cfg:
+      # Frozen WM/classifier only occupy GPU1-7 during latent imagination.
+      enable_offload: true
       bootstrap_task_ids: ${ray_data.task_ids}
       bootstrap_group_size: ${algorithm.group_size}
       initial_condition_selector: ${manual_cotrain.initial_condition_selector}

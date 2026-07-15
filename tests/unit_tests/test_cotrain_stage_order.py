@@ -112,6 +112,10 @@ class _Actor:
         self.events.append(f"policy_push:{version}")
         return _Ready([{"sync/policy_version": float(version)}])
 
+    def release_synced_model(self, key: str, version: int):
+        self.events.append(f"policy_release:{version}")
+        return _Ready([{"sync/policy_buckets_released": 1.0}])
+
     def encoder_sft(self, batch: RealTrajectoryBatch):
         self.events.append("encoder_sft")
         assert batch.num_trajectories == 1
@@ -146,8 +150,8 @@ class _Rollout:
     def set_global_step(self, step: int):
         return _Ready([None])
 
-    def sync_model_from_actor(self, key: str):
-        self.events.append("policy_pull")
+    def sync_model_from_actor(self, key: str, expected_version: int | None = None):
+        self.events.append(f"policy_pull_wait:{expected_version}")
         return _Ready([{"sync/rollout_policy_updated": 1.0}])
 
     def generate(self, *args):
@@ -156,6 +160,22 @@ class _Rollout:
         phase = "real_generate" if self.calls == 1 else "wm_generate"
         self.events.append(phase)
         return _Ready([{"rollout/generated": 1.0}])
+
+
+def test_policy_sync_starts_rollout_receiver_before_actor_publish() -> None:
+    events: list[str] = []
+    metrics = CotrainRunner._sync_policy_groups(
+        _Actor(events),
+        _Rollout(events),
+        version=4,
+    )
+
+    assert events[:3] == [
+        "policy_pull_wait:4",
+        "policy_push:4",
+        "policy_release:4",
+    ]
+    assert metrics["sync/policy_version"] == 4.0
 
 
 class _Env:

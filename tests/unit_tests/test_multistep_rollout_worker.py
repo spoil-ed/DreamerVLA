@@ -615,7 +615,7 @@ def test_rollout_worker_offload_state_tracks_device_lifecycle() -> None:
     assert worker._model_offloaded is True
 
 
-def test_sync_model_from_actor_applies_patch_syncer() -> None:
+def test_sync_model_from_actor_applies_bucket_syncer() -> None:
     if ray.is_initialized():
         ray.shutdown()
     cluster = Cluster()
@@ -645,6 +645,35 @@ def test_sync_model_from_actor_applies_patch_syncer() -> None:
         assert torch.allclose(next(iter(synced.values())), next(iter(changed.values())))
     finally:
         cluster.shutdown()
+
+
+def test_sync_model_from_actor_advances_local_version_while_waiting() -> None:
+    worker = MultiStepRolloutWorker(
+        policy_cfg=_policy_cfg(),
+        encoder_cfg=None,
+        init_ckpt={},
+        train_cfg={"device": "cpu", "syncer": {"wait_timeout_s": 1.0}},
+    )
+    worker.init()
+    local_versions: list[int] = []
+
+    class _VersionedSyncer:
+        last_pull_metrics: dict[str, float] = {}
+
+        def pull(self, _key, _model, local_version):
+            local_versions.append(int(local_version))
+            return 1 if len(local_versions) == 1 else 2
+
+    worker.syncer = _VersionedSyncer()
+
+    metrics = worker.sync_model_from_actor(
+        "policy",
+        local_version=0,
+        expected_version=2,
+    )
+
+    assert local_versions == [0, 1]
+    assert metrics["sync/rollout_policy_version"] == 2.0
 
 
 def test_generate_reads_channel_writes_results_and_stops() -> None:

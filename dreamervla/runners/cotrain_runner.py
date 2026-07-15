@@ -944,9 +944,6 @@ class CotrainRunner(BaseRunner):
             )
             stage_start = mark_stage("sync_post_sft_policy", stage_start)
 
-        if max_policy_kl is not None:
-            actor.begin_policy_transaction().wait()
-
         dynamic_wm_leases = self._wm_rollout_target_trajectories() is not None
         if dynamic_wm_leases:
             wm_rollout_result = rollout.generate(
@@ -1030,6 +1027,8 @@ class CotrainRunner(BaseRunner):
             "actor_compute_advantages_and_returns",
             stage_start,
         )
+        if max_policy_kl is not None:
+            actor.begin_policy_transaction().wait()
         train_metrics = _aggregate_actor_metric_lists([actor.run_training().wait()])
         actor_kl_attempted = max(
             0.0,
@@ -1216,9 +1215,16 @@ class CotrainRunner(BaseRunner):
 
     @staticmethod
     def _sync_policy_groups(actor: Any, rollout: Any, *, version: int) -> dict[str, float]:
+        rollout_result = rollout.sync_model_from_actor(
+            "policy",
+            expected_version=int(version),
+        )
         actor_sync = actor.sync_model_to_rollout("policy", int(version)).wait()
-        rollout_sync = rollout.sync_model_from_actor("policy").wait()
-        return _aggregate_sync_metric_lists([actor_sync, rollout_sync])
+        rollout_sync = rollout_result.wait()
+        release_sync = actor.release_synced_model("policy", int(version)).wait()
+        return _aggregate_sync_metric_lists(
+            [actor_sync, rollout_sync, release_sync]
+        )
 
     def _report_phase_completion(
         self,

@@ -14,10 +14,7 @@ import ray
 import torch
 
 from dreamervla.hybrid_engines.weight_syncer.base import WeightSyncer
-from dreamervla.hybrid_engines.weight_syncer.objectstore import (
-    ObjectStoreWeightSyncer,
-    _to_cpu_tensor,
-)
+from dreamervla.hybrid_engines.weight_syncer.objectstore import ObjectStoreWeightSyncer
 
 
 def _tensor_bytes(tensor: torch.Tensor) -> int:
@@ -75,15 +72,77 @@ class BucketWeightSyncer(WeightSyncer):
         self._store = ObjectStoreWeightSyncer._get_or_create_store(self.store_name)
 
     def push(self, key: str, state_dict: dict[str, Any], version: int) -> None:
-        cpu_state = {name: _to_cpu_tensor(value) for name, value in state_dict.items()}
+        # ActorGroup exports an independent CPU snapshot. Keep that storage and
+        # let Ray serialize each bucket instead of cloning the complete model a
+        # second time before bucketing.
+        cpu_state = {
+            name: (
+                value.detach().cpu()
+                if isinstance(value, torch.Tensor)
+                else torch.as_tensor(value).detach().cpu()
+            )
+            for name, value in state_dict.items()
+        }
         buckets = bucket_state_dict(cpu_state, self.bucket_bytes)
         bucket_refs = [
-            self._store.set.remote(_bucket_key(key, index), int(version), bucket)
+            self._store.set.remote(
+                _bucket_key(key, index, version=int(version)),
+                int(version),
+                bucket,
+            )
             for index, bucket in enumerate(buckets)
         ]
         ray.get(bucket_refs)
-        meta = {"num_buckets": torch.tensor(len(buckets), dtype=torch.int64)}
-        ray.get(self._store.set.remote(_meta_key(key), int(version), meta))
+        self.commit(str(key), version=int(version), num_buckets=len(buckets))
+
+    def push_bucket(
+        self,
+        key: str,
+        bucket: dict[str, torch.Tensor],
+        *,
+        version: int,
+        index: int,
+    ) -> None:
+        """Publish one independent CPU bucket without retaining a full state dict."""
+
+        ray.get(
+            self._store.set.remote(
+                _bucket_key(str(key), int(index), version=int(version)),
+                int(version),
+                bucket,
+            )
+        )
+
+    def commit(self, key: str, *, version: int, num_buckets: int) -> None:
+        """Atomically expose a version after every bucket has been published."""
+
+        if int(num_buckets) <= 0:
+            raise ValueError("weight sync must publish at least one bucket")
+        previous_item = ray.get(self._store.get.remote(_meta_key(str(key))))
+        previous: tuple[int, int] | None = None
+        if previous_item is not None:
+            previous_version, previous_meta = previous_item
+            previous_meta = _resolve(previous_meta)
+            previous = (
+                int(previous_version),
+                int(previous_meta["num_buckets"].item()),
+            )
+        meta = {"num_buckets": torch.tensor(int(num_buckets), dtype=torch.int64)}
+        ray.get(self._store.set.remote(_meta_key(str(key)), int(version), meta))
+        if previous is not None and int(previous[0]) < int(version):
+            old_version, old_bucket_count = previous
+            ray.get(
+                self._store.delete.remote(
+                    [
+                        _bucket_key(
+                            str(key),
+                            index,
+                            version=int(old_version),
+                        )
+                        for index in range(int(old_bucket_count))
+                    ]
+                )
+            )
 
     def pull(self, key: str, model: torch.nn.Module, local_version: int) -> int | None:
         item = ray.get(self._store.get.remote(_meta_key(key)))
@@ -94,23 +153,59 @@ class BucketWeightSyncer(WeightSyncer):
             return None
         meta = _resolve(meta)
         num_buckets = int(meta["num_buckets"].item())
-        merged: dict[str, torch.Tensor] = {}
         bucket_items = ray.get(
-            [self._store.get.remote(_bucket_key(key, index)) for index in range(num_buckets)]
+            [
+                self._store.get.remote(_bucket_key(key, index, version=int(version)))
+                for index in range(num_buckets)
+            ]
         )
+        destination = model.state_dict()
         for index, bucket_item in enumerate(bucket_items):
             if bucket_item is None:
                 raise RuntimeError(
                     f"missing bucket {index} for key {key!r}; weight store is inconsistent"
                 )
-            merged.update(_resolve(bucket_item[1]))
-        device = next(model.parameters(), torch.empty(0)).device
-        model.load_state_dict({name: value.to(device) for name, value in merged.items()})
+            bucket_version, bucket = bucket_item
+            if int(bucket_version) != int(version):
+                raise RuntimeError(
+                    f"bucket {index} for key {key!r} has version "
+                    f"{bucket_version}, expected {version}"
+                )
+            for name, value in _resolve(bucket).items():
+                if name not in destination:
+                    raise KeyError(f"weight bucket contains unknown parameter {name!r}")
+                destination[name].copy_(
+                    value.to(
+                        device=destination[name].device,
+                        dtype=destination[name].dtype,
+                    )
+                )
         return int(version)
 
+    def release(self, key: str, *, version: int) -> bool:
+        """Release a committed snapshot after every Rollout worker applied it."""
 
-def _bucket_key(key: str, index: int) -> str:
-    return f"{key}::b{index}"
+        item = ray.get(self._store.get.remote(_meta_key(str(key))))
+        if item is None or int(item[0]) != int(version):
+            return False
+        meta = _resolve(item[1])
+        num_buckets = int(meta["num_buckets"].item())
+        ray.get(
+            self._store.delete.remote(
+                [
+                    _meta_key(str(key)),
+                    *(
+                        _bucket_key(str(key), index, version=int(version))
+                        for index in range(num_buckets)
+                    ),
+                ]
+            )
+        )
+        return True
+
+
+def _bucket_key(key: str, index: int, *, version: int) -> str:
+    return f"{key}::v{int(version)}::b{index}"
 
 
 def _meta_key(key: str) -> str:

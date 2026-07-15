@@ -84,3 +84,46 @@ def test_fsdp_manager_passes_init_consistency_options_to_fsdp1(monkeypatch) -> N
     assert isinstance(wrapped, _FakeFSDP)
     assert captured["use_orig_params"] is True
     assert captured["sync_module_states"] is True
+
+
+def test_fsdp1_uses_full_shard_prefetch_and_model_wrap_classes(monkeypatch) -> None:
+    import torch.distributed as dist
+    import torch.distributed.fsdp as fsdp_mod
+
+    captured: dict[str, object] = {}
+
+    class _Block(torch.nn.Linear):
+        pass
+
+    class _LayeredPolicy(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.block = _Block(2, 2)
+
+        def fsdp_wrap_module_classes(self) -> tuple[type[torch.nn.Module], ...]:
+            return (_Block,)
+
+    class _FakeFSDP(torch.nn.Module):
+        def __init__(self, module: torch.nn.Module, **kwargs: object) -> None:
+            super().__init__()
+            self.module = module
+            captured.update(kwargs)
+
+    monkeypatch.setattr(dist, "is_available", lambda: True)
+    monkeypatch.setattr(dist, "is_initialized", lambda: True)
+    monkeypatch.setattr(fsdp_mod, "FullyShardedDataParallel", _FakeFSDP)
+
+    manager = FSDPModelManager(
+        strategy="fsdp",
+        sharding_strategy="full_shard",
+        forward_prefetch=True,
+        backward_prefetch="backward_pre",
+        limit_all_gathers=True,
+    )
+    manager.prepare_model(_LayeredPolicy())
+
+    assert captured["sharding_strategy"] is fsdp_mod.ShardingStrategy.FULL_SHARD
+    assert captured["forward_prefetch"] is True
+    assert captured["backward_prefetch"] is fsdp_mod.BackwardPrefetch.BACKWARD_PRE
+    assert captured["limit_all_gathers"] is True
+    assert callable(captured["auto_wrap_policy"])

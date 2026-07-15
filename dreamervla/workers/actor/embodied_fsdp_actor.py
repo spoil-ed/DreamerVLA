@@ -18,7 +18,7 @@ from torch import nn
 
 from dreamervla.hybrid_engines.fsdp import FSDPModelManager
 from dreamervla.hybrid_engines.fsdp.strategy import dtype_from_precision
-from dreamervla.hybrid_engines.weight_syncer import PatchWeightSyncer
+from dreamervla.hybrid_engines.weight_syncer import BucketWeightSyncer
 from dreamervla.scheduler.channel import Channel
 from dreamervla.scheduler.worker import Worker
 from dreamervla.utils.progress import ProgressReporter
@@ -31,7 +31,7 @@ from dreamervla.workers.cotrain.messages import (
     collate_trajectory_shards,
 )
 
-_DEFAULT_PATCH_STORE = "DreamerVLAActorRolloutPatchStore"
+_DEFAULT_WEIGHT_STORE = "DreamerVLAActorRolloutWeightStore"
 _EXTRA_FORWARD_KEYS = (
     "action_token_ids",
     "input_ids",
@@ -64,6 +64,11 @@ class EmbodiedFSDPActor(Worker):
                 self.train_cfg.get("precision", "fp32"),
             )
         )
+        self.enable_offload = bool(self.train_cfg.get("enable_offload", False))
+        self.is_weight_offloaded = False
+        self.is_optimizer_offloaded = False
+        self.is_encoder_optimizer_offloaded = False
+        self.memory_phase = "uninitialized"
 
         self.global_step = 0
         self.policy: nn.Module | None = None
@@ -71,7 +76,7 @@ class EmbodiedFSDPActor(Worker):
         self.encoder_optimizer: torch.optim.Optimizer | None = None
         self._encoder_parameter_ids: set[int] = set()
         self.fsdp_manager: FSDPModelManager | None = None
-        self.syncer: PatchWeightSyncer | None = None
+        self.syncer: BucketWeightSyncer | None = None
         self.trajectory_shards: list[TrajectoryShard] = []
         self.batch: TrajectoryBatch | None = None
         self.returns: torch.Tensor | None = None
@@ -81,6 +86,7 @@ class EmbodiedFSDPActor(Worker):
         self._transaction_policy_state: dict[str, torch.Tensor] | None = None
         self._transaction_policy_optimizer: dict[str, Any] | None = None
         self._transaction_encoder_optimizer: dict[str, Any] | None = None
+        self._transaction_uses_local_state = False
 
     def init(self) -> None:
         """Build policy, optional FSDP wrapper, and optimizer."""
@@ -122,6 +128,12 @@ class EmbodiedFSDPActor(Worker):
         for parameter in self.policy.parameters():
             if id(parameter) in self._encoder_parameter_ids:
                 parameter.requires_grad_(False)
+        self.memory_phase = "training_loaded"
+        if self.enable_offload:
+            self._offload_optimizer()
+            if self.encoder_optimizer is not None:
+                self._offload_optimizer(self.encoder_optimizer)
+            self._offload_parameters(offload_grad=True)
 
     def set_global_step(self, global_step: int) -> None:
         """Set runner-visible global progress used by weight-sync versions."""
@@ -129,6 +141,15 @@ class EmbodiedFSDPActor(Worker):
         self.global_step = int(global_step)
 
     def encoder_sft(self, batch: RealTrajectoryBatch) -> dict[str, float]:
+        """Run encoder SFT with an explicit Actor residency lease."""
+
+        self._load_for_training()
+        try:
+            return self._encoder_sft_loaded(batch)
+        finally:
+            self._release_after_training()
+
+    def _encoder_sft_loaded(self, batch: RealTrajectoryBatch) -> dict[str, float]:
         """SFT only the raw-input encoder on successful current-step episodes."""
 
         successful = [trajectory for trajectory in batch.trajectories if trajectory.success]
@@ -304,9 +325,25 @@ class EmbodiedFSDPActor(Worker):
 
         if self._transaction_policy_state is not None:
             raise RuntimeError("a policy KL transaction is already active")
-        self._transaction_policy_state = self.state_dict()
-        self._transaction_policy_optimizer = self.optimizer_state_dict()
-        self._transaction_encoder_optimizer = self.encoder_optimizer_state_dict()
+        self._transaction_uses_local_state = _is_fsdp_module(self._policy())
+        if self._transaction_uses_local_state:
+            restore_weights = bool(self.enable_offload and self.is_weight_offloaded)
+            self._load_parameters(onload_grad=False)
+            try:
+                self._transaction_policy_state = _export_local_policy_state(self._policy())
+                self._transaction_policy_optimizer = _to_cpu_tree(self._optimizer().state_dict())
+                self._transaction_encoder_optimizer = (
+                    None
+                    if self.encoder_optimizer is None
+                    else _to_cpu_tree(self.encoder_optimizer.state_dict())
+                )
+            finally:
+                if restore_weights:
+                    self._offload_parameters(offload_grad=True)
+        else:
+            self._transaction_policy_state = self.state_dict()
+            self._transaction_policy_optimizer = self.optimizer_state_dict()
+            self._transaction_encoder_optimizer = self.encoder_optimizer_state_dict()
         return {"actor/kl_transaction_started": 1.0}
 
     def finalize_policy_transaction(
@@ -322,26 +359,56 @@ class EmbodiedFSDPActor(Worker):
         budget = float(max_kl)
         accepted = observed <= max(0.0, budget)
         if not accepted:
-            _load_policy_state_dict(
-                self._policy(),
-                self._transaction_policy_state,
-                rank=int(self.rank),
+            restore_weights = bool(self.enable_offload and self.is_weight_offloaded)
+            restore_policy_optimizer = bool(self.enable_offload and self.is_optimizer_offloaded)
+            restore_encoder_optimizer = bool(
+                self.enable_offload and self.is_encoder_optimizer_offloaded
             )
-            if self._transaction_policy_optimizer is not None:
-                self._load_optimizer_state_dict(
-                    self._transaction_policy_optimizer,
-                )
-            if (
-                self.encoder_optimizer is not None
-                and self._transaction_encoder_optimizer is not None
-            ):
-                self._load_optimizer_state_dict(
-                    self._transaction_encoder_optimizer,
-                    optimizer=self.encoder_optimizer,
-                )
+            try:
+                self._load_parameters(onload_grad=False)
+                self._load_optimizer()
+                if self.encoder_optimizer is not None:
+                    self._load_optimizer(self.encoder_optimizer)
+                if self._transaction_uses_local_state:
+                    _load_local_policy_state(
+                        self._policy(),
+                        self._transaction_policy_state,
+                    )
+                else:
+                    _load_policy_state_dict(
+                        self._policy(),
+                        self._transaction_policy_state,
+                        rank=int(self.rank),
+                    )
+                if self._transaction_policy_optimizer is not None:
+                    if self._transaction_uses_local_state:
+                        self._optimizer().load_state_dict(self._transaction_policy_optimizer)
+                    else:
+                        self._load_optimizer_state_dict(
+                            self._transaction_policy_optimizer,
+                        )
+                if (
+                    self.encoder_optimizer is not None
+                    and self._transaction_encoder_optimizer is not None
+                ):
+                    if self._transaction_uses_local_state:
+                        self.encoder_optimizer.load_state_dict(self._transaction_encoder_optimizer)
+                    else:
+                        self._load_optimizer_state_dict(
+                            self._transaction_encoder_optimizer,
+                            optimizer=self.encoder_optimizer,
+                        )
+            finally:
+                if restore_policy_optimizer:
+                    self._offload_optimizer()
+                if restore_encoder_optimizer and self.encoder_optimizer is not None:
+                    self._offload_optimizer(self.encoder_optimizer)
+                if restore_weights:
+                    self._offload_parameters(offload_grad=True)
         self._transaction_policy_state = None
         self._transaction_policy_optimizer = None
         self._transaction_encoder_optimizer = None
+        self._transaction_uses_local_state = False
         return {
             "actor/kl_transaction_observed": observed,
             "actor/kl_transaction_budget": budget,
@@ -350,6 +417,19 @@ class EmbodiedFSDPActor(Worker):
         }
 
     def reencode_real_trajectories(
+        self,
+        batch: RealTrajectoryBatch,
+    ) -> RealTrajectoryBatch:
+        """Re-encode raw trajectories while the Actor parameters are resident."""
+
+        self._load_parameters(onload_grad=False)
+        try:
+            return self._reencode_real_trajectories_loaded(batch)
+        finally:
+            if self.enable_offload:
+                self._offload_parameters(offload_grad=True)
+
+    def _reencode_real_trajectories_loaded(
         self,
         batch: RealTrajectoryBatch,
     ) -> RealTrajectoryBatch:
@@ -529,6 +609,17 @@ class EmbodiedFSDPActor(Worker):
         return dict(self._advantage_metrics)
 
     def run_training(self) -> dict[str, float]:
+        """Run PPO under the Actor's exclusive training residency phase."""
+
+        self._load_for_training()
+        try:
+            metrics = self._run_training_loaded()
+        finally:
+            self._release_after_training()
+        metrics.update(self._memory_metrics("train_end"))
+        return metrics
+
+    def _run_training_loaded(self) -> dict[str, float]:
         """Run PPO with the same batch hierarchy used by RLinf embodied actors.
 
         Trajectory chunks are flattened and deterministically shuffled, split
@@ -976,33 +1067,52 @@ class EmbodiedFSDPActor(Worker):
         """Push the current policy state to RolloutGroup through patch sync."""
 
         resolved_version = self.global_step if version is None else int(version)
-        export_start = time.perf_counter()
-        state = self.state_dict()
-        export_s = float(time.perf_counter() - export_start)
         syncer_cfg = _as_plain_dict(self.train_cfg.get("syncer", {}))
         sync_dtype = dtype_from_precision(syncer_cfg.get("precision", "fp32"))
-        if sync_dtype is not torch.float32:
-            state = {
-                name: (value.to(dtype=sync_dtype) if value.is_floating_point() else value)
-                for name, value in state.items()
-            }
-        push_s = 0.0
-        if int(self.rank) == 0 and state:
-            push_start = time.perf_counter()
-            syncer = self._syncer()
-            syncer.push(str(key), state, int(resolved_version))
-            push_s = float(time.perf_counter() - push_start)
-            syncer_metrics = dict(getattr(syncer, "last_push_metrics", {}) or {})
+        export_start = time.perf_counter()
+        if _is_fsdp_module(self._policy()):
+            restore_offloaded = bool(self.enable_offload and self.is_weight_offloaded)
+            self._load_parameters(onload_grad=False)
+            try:
+                sync_metrics = self._push_fsdp_sharded_buckets(
+                    str(key),
+                    int(resolved_version),
+                    sync_dtype=sync_dtype,
+                    bucket_bytes=int(syncer_cfg.get("bucket_bytes", 128 * 1024 * 1024)),
+                )
+            finally:
+                if restore_offloaded:
+                    self._offload_parameters(offload_grad=True)
+            export_s = float(time.perf_counter() - export_start)
+            push_s = float(sync_metrics.pop("push_s", 0.0))
+            num_tensors = float(sync_metrics.pop("tensors", 0.0))
+            num_bytes = float(sync_metrics.pop("bytes", 0.0))
+            syncer_metrics = sync_metrics
         else:
-            syncer_metrics = {}
-        num_tensors = float(len(state))
-        num_bytes = float(
-            sum(
-                value.numel() * value.element_size()
-                for value in state.values()
-                if isinstance(value, torch.Tensor)
+            state = self.state_dict()
+            export_s = float(time.perf_counter() - export_start)
+            if sync_dtype is not torch.float32:
+                state = {
+                    name: (value.to(dtype=sync_dtype) if value.is_floating_point() else value)
+                    for name, value in state.items()
+                }
+            push_s = 0.0
+            if int(self.rank) == 0 and state:
+                push_start = time.perf_counter()
+                syncer = self._syncer()
+                syncer.push(str(key), state, int(resolved_version))
+                push_s = float(time.perf_counter() - push_start)
+                syncer_metrics = dict(getattr(syncer, "last_push_metrics", {}) or {})
+            else:
+                syncer_metrics = {}
+            num_tensors = float(len(state))
+            num_bytes = float(
+                sum(
+                    value.numel() * value.element_size()
+                    for value in state.values()
+                    if isinstance(value, torch.Tensor)
+                )
             )
-        )
         metrics = {
             f"sync/{key}_version": float(resolved_version),
             f"sync/{key}_export_s": export_s,
@@ -1011,13 +1121,108 @@ class EmbodiedFSDPActor(Worker):
             f"sync/{key}_bytes": num_bytes,
         }
         metrics.update(syncer_metrics)
+        metrics.update(self._memory_metrics("sync_end"))
         return metrics
+
+    def _push_fsdp_sharded_buckets(
+        self,
+        key: str,
+        version: int,
+        *,
+        sync_dtype: torch.dtype,
+        bucket_bytes: int,
+    ) -> dict[str, float]:
+        """Gather and publish one FSDP parameter bucket at a time."""
+
+        if bucket_bytes <= 0:
+            raise ValueError("syncer.bucket_bytes must be positive")
+        state = _export_policy_sharded_state_dict(self._policy())
+        bucket: dict[str, torch.Tensor] = {}
+        bucket_size = 0
+        bucket_index = 0
+        tensor_count = 0
+        byte_count = 0
+        push_s = 0.0
+        syncer = self._syncer() if int(self.rank) == 0 else None
+
+        def flush() -> None:
+            nonlocal bucket, bucket_size, bucket_index, push_s
+            if not bucket:
+                return
+            if syncer is not None:
+                start = time.perf_counter()
+                syncer.push_bucket(
+                    key,
+                    bucket,
+                    version=int(version),
+                    index=int(bucket_index),
+                )
+                push_s += time.perf_counter() - start
+            bucket = {}
+            bucket_size = 0
+            bucket_index += 1
+
+        for name, value in state.items():
+            materialized = _materialize_sharded_state_value(
+                value,
+                rank=int(self.rank),
+                device=self.torch_device,
+            )
+            if materialized is None:
+                continue
+            if materialized.is_floating_point() and sync_dtype is not torch.float32:
+                materialized = materialized.to(dtype=sync_dtype)
+            size = int(materialized.numel()) * int(materialized.element_size())
+            if bucket and bucket_size + size > bucket_bytes:
+                flush()
+            bucket[str(name)] = materialized
+            bucket_size += size
+            tensor_count += 1
+            byte_count += size
+        flush()
+        if syncer is not None:
+            start = time.perf_counter()
+            syncer.commit(
+                key,
+                version=int(version),
+                num_buckets=int(bucket_index),
+            )
+            push_s += time.perf_counter() - start
+        return {
+            "push_s": float(push_s),
+            "tensors": float(tensor_count),
+            "bytes": float(byte_count),
+            "sync/policy_bucket_count": float(bucket_index),
+            "sync/policy_sharded_export": 1.0,
+        }
 
     def state_dict(self) -> dict[str, torch.Tensor]:
         """Return a detached CPU copy of the policy state."""
 
-        state = _export_policy_state_dict(self._policy())
-        return {name: value.detach().cpu().clone() for name, value in state.items()}
+        restore_offloaded = bool(self.enable_offload and self.is_weight_offloaded)
+        self._load_parameters(onload_grad=False)
+        try:
+            state = _export_policy_state_dict(self._policy())
+            return {name: value.detach().cpu().clone() for name, value in state.items()}
+        finally:
+            if restore_offloaded:
+                self._offload_parameters(offload_grad=True)
+
+    def release_synced_model(
+        self,
+        key: str = "policy",
+        version: int | None = None,
+    ) -> dict[str, float]:
+        """Release object-store buckets after RolloutGroup acknowledged them."""
+
+        resolved_version = self.global_step if version is None else int(version)
+        released = False
+        if int(self.rank) == 0:
+            released = self._syncer().release(
+                str(key),
+                version=int(resolved_version),
+            )
+        return {f"sync/{key}_buckets_released": float(released)}
 
     def rng_state_dict(self) -> dict[str, Any]:
         """Return this actor rank's Python, NumPy, torch, and CUDA RNG state."""
@@ -1048,18 +1253,32 @@ class EmbodiedFSDPActor(Worker):
         self,
         optimizer: torch.optim.Optimizer,
     ) -> dict[str, Any]:
-        policy = self._policy()
-        if _is_fsdp_module(policy):
-            from torch.distributed.fsdp import FullyShardedDataParallel
+        restore_weights = bool(self.enable_offload and self.is_weight_offloaded)
+        is_encoder = optimizer is self.encoder_optimizer
+        restore_optimizer = bool(
+            self.enable_offload
+            and (self.is_encoder_optimizer_offloaded if is_encoder else self.is_optimizer_offloaded)
+        )
+        try:
+            self._load_parameters(onload_grad=False)
+            self._load_optimizer(optimizer)
+            policy = self._policy()
+            if _is_fsdp_module(policy):
+                from torch.distributed.fsdp import FullyShardedDataParallel
 
-            state = FullyShardedDataParallel.full_optim_state_dict(
-                policy,
-                optimizer,
-                rank0_only=True,
-            )
-        else:
-            state = optimizer.state_dict()
-        return _to_cpu_tree(state)
+                state = FullyShardedDataParallel.full_optim_state_dict(
+                    policy,
+                    optimizer,
+                    rank0_only=True,
+                )
+            else:
+                state = optimizer.state_dict()
+            return _to_cpu_tree(state)
+        finally:
+            if restore_optimizer:
+                self._offload_optimizer(optimizer)
+            if restore_weights:
+                self._offload_parameters(offload_grad=True)
 
     def _load_optimizer_state_dict(
         self,
@@ -1183,6 +1402,131 @@ class EmbodiedFSDPActor(Worker):
             return float(_to_float(norm))
         return _grad_norm(params)
 
+    def _load_parameters(self, *, onload_grad: bool) -> None:
+        if not self.enable_offload or not self.is_weight_offloaded:
+            if self.memory_phase == "uninitialized":
+                self.memory_phase = "parameters_loaded"
+            return
+        if self.fsdp_manager is None:
+            raise RuntimeError("Actor offload requires an FSDPModelManager")
+        # Clear first so an OOM during a partial transfer can be cleaned by the
+        # same offload path used after a successful phase.
+        self.is_weight_offloaded = False
+        self.memory_phase = "parameters_loaded"
+        try:
+            self.fsdp_manager.onload_param_and_grad(
+                self._policy(),
+                self.torch_device,
+                onload_grad=bool(onload_grad),
+            )
+        except Exception:
+            self._offload_parameters(offload_grad=True)
+            raise
+
+    def _offload_parameters(self, *, offload_grad: bool) -> None:
+        if not self.enable_offload or self.is_weight_offloaded:
+            return
+        if self.fsdp_manager is None:
+            raise RuntimeError("Actor offload requires an FSDPModelManager")
+        self.fsdp_manager.offload_param_and_grad(
+            self._policy(),
+            offload_grad=bool(offload_grad),
+        )
+        self.is_weight_offloaded = True
+        self.memory_phase = "offloaded"
+
+    def _load_optimizer(
+        self,
+        optimizer: torch.optim.Optimizer | None = None,
+    ) -> None:
+        resolved = self._optimizer() if optimizer is None else optimizer
+        offloaded = (
+            self.is_encoder_optimizer_offloaded
+            if resolved is self.encoder_optimizer
+            else self.is_optimizer_offloaded
+        )
+        if not self.enable_offload or not offloaded:
+            return
+        if self.fsdp_manager is None:
+            raise RuntimeError("Actor offload requires an FSDPModelManager")
+        if resolved is self.encoder_optimizer:
+            self.is_encoder_optimizer_offloaded = False
+        else:
+            self.is_optimizer_offloaded = False
+        try:
+            self.fsdp_manager.onload_optimizer(
+                resolved,
+                self.torch_device,
+            )
+        except Exception:
+            self._offload_optimizer(resolved)
+            raise
+
+    def _offload_optimizer(
+        self,
+        optimizer: torch.optim.Optimizer | None = None,
+    ) -> None:
+        if not self.enable_offload:
+            return
+        resolved = self._optimizer() if optimizer is None else optimizer
+        already_offloaded = (
+            self.is_encoder_optimizer_offloaded
+            if resolved is self.encoder_optimizer
+            else self.is_optimizer_offloaded
+        )
+        if already_offloaded:
+            return
+        if self.fsdp_manager is None:
+            raise RuntimeError("Actor offload requires an FSDPModelManager")
+        self.fsdp_manager.offload_optimizer(resolved)
+        if resolved is self.encoder_optimizer:
+            self.is_encoder_optimizer_offloaded = True
+        else:
+            self.is_optimizer_offloaded = True
+
+    def _load_for_training(self) -> None:
+        try:
+            self._load_parameters(onload_grad=True)
+            self._load_optimizer()
+            if self.encoder_optimizer is not None:
+                self._load_optimizer(self.encoder_optimizer)
+            self.memory_phase = "training_loaded"
+        except Exception:
+            # Phase acquisition is transactional: an optimizer onload can OOM
+            # after parameters are already resident, so release every resource
+            # acquired so far before propagating the original failure.
+            self._offload_optimizer()
+            if self.encoder_optimizer is not None:
+                self._offload_optimizer(self.encoder_optimizer)
+            self._offload_parameters(offload_grad=True)
+            raise
+
+    def _release_after_training(self) -> None:
+        optimizer = self._optimizer()
+        optimizer.zero_grad(set_to_none=True)
+        self._offload_optimizer()
+        if self.encoder_optimizer is not None:
+            self.encoder_optimizer.zero_grad(set_to_none=True)
+            self._offload_optimizer(self.encoder_optimizer)
+        self._offload_parameters(offload_grad=True)
+
+    def _memory_metrics(self, phase: str) -> dict[str, float]:
+        metrics = {
+            f"actor/memory/{phase}_weights_offloaded": float(self.is_weight_offloaded),
+            f"actor/memory/{phase}_optimizer_offloaded": float(self.is_optimizer_offloaded),
+            f"actor/memory/{phase}_encoder_optimizer_offloaded": float(
+                self.encoder_optimizer is None or self.is_encoder_optimizer_offloaded
+            ),
+        }
+        if self.torch_device.type == "cuda" and torch.cuda.is_available():
+            metrics[f"actor/memory/{phase}_allocated_bytes"] = float(
+                torch.cuda.memory_allocated(self.torch_device)
+            )
+            metrics[f"actor/memory/{phase}_reserved_bytes"] = float(
+                torch.cuda.memory_reserved(self.torch_device)
+            )
+        return metrics
+
     def _policy(self) -> nn.Module:
         if self.policy is None:
             raise RuntimeError("EmbodiedFSDPActor.init() has not been called")
@@ -1203,11 +1547,14 @@ class EmbodiedFSDPActor(Worker):
             raise RuntimeError("compute_advantages_and_returns() must be called first")
         return self.advantages
 
-    def _syncer(self) -> PatchWeightSyncer:
+    def _syncer(self) -> BucketWeightSyncer:
         if self.syncer is None:
             syncer_cfg = _as_plain_dict(self.train_cfg.get("syncer", {}))
-            store_name = str(syncer_cfg.get("store_name", _DEFAULT_PATCH_STORE))
-            self.syncer = PatchWeightSyncer(store_name=store_name)
+            store_name = str(syncer_cfg.get("store_name", _DEFAULT_WEIGHT_STORE))
+            self.syncer = BucketWeightSyncer(
+                store_name=store_name,
+                bucket_bytes=int(syncer_cfg.get("bucket_bytes", 128 * 1024 * 1024)),
+            )
         return self.syncer
 
 
@@ -1458,6 +1805,100 @@ def _export_policy_state_dict(policy: nn.Module) -> dict[str, torch.Tensor]:
     else:
         state = policy.state_dict()
     return {str(name): torch.as_tensor(value) for name, value in dict(state).items()}
+
+
+def _export_policy_sharded_state_dict(policy: nn.Module) -> dict[str, Any]:
+    if not _is_fsdp_module(policy):
+        raise TypeError("sharded policy export requires an FSDP1 module")
+    from torch.distributed.fsdp import (
+        FullyShardedDataParallel,
+        ShardedStateDictConfig,
+        StateDictType,
+    )
+
+    cfg = ShardedStateDictConfig(offload_to_cpu=False)
+    with FullyShardedDataParallel.state_dict_type(
+        policy,
+        StateDictType.SHARDED_STATE_DICT,
+        cfg,
+    ):
+        return dict(policy.state_dict())
+
+
+def _materialize_sharded_state_value(
+    value: Any,
+    *,
+    rank: int,
+    device: torch.device,
+) -> torch.Tensor | None:
+    try:
+        from torch.distributed._shard.sharded_tensor import ShardedTensor
+    except ImportError:  # pragma: no cover - torch version dependent
+        ShardedTensor = ()  # type: ignore[assignment,misc]
+    if isinstance(value, ShardedTensor):
+        output = (
+            torch.empty(tuple(value.size()), dtype=value.dtype, device=device)
+            if int(rank) == 0
+            else None
+        )
+        value.gather(dst=0, out=output, dtype=value.dtype)
+        return None if output is None else output.detach().cpu()
+    try:
+        from torch.distributed.tensor import DTensor
+    except ImportError:  # pragma: no cover - torch version dependent
+        DTensor = ()  # type: ignore[assignment,misc]
+    if isinstance(value, DTensor):
+        full = value.full_tensor()
+        return full.detach().cpu() if int(rank) == 0 else None
+    if isinstance(value, torch.Tensor):
+        return value.detach().cpu().clone() if int(rank) == 0 else None
+    tensor = torch.as_tensor(value)
+    return tensor.detach().cpu().clone() if int(rank) == 0 else None
+
+
+def _export_local_policy_state(policy: nn.Module) -> dict[str, torch.Tensor]:
+    """Snapshot only this Actor rank's FSDP shards for transactional rollback."""
+
+    state: dict[str, torch.Tensor] = {}
+    for name, parameter in policy.named_parameters():
+        state[f"parameter::{name}"] = parameter.detach().cpu().clone()
+    for name, buffer in policy.named_buffers():
+        state[f"buffer::{name}"] = buffer.detach().cpu().clone()
+    return state
+
+
+@torch.no_grad()
+def _load_local_policy_state(
+    policy: nn.Module,
+    state: dict[str, torch.Tensor],
+) -> None:
+    parameters = dict(policy.named_parameters())
+    buffers = dict(policy.named_buffers())
+    expected = {
+        *(f"parameter::{name}" for name in parameters),
+        *(f"buffer::{name}" for name in buffers),
+    }
+    if set(state) != expected:
+        missing = sorted(expected - set(state))
+        unexpected = sorted(set(state) - expected)
+        raise RuntimeError(
+            "local FSDP transaction state mismatch: "
+            f"missing={missing[:5]} unexpected={unexpected[:5]}"
+        )
+    for name, parameter in parameters.items():
+        parameter.copy_(
+            state[f"parameter::{name}"].to(
+                device=parameter.device,
+                dtype=parameter.dtype,
+            )
+        )
+    for name, buffer in buffers.items():
+        buffer.copy_(
+            state[f"buffer::{name}"].to(
+                device=buffer.device,
+                dtype=buffer.dtype,
+            )
+        )
 
 
 def _load_policy_state_dict(

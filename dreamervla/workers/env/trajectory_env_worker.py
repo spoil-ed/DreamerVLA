@@ -3686,6 +3686,46 @@ class WMEnvWorker(BaseTrajectoryEnvWorker):
             replay_write_enabled=replay_write_enabled,
         )
 
+    def init(self) -> None:
+        """Build imagined envs and release frozen models until interaction."""
+
+        super().init()
+        if bool(self.env_cfg.get("enable_offload", False)):
+            self._set_model_residency(load=False)
+
+    def interact(
+        self,
+        env_channel_name: str,
+        rollout_channel_name: str,
+        actor_channel_name: str,
+    ) -> dict[str, float]:
+        """Lease WM GPU residency only for the imagined environment phase."""
+
+        enabled = bool(self.env_cfg.get("enable_offload", False))
+        try:
+            if enabled:
+                self._set_model_residency(load=True)
+            metrics = super().interact(
+                env_channel_name,
+                rollout_channel_name,
+                actor_channel_name,
+            )
+        finally:
+            if enabled:
+                self._set_model_residency(load=False)
+        metrics["env/wm_env/models_offloaded"] = float(enabled)
+        return metrics
+
+    def _set_model_residency(self, *, load: bool) -> None:
+        method_name = "reload_model" if load else "offload_model"
+        for env in self.envs:
+            method = getattr(env, method_name, None)
+            if not callable(method):
+                raise TypeError(
+                    f"WMEnvWorker enable_offload requires {type(env).__name__}.{method_name}()"
+                )
+            method()
+
 
 def _same_scalar_kind(value: Any, replacement: bool | float) -> Any:
     if isinstance(value, np.ndarray):

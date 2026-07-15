@@ -20,6 +20,23 @@ class _TinyClassifier(torch.nn.Module):
         return {"score": latent.sum(dim=-1, keepdim=True)}
 
 
+def test_frozen_world_model_env_supports_phase_offload() -> None:
+    env = LatentWorldModelEnv(
+        _TinyWM(),
+        _TinyClassifier(),
+        latent_dim=2,
+        action_dim=2,
+        device="cpu",
+    )
+
+    env.offload_model()
+    assert env._models_offloaded is True
+    env.reload_model()
+    assert env._models_offloaded is False
+    obs, _ = env.reset()
+    assert obs["latent"].shape == (2,)
+
+
 class _ChunkWM(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()

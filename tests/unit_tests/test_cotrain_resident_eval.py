@@ -27,6 +27,9 @@ class _Actor:
         self.sync_versions.append(int(version))
         return _Ready([{"sync/policy_version": float(version)}])
 
+    def release_synced_model(self, _key: str, version: int):
+        return _Ready([{"sync/policy_buckets_released": float(version >= 0)}])
+
 
 class _Rollout:
     workers = (object(), object())
@@ -35,7 +38,12 @@ class _Rollout:
         self.pull_calls = 0
         self.generate_calls = 0
 
-    def sync_model_from_actor(self, _key: str):
+    def sync_model_from_actor(
+        self,
+        _key: str,
+        expected_version: int | None = None,
+    ):
+        del expected_version
         self.pull_calls += 1
         return _Ready([{"sync/rollout_policy_updated": 1.0}])
 

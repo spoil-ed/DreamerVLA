@@ -23,6 +23,10 @@ class _WeightStore:
     def get(self, key: str) -> tuple[int, Any] | None:
         return self.items.get(str(key))
 
+    def delete(self, keys: list[str]) -> None:
+        for key in keys:
+            self.items.pop(str(key), None)
+
 
 class ObjectStoreWeightSyncer(WeightSyncer):
     """Store CPU state_dicts in Ray's object store with monotonic versions."""
@@ -32,10 +36,7 @@ class ObjectStoreWeightSyncer(WeightSyncer):
         self.store = self._get_or_create_store(self.store_name)
 
     def push(self, key: str, state_dict: dict[str, Any], version: int) -> None:
-        cpu_state = {
-            name: _to_cpu_tensor(value)
-            for name, value in state_dict.items()
-        }
+        cpu_state = {name: _to_cpu_tensor(value) for name, value in state_dict.items()}
         ray.get(self.store.set.remote(str(key), int(version), cpu_state))
 
     def pull(self, key: str, model: torch.nn.Module, local_version: int) -> int | None:

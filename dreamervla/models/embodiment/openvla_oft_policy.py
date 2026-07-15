@@ -136,9 +136,7 @@ def _validate_loaded_hidden_token_geometry(
     token_count = patches * num_images
     mismatches: list[str] = []
     if expected_token_count is not None and token_count != int(expected_token_count):
-        mismatches.append(
-            f"token_count expected={int(expected_token_count)} loaded={token_count}"
-        )
+        mismatches.append(f"token_count expected={int(expected_token_count)} loaded={token_count}")
     if expected_token_dim is not None and token_dim != int(expected_token_dim):
         mismatches.append(f"token_dim expected={int(expected_token_dim)} loaded={token_dim}")
     if expected_num_images is not None and num_images != int(expected_num_images):
@@ -436,6 +434,34 @@ class OpenVLAOFTPolicy(nn.Module):
                 "loaded OpenVLA policy exposes no vision backbone/projector parameters"
             )
         return tuple(names)
+
+    def fsdp_wrap_module_classes(self) -> tuple[type[nn.Module], ...]:
+        """Return checkpoint-native block classes used for nested FSDP wrapping."""
+
+        declared_names: set[str] = set()
+        for module in self.modules():
+            declared_names.update(
+                str(name) for name in (getattr(module, "_no_split_modules", None) or ())
+            )
+        classes: list[type[nn.Module]] = []
+        for module in self.modules():
+            module_type = type(module)
+            name = module_type.__name__
+            if name in declared_names and module_type not in classes:
+                classes.append(module_type)
+        if not classes:
+            raise RuntimeError(
+                "loaded OpenVLA checkpoint exposes no _no_split_modules block classes"
+            )
+        return tuple(classes)
+
+    def gradient_checkpointing_enable(self) -> None:
+        """Enable native checkpointing on the language/vision backbones."""
+
+        enable = getattr(self.vla, "gradient_checkpointing_enable", None)
+        if not callable(enable):
+            raise RuntimeError("loaded OpenVLA checkpoint does not expose gradient checkpointing")
+        enable()
 
     def encode_raw(
         self,

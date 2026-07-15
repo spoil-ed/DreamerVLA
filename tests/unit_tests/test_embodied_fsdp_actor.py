@@ -10,7 +10,7 @@ import torch
 from torch import nn
 
 import dreamervla.workers.actor.embodied_fsdp_actor as embodied_fsdp_actor
-from dreamervla.hybrid_engines.weight_syncer import PatchWeightSyncer
+from dreamervla.hybrid_engines.weight_syncer import BucketWeightSyncer
 from dreamervla.scheduler.cluster import Cluster
 from dreamervla.workers.actor._test_models import TinyLumosPolicy
 from dreamervla.workers.actor.embodied_fsdp_actor import EmbodiedFSDPActor
@@ -706,7 +706,7 @@ def test_sync_model_to_rollout_pushes_patch_and_returns_version_metric() -> None
         metrics = actor.sync_model_to_rollout()
 
         target = TinyLumosPolicy(hidden_dim=4, action_dim=3, chunk_size=2)
-        pulled = PatchWeightSyncer(store_name=store_name).pull(
+        pulled = BucketWeightSyncer(store_name=store_name).pull(
             "policy",
             target,
             local_version=0,
@@ -772,6 +772,146 @@ def test_sync_model_to_rollout_casts_snapshot_to_configured_bfloat16() -> None:
     expected_bytes = sum(value.numel() * value.element_size() for value in pushed.values())
     assert floating_dtypes == {torch.bfloat16}
     assert metrics["sync/policy_bytes"] == float(expected_bytes)
+
+
+def test_fsdp_online_sync_streams_sharded_buckets_without_full_state(monkeypatch) -> None:
+    cfg = _actor_cfg()
+    cfg["train_cfg"]["syncer"] = {"bucket_bytes": 16, "precision": "bf16"}
+    actor = EmbodiedFSDPActor(**cfg)
+    actor.init()
+    published: list[tuple[int, dict[str, torch.Tensor]]] = []
+    commits: list[tuple[int, int]] = []
+
+    class _FakeBucketSyncer:
+        def push_bucket(self, key, bucket, *, version, index):
+            del key
+            published.append((int(index), dict(bucket)))
+
+        def commit(self, key, *, version, num_buckets):
+            del key
+            commits.append((int(version), int(num_buckets)))
+
+    actor.syncer = _FakeBucketSyncer()  # type: ignore[assignment]
+    monkeypatch.setattr(embodied_fsdp_actor, "_is_fsdp_module", lambda _model: True)
+    monkeypatch.setattr(
+        embodied_fsdp_actor,
+        "_export_policy_sharded_state_dict",
+        lambda _model: {
+            "a": torch.ones(4, dtype=torch.float32),
+            "b": torch.ones(4, dtype=torch.float32),
+        },
+    )
+    actor.state_dict = lambda: (_ for _ in ()).throw(  # type: ignore[method-assign]
+        AssertionError("online FSDP sync must not call full state_dict")
+    )
+
+    metrics = actor.sync_model_to_rollout("policy", version=5)
+
+    assert commits == [(5, 1)]
+    assert len(published) == 1
+    assert set(published[0][1]) == {"a", "b"}
+    assert all(value.dtype is torch.bfloat16 for value in published[0][1].values())
+    assert metrics["sync/policy_sharded_export"] == 1.0
+
+
+def test_actor_phase_lifecycle_offloads_after_init_sync_and_training(monkeypatch) -> None:
+    cfg = _actor_cfg()
+    cfg["train_cfg"]["enable_offload"] = True
+    actor = EmbodiedFSDPActor(**cfg)
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        "dreamervla.workers.actor.embodied_fsdp_actor.FSDPModelManager.offload_param_and_grad",
+        lambda self, model, offload_grad: calls.append("offload_params"),
+    )
+    monkeypatch.setattr(
+        "dreamervla.workers.actor.embodied_fsdp_actor.FSDPModelManager.onload_param_and_grad",
+        lambda self, model, device, onload_grad: calls.append("onload_params"),
+    )
+    monkeypatch.setattr(
+        "dreamervla.workers.actor.embodied_fsdp_actor.FSDPModelManager.offload_optimizer",
+        lambda self, optimizer: calls.append("offload_optimizer"),
+    )
+    monkeypatch.setattr(
+        "dreamervla.workers.actor.embodied_fsdp_actor.FSDPModelManager.onload_optimizer",
+        lambda self, optimizer, device: calls.append("onload_optimizer"),
+    )
+
+    actor.init()
+    assert actor.memory_phase == "offloaded"
+    actor.sync_model_to_rollout("policy", version=1)
+    assert actor.memory_phase == "offloaded"
+    actor.load_trajectory_shards([_shard(0.0, 1.0)])
+    actor.compute_advantages_and_returns()
+    actor.run_training()
+    assert actor.memory_phase == "offloaded"
+    assert "onload_params" in calls
+    assert "onload_optimizer" in calls
+    assert calls.count("offload_params") >= 3
+
+
+def test_actor_partial_onload_failure_restores_offloaded_phase(monkeypatch) -> None:
+    cfg = _actor_cfg()
+    cfg["train_cfg"]["enable_offload"] = True
+    actor = EmbodiedFSDPActor(**cfg)
+    actor.init()
+    offloads: list[bool] = []
+
+    def fail_onload(*_args, **_kwargs) -> None:
+        raise torch.OutOfMemoryError("synthetic actor onload OOM")
+
+    assert actor.fsdp_manager is not None
+    monkeypatch.setattr(
+        "dreamervla.workers.actor.embodied_fsdp_actor.FSDPModelManager.onload_param_and_grad",
+        lambda self, model, device, *, onload_grad: fail_onload(),
+    )
+    monkeypatch.setattr(
+        "dreamervla.workers.actor.embodied_fsdp_actor.FSDPModelManager.offload_param_and_grad",
+        lambda self, model, *, offload_grad: offloads.append(bool(offload_grad)),
+    )
+
+    with pytest.raises(torch.OutOfMemoryError, match="synthetic actor onload OOM"):
+        actor._load_parameters(onload_grad=False)
+
+    assert offloads == [True]
+    assert actor.is_weight_offloaded is True
+    assert actor.memory_phase == "offloaded"
+
+
+def test_actor_partial_training_onload_failure_releases_all_residency(monkeypatch) -> None:
+    cfg = _actor_cfg()
+    cfg["train_cfg"]["enable_offload"] = True
+    actor = EmbodiedFSDPActor(**cfg)
+    actor.init()
+    events: list[str] = []
+
+    monkeypatch.setattr(actor, "_load_parameters", lambda **_kwargs: events.append("params_load"))
+
+    def fail_optimizer_onload(_optimizer=None):
+        events.append("optimizer_load")
+        raise torch.OutOfMemoryError("optimizer onload failed")
+
+    monkeypatch.setattr(actor, "_load_optimizer", fail_optimizer_onload)
+    monkeypatch.setattr(
+        actor,
+        "_offload_optimizer",
+        lambda _optimizer=None: events.append("optimizer_offload"),
+    )
+    monkeypatch.setattr(
+        actor,
+        "_offload_parameters",
+        lambda **_kwargs: events.append("params_offload"),
+    )
+
+    with pytest.raises(torch.OutOfMemoryError, match="optimizer onload failed"):
+        actor._load_for_training()
+
+    assert events == [
+        "params_load",
+        "optimizer_load",
+        "optimizer_offload",
+        "params_offload",
+    ]
 
 
 def _filter_rewards_cfg() -> dict:

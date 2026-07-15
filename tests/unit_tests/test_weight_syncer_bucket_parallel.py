@@ -61,11 +61,17 @@ class _FakeStore:
     def _get(self, key: str) -> tuple[int, Any] | None:
         return self.items.get(str(key))
 
+    def _delete(self, keys: list[str]) -> None:
+        for key in keys:
+            self.items.pop(str(key), None)
+
     def __getattr__(self, name: str) -> _FakeMethod:
         if name == "set":
             return _FakeMethod(self._set)
         if name == "get":
             return _FakeMethod(self._get)
+        if name == "delete":
+            return _FakeMethod(self._delete)
         raise AttributeError(name)
 
 
@@ -129,7 +135,7 @@ def test_push_batches_bucket_set_into_one_ray_get(monkeypatch) -> None:
 
     merged: dict[str, torch.Tensor] = {}
     for i in range(num_buckets):
-        v, ref = store.items[f"policy::b{i}"]
+        v, ref = store.items[f"policy::v3::b{i}"]
         assert v == 3
         merged.update(ref.value)
     assert set(merged) == set(state)
@@ -140,8 +146,8 @@ def test_push_batches_bucket_set_into_one_ray_get(monkeypatch) -> None:
     # ``ray.get([...])`` call, not one round-trip per bucket. The meta ``set``
     # stays a separate scalar get submitted after the bucket batch.
     assert fake.batched_get_calls == 1
-    # total gets == 1 batched bucket get + 1 scalar meta get.
-    assert fake.get_calls == 2
+    # total gets == bucket batch + previous-meta read + committed-meta write.
+    assert fake.get_calls == 3
 
 
 def test_pull_batches_bucket_get_into_one_ray_get(monkeypatch) -> None:
@@ -176,3 +182,48 @@ def test_pull_batches_bucket_get_into_one_ray_get(monkeypatch) -> None:
     # total gets == meta get.remote (1) + meta _resolve (1) + batched bucket
     # get (1) + per-bucket _resolve unwraps (out of scope for Q11).
     assert fake.get_calls == 3 + num_buckets
+
+
+def test_streaming_bucket_version_is_hidden_until_commit(monkeypatch) -> None:
+    _install_fake_ray(monkeypatch)
+    store = _FakeStore()
+    syncer = _make_syncer(store)
+
+    syncer.push_bucket(
+        "policy",
+        {"p0": torch.ones(2)},
+        version=11,
+        index=0,
+    )
+    assert "policy::v11::b0" in store.items
+    assert "policy::meta" not in store.items
+
+    syncer.commit("policy", version=11, num_buckets=1)
+    assert store.items["policy::meta"][0] == 11
+
+
+def test_streaming_commit_reclaims_previous_version_buckets(monkeypatch) -> None:
+    _install_fake_ray(monkeypatch)
+    store = _FakeStore()
+    syncer = _make_syncer(store)
+
+    syncer.push_bucket("policy", {"p0": torch.ones(2)}, version=1, index=0)
+    syncer.commit("policy", version=1, num_buckets=1)
+    syncer.push_bucket("policy", {"p0": torch.zeros(2)}, version=2, index=0)
+    syncer.commit("policy", version=2, num_buckets=1)
+
+    assert "policy::v1::b0" not in store.items
+    assert "policy::v2::b0" in store.items
+
+
+def test_release_drops_acknowledged_snapshot(monkeypatch) -> None:
+    _install_fake_ray(monkeypatch)
+    store = _FakeStore()
+    syncer = _make_syncer(store)
+    syncer.push_bucket("policy", {"p0": torch.ones(2)}, version=9, index=0)
+    syncer.commit("policy", version=9, num_buckets=1)
+
+    assert syncer.release("policy", version=9) is True
+    assert "policy::meta" not in store.items
+    assert "policy::v9::b0" not in store.items
+    assert syncer.release("policy", version=9) is False

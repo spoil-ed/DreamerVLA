@@ -243,12 +243,16 @@ def test_cotrain_components_are_selected_from_worldmodel_and_classifier_groups()
         assert cfg.ray_components.classifier.kwargs[key] == cfg.classifier[key]
 
 
-def test_wmcls_cotrain_offloads_rollout_vla_only() -> None:
+def test_wmcls_cotrain_uses_rlinf_phase_offload_and_layered_fsdp() -> None:
     cfg = _compose(["experiment=openvla_libero"])
 
     assert cfg.rollout.train_cfg.enable_offload is True
+    assert cfg.actor.train_cfg.enable_offload is True
     assert cfg.actor.train_cfg.fsdp.cpu_offload is False
-    assert "wrap_policy" not in cfg.actor.train_cfg.fsdp
+    assert cfg.actor.train_cfg.fsdp.activation_checkpointing is True
+    assert cfg.actor.train_cfg.fsdp.sharding_strategy == "full_shard"
+    assert cfg.actor.train_cfg.fsdp.limit_all_gathers is True
+    assert cfg.actor.train_cfg.fsdp.require_layer_wrap is True
 
 
 def test_openvla_onetraj_cotrain_aligns_world_model_full_dataset_recipe() -> None:

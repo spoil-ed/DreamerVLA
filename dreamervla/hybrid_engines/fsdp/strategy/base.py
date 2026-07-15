@@ -8,6 +8,7 @@ strategy. Manual, config-driven (no VRAM inference). Single-node verifiable: a
 
 from __future__ import annotations
 
+import gc
 import os
 from abc import ABC, abstractmethod
 
@@ -49,6 +50,11 @@ class FSDPStrategyBase(ABC):
         backend: str | None = None,
         use_orig_params: bool = False,
         sync_module_states: bool = False,
+        sharding_strategy: str = "full_shard",
+        forward_prefetch: bool = False,
+        backward_prefetch: str | None = "backward_pre",
+        limit_all_gathers: bool = True,
+        require_layer_wrap: bool = False,
     ) -> None:
         self.precision = precision
         self.cpu_offload = bool(cpu_offload)
@@ -57,6 +63,13 @@ class FSDPStrategyBase(ABC):
         self.backend = backend
         self.use_orig_params = bool(use_orig_params)
         self.sync_module_states = bool(sync_module_states)
+        self.sharding_strategy = str(sharding_strategy).strip().lower()
+        self.forward_prefetch = bool(forward_prefetch)
+        self.backward_prefetch = (
+            None if backward_prefetch is None else str(backward_prefetch).strip().lower()
+        )
+        self.limit_all_gathers = bool(limit_all_gathers)
+        self.require_layer_wrap = bool(require_layer_wrap)
         dtype_from_precision(precision)  # validate eagerly
 
     @property
@@ -89,9 +102,78 @@ class FSDPStrategyBase(ABC):
         """Apply checkpointing + (multi-rank) sharding; return the model."""
 
     def _apply_checkpointing(self, model: torch.nn.Module) -> torch.nn.Module:
-        if self.activation_checkpointing and hasattr(model, "gradient_checkpointing_enable"):
-            model.gradient_checkpointing_enable()
+        if self.activation_checkpointing:
+            enable = getattr(model, "gradient_checkpointing_enable", None)
+            if not callable(enable):
+                raise TypeError(
+                    "activation_checkpointing requires the policy to expose "
+                    "gradient_checkpointing_enable()"
+                )
+            enable()
         return model
+
+    @torch.no_grad()
+    def offload_param_and_grad(
+        self,
+        model: torch.nn.Module,
+        offload_grad: bool,
+    ) -> None:
+        model.to("cpu")
+        if offload_grad:
+            for parameter in model.parameters():
+                if parameter.grad is not None:
+                    parameter.grad = parameter.grad.to("cpu", non_blocking=True)
+        self.clear_memory()
+
+    @torch.no_grad()
+    def onload_param_and_grad(
+        self,
+        model: torch.nn.Module,
+        device: torch.device,
+        onload_grad: bool,
+    ) -> None:
+        model.to(device)
+        if onload_grad:
+            for parameter in model.parameters():
+                if parameter.grad is not None:
+                    parameter.grad = parameter.grad.to(device, non_blocking=True)
+        self.clear_memory()
+
+    @torch.no_grad()
+    def offload_optimizer(self, optimizer: torch.optim.Optimizer) -> None:
+        self._move_optimizer_state(optimizer, torch.device("cpu"))
+        self.clear_memory()
+
+    @torch.no_grad()
+    def onload_optimizer(
+        self,
+        optimizer: torch.optim.Optimizer,
+        device: torch.device,
+    ) -> None:
+        self._move_optimizer_state(optimizer, device)
+        self.clear_memory()
+
+    @staticmethod
+    def _move_optimizer_state(
+        optimizer: torch.optim.Optimizer,
+        device: torch.device,
+    ) -> None:
+        for state in optimizer.state.values():
+            for key, value in tuple(state.items()):
+                if isinstance(value, torch.Tensor):
+                    state[key] = value.to(device, non_blocking=True)
+
+    @staticmethod
+    def clear_memory() -> None:
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            try:
+                torch.cuda.ipc_collect()
+            except RuntimeError:
+                pass
 
     def ensure_process_group(self) -> bool:
         """Initialize torch.distributed for explicit multi-worker FSDP runs.

@@ -127,6 +127,9 @@ actor:
   init_ckpt: {}
   train_cfg:
     device: auto
+    # RLinf-style phase residency: Actor parameters/gradients and optimizer
+    # states live on CPU while RolloutGroup or WMEnvGroup owns the GPUs.
+    enable_offload: true
     lr: 5.0e-7
     # Counts are flattened trajectory-chunk samples, matching RLinf ActorGroup.
     # 1024 trajectories * (512 / 8) chunks = 65536 samples, hence four
@@ -136,16 +139,23 @@ actor:
     seed: ${seed}
     progress_every_s: 5.0
     syncer:
-      store_name: DreamerVLAActorRolloutPatchStore
+      store_name: DreamerVLAActorRolloutWeightStore
       precision: bf16
+      bucket_bytes: 134217728
     fsdp:
       strategy: fsdp
       precision: bf16
       cpu_offload: false
-      activation_checkpointing: false
+      activation_checkpointing: true
       enable_gradient_accumulation: false
       backend: nccl
       use_orig_params: true
+      sync_module_states: true
+      sharding_strategy: full_shard
+      forward_prefetch: false
+      backward_prefetch: backward_pre
+      limit_all_gathers: true
+      require_layer_wrap: true
     optimizers:
       policy: ${ray_actor_optimizer}
       encoder: ${ray_encoder_optimizer}
@@ -189,7 +199,9 @@ rollout:
     deterministic: false
     logprob_type: ${algorithm.logprob_type}
     syncer:
-      store_name: DreamerVLAActorRolloutPatchStore
+      store_name: DreamerVLAActorRolloutWeightStore
+      bucket_bytes: 134217728
+      wait_timeout_s: 900
 
 learner:
   init_ckpt:

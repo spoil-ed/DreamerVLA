@@ -84,3 +84,26 @@ def test_fsdp_model_manager_requires_rendezvous_env_for_multi_worker(monkeypatch
 
     with pytest.raises(RuntimeError, match="MASTER_ADDR"):
         manager.ensure_process_group()
+
+
+def test_manager_phase_offload_moves_parameters_and_optimizer_state() -> None:
+    from dreamervla.hybrid_engines.fsdp import FSDPModelManager
+
+    model = torch.nn.Linear(2, 2)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    model(torch.ones(1, 2)).sum().backward()
+    optimizer.step()
+    manager = FSDPModelManager(strategy="none")
+
+    manager.offload_param_and_grad(model, offload_grad=True)
+    manager.offload_optimizer(optimizer)
+    manager.onload_param_and_grad(model, torch.device("cpu"), onload_grad=True)
+    manager.onload_optimizer(optimizer, torch.device("cpu"))
+
+    assert all(parameter.device.type == "cpu" for parameter in model.parameters())
+    assert all(
+        value.device.type == "cpu"
+        for state in optimizer.state.values()
+        for value in state.values()
+        if isinstance(value, torch.Tensor)
+    )

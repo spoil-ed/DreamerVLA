@@ -151,6 +151,7 @@ class LatentWorldModelEnv:
         self._batch_size_max = 0
         self._score_samples: list[np.ndarray] = []
         self._chunk_fallback_warned = False
+        self._models_offloaded = False
         self.world_model.to(self.device).eval()
         self._stateful_chunk_history = hasattr(self.world_model, "num_hist")
         self._wm_latent_states: list[dict[str, torch.Tensor] | None] = [
@@ -184,6 +185,32 @@ class LatentWorldModelEnv:
 
     def set_success_threshold(self, threshold: float) -> None:
         self.success_threshold = float(threshold)
+
+    @torch.no_grad()
+    def offload_model(self) -> None:
+        """Move frozen WM/classifier parameters to CPU between imagine phases."""
+
+        if self._models_offloaded:
+            return
+        self.world_model.to("cpu")
+        if self.classifier is not None:
+            self.classifier.to("cpu")
+        self._models_offloaded = True
+        if self.device.type == "cuda" and torch.cuda.is_available():
+            torch.cuda.synchronize(self.device)
+            torch.cuda.empty_cache()
+
+    @torch.no_grad()
+    def reload_model(self) -> None:
+        """Restore frozen WM/classifier parameters for imagined interaction."""
+
+        if not self._models_offloaded:
+            return
+        # Clear first so a caller's finally block can clean a partial transfer.
+        self._models_offloaded = False
+        self.world_model.to(self.device).eval()
+        if self.classifier is not None:
+            self.classifier.to(self.device).eval()
 
     def reset(
         self,
@@ -994,12 +1021,17 @@ class LatentWorldModelEnv:
         return observations, rewards, terminations, truncations, infos
 
     def load_world_model_state(self, state_dict: dict[str, Any], version: int) -> None:
+        restore_offloaded = self._models_offloaded
         if state_dict:
             self.world_model.load_state_dict(state_dict, assign=True)
         self.world_model.to(self.device).eval()
         self.wm_version = int(version)
+        if restore_offloaded:
+            self._models_offloaded = False
+            self.offload_model()
 
     def load_classifier_state(self, state_dict: dict[str, Any], version: int) -> None:
+        restore_offloaded = self._models_offloaded
         if self.classifier is None:
             if state_dict:
                 raise RuntimeError("cannot load classifier state without a classifier module")
@@ -1007,6 +1039,9 @@ class LatentWorldModelEnv:
             self.classifier.load_state_dict(state_dict, assign=True)
             self.classifier.to(self.device).eval()
         self.classifier_version = int(version)
+        if restore_offloaded:
+            self._models_offloaded = False
+            self.offload_model()
 
     def make_transition(
         self,
