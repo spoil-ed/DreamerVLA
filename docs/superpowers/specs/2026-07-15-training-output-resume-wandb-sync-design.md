@@ -18,6 +18,8 @@ replay behavior remains untouched.
 - RNG state is persisted so the next epoch's shuffle, dropout, sampling, and random
   augmentation continue from the checkpoint boundary.
 - The design applies to the active world-model, classifier, and cotrain training routes.
+- `python -m dreamervla.train` runs through Hydra's native runtime so Hydra itself
+  writes `.hydra/config.yaml`, `.hydra/overrides.yaml`, and `.hydra/hydra.yaml`.
 - Existing canonical and legacy checkpoint paths remain readable. New artifacts use
   only the canonical layout.
 - Explicitly configured top-k checkpoints and Hugging Face exports have independent
@@ -34,13 +36,20 @@ Every route uses the same shallow run root:
 ├── checkpoints/
 ├── tensorboard/
 ├── wandb/
-├── logs/
-├── video/
-├── diagnostics/
 ├── .hydra/
-├── resolved_config.yaml
 └── run_manifest.json
 ```
+
+Hydra owns `.hydra/`; DreamerVLA does not recreate or duplicate those files.
+`.hydra/config.yaml` is the canonical saved application configuration. Existing
+diagnostic and evaluation consumers of the root-level `resolved_config.yaml` migrate
+to a shared loader for `.hydra/config.yaml`, including DreamerVLA resolver
+registration before resolution.
+
+`run_manifest.json` remains separate because it records runtime facts Hydra does not
+know: runner identity, Git revision, distributed topology, selected logger backends,
+and runtime-derived model summaries. It must not repeat the resolved configuration,
+artifact paths derivable from the run root, or setup-time step/epoch values.
 
 One invocation runs one route, so its `checkpoints/` contains only that route's
 artifacts:
@@ -64,9 +73,10 @@ the default mainline layout.
 
 ## Unified resume contract
 
-`BaseRunner` continues to own run-root discovery, canonical artifact paths, and lazy
-metric-logger construction. Resume must infer the checkpoint's owning run root before
-any artifact is written.
+Hydra owns initial run-directory creation and its configuration snapshots.
+`BaseRunner` owns resume run-root discovery, canonical training artifact paths,
+runtime-manifest creation, and lazy metric-logger construction. Resume must infer the
+checkpoint's owning run root before any DreamerVLA artifact is written.
 
 Each resumable checkpoint stores the state that exists for its route:
 
@@ -163,8 +173,8 @@ splits one local logical run into multiple online runs.
 
 - A fresh run creates the canonical directories once.
 - Resume reuses the checkpoint's owning run root and appends logs there.
-- `resolved_config.yaml` and `run_manifest.json` remain at the run root rather than
-  being copied into backend directories.
+- Hydra writes its three native snapshots under `.hydra/`. DreamerVLA writes only the
+  nonduplicated runtime metadata to `run_manifest.json`.
 - TensorBoard creates a new event file in the same directory and purges the invalid
   tail logically.
 - W&B creates a new offline segment under the same canonical W&B directory using the
@@ -190,6 +200,9 @@ Tests cover:
 
 - canonical shallow directory creation with no `wandb/wandb` and no duplicated
   TensorBoard config;
+- native Hydra creation of `.hydra/config.yaml`, `.hydra/overrides.yaml`, and
+  `.hydra/hydra.yaml`, with no root-level `resolved_config.yaml`;
+- diagnostic and evaluation config discovery through `.hydra/config.yaml`;
 - run-root reuse from canonical and legacy resume paths;
 - checkpoint round trips for WM, classifier, and cotrain model/optimizer/progress
   state, excluding replay-buffer assertions;
