@@ -1,12 +1,9 @@
-"""P0 parity: the Ray-actor learner must train identically to the in-process
-(single-machine) learner for the same components + batch.
+"""P0 parity: the Ray actor learner must match the direct update implementation
+for the same components and batch.
 
-The two cotrain *runners* (ray vs single-machine `WorldModelTrainingRunner`)
-have structurally different loops (async vs sync, offline warmup, different
-update cadence), so a full-loop aggregate `allclose` is neither achievable nor
-meaningful. The equivalence that actually matters — and that this guards — is
-that the Ray ``LearnerWorker`` update computes the *same training math* as the
-same learner run in-process. Tiny test models are zero-initialised, so the only
+The equivalence that matters — and that this guards — is that the Ray
+``LearnerWorker`` computes the same training math as the update called directly.
+Tiny test models are zero-initialised, so the only
 non-determinism is the sampled batch; we remove it by feeding both learners one
 captured fixed batch.
 """

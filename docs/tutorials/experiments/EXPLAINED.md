@@ -27,7 +27,7 @@ snake_case `task=` token with the CamelCase artifact directory.
 | Recipe | Scheme | What it builds |
 | --- | --- | --- |
 | `openvla_onetraj_libero` | discrete-token route | OpenVLA-OFT one-trajectory baseline |
-| `openvla_onetraj_libero` hidden-token WM | query_before | OFT projected vision-token WM (offline + online cotrain) |
+| `openvla_onetraj_libero` hidden-token WM | query_before | OFT projected vision-token WM offline warmup |
 | `openvla_onetraj_coldstart_libero` | cold-start | fresh rollout collection (+ warmup + cotrain) |
 
 ## Observation contract
