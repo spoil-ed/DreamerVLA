@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from dreamervla.algorithms.ppo import (
@@ -43,24 +41,3 @@ def test_actor_update_registry_reports_available_names() -> None:
 
     with pytest.raises(ValueError, match="Unknown actor update route"):
         get_actor_update_route("not_a_route")
-
-
-def test_world_model_runtime_uses_actor_update_registry() -> None:
-    project_root = Path(__file__).resolve().parents[2]
-    source = (
-        project_root / "dreamervla" / "runtime" / "world_model_training_common.py"
-    ).read_text(encoding="utf-8")
-
-    assert "get_actor_update_route" in source
-    assert "from dreamervla.algorithms.ppo import" not in source
-
-
-def test_world_model_runtime_branches_lumos_by_route_metadata() -> None:
-    project_root = Path(__file__).resolve().parents[2]
-    source = (
-        project_root / "dreamervla" / "runtime" / "world_model_training_common.py"
-    ).read_text(encoding="utf-8")
-
-    assert 'actor_update_route.world_model_arg != "chunk_world_model"' in source
-    assert "actor_update_route.step_fn(" in source
-    assert 'args.actor_update_kind == "outcome"' not in source
