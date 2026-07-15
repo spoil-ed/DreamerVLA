@@ -252,8 +252,8 @@ def test_ray_task_ids_expand_all_without_legacy_scheduler() -> None:
     from dreamervla.runtime.rollout_collection_ray import _resolve_ray_task_ids
 
     assert _resolve_ray_task_ids(
-        "all", num_tasks=3, suite="libero_goal"
-    ) == [0, 1, 2]
+        "all", num_tasks=None, suite="libero_goal"
+    ) == list(range(10))
     assert _resolve_ray_task_ids(
         [4, 1], num_tasks=None, suite="libero_goal"
     ) == [4, 1]
