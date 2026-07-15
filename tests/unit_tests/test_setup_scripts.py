@@ -103,7 +103,8 @@ def test_release_shell_entrypoints_are_self_contained() -> None:
 
     train_text = (root / "scripts/experiments/cotrain/train.sh").read_text(encoding="utf-8")
     eval_text = (root / "scripts/experiments/cotrain/eval.sh").read_text(encoding="utf-8")
-    assert "dreamervla.launchers.cotrain" in train_text
+    assert "dreamervla.launchers.train" in train_text
+    assert "dreamervla.launchers.cotrain" not in train_text
     assert "dreamervla.launchers.train" in eval_text
     assert "DVLA_ROOT" not in train_text
     assert "DVLA_DATA_ROOT" not in train_text
@@ -195,9 +196,9 @@ def test_setup_and_download_scripts_are_release_entrypoints() -> None:
     assert "hf download" not in download_text
 
     download_step_text = "\n".join(step.read_text(encoding="utf-8") for step in download_steps)
-    download_cfg_text = (
-        root / "configs" / "scripts" / "download" / "config.yaml"
-    ).read_text(encoding="utf-8")
+    download_cfg_text = (root / "configs" / "scripts" / "download" / "config.yaml").read_text(
+        encoding="utf-8"
+    )
     assert 'source "${SCRIPT_DIR}/_env.sh"' not in download_step_text
     assert 'DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"' in download_step_text
     assert "hf download" in download_step_text
@@ -362,9 +363,9 @@ def test_requirements_keep_runtime_dependency_set_curated() -> None:
 def test_install_contract_is_reproducible_without_patching_upstream() -> None:
     root = _project_root()
     requirements = (root / "requirements.txt").read_text(encoding="utf-8")
-    install_cfg = (
-        root / "configs" / "scripts" / "install" / "config.yaml"
-    ).read_text(encoding="utf-8")
+    install_cfg = (root / "configs" / "scripts" / "install" / "config.yaml").read_text(
+        encoding="utf-8"
+    )
     third_party_step = (root / "scripts" / "install" / "40_third_party.sh").read_text(
         encoding="utf-8"
     )
@@ -412,9 +413,9 @@ def test_libero_data_script_uses_only_hidden_token_mainline_and_filters_noops() 
     prepare = root / "scripts" / "preprocess" / "prepare_libero_data.sh"
     hidden_token = root / "scripts" / "preprocess" / "10_oft_hidden_token.sh"
     reward = root / "scripts" / "preprocess" / "00_hdf5_reward.sh"
-    preprocess_cfg = (root / "configs" / "scripts" / "preprocess" / "preprocess_suite.yaml").read_text(
-        encoding="utf-8"
-    )
+    preprocess_cfg = (
+        root / "configs" / "scripts" / "preprocess" / "preprocess_suite.yaml"
+    ).read_text(encoding="utf-8")
 
     assert prepare.is_file()
     process_text = process_all.read_text(encoding="utf-8")
@@ -450,9 +451,9 @@ def test_preprocess_steps_are_numbered_registered_and_individually_runnable() ->
     root = _project_root()
     preprocess_dir = root / "scripts" / "preprocess"
     registry = (root / "scripts" / "README.md").read_text(encoding="utf-8")
-    preprocess_cfg = (root / "configs" / "scripts" / "preprocess" / "preprocess_suite.yaml").read_text(
-        encoding="utf-8"
-    )
+    preprocess_cfg = (
+        root / "configs" / "scripts" / "preprocess" / "preprocess_suite.yaml"
+    ).read_text(encoding="utf-8")
 
     expected_steps = (
         "00_hdf5_reward.sh",
@@ -968,9 +969,9 @@ def test_top_level_preprocess_libero_wrapper_uses_repo_root_and_data_root() -> N
 
     assert wrapper.is_file()
     text = wrapper.read_text(encoding="utf-8")
-    cfg_text = (
-        root / "configs" / "scripts" / "preprocess" / "preprocess_libero.yaml"
-    ).read_text(encoding="utf-8")
+    cfg_text = (root / "configs" / "scripts" / "preprocess" / "preprocess_libero.yaml").read_text(
+        encoding="utf-8"
+    )
 
     assert 'export DVLA_ROOT="${DVLA_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd -P)}"' in text
     assert 'DVLA_DATA_ROOT="${DVLA_DATA_ROOT:-${DVLA_ROOT}/data}"' in text
@@ -1009,12 +1010,11 @@ def test_release_scripts_tree_is_curated() -> None:
         "classifier_training",
         "collect_rollouts",
         "cotrain",
-        "dreamer",
         "openvla_oft_official_eval",
         "single_trajectory_overfit",
         "world_model_training",
     ]
-    assert len(list(scripts.rglob("*.sh"))) == 33
+    assert len(list(scripts.rglob("*.sh"))) == 32
     gitignore = (root / ".gitignore").read_text(encoding="utf-8")
     assert "__pycache__/" in gitignore
     assert "*.pyc" in gitignore

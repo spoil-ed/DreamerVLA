@@ -119,24 +119,14 @@ bash scripts/experiments/cotrain/train.sh \
   --cls_ckpt /path/to/classifier.ckpt
 ```
 
-The dedicated Dreamer mainline entrypoint selects the same frozen-WM/CLS recipe
-without requiring a `--config` argument:
-
-- `experiments/dreamer/train.sh`
-
-```bash
-bash scripts/experiments/dreamer/train.sh \
-  --wm_ckpt /path/to/wm.ckpt \
-  --cls_ckpt /path/to/classifier.ckpt
-```
-
 Checkpoints are written below the owning run root as
 `checkpoints/global_step_<N>/manual_cotrain.ckpt`, with
 `checkpoints/latest.ckpt` updated for discovery. Resume accepts a run root, a
 checkpoint directory, or a checkpoint file and continues in the original run root:
 
 ```bash
-bash scripts/experiments/dreamer/train.sh \
+bash scripts/experiments/cotrain/train.sh \
+  --config openvla_libero \
   --resume /path/to/openvla_libero/<timestamp>
 ```
 

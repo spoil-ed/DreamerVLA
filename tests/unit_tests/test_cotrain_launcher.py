@@ -6,7 +6,12 @@ from pathlib import Path
 import pytest
 import torch
 
-from dreamervla.launchers.cotrain import build_launch
+from dreamervla.launchers.train import ExperimentLaunch
+from dreamervla.launchers.train import build_launch as _build_launch
+
+
+def build_launch(argv: list[str]) -> ExperimentLaunch:
+    return _build_launch(["--config", "openvla_libero", *argv])
 
 
 def test_cotrain_launcher_rejects_random_frozen_wm_and_classifier(
@@ -273,3 +278,22 @@ def test_cotrain_launcher_rejects_resume_with_output_override(
                 "training.out_dir=/tmp/fork",
             ]
         )
+
+
+def test_cotrain_train_script_uses_unified_train_launcher() -> None:
+    root = Path(__file__).resolve().parents[2]
+    text = (root / "scripts/experiments/cotrain/train.sh").read_text(encoding="utf-8")
+
+    assert "dreamervla.launchers.train" in text
+    assert "dreamervla.launchers.cotrain" not in text
+    assert not (root / "dreamervla/launchers/cotrain.py").exists()
+
+
+def test_openvla_experiment_selects_cotrain_launch_contract() -> None:
+    root = Path(__file__).resolve().parents[2]
+    config = (root / "configs/experiment/openvla_libero.yaml").read_text(encoding="utf-8")
+    launcher = (root / "dreamervla/launchers/train.py").read_text(encoding="utf-8")
+
+    assert "dreamervla.launchers.contracts.CotrainLaunchContract" in config
+    assert "openvla_libero" not in launcher
+    assert "CotrainRunner" not in launcher

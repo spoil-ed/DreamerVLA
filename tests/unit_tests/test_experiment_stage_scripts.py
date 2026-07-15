@@ -41,7 +41,8 @@ def test_cotrain_train_script_uses_train_only_recipe_without_pinned_warm_states(
     root = Path(__file__).resolve().parents[2]
     text = (root / "scripts/experiments/cotrain/train.sh").read_text(encoding="utf-8")
 
-    assert "dreamervla.launchers.cotrain" in text
+    assert "dreamervla.launchers.train" in text
+    assert "dreamervla.launchers.cotrain" not in text
     assert "experiment=openvla_libero" not in text
     assert "manual_cotrain.global_steps" not in text
     assert "/inspire/" not in text
@@ -220,9 +221,9 @@ def test_experiment_launcher_resume_reuses_original_run_root(
     output = capsys.readouterr().out
     assert result == 0
     assert "training.resume=true" in output
-    assert f"training.resume_path={checkpoint.resolve()}" in output
-    assert f"training.resume_dir={run_dir.resolve()}" in output
-    assert f"training.out_dir={run_dir.resolve()}" in output
+    assert f"training.resume_path={json.dumps(str(checkpoint.resolve()))}" in output
+    assert f"training.resume_dir={json.dumps(str(run_dir.resolve()))}" in output
+    assert f"training.out_dir={json.dumps(str(run_dir.resolve()))}" in output
 
 
 def test_experiment_launcher_rejects_resume_with_output_override(
