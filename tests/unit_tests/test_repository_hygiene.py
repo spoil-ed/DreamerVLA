@@ -428,7 +428,7 @@ def test_retired_diagnostics_and_runtime_helpers_are_absent() -> None:
         tree = ast.parse((project_root / path).read_text(encoding="utf-8"))
         defined_names = {
             node.name
-            for node in tree.body
+            for node in ast.walk(tree)
             if isinstance(node, (ast.AsyncFunctionDef, ast.ClassDef, ast.FunctionDef))
         }
         found = sorted(names & defined_names)
