@@ -824,6 +824,46 @@ def test_generate_reads_rank_keyed_observation_batches_when_num_slots_is_set(mon
         cluster.shutdown()
 
 
+def test_generate_shared_batch_key_preserves_originating_env_rank() -> None:
+    if ray.is_initialized():
+        ray.shutdown()
+    cluster = Cluster()
+    try:
+        input_name = f"test-rollout-shared-in-{uuid.uuid4().hex}"
+        output_name = f"test-rollout-shared-out-{uuid.uuid4().hex}"
+        input_channel = Channel.create(input_name)
+        output_channel = Channel.create(output_name)
+        input_channel.put(
+            _obs_batch(_obs(step=3, env_rank=24), env_rank=24),
+            key="real_env",
+        )
+        input_channel.put(StopMsg(reason="unit-test"), key="real_env")
+
+        worker = MultiStepRolloutWorker(
+            policy_cfg=_policy_cfg(),
+            encoder_cfg=None,
+            init_ckpt={},
+            train_cfg={"device": "cpu"},
+        )
+        worker.init()
+
+        stats = worker.generate(
+            input_name,
+            output_name,
+            num_slots=1,
+            input_key="real_env",
+        )
+
+        assert stats["rollout/generated"] == 1.0
+        assert output_channel.qsize(key="24") == 1
+        batch = output_channel.get(key="24")
+        assert isinstance(batch, RolloutResultBatchMsg)
+        assert batch.env_rank == 24
+        assert batch.steps == [3]
+    finally:
+        cluster.shutdown()
+
+
 def test_generate_reads_rank_keyed_batch_hidden_payload() -> None:
     if ray.is_initialized():
         ray.shutdown()

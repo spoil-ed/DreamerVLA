@@ -52,6 +52,8 @@ from dreamervla.workers.env.trajectory_env_worker import RealEnvWorker, WMEnvWor
 from dreamervla.workers.replay.replay_worker import ReplayWorker
 from dreamervla.workers.rollout.multistep_rollout_worker import MultiStepRolloutWorker
 
+_REAL_ROLLOUT_REQUEST_KEY = "real_env"
+
 
 class DreamerRunner(BaseRunner):
     """Frozen latent-imagination RL runner for the DreamerVLA mainline."""
@@ -71,6 +73,8 @@ class DreamerRunner(BaseRunner):
             config.manual_cotrain.debug_eval_interval_global_steps = 1
             config.manual_cotrain.checkpoint_every = 1
             config.manual_cotrain.real_rollout_target_trajectories = 8
+            config.manual_cotrain.real_env_workers = 8
+            config.manual_cotrain.real_envs_per_worker = 1
             config.manual_cotrain.wm_rollout_target_trajectories = 256
         training_mode = str(
             OmegaConf.select(
@@ -384,7 +388,7 @@ class DreamerRunner(BaseRunner):
         real_env_group = WorkerGroup(
             RealEnvWorker,
             self._real_env_cfg(),
-            self._envs_per_worker(),
+            self._real_envs_per_worker(),
             initial_real_rollout_epoch,
             self._real_max_steps_per_rollout_epoch(),
             self._num_action_chunks(),
@@ -393,6 +397,7 @@ class DreamerRunner(BaseRunner):
             replay=replay,
             dump=None,
             rank_offset=0,
+            request_key=_REAL_ROLLOUT_REQUEST_KEY,
             request_final_bootstrap=self._requires_bootstrap_value(),
             replay_write_enabled=False,
         ).launch(
@@ -419,7 +424,7 @@ class DreamerRunner(BaseRunner):
                 task_id=self._task_id(),
                 replay=replay,
                 dump=None,
-                rank_offset=len(real_specs),
+                rank_offset=0,
                 request_final_bootstrap=self._requires_bootstrap_value(),
                 replay_write_enabled=self._wm_env_write_replay(),
             ).launch(
@@ -677,7 +682,7 @@ class DreamerRunner(BaseRunner):
         self._configure_env_progress(wm_env, progress_dir)
         configured_real_target = self._real_rollout_target_trajectories()
         real_trajectory_target = configured_real_target or (
-            self._envs_per_worker()
+            self._real_envs_per_worker()
             * sum(self._real_rollout_epochs_by_worker(self._real_env_workers()))
         )
         real_progress_monitor = _EvaluationProgressMonitor(
@@ -718,7 +723,8 @@ class DreamerRunner(BaseRunner):
         real_rollout_result = rollout.generate(
             env_channel_name,
             rollout_channel_name,
-            self._envs_per_worker(),
+            self._real_envs_per_worker(),
+            _REAL_ROLLOUT_REQUEST_KEY,
         )
         real_env_metrics = _wait_env_metrics_with_rollout_guard(
             [real_env_result],
@@ -726,7 +732,7 @@ class DreamerRunner(BaseRunner):
             timeout_s=self._env_rollout_timeout_s(),
             progress=real_progress_monitor,
         )
-        self._stop_rollout_workers(groups)
+        self._stop_rollout_workers(groups, input_key=_REAL_ROLLOUT_REQUEST_KEY)
         real_rollout_metrics = _sum_metric_lists([real_rollout_result.wait()])
         stage_start = mark_stage("collect_real_trajectories", stage_start)
 
@@ -1383,11 +1389,12 @@ class DreamerRunner(BaseRunner):
         groups: dict[str, Any],
         *,
         channel_key: str = "env_channel",
+        input_key: str | None = None,
     ) -> None:
         for rollout_rank, _worker in enumerate(groups["RolloutGroup"].workers):
             groups[channel_key].put(
                 StopMsg(reason="global_step_complete"),
-                key=str(int(rollout_rank)),
+                key=(str(int(rollout_rank)) if input_key is None else str(input_key)),
             )
 
     def _report_global_step_progress(
@@ -1776,10 +1783,10 @@ class DreamerRunner(BaseRunner):
         return self._rollout_epochs_by_worker(
             worker_count,
             target_trajectories=self._real_rollout_target_trajectories(),
-            envs_per_worker=self._envs_per_worker(),
+            envs_per_worker=self._real_envs_per_worker(),
             fallback_epoch=self._real_rollout_epoch(),
             target_name="manual_cotrain.real_rollout_target_trajectories",
-            envs_name="manual_cotrain.envs_per_worker",
+            envs_name="manual_cotrain.real_envs_per_worker",
             role_name="real",
         )
 
@@ -1796,6 +1803,19 @@ class DreamerRunner(BaseRunner):
                 "and divisible by manual_cotrain.num_action_chunks"
             )
         return resolved
+
+    def _real_rollout_total_chunks(self) -> int:
+        worker_epochs = self._real_rollout_epochs_by_worker(
+            self._real_env_workers()
+        )
+        return (
+            sum(worker_epochs)
+            * self._real_envs_per_worker()
+            * _chunk_steps(
+                self._real_max_steps_per_rollout_epoch(),
+                self._num_action_chunks(),
+            )
+        )
 
     def _wm_rollout_epoch(self) -> int:
         return self._positive_manual_int(
@@ -1888,6 +1908,12 @@ class DreamerRunner(BaseRunner):
     def _envs_per_worker(self) -> int:
         return self._positive_manual_int("envs_per_worker", default=1)
 
+    def _real_envs_per_worker(self) -> int:
+        return self._positive_manual_int(
+            "real_envs_per_worker",
+            default=self._envs_per_worker(),
+        )
+
     def _wm_envs_per_worker(self) -> int:
         return self._positive_manual_int(
             "wm_envs_per_worker",
@@ -1895,7 +1921,7 @@ class DreamerRunner(BaseRunner):
         )
 
     def _rollout_num_slots(self) -> int:
-        return max(self._envs_per_worker(), self._wm_envs_per_worker())
+        return max(self._real_envs_per_worker(), self._wm_envs_per_worker())
 
     def _task_id(self) -> int:
         return int(OmegaConf.select(self.cfg, "manual_cotrain.task_id", default=0))
@@ -2058,18 +2084,7 @@ class DreamerRunner(BaseRunner):
         pending_real = list(real_env_results)
         completed_metrics: list[Any] = []
         start = time.monotonic()
-        configured_real_workers = (
-            min(self._real_env_workers(), self._ngpu()) if self._ngpu() > 0 else 1
-        )
-        real_worker_epochs = self._real_rollout_epochs_by_worker(int(configured_real_workers))
-        real_total_chunks = (
-            sum(real_worker_epochs)
-            * self._envs_per_worker()
-            * _chunk_steps(
-                self._max_steps_per_rollout_epoch(),
-                self._num_action_chunks(),
-            )
-        )
+        real_total_chunks = self._real_rollout_total_chunks()
         wm_chunks_per_epoch = self._wm_envs_per_worker() * _chunk_steps(
             self._wm_max_steps_per_rollout_epoch(),
             self._num_action_chunks(),
@@ -2539,7 +2554,7 @@ class DreamerRunner(BaseRunner):
             cfg["render_backend"] = real_render_backend
         elif "render_backend" not in cfg:
             cfg["render_backend"] = self._render_backend()
-        cfg.setdefault("num_envs_per_worker", self._envs_per_worker())
+        cfg.setdefault("num_envs_per_worker", self._real_envs_per_worker())
         if str(cfg.get("render_backend", "osmesa")).strip().lower() == "egl":
             self._ensure_real_env_render_gpu_pool(cfg)
         return cfg

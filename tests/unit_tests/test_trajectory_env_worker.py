@@ -886,6 +886,41 @@ def test_real_env_interact_routes_observations_and_replay_without_actor_trajecto
         worker.close()
 
 
+def test_real_env_shared_request_key_keeps_rank_scoped_response(monkeypatch) -> None:
+    worker = RealEnvWorker(
+        env_cfg=_counter_env_cfg(),
+        num_slots=1,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=2,
+        num_action_chunks=2,
+        task_id=0,
+        rank_offset=24,
+        request_key="real_env",
+    )
+    result = replace(_rollout_result(), env_rank=24)
+    channels = {
+        "env": _MemoryChannel(),
+        "rollout": _MemoryChannel(
+            [_rollout_batch(result, env_rank=24), _rollout_batch(result, env_rank=24)]
+        ),
+        "actor": _MemoryChannel(),
+    }
+    monkeypatch.setattr(
+        trajectory_env_worker.Channel,
+        "connect",
+        staticmethod(lambda name: channels[str(name)]),
+    )
+    try:
+        worker.init()
+        worker.interact("env", "rollout", "actor")
+
+        assert {key for key, _batch in channels["env"].puts} == {"real_env"}
+        assert channels["rollout"].gets == ["24", "24"]
+        assert all(batch.env_rank == 24 for _key, batch in channels["env"].puts)
+    finally:
+        worker.close()
+
+
 def test_real_env_exact_budget_stops_slot_after_first_trajectory(monkeypatch) -> None:
     replay = _MemoryReplay()
     env_cfg = _short_horizon_counter_env_cfg()

@@ -80,6 +80,23 @@ def test_mainline_and_frozen_routes_share_all_eight_actor_ranks() -> None:
     assert frozen.learner_spec is None
 
 
+def test_osmesa_real_pool_keeps_25_cpu_workers_and_seven_wm_workers() -> None:
+    plan = build_manual_cotrain_placement(
+        8,
+        real_env_workers=25,
+        include_learner=True,
+    )
+
+    real = [spec for spec in plan.env_specs if spec.role == "real_env"]
+    imagined = [spec for spec in plan.env_specs if spec.role == "wm_env"]
+    assert len(real) == 25
+    assert [spec.rank for spec in real] == list(range(25))
+    assert [spec.gpu_ids for spec in real] == [[] for _ in range(25)]
+    assert len(imagined) == 7
+    assert [spec.gpu_ids for spec in imagined] == [[gpu] for gpu in range(1, 8)]
+    assert len(plan.rollout_specs) == 8
+
+
 def test_manual_cotrain_placement_honors_component_gpu_groups() -> None:
     plan = build_manual_cotrain_placement(
         7,

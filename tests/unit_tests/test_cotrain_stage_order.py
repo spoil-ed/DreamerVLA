@@ -141,6 +141,7 @@ class _Rollout:
     def __init__(self, events: list[str]) -> None:
         self.events = events
         self.calls = 0
+        self.generate_args: list[tuple[object, ...]] = []
 
     def set_global_step(self, step: int):
         return _Ready([None])
@@ -150,6 +151,7 @@ class _Rollout:
         return _Ready([{"sync/rollout_policy_updated": 1.0}])
 
     def generate(self, *args):
+        self.generate_args.append(tuple(args))
         self.calls += 1
         phase = "real_generate" if self.calls == 1 else "wm_generate"
         self.events.append(phase)
@@ -364,9 +366,10 @@ def test_failure_imagined_rl_skips_encoder_and_learner_updates(
         share_target,
         lambda value, *, cluster: value,
     )
+    rollout = _Rollout(events)
     groups = {
         "ActorGroup": _Actor(events),
-        "RolloutGroup": _Rollout(events),
+        "RolloutGroup": rollout,
         "LearnerGroup": _Learner(events),
         "RealEnvGroup": _Env("real", events),
         "WMEnvGroup": _Env("wm", events),
@@ -392,6 +395,19 @@ def test_failure_imagined_rl_skips_encoder_and_learner_updates(
     assert "wm_cls_update" not in events
     assert "wm_cls_sync" not in events
     assert metrics["actor/ppo_updates"] == 1.0
+    if runner_cls is DreamerRunner:
+        assert rollout.generate_args[0] == ("env", "rollout", 1, "real_env")
+
+
+def test_dreamer_shared_real_stop_key_targets_every_rollout_worker() -> None:
+    groups = {
+        "RolloutGroup": type("RolloutGroup", (), {"workers": [object()] * 8})(),
+        "env_channel": _Channel(),
+    }
+
+    DreamerRunner._stop_rollout_workers(groups, input_key="real_env")
+
+    assert [key for key, _value in groups["env_channel"].puts] == ["real_env"] * 8
 
 
 def test_failure_imagined_rl_skips_imagination_when_failure_pool_is_empty(

@@ -306,15 +306,16 @@ class MultiStepRolloutWorker(Worker):
                 self.reload_model()
             input_channel = Channel.connect(input_channel_name)
             output_channel = Channel.connect(output_channel_name)
-            if input_key is not None:
-                return self._generate_from_key(
-                    input_channel, output_channel, str(input_key)
-                )
             if num_slots is not None:
                 return self._generate_from_rank_batch_key(
                     input_channel,
                     output_channel,
                     int(num_slots),
+                    key=(str(input_key) if input_key is not None else None),
+                )
+            if input_key is not None:
+                return self._generate_from_key(
+                    input_channel, output_channel, str(input_key)
                 )
 
             return self._generate_from_key(input_channel, output_channel, "default")
@@ -388,10 +389,12 @@ class MultiStepRolloutWorker(Worker):
         input_channel: Channel,
         output_channel: Channel,
         num_slots: int,
+        *,
+        key: str | None = None,
     ) -> dict[str, float]:
         if int(num_slots) <= 0:
             raise ValueError("num_slots must be positive")
-        key = str(int(self.rank))
+        key = str(int(self.rank)) if key is None else str(key)
         generated = 0
         channel_get_s = 0.0
         policy_forward_s = 0.0
@@ -412,11 +415,7 @@ class MultiStepRolloutWorker(Worker):
                     "MultiStepRolloutWorker.generate expected ObservationBatchMsg "
                     f"or StopMsg, got {type(msg).__name__}"
                 )
-            if int(msg.env_rank) != int(self.rank):
-                raise ValueError(
-                    "observation batch env_rank must match rollout rank: "
-                    f"got {int(msg.env_rank)}, expected {int(self.rank)}"
-                )
+            env_rank = int(msg.env_rank)
             observations = list(msg.observations)
             if not observations:
                 raise ValueError("ObservationBatchMsg.observations must not be empty")
@@ -431,10 +430,10 @@ class MultiStepRolloutWorker(Worker):
                         "ObservationBatchMsg must contain ObservationMsg items, "
                         f"got {type(obs_msg).__name__}"
                     )
-                if int(obs_msg.env_rank) != int(self.rank):
+                if int(obs_msg.env_rank) != env_rank:
                     raise ValueError(
-                        "observation env_rank must match rollout rank: "
-                        f"got {int(obs_msg.env_rank)}, expected {int(self.rank)}"
+                        "observation env_rank must match its observation batch: "
+                        f"got {int(obs_msg.env_rank)}, expected {env_rank}"
                     )
             keys = [obs_msg.key for obs_msg in observations]
             keys_csv = ",".join(keys)

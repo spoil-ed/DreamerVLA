@@ -93,7 +93,6 @@ def build_manual_cotrain_placement(
             component_groups=component_groups,
         )
 
-    real_workers = min(real_workers, 1)
     env_specs = [
         RolePlacement(
             kind="env",

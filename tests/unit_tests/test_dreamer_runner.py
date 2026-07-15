@@ -32,6 +32,21 @@ def test_dreamer_runner_places_frozen_learner_on_cpu() -> None:
     assert plan.learner_spec.gpu_ids == []
 
 
+def test_dreamer_runner_uses_25_one_slot_osmesa_real_workers() -> None:
+    cfg = _compose_experiment("openvla_libero")
+    runner = DreamerRunner(cfg)
+    plan = runner._placement_plan()
+
+    assert cfg.render_backend == "osmesa"
+    assert runner._real_env_workers() == 25
+    assert runner._real_envs_per_worker() == 1
+    assert runner._real_env_cfg()["num_envs_per_worker"] == 1
+    assert runner._real_rollout_epochs_by_worker(25) == [2] * 7 + [1] * 18
+    assert runner._real_rollout_total_chunks() == 1216
+    assert len(plan.real_env_ranks) == 25
+    assert len(plan.wm_env_ranks) == 7
+
+
 def test_cotrain_and_dreamer_are_separate_public_routes() -> None:
     cotrain_cfg = _compose_experiment("openvla_onetraj_libero_cotrain")
     dreamer_cfg = _compose_experiment("openvla_libero")

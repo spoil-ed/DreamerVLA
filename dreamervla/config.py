@@ -1069,6 +1069,7 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
     is_ray_runner = target.endswith(
         (
             "CotrainRunner",
+            "DreamerRunner",
             "RolloutCollectionRunner",
         )
     )
@@ -1127,6 +1128,7 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
     _require_positive_if_present(cfg, "manual_cotrain.wm_rollout_multiplier")
     _require_positive_if_present(cfg, "manual_cotrain.num_action_chunks")
     _require_positive_if_present(cfg, "manual_cotrain.envs_per_worker")
+    _require_positive_if_present(cfg, "manual_cotrain.real_envs_per_worker")
     _require_positive_if_present(cfg, "manual_cotrain.wm_envs_per_worker")
     _validate_ray_single_node_placement(cfg)
 
@@ -1253,7 +1255,7 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
 
 def _warn_manual_cotrain_baseline_overrides(cfg: DictConfig) -> None:
     target = str(OmegaConf.select(cfg, "_target_", default="") or "")
-    if not target.endswith("CotrainRunner"):
+    if not target.endswith(("CotrainRunner", "DreamerRunner")):
         return
     baselines = {
         "real_rollout_target_trajectories": 32,
@@ -1278,7 +1280,7 @@ def _validate_manual_cotrain_group_geometry(cfg: DictConfig) -> None:
     """Validate manual-cotrain rollout slots against actor GRPO grouping."""
 
     target = str(OmegaConf.select(cfg, "_target_", default="") or "")
-    if not target.endswith("CotrainRunner"):
+    if not target.endswith(("CotrainRunner", "DreamerRunner")):
         return
 
     envs_per_worker_raw = OmegaConf.select(
@@ -1309,13 +1311,24 @@ def _validate_manual_cotrain_group_geometry(cfg: DictConfig) -> None:
             default=1,
         )
     )
-    real_workers = (
-        min(max(0, configured_real_workers), max(1, ngpu))
-        if real_enabled
-        else 0
-    )
-    wm_workers = max(0, (max(1, ngpu) if ngpu == 0 else ngpu) - real_workers)
+    if real_enabled:
+        real_workers = max(0, configured_real_workers)
+        if not target.endswith("DreamerRunner"):
+            real_workers = min(real_workers, max(1, ngpu))
+    else:
+        real_workers = 0
+    if target.endswith("DreamerRunner"):
+        wm_workers = max(0, ngpu - (1 if real_workers and ngpu > 0 else 0))
+    else:
+        wm_workers = max(0, (max(1, ngpu) if ngpu == 0 else ngpu) - real_workers)
     envs_per_worker = int(envs_per_worker_raw)
+    real_envs_per_worker = int(
+        OmegaConf.select(
+            cfg,
+            "manual_cotrain.real_envs_per_worker",
+            default=envs_per_worker,
+        )
+    )
     wm_envs_per_worker = int(
         OmegaConf.select(
             cfg,
@@ -1352,11 +1365,37 @@ def _validate_manual_cotrain_group_geometry(cfg: DictConfig) -> None:
         "manual_cotrain.wm_rollout_target_trajectories",
         default=None,
     )
+    real_rollout_target = OmegaConf.select(
+        cfg,
+        "manual_cotrain.real_rollout_target_trajectories",
+        default=None,
+    )
     group_size = int(group_size_raw)
     if group_size <= 0:
         raise ValueError("actor.train_cfg.algorithm_cfg.group_size must be positive")
 
-    real_trajectory_count = envs_per_worker * real_workers * real_rollout_epoch
+    if real_workers > 0 and real_rollout_target is not None:
+        real_trajectory_count = int(real_rollout_target)
+        if real_trajectory_count % real_envs_per_worker != 0:
+            raise ValueError(
+                "manual_cotrain.real_rollout_target_trajectories must be divisible by "
+                "manual_cotrain.real_envs_per_worker: "
+                f"real_rollout_target_trajectories={real_trajectory_count}, "
+                f"real_envs_per_worker={real_envs_per_worker}"
+            )
+        total_real_worker_epochs = real_trajectory_count // real_envs_per_worker
+        if total_real_worker_epochs < real_workers:
+            raise ValueError(
+                "manual_cotrain.real_rollout_target_trajectories is too small to give "
+                "each real worker at least one rollout_epoch: "
+                f"real_rollout_target_trajectories={real_trajectory_count}, "
+                f"real_envs_per_worker={real_envs_per_worker}, "
+                f"real_workers={real_workers}"
+            )
+    else:
+        real_trajectory_count = (
+            real_envs_per_worker * real_workers * real_rollout_epoch
+        )
     if wm_workers > 0 and wm_rollout_target is not None:
         wm_trajectory_count = int(wm_rollout_target)
         if wm_trajectory_count % wm_envs_per_worker != 0:
@@ -1384,6 +1423,7 @@ def _validate_manual_cotrain_group_geometry(cfg: DictConfig) -> None:
             "actor.train_cfg.algorithm_cfg.group_size: "
             f"manual_cotrain.ngpu={ngpu}, "
             f"manual_cotrain.envs_per_worker={envs_per_worker}, "
+            f"manual_cotrain.real_envs_per_worker={real_envs_per_worker}, "
             f"manual_cotrain.wm_envs_per_worker={wm_envs_per_worker}, "
             f"manual_cotrain.rollout_epoch={rollout_epoch}, "
             f"manual_cotrain.real_rollout_epoch={real_rollout_epoch}, "
@@ -1399,7 +1439,7 @@ def _validate_manual_actor_ppo_batches(cfg: DictConfig) -> None:
     """Validate the RLinf global-batch/micro-batch hierarchy before Ray starts."""
 
     target = str(OmegaConf.select(cfg, "_target_", default="") or "")
-    if not target.endswith("CotrainRunner"):
+    if not target.endswith(("CotrainRunner", "DreamerRunner")):
         return
     global_batch_raw = OmegaConf.select(
         cfg,
@@ -1463,7 +1503,7 @@ def _validate_manual_cotrain_replay_window(cfg: DictConfig) -> None:
     """Validate that EnvWorker can produce replay windows used by LearnerWorker."""
 
     target = str(OmegaConf.select(cfg, "_target_", default="") or "")
-    if not target.endswith("CotrainRunner"):
+    if not target.endswith(("CotrainRunner", "DreamerRunner")):
         return
 
     sequence_length_raw = OmegaConf.select(cfg, "replay.cfg.sequence_length", default=None)
@@ -1491,7 +1531,7 @@ def _validate_manual_cotrain_classifier_window(cfg: DictConfig) -> None:
     """Validate rollout length against classifier replay-window sampling."""
 
     target = str(OmegaConf.select(cfg, "_target_", default="") or "")
-    if not target.endswith("CotrainRunner"):
+    if not target.endswith(("CotrainRunner", "DreamerRunner")):
         return
 
     max_steps_raw = OmegaConf.select(

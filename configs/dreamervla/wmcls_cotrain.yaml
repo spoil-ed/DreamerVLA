@@ -25,7 +25,8 @@ manual_cotrain:
   checkpoint_every: 10
   save_replay_state: true
   real_env_enabled: true
-  real_env_workers: 1
+  real_env_workers: 25
+  real_envs_per_worker: 1
   training_mode: failure_imagined_rl
   initial_condition_selector: failed_episode_start
   staged_policy_update: false

@@ -1039,6 +1039,7 @@ class BaseTrajectoryEnvWorker(Worker):
         replay: Any | None = None,
         dump: Any | None = None,
         rank_offset: int = 0,
+        request_key: str | None = None,
         request_final_bootstrap: bool = True,
         replay_write_enabled: bool = True,
     ) -> None:
@@ -1066,6 +1067,7 @@ class BaseTrajectoryEnvWorker(Worker):
         self.replay = replay
         self.dump = dump
         self.rank_offset = int(rank_offset)
+        self.request_key = None if request_key is None else str(request_key)
         self.request_final_bootstrap = bool(request_final_bootstrap)
         self.replay_write_enabled = bool(replay_write_enabled)
         if self.num_slots <= 0:
@@ -3457,6 +3459,9 @@ class BaseTrajectoryEnvWorker(Worker):
     def _rank_key(self) -> str:
         return str(int(self.rank) + int(self.rank_offset))
 
+    def _request_key(self) -> str:
+        return self._rank_key() if self.request_key is None else self.request_key
+
     def _observation_batch_msg(
         self,
         messages: list[ObservationMsg],
@@ -3500,14 +3505,15 @@ class BaseTrajectoryEnvWorker(Worker):
             return
         batch = self._observation_batch_msg(messages)
         put_start = time.perf_counter()
-        env_channel.put(batch, key=batch.key)
+        request_key = self._request_key()
+        env_channel.put(batch, key=request_key)
         metrics["env/channel_put_obs_s"] += time.perf_counter() - put_start
         keys_csv = ",".join(message.key for message in messages)
         phase_suffix = f" phase={str(phase)}" if phase is not None else ""
         _hs_trace(
             f"[env rank={int(self.rank)} role={self.role}] "
             f"send action request batch_size={len(messages)} "
-            f"key={batch.key} keys={keys_csv}{phase_suffix}"
+            f"key={request_key} keys={keys_csv}{phase_suffix}"
         )
 
     def _get_rollout_result_batch(
@@ -3624,6 +3630,7 @@ class RealEnvWorker(BaseTrajectoryEnvWorker):
         replay: Any | None = None,
         dump: Any | None = None,
         rank_offset: int = 0,
+        request_key: str | None = None,
         request_final_bootstrap: bool = True,
         replay_write_enabled: bool = True,
     ) -> None:
@@ -3639,6 +3646,7 @@ class RealEnvWorker(BaseTrajectoryEnvWorker):
             replay=replay,
             dump=dump,
             rank_offset=rank_offset,
+            request_key=request_key,
             request_final_bootstrap=request_final_bootstrap,
             replay_write_enabled=replay_write_enabled,
         )

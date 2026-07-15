@@ -15,7 +15,7 @@
 **Files:**
 - Modify: `tests/unit_tests/test_cotrain_placement.py`
 - Modify: `tests/unit_tests/test_cotrain_config_validation.py`
-- Modify: `tests/unit_tests/test_dreamer_mainline.py`
+- Modify: `tests/unit_tests/test_dreamer_runner.py`
 - Modify: `dreamervla/workers/cotrain/placement.py`
 - Modify: `dreamervla/config.py`
 - Modify: `configs/dreamervla/wmcls_cotrain.yaml`
@@ -52,7 +52,7 @@
 
 **Files:**
 - Modify: `tests/unit_tests/test_cotrain_stage_order.py`
-- Modify: `tests/unit_tests/test_dreamer_mainline.py`
+- Modify: `tests/unit_tests/test_dreamer_runner.py`
 - Modify: `dreamervla/runners/dreamer_runner.py`
 
 - [ ] Add failing tests asserting that Dreamer real generation and all eight stop
