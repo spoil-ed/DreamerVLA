@@ -27,44 +27,40 @@ replay behavior remains untouched.
 
 ## Canonical run-root layout
 
-Each invocation owns one shallow run root:
+Every route uses the same shallow run root:
 
 ```text
 <output_root>/<run.name>/<YYYYMMDD_HHMMSS>/
 ├── checkpoints/
-│   ├── wm_warmup.ckpt                         # WM warmup final/resume artifact
-│   ├── classifier_warmup.ckpt                 # classifier warmup final/resume artifact
-│   ├── latest.ckpt                            # active route's canonical resume pointer
-│   ├── global_step_<N>/manual_cotrain.ckpt    # cotrain point-in-time artifact
-│   ├── warmup_progress/                       # at most one latest file per component
-│   ├── warmup_topk/                           # only when top-k is explicitly enabled
-│   └── *_hf/                                  # only when HF export is explicitly enabled
 ├── tensorboard/
-│   └── events.out.tfevents.*
 ├── wandb/
-│   ├── run_id.txt
-│   └── offline-run-*/
 ├── logs/
-├── video/{train,eval}/
+├── video/
 ├── diagnostics/
 ├── .hydra/
 ├── resolved_config.yaml
 └── run_manifest.json
 ```
 
+One invocation runs one route, so its `checkpoints/` contains only that route's
+artifacts:
+
+- WM warmup: `wm_warmup.ckpt`;
+- classifier warmup: `classifier_warmup.ckpt`;
+- cotrain: `global_step_<N>/manual_cotrain.ckpt` and `latest.ckpt`.
+
+WM and classifier overwrite their canonical checkpoint atomically at each configured
+epoch boundary. They do not create a separate progress-checkpoint directory. Cotrain
+keeps the required point-in-time checkpoint and `latest.ckpt`; the latest path is
+materialized with an atomic hard link when possible and an atomic copy only when the
+filesystem cannot link.
+
 The logger must not create `<run_root>/wandb/wandb/`. TensorBoard must not copy the
 already-canonical resolved configuration into `tensorboard/config.yaml`.
 
-Cotrain keeps the required point-in-time checkpoint and `checkpoints/latest.ckpt`.
-The latest path is materialized with an atomic hard link when possible and an atomic
-copy only when the filesystem cannot link, so it does not normally consume a second
-full checkpoint allocation.
-
-When a warmup recipe spans multiple configured epochs, epoch-boundary progress uses
-one atomically replaced latest checkpoint per component instead of accumulating
-`*_step_*.ckpt` files. No checkpoint is written from the middle of an epoch. The
-completed warmup checkpoint replaces the need for the progress artifact. Explicit
-top-k retention remains controlled by Hydra.
+Optional top-k retention and Hugging Face export remain opt-in Hydra features. They
+may add explicitly requested artifacts under `checkpoints/`, but they are not part of
+the default mainline layout.
 
 ## Unified resume contract
 
@@ -173,7 +169,8 @@ splits one local logical run into multiple online runs.
   tail logically.
 - W&B creates a new offline segment under the same canonical W&B directory using the
   stable run ID.
-- Completed epoch checkpoints supersede temporary warmup progress files.
+- WM and classifier atomically replace their route checkpoint at an epoch boundary;
+  they do not retain temporary progress files.
 
 ## Error handling
 
