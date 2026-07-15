@@ -15,6 +15,7 @@ _RUNNER_MODULES = {
         "dreamervla.runners.success_classifier_training_runner"
     ),
     "CotrainRunner": "dreamervla.runners.cotrain_runner",
+    "DreamerRunner": "dreamervla.runners.dreamer_runner",
     "LIBEROVLAEvaluationRunner": (
         "dreamervla.runners.libero_vla_evaluation_runner"
     ),
