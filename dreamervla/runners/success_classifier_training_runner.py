@@ -50,6 +50,7 @@ from dreamervla.algorithms.critic import (
     LatentSuccessClassifier,
     LatentSuccessClassifierConfig,
 )
+from dreamervla.constants import CHECKPOINT_FORMAT_VERSION
 from dreamervla.preprocess.sidecar_schema import validate_hidden_token_sidecar_dir
 from dreamervla.runners.base_runner import BaseRunner
 from dreamervla.runtime.classifier_metrics import sweep_threshold_metrics as _sweep_metrics
@@ -281,6 +282,32 @@ class SuccessClassifierTrainingRunner(BaseRunner):
             self.distributed.unwrap_module(value).load_state_dict(state_dict, **kwargs)
             return
         super()._load_state_dict_from_checkpoint(key, value, state_dict, **kwargs)
+
+    def load_payload(
+        self,
+        payload: dict[str, Any],
+        *,
+        restore_rng: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        version = payload.get("format_version")
+        if isinstance(version, int) and version > CHECKPOINT_FORMAT_VERSION:
+            raise ValueError(
+                f"checkpoint payload has format_version={version}, but this build supports "
+                f"up to {CHECKPOINT_FORMAT_VERSION}; upgrade DreamerVLA to load it."
+            )
+        if isinstance(version, int) and version >= 2:
+            state_dicts = payload.get("state_dicts")
+            pickles = payload.get("pickles")
+            if not isinstance(state_dicts, dict) or "model" not in state_dicts:
+                raise RuntimeError("format v2 classifier checkpoint is missing model state")
+            if "optim" not in state_dicts:
+                raise RuntimeError("format v2 classifier checkpoint is missing optim state")
+            if not isinstance(pickles, dict) or "global_step" not in pickles or "epoch" not in pickles:
+                raise RuntimeError(
+                    "format v2 classifier checkpoint is missing global_step/epoch progress"
+                )
+        super().load_payload(payload, restore_rng=restore_rng, **kwargs)
 
     # --------------------------- setup ---------------------------------
 
@@ -628,7 +655,9 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         num_epochs_cfg = OmegaConf.select(tr, "num_epochs", default=20)
         num_epochs = 20 if num_epochs_cfg is None else int(num_epochs_cfg)
         eval_every = int(OmegaConf.select(tr, "eval_every") or 500)
-        ckpt_every = int(OmegaConf.select(tr, "ckpt_every") or eval_every)
+        checkpoint_every_epochs = int(
+            OmegaConf.select(tr, "checkpoint_every_epochs", default=1) or 0
+        )
         log_every = int(OmegaConf.select(tr, "log_every") or 50)
         steps_per_epoch_cfg = int(OmegaConf.select(tr, "steps_per_epoch") or 0)
         steps_per_epoch = (
@@ -662,6 +691,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         t0 = time.time()
         self.console_banner("TRAINING", subtitle=f"{num_epochs} epochs")
         while self.epoch < num_epochs:
+            self.set_dataloader_epoch(self.train_loader, self.epoch)
             data_wait_started_at = time.perf_counter()
             for batch in islice(self.train_loader, steps_per_epoch):
                 update_started_at = data_wait_started_at
@@ -782,16 +812,25 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                         time.perf_counter() - eval_started_at
                     )
 
-                if self.global_step % ckpt_every == 0:
-                    checkpoint_started_at = time.perf_counter()
-                    self.save_checkpoint(tag="latest")
-                    maintenance_metrics["time/classifier_checkpoint_s"] = (
-                        time.perf_counter() - checkpoint_started_at
-                    )
                 if maintenance_metrics:
                     self.log_metrics(maintenance_metrics, step=int(self.global_step))
                 data_wait_started_at = time.perf_counter()
-            self.epoch += 1
+            self.finish_epoch()
+            if (
+                checkpoint_every_epochs > 0
+                and self.epoch < num_epochs
+                and self.epoch % checkpoint_every_epochs == 0
+            ):
+                checkpoint_started_at = time.perf_counter()
+                self.save_checkpoint(tag="latest")
+                self.log_metrics(
+                    {
+                        "time/classifier_checkpoint_s": (
+                            time.perf_counter() - checkpoint_started_at
+                        )
+                    },
+                    step=int(self.global_step),
+                )
 
         self.console_banner("TRAINING", done=True)
         final_validation = self._finalize_validation_checkpoints()
@@ -804,7 +843,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                 }
             )
         # ---- final ckpt + summary ------------------------------------
-        self.save_checkpoint(tag="final")
+        self.save_checkpoint(tag="latest")
         summary = {
             "best_window_f1": self.best_window_f1,
             "best_episode_f1": self.best_episode_f1,

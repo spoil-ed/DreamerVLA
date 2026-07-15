@@ -39,6 +39,7 @@ def test_resolve_resume_checkpoint_prefers_canonical_latest(
     legacy.parent.mkdir(parents=True)
     canonical.touch()
     legacy.touch()
+    (run_dir / "stray.ckpt").touch()
 
     assert resolve_resume_checkpoint(run_dir) == canonical.resolve()
     assert resolve_resume_checkpoint(legacy) == legacy.resolve()
@@ -56,3 +57,22 @@ def test_resolve_resume_checkpoint_finds_latest_global_step(
     latest.touch()
 
     assert resolve_resume_checkpoint(run_dir) == latest.resolve()
+
+
+def test_resolve_resume_checkpoint_prefers_manual_then_canonical_warmups(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    wm = run_dir / "checkpoints" / "wm_warmup.ckpt"
+    classifier = run_dir / "checkpoints" / "classifier_warmup.ckpt"
+    legacy_wm = run_dir / "ckpt" / "wm_warmup.ckpt"
+    legacy_progress = run_dir / "ckpt" / "warmup_progress" / "wm_step_99.ckpt"
+    for path in (wm, classifier, legacy_wm, legacy_progress):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+
+    assert resolve_resume_checkpoint(run_dir) == wm.resolve()
+    wm.unlink()
+    assert resolve_resume_checkpoint(run_dir) == classifier.resolve()
+    classifier.unlink()
+    assert resolve_resume_checkpoint(run_dir) == legacy_wm.resolve()
+    legacy_wm.unlink()
+    assert resolve_resume_checkpoint(run_dir) == legacy_progress.resolve()

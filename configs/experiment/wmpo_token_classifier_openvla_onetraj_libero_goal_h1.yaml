@@ -44,7 +44,7 @@ training:
   class_balanced: false
   log_every: 10
   eval_every: 250
-  ckpt_every: 250
+  checkpoint_every_epochs: 1
   thresh_min: 0.05
   thresh_max: 0.95
   thresh_steps: 19

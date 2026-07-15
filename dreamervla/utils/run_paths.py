@@ -43,36 +43,45 @@ def resolve_resume_checkpoint(path: str | Path) -> Path:
     if candidate.is_dir() and (candidate / "config.json").is_file():
         return candidate
 
-    if candidate.is_dir() and candidate.name not in {"checkpoints", "ckpt"}:
-        direct = sorted(candidate.glob("*.ckpt"), key=lambda item: (_step_value(item), item.name))
-        if direct:
-            preferred = [
-                item
-                for item in direct
-                if item.name in {"latest.ckpt", "manual_cotrain.ckpt", "model.ckpt"}
-            ]
-            return (preferred[-1] if preferred else direct[-1]).resolve()
-
     run_root = infer_run_root(candidate)
+    latest = run_root / "checkpoints" / "latest.ckpt"
+    if latest.is_file():
+        return latest.resolve()
+
+    manual = list(run_root.glob("checkpoints/global_step_*/manual_cotrain.ckpt"))
+    if manual:
+        return max(
+            manual,
+            key=lambda item: (_step_value(item), item.stat().st_mtime_ns),
+        ).resolve()
+
     fixed_candidates = (
-        run_root / "checkpoints" / "latest.ckpt",
         run_root / "checkpoints" / "wm_warmup.ckpt",
+        run_root / "checkpoints" / "classifier_warmup.ckpt",
         run_root / "ckpt" / "latest.ckpt",
         run_root / "ckpt" / "wm_warmup.ckpt",
-        run_root / "latest.ckpt",
+        run_root / "ckpt" / "classifier_warmup.ckpt",
     )
     for fixed in fixed_candidates:
         if fixed.is_file():
             return fixed.resolve()
 
     patterns = (
-        "checkpoints/global_step_*/*.ckpt",
         "checkpoints/manual_cotrain_step_*/*.ckpt",
         "checkpoints/warmup_progress/*.ckpt",
         "ckpt/manual_cotrain_step_*/*.ckpt",
         "ckpt/warmup_progress/*.ckpt",
+        "latest.ckpt",
     )
     matches = [item for pattern in patterns for item in run_root.glob(pattern)]
     if matches:
         return max(matches, key=lambda item: (_step_value(item), item.stat().st_mtime_ns)).resolve()
+    direct = sorted(candidate.glob("*.ckpt"), key=lambda item: (_step_value(item), item.name))
+    if direct:
+        preferred = [
+            item
+            for item in direct
+            if item.name in {"latest.ckpt", "manual_cotrain.ckpt", "model.ckpt"}
+        ]
+        return (preferred[-1] if preferred else direct[-1]).resolve()
     raise FileNotFoundError(f"no resumable checkpoint found under run root: {run_root}")

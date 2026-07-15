@@ -24,7 +24,7 @@ def test_hidden_token_pipeline_uses_traj1_proprio_language_wm_profile():
     assert wm.mlp_dim == 4096
     assert cfg.training.wm_warmup_steps == 20000
     assert cfg.training.warmup_replay_epochs == 10
-    assert cfg.training.warmup_checkpoint_every == 500
+    assert cfg.training.warmup_checkpoint_every_epochs == 1
     assert cfg.training.warmup_topk_k == 3
     assert cfg.training.wm_profile_steps == 8
     assert cfg.training.wm_prefetch_workers == 1
@@ -75,7 +75,7 @@ def test_full_dataset_wm_experiment_owns_complete_training_recipe(tmp_path, monk
     assert cfg.training.wm_warmup_steps == 20000
     assert cfg.training.classifier_warmup_steps == 0
     assert cfg.training.warmup_replay_epochs == 10
-    assert cfg.training.warmup_checkpoint_every == 500
+    assert cfg.training.warmup_checkpoint_every_epochs == 1
     assert cfg.training.warmup_topk_k == 3
     assert cfg.training.wm_profile_steps == 8
     assert cfg.training.wm_prefetch_workers == 1
@@ -250,12 +250,59 @@ def test_validate_cfg_warmup(tmp_path):
             "training": {
                 "wm_warmup_steps": 10,
                 "classifier_warmup_steps": 10,
-                "warmup_checkpoint_every": -1,
+                "warmup_checkpoint_every_epochs": -1,
             },
         }
     )
-    with pytest.raises(Exception, match="warmup_checkpoint_every"):
+    with pytest.raises(Exception, match="warmup_checkpoint_every_epochs"):
         validate_cfg(neg_ckpt_every)
+
+    removed_ckpt_every = OmegaConf.create(
+        {
+            "_target_": "dreamervla.runners.WorldModelTrainingRunner",
+            "offline_warmup": {"data_dir": str(tmp_path), "hidden_dir": str(tmp_path)},
+            "training": {
+                "wm_warmup_steps": 10,
+                "classifier_warmup_steps": 10,
+                "warmup_checkpoint_every": 1,
+            },
+        }
+    )
+    with pytest.raises(Exception, match="warmup_checkpoint_every_epochs"):
+        validate_cfg(removed_ckpt_every)
+
+
+def test_classifier_checkpoint_cadence_uses_epochs_and_rejects_removed_field(tmp_path):
+    import pytest
+    from omegaconf import OmegaConf
+
+    from dreamervla.config import validate_cfg
+
+    valid = OmegaConf.create(
+        {
+            "_target_": "dreamervla.runners.SuccessClassifierTrainingRunner",
+            "training": {"num_epochs": 2, "checkpoint_every_epochs": 1},
+        }
+    )
+    validate_cfg(valid)
+
+    disabled = OmegaConf.create(
+        {
+            "_target_": "dreamervla.runners.SuccessClassifierTrainingRunner",
+            "training": {"num_epochs": 2, "checkpoint_every_epochs": 0},
+        }
+    )
+    with pytest.raises(Exception, match="checkpoint_every_epochs"):
+        validate_cfg(disabled)
+
+    removed = OmegaConf.create(
+        {
+            "_target_": "dreamervla.runners.SuccessClassifierTrainingRunner",
+            "training": {"num_epochs": 2, "ckpt_every": 1},
+        }
+    )
+    with pytest.raises(Exception, match="checkpoint_every_epochs"):
+        validate_cfg(removed)
     bad_log_every = OmegaConf.create(
         {
             "_target_": "dreamervla.runners.WorldModelTrainingRunner",

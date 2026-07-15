@@ -839,7 +839,6 @@ def test_offline_warmup_steps_update_modules(tmp_path, monkeypatch):
     replay = _seeded_replay(tmp_path)
     calls = {"wm": 0, "cls": 0}
     cls_kwargs = []
-    checkpoints = {"wm": 0, "cls": 0}
     logged = []
     progress = []
 
@@ -889,8 +888,6 @@ def test_offline_warmup_steps_update_modules(tmp_path, monkeypatch):
         steps=3,
         batch_size=2,
         optim_cfg=None,
-        checkpoint_every=2,
-        checkpoint_fn=lambda: checkpoints.__setitem__("wm", checkpoints["wm"] + 1),
     )
     runner._offline_warmup_classifier(
         replay,
@@ -902,12 +899,9 @@ def test_offline_warmup_steps_update_modules(tmp_path, monkeypatch):
         sampling_protocol="wmpo",
         balance_batches=True,
         log_step_offset=3,
-        checkpoint_every=2,
-        checkpoint_fn=lambda: checkpoints.__setitem__("cls", checkpoints["cls"] + 1),
     )
     assert calls == {"wm": 3, "cls": 5}
     assert cls_kwargs == [("bce", "wmpo", True)] * 5
-    assert checkpoints == {"wm": 1, "cls": 2}
     assert progress == [
         (1, 3, "wm-warmup", "update"),
         (2, 3, "wm-warmup", "update"),
@@ -1029,6 +1023,11 @@ def test_offline_warmup_wm_profiles_configured_initial_steps(monkeypatch):
     assert "time/wm_warmup_forward_ms" in time_metrics
     assert "time/wm_warmup_total_ms" in time_metrics
 
+    runner._offline_warmup_wm(
+        Replay(), steps=3, start_step=2, batch_size=2, optim_cfg=None
+    )
+    assert profile_keys_by_step[-1] == set()
+
 
 def test_offline_warmup_wm_profiles_every_step_when_configured_negative(monkeypatch):
     from omegaconf import OmegaConf
@@ -1131,7 +1130,6 @@ def test_offline_warmup_classifier_progress_uses_rank_zero_event_printer(monkeyp
     runner.classifier_optimizer = object()
     runner._log_replay_warmup_metrics = lambda *_args, **_kwargs: None
     runner._print_pipeline_event = lambda message: events.append(message)
-    runner._maybe_warmup_checkpoint = lambda **_kwargs: None
     runner.console_progress = lambda *_args, **_kwargs: None
 
     runner._offline_warmup_classifier(
@@ -1862,7 +1860,8 @@ def _make_orchestration_runner(
         calls.append("alternating_warmup")
         return 0.0, 0.0
 
-    def fake_online_loop(self, cfg):
+    def fake_online_loop(self, cfg, *, resume_online=True):
+        del resume_online
         calls.append("online")
         return []
 
@@ -1878,13 +1877,43 @@ def _make_orchestration_runner(
     real_save_wm = mod.WorldModelTrainingRunner._save_wm_warmup
     real_save_cls = mod.WorldModelTrainingRunner._save_cls_warmup
 
-    def save_wm(self, *, completed_steps):
+    def save_wm(
+        self,
+        *,
+        completed_steps,
+        completed_epochs=1,
+        metrics=None,
+        topk_manager=None,
+        steps_per_epoch=None,
+    ):
         calls.append("save_wm")
-        real_save_wm(self, completed_steps=completed_steps)
+        real_save_wm(
+            self,
+            completed_steps=completed_steps,
+            completed_epochs=completed_epochs,
+            metrics=metrics,
+            topk_manager=topk_manager,
+            steps_per_epoch=steps_per_epoch,
+        )
 
-    def save_cls(self):
+    def save_cls(
+        self,
+        *,
+        completed_steps=0,
+        completed_epochs=1,
+        metrics=None,
+        topk_manager=None,
+        steps_per_epoch=None,
+    ):
         calls.append("save_cls")
-        real_save_cls(self)
+        real_save_cls(
+            self,
+            completed_steps=completed_steps,
+            completed_epochs=completed_epochs,
+            metrics=metrics,
+            topk_manager=topk_manager,
+            steps_per_epoch=steps_per_epoch,
+        )
 
     monkeypatch.setattr(mod.WorldModelTrainingRunner, "_save_wm_warmup", save_wm)
     monkeypatch.setattr(mod.WorldModelTrainingRunner, "_save_cls_warmup", save_cls)
@@ -1914,7 +1943,9 @@ def test_run_orchestrates_seed_warmup_split_ckpt_online(tmp_path, monkeypatch, c
         weights_only=False,
     )
     assert wm_payload["warmup_step"] == 2
-    assert wm_payload["warmup_total_steps"] == 2
+    assert wm_payload["warmup_epoch"] == 1
+    assert wm_payload["complete"] is True
+    assert {"world_model", "world_model_optimizer"}.issubset(wm_payload["state_dicts"])
 
 
 def test_run_passes_replay_capacity_mode_and_seed_cap_from_hydra(tmp_path, monkeypatch):
@@ -2035,7 +2066,7 @@ def test_wm_only_run_never_calibrates_or_checkpoints_classifier(tmp_path, monkey
     assert not (tmp_path / "checkpoints" / "classifier_warmup.ckpt").exists()
 
 
-def test_warmup_progress_checkpoint_does_not_mark_component_complete(tmp_path):
+def test_wm_warmup_checkpoint_atomically_overwrites_canonical_path(tmp_path):
     from omegaconf import OmegaConf
 
     from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
@@ -2057,31 +2088,198 @@ def test_warmup_progress_checkpoint_does_not_mark_component_complete(tmp_path):
 
     with torch.no_grad():
         runner.world_model.weight.fill_(3.0)
-    runner._save_wm_warmup_progress(
+    first = runner._save_wm_warmup_checkpoint(
         step=7,
-        total=20,
+        epoch=1,
+        complete=False,
         metrics={"loss": 0.25},
-        topk_manager=None,
+        steps_per_epoch=7,
+        total_steps=20,
     )
     with torch.no_grad():
         runner.world_model.weight.fill_(9.0)
-
-    restored_step = runner._load_latest_wm_warmup_progress()
-
-    assert restored_step == 7
-    assert not (tmp_path / "checkpoints" / "wm_warmup.ckpt").exists()
-    assert (tmp_path / "checkpoints" / "warmup_progress" / "wm_step_00000007.ckpt").exists()
-    assert torch.allclose(
-        runner.world_model.weight,
-        torch.full_like(runner.world_model.weight, 3.0),
+    second = runner._save_wm_warmup_checkpoint(
+        step=14,
+        epoch=2,
+        complete=False,
+        metrics={"loss": 0.2},
+        steps_per_epoch=7,
+        total_steps=20,
     )
 
+    assert first == second == tmp_path / "checkpoints" / "wm_warmup.ckpt"
+    assert not (tmp_path / "checkpoints" / "warmup_progress").exists()
+    payload = torch.load(second, map_location="cpu", weights_only=False)
+    assert payload["format_version"] == 2
+    assert payload["component"] == "wm"
+    assert payload["warmup_epoch"] == 2
+    assert payload["warmup_step"] == 14
+    assert payload["warmup_steps_per_epoch"] == 7
+    assert payload["warmup_total_steps"] == 20
+    assert payload["complete"] is False
+    assert {"world_model", "world_model_optimizer"}.issubset(payload["state_dicts"])
+    assert payload["rng_by_rank"]
+    from dreamervla.utils.component_checkpoint import load_component_checkpoint
 
-def test_warmup_topk_checkpoint_keeps_best_metric_values(tmp_path):
+    loaded = load_component_checkpoint(second, "world_model")
+    assert set(loaded.state_dict) == set(runner.world_model.state_dict())
+
+
+def test_wm_warmup_resume_restores_next_epoch_and_requires_optimizer(tmp_path):
+    import pytest
+    from omegaconf import OmegaConf
+
     from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
 
     runner = WorldModelTrainingRunner.__new__(WorldModelTrainingRunner)
     runner._output_dir = str(tmp_path)
+    runner.global_step = 0
+    runner.cfg = OmegaConf.create({"world_model": {}})
+    runner.world_model = torch.nn.Linear(2, 2)
+    runner.world_model_optimizer = torch.optim.AdamW(runner.world_model.parameters(), lr=1e-3)
+    path = runner._save_wm_warmup_checkpoint(
+        step=14,
+        epoch=2,
+        complete=False,
+        metrics={"loss": 0.2},
+        steps_per_epoch=7,
+        total_steps=14,
+    )
+
+    restored = runner._load_wm_warmup_checkpoint(path, strict=True)
+    assert restored == {"epoch": 2, "step": 14, "complete": False}
+    assert restored["epoch"] + 1 == 3
+
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    payload["warmup_step"] = 13
+    torch.save(payload, path)
+    with pytest.raises(RuntimeError, match="progress mismatch"):
+        runner._load_wm_warmup_checkpoint(path, strict=True)
+    payload["warmup_step"] = 14
+    del payload["state_dicts"]["world_model_optimizer"]
+    torch.save(payload, path)
+    with pytest.raises(RuntimeError, match="world_model_optimizer"):
+        runner._load_wm_warmup_checkpoint(path, strict=True)
+
+    payload["state_dicts"]["world_model_optimizer"] = (
+        runner.world_model_optimizer.state_dict()
+    )
+    payload["complete"] = True
+    payload["warmup_epoch"] = 99
+    torch.save(payload, path)
+    with pytest.raises(RuntimeError, match="epoch mismatch"):
+        runner._load_wm_warmup_checkpoint(path, strict=True)
+
+    payload["format_version"] = 3
+    torch.save(payload, path)
+    with pytest.raises(ValueError, match="format_version=3"):
+        runner._load_wm_warmup_checkpoint(path, strict=True)
+
+
+def test_strict_warmup_resume_rejects_hf_only_without_torch_progress(tmp_path):
+    import pytest
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
+
+    runner = WorldModelTrainingRunner.__new__(WorldModelTrainingRunner)
+    runner._output_dir = str(tmp_path)
+    runner.cfg = OmegaConf.create({})
+    (tmp_path / "checkpoints" / "wm_warmup_hf").mkdir(parents=True)
+
+    with pytest.raises(RuntimeError, match="no WM warmup checkpoint"):
+        runner._load_latest_wm_warmup_progress(
+            steps_per_epoch=5, total_steps=10
+        )
+
+
+def test_classifier_warmup_checkpoint_atomically_overwrites_canonical_path(tmp_path):
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
+
+    runner = WorldModelTrainingRunner.__new__(WorldModelTrainingRunner)
+    runner._output_dir = str(tmp_path)
+    runner.cfg = OmegaConf.create({})
+    runner.global_step = 0
+    runner.classifier = torch.nn.Linear(2, 2)
+    runner.classifier_optimizer = torch.optim.AdamW(runner.classifier.parameters(), lr=1e-3)
+    runner.classifier_threshold = 0.42
+    runner.best_classifier_f1 = 0.8
+    runner.best_classifier_ckpt_path = "best.ckpt"
+
+    first = runner._save_cls_warmup_checkpoint(
+        step=5,
+        epoch=1,
+        complete=False,
+        metrics={"f1": 0.8},
+        steps_per_epoch=5,
+        total_steps=10,
+    )
+    second = runner._save_cls_warmup_checkpoint(
+        step=10,
+        epoch=2,
+        complete=True,
+        metrics={"f1": 0.9},
+        steps_per_epoch=5,
+        total_steps=10,
+    )
+
+    assert first == second == tmp_path / "checkpoints" / "classifier_warmup.ckpt"
+    assert not (tmp_path / "checkpoints" / "warmup_progress").exists()
+    payload = torch.load(second, map_location="cpu", weights_only=False)
+    assert payload["format_version"] == 2
+    assert payload["component"] == "classifier"
+    assert payload["warmup_epoch"] == 2
+    assert payload["warmup_step"] == 10
+    assert payload["warmup_steps_per_epoch"] == 5
+    assert payload["warmup_total_steps"] == 10
+    assert payload["complete"] is True
+    assert payload["classifier_threshold"] == 0.42
+    assert payload["best_metric"] == 0.8
+    assert payload["best_checkpoint_path"] == "best.ckpt"
+    assert {"classifier", "classifier_optimizer"}.issubset(payload["state_dicts"])
+    assert payload["rng_by_rank"]
+
+
+def test_legacy_warmup_progress_remains_readable(tmp_path):
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
+
+    runner = WorldModelTrainingRunner.__new__(WorldModelTrainingRunner)
+    runner._output_dir = str(tmp_path)
+    runner.global_step = 0
+    runner.cfg = OmegaConf.create({"world_model": {}})
+    runner.world_model = torch.nn.Linear(2, 2)
+    runner.world_model_optimizer = torch.optim.AdamW(runner.world_model.parameters(), lr=1e-3)
+    legacy = tmp_path / "ckpt" / "warmup_progress" / "wm_step_00000007.ckpt"
+    legacy.parent.mkdir(parents=True)
+    torch.save(
+        {
+            "world_model": runner.world_model.state_dict(),
+            "world_model_optimizer": runner.world_model_optimizer.state_dict(),
+            "warmup_step": 7,
+            "complete": False,
+        },
+        legacy,
+    )
+
+    restored = runner._load_latest_wm_warmup_progress(
+        steps_per_epoch=5, total_steps=20
+    )
+    assert restored == {"epoch": 1, "step": 7, "complete": False}
+
+
+def test_warmup_topk_checkpoint_keeps_best_metric_values(tmp_path):
+    import pytest
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
+
+    runner = WorldModelTrainingRunner.__new__(WorldModelTrainingRunner)
+    runner._output_dir = str(tmp_path)
+    runner.cfg = OmegaConf.create({})
     runner.global_step = 0
     runner.classifier = torch.nn.Linear(2, 2)
     runner.classifier_optimizer = torch.optim.AdamW(runner.classifier.parameters(), lr=1e-3)
@@ -2089,11 +2287,14 @@ def test_warmup_topk_checkpoint_keeps_best_metric_values(tmp_path):
 
     topk = runner._make_warmup_topk_manager(component="classifier", k=2)
     for step, f1 in [(1, 0.10), (2, 0.70), (3, 0.30), (4, 0.90)]:
-        runner._save_cls_warmup_progress(
+        runner._save_cls_warmup_checkpoint(
             step=step,
-            total=10,
+            epoch=step,
+            complete=False,
             metrics={"loss": 1.0 - f1, "acc": f1, "f1": f1, "pos_frac": 0.5},
             topk_manager=topk,
+            steps_per_epoch=1,
+            total_steps=10,
         )
 
     names = sorted(
@@ -2104,6 +2305,97 @@ def test_warmup_topk_checkpoint_keeps_best_metric_values(tmp_path):
     assert any("step=00000004" in name and "f1=0.900000" in name for name in names)
     assert not any("step=00000001" in name for name in names)
     assert not any("step=00000003" in name for name in names)
+
+    resumed = runner._make_warmup_topk_manager(component="classifier", k=2)
+    runner._save_cls_warmup_checkpoint(
+        step=5,
+        epoch=5,
+        complete=False,
+        metrics={"loss": 0.05, "acc": 0.95, "f1": 0.95, "pos_frac": 0.5},
+        topk_manager=resumed,
+        steps_per_epoch=1,
+        total_steps=10,
+    )
+    resumed_names = list(
+        (tmp_path / "checkpoints" / "warmup_topk" / "classifier").glob("*.ckpt")
+    )
+    assert len(resumed_names) == 2
+    assert any("f1=0.950000" in path.name for path in resumed_names)
+
+    future = resumed_names[0]
+    future_payload = torch.load(future, map_location="cpu", weights_only=False)
+    future_payload["format_version"] = 3
+    torch.save(future_payload, future)
+    with pytest.raises(ValueError, match="format_version=3"):
+        runner._make_warmup_topk_manager(component="classifier", k=2)
+
+
+def test_partial_final_warmup_keeps_completed_epoch_floor_and_final_metrics():
+    from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
+
+    runner = WorldModelTrainingRunner.__new__(WorldModelTrainingRunner)
+    calls: list[tuple[int, int]] = []
+    saved: dict[str, object] = {}
+    runner._offline_warmup_wm = lambda _replay, *, steps, start_step, **_kwargs: (
+        calls.append((start_step, steps)) or float(steps)
+    )
+    runner._save_wm_warmup_checkpoint = lambda **_kwargs: None
+    runner._save_wm_warmup = lambda **kwargs: saved.update(kwargs)
+
+    runner._run_wm_warmup_epochs(
+        object(),
+        total_steps=12,
+        steps_per_epoch=5,
+        start_step=0,
+        start_epoch=0,
+        batch_size=1,
+        optim_cfg=None,
+        checkpoint_every_epochs=1,
+        topk_manager=object(),
+    )
+
+    assert calls == [(0, 5), (5, 10), (10, 12)]
+    assert saved["completed_epochs"] == 2
+    assert saved["completed_steps"] == 12
+    assert saved["metrics"] == {"loss": 12.0}
+    assert saved["topk_manager"] is not None
+
+
+def test_classifier_final_topk_uses_f1_not_accuracy():
+    from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
+
+    runner = WorldModelTrainingRunner.__new__(WorldModelTrainingRunner)
+    saved: dict[str, object] = {}
+
+    def train(*_args, **_kwargs):
+        runner._last_classifier_warmup_metrics = {"acc": 0.2, "f1": 0.8, "loss": 0.4}
+        return 0.2
+
+    runner._offline_warmup_classifier = train
+    runner._save_cls_warmup_checkpoint = lambda **_kwargs: None
+    runner._save_cls_warmup = lambda **kwargs: saved.update(kwargs)
+
+    runner._run_cls_warmup_epochs(
+        object(),
+        total_steps=5,
+        steps_per_epoch=5,
+        start_step=0,
+        start_epoch=0,
+        batch_size=1,
+        early_neg_stride=1,
+        grad_clip=1.0,
+        loss_type=None,
+        sampling_protocol="lumos",
+        balance_batches=False,
+        log_step_offset=0,
+        checkpoint_every_epochs=1,
+        topk_manager=object(),
+        calibration_kwargs={},
+    )
+
+    assert saved["metrics"]["acc"] == 0.2
+    assert saved["metrics"]["f1"] == 0.8
+    assert saved["topk_manager"] is not None
 
 
 def test_warmup_only_component_build_skips_rollout_encoder(monkeypatch):
@@ -2374,7 +2666,9 @@ def test_single_env_rollout_executes_full_chunk_and_clears_on_reset(tmp_path, mo
     runner.policy = FakePolicy()
     runner._oft_hidden_token_extractor = FakeExtractor()
     runner._build_env = lambda _cfg: fake_env
-    runner.resume = lambda: None
+    runner.resume = lambda: (_ for _ in ()).throw(
+        AssertionError("resume must be skipped without an online latest checkpoint")
+    )
     runner.console_progress = lambda *_args, **_kwargs: None
     runner.console_record_success = lambda *_args, **_kwargs: None
 
@@ -2404,7 +2698,7 @@ def test_single_env_rollout_executes_full_chunk_and_clears_on_reset(tmp_path, mo
         }
     )
 
-    runner._online_cotrain_loop(cfg)
+    runner._online_cotrain_loop(cfg, resume_online=False)
 
     assert len(fake_env.actions) == 3
     np.testing.assert_array_equal(fake_env.actions[0], np.full(7, 0.25, np.float32))
@@ -2468,6 +2762,97 @@ def test_run_resume_skips_seed_and_warmups_when_ckpts_exist(tmp_path, monkeypatc
     assert runner.classifier_optimizer.state_dict()["state"]
     # threshold restored from the cls warmup ckpt
     assert runner.classifier_threshold == 0.42
+
+
+def test_online_resume_without_latest_uses_last_complete_warmup_rng(tmp_path):
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
+
+    runner = WorldModelTrainingRunner.__new__(WorldModelTrainingRunner)
+    runner._output_dir = str(tmp_path)
+    runner.cfg = OmegaConf.create({"training": {"resume": True}})
+    ckpt = tmp_path / "checkpoints"
+    ckpt.mkdir(parents=True)
+    (ckpt / "wm_warmup.ckpt").touch()
+    (ckpt / "classifier_warmup.ckpt").touch()
+    restored: list[str] = []
+    runner._restore_warmup_rng_from_checkpoint = lambda path: restored.append(path.name)
+
+    resume_online = runner._prepare_online_resume(
+        trained_active_warmup=False, classifier_enabled=True
+    )
+
+    assert resume_online is False
+    assert restored == ["classifier_warmup.ckpt"]
+
+
+def test_online_resume_wm_only_uses_complete_wm_rng(tmp_path):
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
+
+    runner = WorldModelTrainingRunner.__new__(WorldModelTrainingRunner)
+    runner._output_dir = str(tmp_path)
+    runner.cfg = OmegaConf.create({"training": {"resume": True}})
+    ckpt = tmp_path / "checkpoints"
+    ckpt.mkdir(parents=True)
+    (ckpt / "wm_warmup.ckpt").touch()
+    restored: list[str] = []
+    runner._restore_warmup_rng_from_checkpoint = lambda path: restored.append(path.name)
+
+    resume_online = runner._prepare_online_resume(
+        trained_active_warmup=False, classifier_enabled=False
+    )
+
+    assert resume_online is False
+    assert restored == ["wm_warmup.ckpt"]
+
+
+def test_online_latest_owns_rng_and_skips_warmup_rng_restore(tmp_path):
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
+
+    runner = WorldModelTrainingRunner.__new__(WorldModelTrainingRunner)
+    runner._output_dir = str(tmp_path)
+    runner.cfg = OmegaConf.create({"training": {"resume": True}})
+    ckpt = tmp_path / "checkpoints"
+    ckpt.mkdir(parents=True)
+    (ckpt / "wm_warmup.ckpt").touch()
+    (ckpt / "classifier_warmup.ckpt").touch()
+    (ckpt / "latest.ckpt").touch()
+    restored: list[str] = []
+    runner._restore_warmup_rng_from_checkpoint = lambda path: restored.append(path.name)
+
+    resume_online = runner._prepare_online_resume(
+        trained_active_warmup=False, classifier_enabled=True
+    )
+
+    assert resume_online is True
+    assert restored == []
+
+
+def test_explicit_external_online_latest_owns_resume(tmp_path):
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
+
+    explicit = tmp_path / "external" / "latest.ckpt"
+    explicit.parent.mkdir()
+    explicit.touch()
+    runner = WorldModelTrainingRunner.__new__(WorldModelTrainingRunner)
+    runner._output_dir = str(tmp_path / "current")
+    runner.cfg = OmegaConf.create(
+        {"training": {"resume": True, "resume_path": str(explicit)}}
+    )
+    runner._restore_warmup_rng_from_checkpoint = lambda _path: (_ for _ in ()).throw(
+        AssertionError("explicit online checkpoint must own RNG")
+    )
+
+    assert runner._prepare_online_resume(
+        trained_active_warmup=False, classifier_enabled=True
+    ) is True
 
 
 # ---------------------------------------------------------------------------
@@ -2540,7 +2925,6 @@ def _make_warmup_runner(monkeypatch, classifier):
     runner.classifier_threshold = 0.5
     runner.log_metrics = lambda metrics, step: logged.append((dict(metrics), int(step)))
     runner.console_progress = lambda *a, **k: None
-    runner._maybe_warmup_checkpoint = lambda **kw: None
     return runner, logged
 
 

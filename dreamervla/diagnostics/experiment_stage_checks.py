@@ -496,7 +496,7 @@ def libero_original_cls_run(args: argparse.Namespace) -> int:
         f"training.val_batch_size={int(args.val_batch_size)}",
         f"training.lr={float(args.lr)}",
         f"training.eval_every={int(args.eval_every)}",
-        f"training.ckpt_every={int(args.ckpt_every)}",
+        f"training.checkpoint_every_epochs={int(args.ckpt_every)}",
         *list(args.overrides),
     ]
     _print_json(
@@ -537,7 +537,7 @@ def libero_original_warmup_run(args: argparse.Namespace) -> int:
         f"training.wm_warmup_steps={int(args.wm_steps)}",
         f"training.classifier_warmup_steps={int(args.classifier_steps)}",
         f"training.warmup_replay_epochs={int(args.replay_epochs)}",
-        f"training.warmup_checkpoint_every={int(args.checkpoint_every)}",
+        f"training.warmup_checkpoint_every_epochs={int(args.checkpoint_every)}",
         f"++training.warmup_topk_k={int(args.topk_k)}",
         f"dataloader.batch_size={int(args.wm_batch_size)}",
         f"training.classifier_batch_size={int(args.classifier_batch_size)}",

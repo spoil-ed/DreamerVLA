@@ -14,4 +14,4 @@ training:
   wm_profile_steps: 32
   wm_prefetch_workers: 1
   replay_warmup_log_every: 10
-  warmup_checkpoint_every: 0
+  warmup_checkpoint_every_epochs: 1

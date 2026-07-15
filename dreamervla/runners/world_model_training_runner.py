@@ -10,10 +10,11 @@ classifier warmup checkpoints are saved separately for independent resume.
 from __future__ import annotations
 
 import re
+import threading
 import time
-from collections.abc import Callable, Mapping
+import warnings
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
-from inspect import signature
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ import torch
 from omegaconf import OmegaConf
 
 from dreamervla.algorithms.dreamervla import world_model_pretrain_step
+from dreamervla.constants import CHECKPOINT_FORMAT_VERSION
 from dreamervla.runners.base_runner import _atomic_torch_save
 from dreamervla.runners.success_classifier_training_runner import _success_probabilities_from_logits
 from dreamervla.runtime.classifier_metrics import sweep_threshold_metrics
@@ -31,9 +33,25 @@ from dreamervla.runtime.offline_seed import seed_replay_from_offline
 from dreamervla.runtime.world_model_training_common import _WorldModelTrainingCommon
 from dreamervla.utils.checkpoint_util import TopKCheckpointManager
 from dreamervla.utils.console import count_trainable
+from dreamervla.utils.hf_checkpoint import load_runner_payload
 from dreamervla.utils.hf_module import load_module_pretrained, save_module_pretrained
+from dreamervla.utils.seed import capture_rng_state, restore_rng_state, select_rank_rng_state
 
 _WARMUP_PROGRESS_RE = re.compile(r"^(?P<component>wm|classifier)_step_(?P<step>\d+)\.ckpt$")
+_LEGACY_WARMUP_RNG_WARNING_EMITTED = False
+_LEGACY_WARMUP_RNG_WARNING_LOCK = threading.Lock()
+
+
+def _cpu_tree(value: Any) -> Any:
+    if isinstance(value, torch.Tensor):
+        return value.detach().cpu()
+    if isinstance(value, dict):
+        return {key: _cpu_tree(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_cpu_tree(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_cpu_tree(item) for item in value)
+    return value
 
 
 def _assert_offline_seed_present(*, data_dir: Any, hidden_dir: Any) -> None:
@@ -132,47 +150,6 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         if distributed is not None and not bool(getattr(distributed, "is_main_process", True)):
             return
         print(message, flush=True)
-
-    def _maybe_warmup_checkpoint(
-        self,
-        *,
-        current: int,
-        total: int,
-        every: int,
-        checkpoint_fn: Callable[..., None] | None,
-        metrics: dict[str, Any] | None = None,
-        label: str,
-    ) -> None:
-        """Save an optional mid-warmup component checkpoint."""
-        if checkpoint_fn is None or int(every) <= 0:
-            return
-        current_i = int(current)
-        total_i = int(total)
-        if current_i >= total_i or current_i % int(every) != 0:
-            return
-        resolved_metrics = {
-            key: (float(value.detach().cpu()) if isinstance(value, torch.Tensor) else float(value))
-            for key, value in (metrics or {}).items()
-        }
-        self._invoke_warmup_checkpoint(checkpoint_fn, step=current_i, metrics=resolved_metrics)
-        self._print_pipeline_event(
-            f"[pipeline][{label}] checkpoint saved step={current_i}/{total_i}"
-        )
-
-    @staticmethod
-    def _invoke_warmup_checkpoint(
-        checkpoint_fn: Callable[..., None],
-        *,
-        step: int,
-        metrics: dict[str, float],
-    ) -> None:
-        param_count = len(signature(checkpoint_fn).parameters)
-        if param_count == 0:
-            checkpoint_fn()
-        elif param_count == 1:
-            checkpoint_fn(int(step))
-        else:
-            checkpoint_fn(int(step), metrics)
 
     def _wm_prefetch_workers(self) -> int:
         cfg = getattr(self, "cfg", None)
@@ -397,8 +374,6 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         steps: int,
         batch_size: int,
         optim_cfg,
-        checkpoint_every: int = 0,
-        checkpoint_fn: Callable[[int, dict[str, float]], None] | None = None,
         start_step: int = 0,
     ) -> float:
         self.world_model.train()
@@ -409,7 +384,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         prefetch_workers = self._wm_prefetch_workers()
 
         def should_profile(step_idx: int) -> bool:
-            return profile_steps < 0 or (int(step_idx) - start_i) < profile_steps
+            return profile_steps < 0 or int(step_idx) < profile_steps
 
         def consume_batch(
             i: int,
@@ -500,14 +475,6 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                     f"[pipeline][wm-warmup] step={i}/{total_steps} loss={last:.4f}"
                     f"{diagnostic_suffix}{cosine_suffix}"
                 )
-            self._maybe_warmup_checkpoint(
-                current=i + 1,
-                total=total_steps,
-                every=checkpoint_every,
-                checkpoint_fn=checkpoint_fn,
-                metrics=metrics,
-                label="wm-warmup",
-            )
             self.console_progress(
                 progress_current,
                 progress_total,
@@ -574,8 +541,6 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         sampling_protocol: str = "lumos",
         balance_batches: bool = False,
         log_step_offset: int = 0,
-        checkpoint_every: int = 0,
-        checkpoint_fn: Callable[[int, dict[str, float]], None] | None = None,
         start_step: int = 0,
         calibrate: bool = False,
         min_val_f1: float = 0.0,
@@ -585,6 +550,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         val_thresh_steps: int = 19,
     ) -> float:
         last_acc = 0.0
+        last_metrics = {"loss": 0.0, "acc": 0.0, "f1": 0.0, "pos_frac": 0.0}
         for i in range(int(start_step), int(steps)):
             m = online_classifier_update_step(
                 classifier=self.classifier,
@@ -599,6 +565,12 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 balance_batches=balance_batches,
             )
             last_acc = float(m["acc"])
+            last_metrics = {
+                "loss": float(m["loss"]),
+                "acc": last_acc,
+                "f1": float(m.get("f1", 0.0)),
+                "pos_frac": float(m.get("pos_frac", 0.0)),
+            }
             if i % self._replay_warmup_log_every() == 0:
                 self._log_replay_warmup_metrics(
                     {
@@ -615,20 +587,6 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                     f"f1={float(m.get('f1', 0.0)):.3f} "
                     f"pos={float(m.get('pos_frac', 0.0)):.3f}"
                 )
-            metrics = {
-                "loss": float(m["loss"]),
-                "acc": last_acc,
-                "f1": float(m.get("f1", 0.0)),
-                "pos_frac": float(m.get("pos_frac", 0.0)),
-            }
-            self._maybe_warmup_checkpoint(
-                current=i + 1,
-                total=int(steps),
-                every=checkpoint_every,
-                checkpoint_fn=checkpoint_fn,
-                metrics=metrics,
-                label="classifier-warmup",
-            )
             self.console_progress(i + 1, int(steps), "classifier-warmup", unit="update")
         # B1/B2: optional held-out threshold calibration + warmup val gate.
         # Both are OFF by default (calibrate=False, min_val_f1=0.0), so the
@@ -678,6 +636,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                         f"(threshold={float(self.classifier_threshold):.3f}); "
                         "raise data/steps or lower the gate."
                     )
+        self._last_classifier_warmup_metrics = last_metrics
         return last_acc
 
     def _collect_classifier_val_probs(
@@ -990,9 +949,6 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             None,
         )
 
-    def _warmup_progress_path(self, component: str, step: int) -> Path:
-        return self._warmup_progress_dir() / f"{component}_step_{int(step):08d}.ckpt"
-
     def _latest_warmup_progress_path(self, component: str) -> Path | None:
         latest_step = -1
         latest_path: Path | None = None
@@ -1024,22 +980,48 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         if k_value <= 0:
             return None
         if component == "wm":
-            return TopKCheckpointManager(
+            manager = TopKCheckpointManager(
                 save_dir=str(self._warmup_topk_dir("wm")),
                 monitor_key="loss",
                 mode="min",
                 k=k_value,
                 format_str="wm_step={step:08d}-loss={loss:.6f}.ckpt",
             )
-        if component == "classifier":
-            return TopKCheckpointManager(
+        elif component == "classifier":
+            manager = TopKCheckpointManager(
                 save_dir=str(self._warmup_topk_dir("classifier")),
                 monitor_key="f1",
                 mode="max",
                 k=k_value,
                 format_str="classifier_step={step:08d}-f1={f1:.6f}.ckpt",
             )
-        raise ValueError(f"unknown warmup component: {component}")
+        else:
+            raise ValueError(f"unknown warmup component: {component}")
+        self._restore_warmup_topk_manager(manager)
+        return manager
+
+    @staticmethod
+    def _restore_warmup_topk_manager(manager: TopKCheckpointManager) -> None:
+        save_dir = Path(manager.save_dir)
+        if not save_dir.is_dir():
+            return
+        candidates: list[tuple[Path, float]] = []
+        invalid: list[Path] = []
+        for path in sorted(save_dir.glob("*.ckpt")):
+            payload = load_runner_payload(path)
+            metrics = payload.get("metrics", {})
+            value = metrics.get(manager.monitor_key) if isinstance(metrics, dict) else None
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                candidates.append((path, float(value)))
+            else:
+                invalid.append(path)
+        reverse = manager.mode == "max"
+        ranked = sorted(candidates, key=lambda item: (item[1], item[0].name), reverse=reverse)
+        keep = ranked[: manager.k]
+        remove = [path for path, _value in ranked[manager.k :]] + invalid
+        manager.path_value_map = {str(path): value for path, value in keep}
+        for path in remove:
+            path.unlink(missing_ok=True)
 
     @staticmethod
     def _save_warmup_topk(
@@ -1057,136 +1039,350 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         if path is not None:
             _atomic_torch_save(payload, Path(path))
 
-    def _save_wm_warmup_progress(
+    def _gather_checkpoint_rng(self) -> list[dict[str, Any]]:
+        local_state = capture_rng_state()
+        distributed = getattr(self, "distributed", None)
+        gather = None if distributed is None else getattr(distributed, "all_gather_objects", None)
+        return gather(local_state) if callable(gather) else [local_state]
+
+    def _save_wm_warmup_checkpoint(
         self,
         *,
         step: int,
-        total: int,
+        epoch: int,
+        complete: bool,
         metrics: dict[str, float],
-        topk_manager: TopKCheckpointManager | None,
-    ) -> None:
+        steps_per_epoch: int,
+        total_steps: int,
+        topk_manager: TopKCheckpointManager | None = None,
+    ) -> Path:
+        path = Path(self._wm_warmup_ckpt())
+        if not self.checkpoint_save_torch():
+            return path
         payload = {
+            "format_version": CHECKPOINT_FORMAT_VERSION,
+            "component": "wm",
             "global_step": int(self.global_step),
-            "warmup_component": "wm",
+            "warmup_epoch": int(epoch),
             "warmup_step": int(step),
-            "warmup_total_steps": int(total),
-            "complete": False,
+            "warmup_steps_per_epoch": int(steps_per_epoch),
+            "warmup_total_steps": int(total_steps),
+            "complete": bool(complete),
             "metrics": {key: float(value) for key, value in metrics.items()},
-            "config": {
-                "world_model": OmegaConf.to_container(
-                    self.cfg.world_model,
-                    resolve=True,
-                )
+            "state_dicts": {
+                "world_model": _cpu_tree(_unwrap(self.world_model).state_dict()),
+                "world_model_optimizer": _cpu_tree(
+                    self.world_model_optimizer.state_dict()
+                ),
             },
-            "world_model": _unwrap(self.world_model).state_dict(),
-            "world_model_optimizer": self.world_model_optimizer.state_dict(),
+            "rng_by_rank": self._gather_checkpoint_rng(),
         }
-        _atomic_torch_save(payload, self._warmup_progress_path("wm", int(step)))
-        self._save_warmup_topk(payload, metrics=metrics, step=int(step), topk_manager=topk_manager)
+        if self.is_main_process:
+            _atomic_torch_save(payload, path)
+            self._save_warmup_topk(
+                payload, metrics=metrics, step=int(step), topk_manager=topk_manager
+            )
+        return path
 
-    def _save_cls_warmup_progress(
+    def _save_cls_warmup_checkpoint(
         self,
         *,
         step: int,
-        total: int,
+        epoch: int,
+        complete: bool,
         metrics: dict[str, float],
-        topk_manager: TopKCheckpointManager | None,
-    ) -> None:
+        steps_per_epoch: int,
+        total_steps: int,
+        topk_manager: TopKCheckpointManager | None = None,
+    ) -> Path:
+        path = Path(self._cls_warmup_ckpt())
+        if not self.checkpoint_save_torch():
+            return path
         payload = {
+            "format_version": CHECKPOINT_FORMAT_VERSION,
+            "component": "classifier",
             "global_step": int(self.global_step),
-            "warmup_component": "classifier",
+            "warmup_epoch": int(epoch),
             "warmup_step": int(step),
-            "warmup_total_steps": int(total),
-            "complete": False,
+            "warmup_steps_per_epoch": int(steps_per_epoch),
+            "warmup_total_steps": int(total_steps),
+            "complete": bool(complete),
             "metrics": {key: float(value) for key, value in metrics.items()},
-            "classifier": _unwrap(self.classifier).state_dict(),
-            "classifier_optimizer": self.classifier_optimizer.state_dict(),
+            "state_dicts": {
+                "classifier": _cpu_tree(_unwrap(self.classifier).state_dict()),
+                "classifier_optimizer": _cpu_tree(self.classifier_optimizer.state_dict()),
+            },
+            "rng_by_rank": self._gather_checkpoint_rng(),
             "classifier_threshold": float(self.classifier_threshold),
+            "best_metric": getattr(self, "best_classifier_f1", None),
+            "best_checkpoint_path": getattr(self, "best_classifier_ckpt_path", None),
         }
-        _atomic_torch_save(payload, self._warmup_progress_path("classifier", int(step)))
-        self._save_warmup_topk(payload, metrics=metrics, step=int(step), topk_manager=topk_manager)
+        if self.is_main_process:
+            _atomic_torch_save(payload, path)
+            self._save_warmup_topk(
+                payload, metrics=metrics, step=int(step), topk_manager=topk_manager
+            )
+        return path
 
-    def _load_latest_wm_warmup_progress(self) -> int:
-        path = self._latest_warmup_progress_path("wm")
-        if path is None:
-            return 0
-        payload = torch.load(path, map_location="cpu", weights_only=False)
-        _unwrap(self.world_model).load_state_dict(payload["world_model"])
-        if "world_model_optimizer" in payload:
-            self.world_model_optimizer.load_state_dict(payload["world_model_optimizer"])
-        step = int(payload.get("warmup_step", 0))
-        self.set_metric_resume_step(step)
-        self._print_pipeline_event(
-            f"[pipeline][wm-warmup] resumed progress step={step} from {path}"
+    def _restore_warmup_rng(self, payload: dict[str, Any], *, strict: bool) -> None:
+        version = payload.get("format_version")
+        distributed = getattr(self, "distributed", None)
+        rank = 0 if distributed is None else int(getattr(distributed, "rank", 0))
+        state = select_rank_rng_state(payload.get("rng_by_rank", payload.get("rng")), rank)
+        if isinstance(version, int) and version >= CHECKPOINT_FORMAT_VERSION:
+            if state is None:
+                raise RuntimeError("format v2 warmup checkpoint is missing rng_by_rank")
+            restore_rng_state(state, strict=True)
+            return
+        if state is not None:
+            restore_rng_state(state, strict=False)
+            return
+        if not strict:
+            return
+        global _LEGACY_WARMUP_RNG_WARNING_EMITTED
+        if not _LEGACY_WARMUP_RNG_WARNING_EMITTED:
+            with _LEGACY_WARMUP_RNG_WARNING_LOCK:
+                if not _LEGACY_WARMUP_RNG_WARNING_EMITTED:
+                    warnings.warn(
+                        "legacy warmup checkpoint has no RNG state; continuing from current seed",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+                    _LEGACY_WARMUP_RNG_WARNING_EMITTED = True
+
+    @staticmethod
+    def _validate_v2_warmup_progress(
+        payload: dict[str, Any],
+        *,
+        component: str,
+    ) -> dict[str, int | bool]:
+        required = {
+            "component",
+            "warmup_epoch",
+            "warmup_step",
+            "warmup_steps_per_epoch",
+            "warmup_total_steps",
+            "complete",
+            "state_dicts",
+            "rng_by_rank",
+        }
+        missing = sorted(required.difference(payload))
+        if missing:
+            raise RuntimeError(f"format v2 {component} warmup checkpoint is missing {missing}")
+        if payload["component"] != component:
+            raise RuntimeError(
+                f"warmup checkpoint component mismatch: {payload['component']!r} != {component!r}"
+            )
+        epoch = int(payload["warmup_epoch"])
+        step = int(payload["warmup_step"])
+        steps_per_epoch = int(payload["warmup_steps_per_epoch"])
+        total_steps = int(payload["warmup_total_steps"])
+        if steps_per_epoch <= 0 or total_steps <= 0:
+            raise RuntimeError(f"format v2 {component} warmup geometry must be positive")
+        complete = bool(payload["complete"])
+        expected_epoch = (
+            int(total_steps) // int(steps_per_epoch) if complete else epoch
         )
-        return step
+        if epoch != expected_epoch:
+            raise RuntimeError(
+                f"format v2 {component} warmup epoch mismatch: "
+                f"warmup_epoch={epoch}, expected {expected_epoch}"
+            )
+        expected_step = int(total_steps) if complete else epoch * int(steps_per_epoch)
+        if step != expected_step:
+            raise RuntimeError(
+                f"format v2 {component} warmup progress mismatch: "
+                f"warmup_step={step}, expected {expected_step} from warmup_epoch={epoch}"
+            )
+        return {"epoch": epoch, "step": step, "complete": complete}
 
-    def _load_latest_cls_warmup_progress(self) -> int:
-        path = self._latest_warmup_progress_path("classifier")
-        if path is None:
-            return 0
-        payload = torch.load(path, map_location="cpu", weights_only=False)
-        _unwrap(self.classifier).load_state_dict(payload["classifier"])
-        if "classifier_optimizer" in payload:
-            self.classifier_optimizer.load_state_dict(payload["classifier_optimizer"])
+    def _load_wm_warmup_checkpoint(
+        self,
+        path: str | Path,
+        *,
+        strict: bool,
+        restore_rng: bool = True,
+    ) -> dict[str, int | bool]:
+        payload = load_runner_payload(path)
+        version = payload.get("format_version")
+        is_v2 = isinstance(version, int) and version >= CHECKPOINT_FORMAT_VERSION
+        state_dicts = payload.get("state_dicts")
+        if is_v2:
+            progress = self._validate_v2_warmup_progress(
+                payload,
+                component="wm",
+            )
+            if not isinstance(state_dicts, dict) or "world_model" not in state_dicts:
+                raise RuntimeError("format v2 WM warmup checkpoint is missing world_model state")
+            if "world_model_optimizer" not in state_dicts:
+                raise RuntimeError(
+                    "format v2 WM warmup checkpoint is missing world_model_optimizer state"
+                )
+            _unwrap(self.world_model).load_state_dict(state_dicts["world_model"])
+            self.world_model_optimizer.load_state_dict(state_dicts["world_model_optimizer"])
+        else:
+            progress = {
+                "epoch": int(payload.get("warmup_epoch", 0)),
+                "step": int(payload.get("warmup_step", 0)),
+                "complete": bool(payload.get("complete", False)),
+            }
+            if "world_model" not in payload:
+                raise RuntimeError("legacy WM warmup checkpoint is missing world_model state")
+            if strict and "world_model_optimizer" not in payload:
+                raise RuntimeError("legacy WM warmup checkpoint is missing world_model_optimizer")
+            _unwrap(self.world_model).load_state_dict(payload["world_model"])
+            if "world_model_optimizer" in payload:
+                self.world_model_optimizer.load_state_dict(payload["world_model_optimizer"])
+        if restore_rng:
+            self._restore_warmup_rng(payload, strict=strict)
+        return progress
+
+    def _load_cls_warmup_checkpoint(
+        self,
+        path: str | Path,
+        *,
+        strict: bool,
+        restore_rng: bool = True,
+    ) -> dict[str, int | bool]:
+        payload = load_runner_payload(path)
+        version = payload.get("format_version")
+        is_v2 = isinstance(version, int) and version >= CHECKPOINT_FORMAT_VERSION
+        state_dicts = payload.get("state_dicts")
+        if is_v2:
+            progress = self._validate_v2_warmup_progress(
+                payload,
+                component="classifier",
+            )
+            if not isinstance(state_dicts, dict) or "classifier" not in state_dicts:
+                raise RuntimeError("format v2 classifier warmup checkpoint is missing classifier")
+            if "classifier_optimizer" not in state_dicts:
+                raise RuntimeError(
+                    "format v2 classifier warmup checkpoint is missing classifier_optimizer"
+                )
+            _unwrap(self.classifier).load_state_dict(state_dicts["classifier"])
+            self.classifier_optimizer.load_state_dict(state_dicts["classifier_optimizer"])
+        else:
+            progress = {
+                "epoch": int(payload.get("warmup_epoch", 0)),
+                "step": int(payload.get("warmup_step", 0)),
+                "complete": bool(payload.get("complete", False)),
+            }
+            if "classifier" not in payload:
+                raise RuntimeError("legacy classifier warmup checkpoint is missing classifier state")
+            if strict and "classifier_optimizer" not in payload:
+                raise RuntimeError("legacy classifier warmup checkpoint is missing classifier_optimizer")
+            _unwrap(self.classifier).load_state_dict(payload["classifier"])
+            if "classifier_optimizer" in payload:
+                self.classifier_optimizer.load_state_dict(payload["classifier_optimizer"])
         if "classifier_threshold" in payload:
             self.classifier_threshold = float(payload["classifier_threshold"])
-        step = int(payload.get("warmup_step", 0))
-        self.set_metric_resume_step(step)
-        self._print_pipeline_event(
-            f"[pipeline][classifier-warmup] resumed progress step={step} from {path}"
-        )
-        return step
+        if payload.get("best_metric") is not None:
+            self.best_classifier_f1 = float(payload["best_metric"])
+        if payload.get("best_checkpoint_path") is not None:
+            self.best_classifier_ckpt_path = str(payload["best_checkpoint_path"])
+        if restore_rng:
+            self._restore_warmup_rng(payload, strict=strict)
+        return progress
 
-    def _save_wm_warmup(self, *, completed_steps: int) -> None:
+    def _load_latest_wm_warmup_progress(
+        self, *, steps_per_epoch: int | None = None, total_steps: int | None = None
+    ) -> dict[str, int | bool]:
+        del total_steps
+        path = self._existing_warmup_checkpoint("wm_warmup.ckpt")
+        if path is None:
+            path = self._latest_warmup_progress_path("wm")
+        if path is None:
+            raise RuntimeError("training.resume requested but no WM warmup checkpoint exists")
+        progress = self._load_wm_warmup_checkpoint(
+            path,
+            strict=True,
+        )
+        if int(progress["epoch"]) <= 0 and int(progress["step"]) > 0:
+            progress["epoch"] = (
+                int(progress["step"]) // int(steps_per_epoch)
+                if steps_per_epoch
+                else 0
+            )
+        self._print_pipeline_event(
+            f"[pipeline][wm-warmup] resumed progress step={progress['step']} from {path}"
+        )
+        return progress
+
+    def _load_latest_cls_warmup_progress(
+        self, *, steps_per_epoch: int | None = None, total_steps: int | None = None
+    ) -> dict[str, int | bool]:
+        del total_steps
+        path = self._existing_warmup_checkpoint("classifier_warmup.ckpt")
+        if path is None:
+            path = self._latest_warmup_progress_path("classifier")
+        if path is None:
+            raise RuntimeError(
+                "training.resume requested but no classifier warmup checkpoint exists"
+            )
+        progress = self._load_cls_warmup_checkpoint(
+            path,
+            strict=True,
+        )
+        if int(progress["epoch"]) <= 0 and int(progress["step"]) > 0:
+            progress["epoch"] = (
+                int(progress["step"]) // int(steps_per_epoch)
+                if steps_per_epoch
+                else 0
+            )
+        self._print_pipeline_event(
+            f"[pipeline][classifier-warmup] resumed progress step={progress['step']} from {path}"
+        )
+        return progress
+
+    def _save_wm_warmup(
+        self,
+        *,
+        completed_steps: int,
+        completed_epochs: int = 1,
+        metrics: dict[str, float] | None = None,
+        topk_manager: TopKCheckpointManager | None = None,
+        steps_per_epoch: int | None = None,
+    ) -> None:
         completed_steps = int(completed_steps)
         if completed_steps <= 0:
             raise ValueError(f"completed WM warmup steps must be positive, got {completed_steps}")
         if self.checkpoint_save_torch():
-            payload = {
-                "global_step": int(self.global_step),
-                "world_model": _unwrap(self.world_model).state_dict(),
-                "warmup_component": "wm",
-                "warmup_step": completed_steps,
-                "warmup_total_steps": completed_steps,
-                "complete": True,
-                "config": {
-                    "world_model": OmegaConf.to_container(
-                        self.cfg.world_model,
-                        resolve=True,
-                    )
-                },
-            }
-            optimizer = getattr(self, "world_model_optimizer", None)
-            if optimizer is not None:
-                payload["world_model_optimizer"] = optimizer.state_dict()
-            _atomic_torch_save(
-                payload,
-                Path(self._wm_warmup_ckpt()),
+            self._save_wm_warmup_checkpoint(
+                step=completed_steps,
+                epoch=completed_epochs,
+                complete=True,
+                metrics=dict(metrics or {}),
+                steps_per_epoch=int(steps_per_epoch or completed_steps),
+                total_steps=completed_steps,
+                topk_manager=topk_manager,
             )
-        if self.checkpoint_save_hf():
+        if self.checkpoint_save_hf() and self.is_main_process:
             wm_cfg = OmegaConf.to_container(OmegaConf.select(self.cfg, "world_model"), resolve=True)
             target = wm_cfg.pop("_target_")
             save_module_pretrained(
                 _unwrap(self.world_model), self._wm_warmup_hf_dir(), target=target, init_args=wm_cfg
             )
 
-    def _save_cls_warmup(self) -> None:
+    def _save_cls_warmup(
+        self,
+        *,
+        completed_steps: int = 0,
+        completed_epochs: int = 1,
+        metrics: dict[str, float] | None = None,
+        topk_manager: TopKCheckpointManager | None = None,
+        steps_per_epoch: int | None = None,
+    ) -> None:
         if self.checkpoint_save_torch():
-            payload = {
-                "global_step": int(self.global_step),
-                "classifier": _unwrap(self.classifier).state_dict(),
-                "classifier_threshold": float(self.classifier_threshold),
-                "complete": True,
-            }
-            optimizer = getattr(self, "classifier_optimizer", None)
-            if optimizer is not None:
-                payload["classifier_optimizer"] = optimizer.state_dict()
-            _atomic_torch_save(
-                payload,
-                Path(self._cls_warmup_ckpt()),
+            self._save_cls_warmup_checkpoint(
+                step=completed_steps,
+                epoch=completed_epochs,
+                complete=True,
+                metrics=dict(metrics or {}),
+                steps_per_epoch=int(steps_per_epoch or max(1, completed_steps)),
+                total_steps=completed_steps,
+                topk_manager=topk_manager,
             )
-        if self.checkpoint_save_hf():
+        if self.checkpoint_save_hf() and self.is_main_process:
             cls_kwargs = getattr(self, "_classifier_cls_kwargs", {})
             save_module_pretrained(
                 _unwrap(self.classifier),
@@ -1200,6 +1396,204 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 ),
                 init_args=cls_kwargs,
             )
+
+    def _canonical_warmup_is_complete(self, component: str) -> bool:
+        name = "wm_warmup.ckpt" if component == "wm" else "classifier_warmup.ckpt"
+        path = self._existing_warmup_checkpoint(name)
+        if path is None:
+            return False
+        payload = load_runner_payload(path)
+        version = payload.get("format_version")
+        if isinstance(version, int) and version >= CHECKPOINT_FORMAT_VERSION:
+            required = {
+                "component",
+                "warmup_epoch",
+                "warmup_step",
+                "warmup_steps_per_epoch",
+                "warmup_total_steps",
+                "complete",
+                "state_dicts",
+                "rng_by_rank",
+            }
+            missing = sorted(required.difference(payload))
+            if missing:
+                raise RuntimeError(f"format v2 {component} warmup checkpoint is missing {missing}")
+            expected_component = "wm" if component == "wm" else "classifier"
+            if payload["component"] != expected_component:
+                raise RuntimeError(
+                    "warmup checkpoint component mismatch: "
+                    f"{payload['component']!r} != {expected_component!r}"
+                )
+        return bool(payload.get("complete", True))
+
+    def _restore_warmup_rng_from_checkpoint(self, path: Path) -> None:
+        payload = load_runner_payload(path)
+        self._restore_warmup_rng(payload, strict=True)
+
+    def _prepare_online_resume(
+        self,
+        *,
+        trained_active_warmup: bool,
+        classifier_enabled: bool,
+    ) -> bool:
+        """Choose exactly one RNG owner before entering the old online loop."""
+
+        if not bool(OmegaConf.select(self.cfg, "training.resume", default=False)):
+            return False
+        explicit_resume = OmegaConf.select(
+            self.cfg, "training.resume_path", default=None
+        )
+        if explicit_resume not in (None, ""):
+            explicit_path = Path(str(explicit_resume)).expanduser().resolve()
+            is_warmup = explicit_path.name in {
+                "wm_warmup.ckpt",
+                "classifier_warmup.ckpt",
+            } or explicit_path.parent.name == "warmup_progress"
+            if explicit_path.is_file() and not is_warmup:
+                return True
+        online_latest = self.get_checkpoint_path(prefer_existing=True)
+        if online_latest.is_file():
+            return True
+        if trained_active_warmup:
+            return False
+        component = "classifier" if classifier_enabled else "wm"
+        name = "classifier_warmup.ckpt" if classifier_enabled else "wm_warmup.ckpt"
+        checkpoint = self._existing_warmup_checkpoint(name)
+        if checkpoint is None:
+            raise RuntimeError(
+                f"training.resume requested but no complete {component} warmup RNG exists"
+            )
+        self._restore_warmup_rng_from_checkpoint(checkpoint)
+        return False
+
+    @staticmethod
+    def _warmup_epoch_count(*, total_steps: int, steps_per_epoch: int) -> int:
+        return max(1, (int(total_steps) + int(steps_per_epoch) - 1) // int(steps_per_epoch))
+
+    def _run_wm_warmup_epochs(
+        self,
+        replay: Any,
+        *,
+        total_steps: int,
+        steps_per_epoch: int,
+        start_step: int,
+        start_epoch: int,
+        batch_size: int,
+        optim_cfg: Any,
+        checkpoint_every_epochs: int,
+        topk_manager: TopKCheckpointManager | None,
+    ) -> float:
+        last = 0.0
+        total_epochs = self._warmup_epoch_count(
+            total_steps=total_steps, steps_per_epoch=steps_per_epoch
+        )
+        current_step = int(start_step)
+        for epoch_index in range(int(start_epoch), total_epochs):
+            epoch_end = min(int(total_steps), (epoch_index + 1) * int(steps_per_epoch))
+            last = self._offline_warmup_wm(
+                replay,
+                steps=epoch_end,
+                batch_size=batch_size,
+                optim_cfg=optim_cfg,
+                start_step=current_step,
+            )
+            current_step = epoch_end
+            completed_epoch = epoch_index + 1
+            if (
+                current_step < int(total_steps)
+                and int(checkpoint_every_epochs) > 0
+                and completed_epoch % int(checkpoint_every_epochs) == 0
+            ):
+                self._save_wm_warmup_checkpoint(
+                    step=current_step,
+                    epoch=completed_epoch,
+                    complete=False,
+                    metrics={"loss": float(last)},
+                    steps_per_epoch=steps_per_epoch,
+                    total_steps=total_steps,
+                    topk_manager=topk_manager,
+                )
+        self._save_wm_warmup(
+            completed_steps=int(total_steps),
+            completed_epochs=int(total_steps) // int(steps_per_epoch),
+            metrics={"loss": float(last)},
+            topk_manager=topk_manager,
+            steps_per_epoch=steps_per_epoch,
+        )
+        return float(last)
+
+    def _run_cls_warmup_epochs(
+        self,
+        replay: Any,
+        *,
+        total_steps: int,
+        steps_per_epoch: int,
+        start_step: int,
+        start_epoch: int,
+        batch_size: int,
+        early_neg_stride: int,
+        grad_clip: float,
+        loss_type: str | None,
+        sampling_protocol: str,
+        balance_batches: bool,
+        log_step_offset: int,
+        checkpoint_every_epochs: int,
+        topk_manager: TopKCheckpointManager | None,
+        calibration_kwargs: dict[str, Any],
+    ) -> float:
+        last = 0.0
+        last_metrics: dict[str, float] = {"acc": 0.0, "f1": 0.0}
+        total_epochs = self._warmup_epoch_count(
+            total_steps=total_steps, steps_per_epoch=steps_per_epoch
+        )
+        current_step = int(start_step)
+        for epoch_index in range(int(start_epoch), total_epochs):
+            epoch_end = min(int(total_steps), (epoch_index + 1) * int(steps_per_epoch))
+            is_final_epoch = epoch_end >= int(total_steps)
+            last = self._offline_warmup_classifier(
+                replay,
+                steps=epoch_end,
+                batch_size=batch_size,
+                early_neg_stride=early_neg_stride,
+                grad_clip=grad_clip,
+                loss_type=loss_type,
+                sampling_protocol=sampling_protocol,
+                balance_batches=balance_batches,
+                log_step_offset=log_step_offset,
+                start_step=current_step,
+                **(calibration_kwargs if is_final_epoch else {}),
+            )
+            current_step = epoch_end
+            last_metrics = dict(
+                getattr(
+                    self,
+                    "_last_classifier_warmup_metrics",
+                    {"acc": float(last), "f1": 0.0},
+                )
+            )
+            completed_epoch = epoch_index + 1
+            if (
+                not is_final_epoch
+                and int(checkpoint_every_epochs) > 0
+                and completed_epoch % int(checkpoint_every_epochs) == 0
+            ):
+                self._save_cls_warmup_checkpoint(
+                    step=current_step,
+                    epoch=completed_epoch,
+                    complete=False,
+                    metrics=last_metrics,
+                    steps_per_epoch=steps_per_epoch,
+                    total_steps=total_steps,
+                    topk_manager=topk_manager,
+                )
+        self._save_cls_warmup(
+            completed_steps=int(total_steps),
+            completed_epochs=int(total_steps) // int(steps_per_epoch),
+            metrics=last_metrics,
+            topk_manager=topk_manager,
+            steps_per_epoch=steps_per_epoch,
+        )
+        return float(last)
 
     # ------------------------------------------------------------- debug swap
     @staticmethod
@@ -1311,20 +1705,8 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         # warmup-ckpt resume), fail fast here instead of paying the model load only to
         # crash in seeding. A full resume needs no seeding, so the check is skipped.
         resume = bool(OmegaConf.select(cfg, "training.resume", default=False))
-        need_wm = not (
-            resume
-            and (
-                self._existing_warmup_checkpoint("wm_warmup.ckpt") is not None
-                or self._existing_warmup_hf_dir("wm_warmup_hf") is not None
-            )
-        )
-        need_cls = not (
-            resume
-            and (
-                self._existing_warmup_checkpoint("classifier_warmup.ckpt") is not None
-                or self._existing_warmup_hf_dir("classifier_warmup_hf") is not None
-            )
-        )
+        need_wm = not (resume and self._canonical_warmup_is_complete("wm"))
+        need_cls = not (resume and self._canonical_warmup_is_complete("classifier"))
         if (
             int(
                 OmegaConf.select(
@@ -1371,8 +1753,11 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         warmup_replay_max_steps = int(
             OmegaConf.select(cfg, "training.warmup_replay_max_steps", default=0) or 0
         )
-        warmup_checkpoint_every = int(
-            OmegaConf.select(cfg, "training.warmup_checkpoint_every", default=0) or 0
+        warmup_checkpoint_every_epochs = int(
+            OmegaConf.select(
+                cfg, "training.warmup_checkpoint_every_epochs", default=1
+            )
+            or 0
         )
         bs = int(OmegaConf.select(cfg, "dataloader.batch_size", default=4))
         cls_bs = int(OmegaConf.select(cfg, "training.classifier_batch_size", default=16))
@@ -1543,6 +1928,16 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 cls_window=cls_window,
                 cls_chunk_size=cls_chunk_size,
             )
+            wm_steps_per_epoch = (
+                max(1, (sampleable_windows + wm_global_bs - 1) // wm_global_bs)
+                if warmup_replay_epochs > 0
+                else max(1, int(wm_steps))
+            )
+            cls_steps_per_epoch = (
+                max(1, (classifier_windows + cls_global_bs - 1) // cls_global_bs)
+                if warmup_replay_epochs > 0
+                else max(1, int(cls_steps))
+            )
             # A WM-only recipe must not calibrate, update, or checkpoint a
             # randomly initialized classifier merely because no classifier
             # checkpoint exists yet.
@@ -1557,14 +1952,8 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 f"classifier_window={cls_window} chunk_size={cls_chunk_size} "
                 f"classifier_windows={classifier_windows}"
             )
-            if resume and need_wm:
-                wm_start_step = min(self._load_latest_wm_warmup_progress(), int(wm_steps))
-            else:
-                wm_start_step = 0
-            if resume and need_cls:
-                cls_start_step = min(self._load_latest_cls_warmup_progress(), int(cls_steps))
-            else:
-                cls_start_step = 0
+            wm_start_step = cls_start_step = 0
+            wm_start_epoch = cls_start_epoch = 0
             # The frozen encoder is idle during warmup — park it off-GPU to reclaim
             # its weights (restored before the online phase below).
             self._set_encoder_device("cpu")
@@ -1572,6 +1961,10 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         else:
             wm_start_step = 0
             cls_start_step = 0
+            wm_start_epoch = 0
+            cls_start_epoch = 0
+            wm_steps_per_epoch = max(1, int(wm_steps))
+            cls_steps_per_epoch = max(1, int(cls_steps))
 
         wm_topk_manager = (
             self._make_warmup_topk_manager(component="wm")
@@ -1583,117 +1976,63 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             if self.distributed.is_main_process
             else None
         )
+        trained_active_warmup = bool(need_wm or need_cls)
 
-        if need_wm and need_cls:
-            self.console_banner(
-                "[1/3] REPLAY WARMUP",
-                subtitle=(
-                    f"wm={wm_start_step}->{wm_steps} "
-                    f"cls={cls_start_step}->{cls_steps} learner updates"
-                ),
-            )
-            wm_last = self._offline_warmup_wm(
-                warmup_replay,
-                steps=wm_steps,
-                batch_size=bs,
-                optim_cfg=optim_cfg,
-                checkpoint_every=warmup_checkpoint_every,
-                checkpoint_fn=(
-                    (
-                        lambda step, metrics: self._save_wm_warmup_progress(
-                            step=step,
-                            total=wm_steps,
-                            metrics=metrics,
-                            topk_manager=wm_topk_manager,
-                        )
-                    )
-                    if self.distributed.is_main_process
-                    else None
-                ),
-                start_step=wm_start_step,
-            )
-            if self.distributed.is_main_process:
-                self._save_wm_warmup(completed_steps=wm_steps)
-            cls_last = self._offline_warmup_classifier(
-                warmup_replay,
-                steps=cls_steps,
-                batch_size=cls_bs,
-                early_neg_stride=early_neg_stride,
-                grad_clip=grad_clip,
-                loss_type=classifier_loss_type,
-                sampling_protocol=classifier_sampling_protocol,
-                balance_batches=classifier_balance_batches,
-                log_step_offset=wm_steps,
-                checkpoint_every=warmup_checkpoint_every,
-                checkpoint_fn=(
-                    (
-                        lambda step, metrics: self._save_cls_warmup_progress(
-                            step=step,
-                            total=cls_steps,
-                            metrics=metrics,
-                            topk_manager=cls_topk_manager,
-                        )
-                    )
-                    if self.distributed.is_main_process
-                    else None
-                ),
-                start_step=cls_start_step,
-                **self._warmup_calibration_kwargs(),
-            )
-            if self.distributed.is_main_process:
-                self._save_cls_warmup()
-                self.console_banner(
-                    "[1/3] REPLAY WARMUP",
-                    subtitle=f"wm_loss {wm_last:.3f} cls_acc {cls_last:.3f}",
-                    done=True,
+        if need_wm:
+            if resume:
+                wm_progress = self._load_latest_wm_warmup_progress(
+                    steps_per_epoch=wm_steps_per_epoch,
+                    total_steps=wm_steps,
                 )
-        elif need_wm:
+                wm_start_step = min(int(wm_progress["step"]), int(wm_steps))
+                wm_start_epoch = int(wm_progress["epoch"])
             self.console_banner("[1/3] WM WARMUP", subtitle=f"{wm_steps} steps")
-            wm_last = self._offline_warmup_wm(
+            wm_last = self._run_wm_warmup_epochs(
                 warmup_replay,
-                steps=wm_steps,
+                total_steps=wm_steps,
+                steps_per_epoch=wm_steps_per_epoch,
+                start_step=wm_start_step,
+                start_epoch=wm_start_epoch,
                 batch_size=bs,
                 optim_cfg=optim_cfg,
-                checkpoint_every=warmup_checkpoint_every,
-                checkpoint_fn=(
-                    (
-                        lambda step, metrics: self._save_wm_warmup_progress(
-                            step=step,
-                            total=wm_steps,
-                            metrics=metrics,
-                            topk_manager=wm_topk_manager,
-                        )
-                    )
-                    if self.distributed.is_main_process
-                    else None
-                ),
-                start_step=wm_start_step,
+                checkpoint_every_epochs=warmup_checkpoint_every_epochs,
+                topk_manager=wm_topk_manager,
             )
             if self.distributed.is_main_process:
-                self._save_wm_warmup(completed_steps=wm_steps)
                 self.console_banner("[1/3] WM WARMUP", subtitle=f"wm_loss {wm_last:.3f}", done=True)
         if not need_wm:
             wm_checkpoint = self._existing_warmup_checkpoint("wm_warmup.ckpt")
             wm_hf_dir = self._existing_warmup_hf_dir("wm_warmup_hf")
             if wm_checkpoint is not None:
-                payload = torch.load(wm_checkpoint, map_location="cpu", weights_only=False)
-                _unwrap(self.world_model).load_state_dict(payload["world_model"])
-                optimizer = getattr(self, "world_model_optimizer", None)
-                if optimizer is not None and "world_model_optimizer" in payload:
-                    optimizer.load_state_dict(payload["world_model_optimizer"])
+                payload = load_runner_payload(wm_checkpoint)
+                self._load_wm_warmup_checkpoint(
+                    wm_checkpoint,
+                    strict=resume,
+                    restore_rng=False,
+                )
                 self.global_step = max(
                     int(self.global_step),
                     int(payload.get("global_step", 0) or 0),
                 )
-            elif wm_hf_dir is not None:
+            elif wm_hf_dir is not None and not resume:
                 src = load_module_pretrained(wm_hf_dir)
                 _unwrap(self.world_model).load_state_dict(src.state_dict())
 
-        if need_cls and not need_wm:
+        if need_cls:
+            if resume:
+                cls_progress = self._load_latest_cls_warmup_progress(
+                    steps_per_epoch=cls_steps_per_epoch,
+                    total_steps=cls_steps,
+                )
+                cls_start_step = min(int(cls_progress["step"]), int(cls_steps))
+                cls_start_epoch = int(cls_progress["epoch"])
             self.console_banner("[2/3] CLASSIFIER WARMUP", subtitle=f"{cls_steps} steps")
-            cls_last = self._offline_warmup_classifier(
+            cls_last = self._run_cls_warmup_epochs(
                 warmup_replay,
-                steps=cls_steps,
+                total_steps=cls_steps,
+                steps_per_epoch=cls_steps_per_epoch,
+                start_step=cls_start_step,
+                start_epoch=cls_start_epoch,
                 batch_size=cls_bs,
                 early_neg_stride=early_neg_stride,
                 grad_clip=grad_clip,
@@ -1701,24 +2040,11 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 sampling_protocol=classifier_sampling_protocol,
                 balance_batches=classifier_balance_batches,
                 log_step_offset=wm_steps,
-                checkpoint_every=warmup_checkpoint_every,
-                checkpoint_fn=(
-                    (
-                        lambda step, metrics: self._save_cls_warmup_progress(
-                            step=step,
-                            total=cls_steps,
-                            metrics=metrics,
-                            topk_manager=cls_topk_manager,
-                        )
-                    )
-                    if self.distributed.is_main_process
-                    else None
-                ),
-                start_step=cls_start_step,
-                **self._warmup_calibration_kwargs(),
+                checkpoint_every_epochs=warmup_checkpoint_every_epochs,
+                topk_manager=cls_topk_manager,
+                calibration_kwargs=self._warmup_calibration_kwargs(),
             )
             if self.distributed.is_main_process:
-                self._save_cls_warmup()
                 self.console_banner(
                     "[2/3] CLASSIFIER WARMUP", subtitle=f"acc {cls_last:.3f}", done=True
                 )
@@ -1726,19 +2052,17 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             cls_checkpoint = self._existing_warmup_checkpoint("classifier_warmup.ckpt")
             cls_hf_dir = self._existing_warmup_hf_dir("classifier_warmup_hf")
             if cls_checkpoint is not None:
-                payload = torch.load(cls_checkpoint, map_location="cpu", weights_only=False)
-                _unwrap(self.classifier).load_state_dict(payload["classifier"])
-                optimizer = getattr(self, "classifier_optimizer", None)
-                if optimizer is not None and "classifier_optimizer" in payload:
-                    optimizer.load_state_dict(payload["classifier_optimizer"])
-                self.classifier_threshold = float(
-                    payload.get("classifier_threshold", self.classifier_threshold)
+                payload = load_runner_payload(cls_checkpoint)
+                self._load_cls_warmup_checkpoint(
+                    cls_checkpoint,
+                    strict=resume,
+                    restore_rng=False,
                 )
                 self.global_step = max(
                     int(self.global_step),
                     int(payload.get("global_step", 0) or 0),
                 )
-            elif cls_hf_dir is not None:
+            elif cls_hf_dir is not None and not resume:
                 src = load_module_pretrained(cls_hf_dir)
                 _unwrap(self.classifier).load_state_dict(src.state_dict())
 
@@ -1760,4 +2084,8 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             f"[pipeline][device] encoder restored to {self.device} for online rollout"
         )
         self.console_banner("[3/3] ONLINE COTRAIN", subtitle=f"{total_env_steps} env steps")
-        return self._online_cotrain_loop(cfg)
+        resume_online = self._prepare_online_resume(
+            trained_active_warmup=trained_active_warmup,
+            classifier_enabled=int(cls_steps) > 0,
+        )
+        return self._online_cotrain_loop(cfg, resume_online=resume_online)

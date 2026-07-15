@@ -854,11 +854,14 @@ class _WorldModelTrainingCommon(WorldModelTrainingBase):
             obs_hidden_source="hidden_token",
         )
 
-    def _online_cotrain_loop(self, cfg: DictConfig) -> list:  # noqa: C901
+    def _online_cotrain_loop(
+        self, cfg: DictConfig, *, resume_online: bool = True
+    ) -> list:  # noqa: C901
         # Mid-cotrain resume: restore module weights, optimizer state, and
         # global_step from checkpoints/latest.ckpt when training.resume=true.
         # The env rollout loop warm-restarts (env_step/replay are not serialized).
-        self.resume()
+        if resume_online:
+            self.resume()
         processor = self.processor
         algo = OmegaConf.select(cfg, "algorithm")
         # ---- run-control knobs

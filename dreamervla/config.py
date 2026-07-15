@@ -52,6 +52,7 @@ def validate_cfg(cfg: DictConfig, *, world_size: int | None = None) -> DictConfi
     _validate_latent_dimension_contracts(cfg)
     _validate_model_registry_refs(cfg)
     _validate_dino_token_training(cfg)
+    _validate_epoch_checkpoint_cadence(cfg)
     _validate_online_cotrain_pipeline(cfg)
     _validate_ray_manual_resources(cfg)
     _validate_fsdp_config(cfg)
@@ -1039,7 +1040,7 @@ def _validate_online_cotrain_pipeline(cfg: DictConfig) -> None:
         "classifier_warmup_steps",
         "warmup_replay_epochs",
         "warmup_replay_max_steps",
-        "warmup_checkpoint_every",
+        "warmup_checkpoint_every_epochs",
     ):
         val = int(OmegaConf.select(cfg, f"training.{key}", default=0))
         if val < 0:
@@ -1047,6 +1048,49 @@ def _validate_online_cotrain_pipeline(cfg: DictConfig) -> None:
     log_every = int(OmegaConf.select(cfg, "training.replay_warmup_log_every", default=1))
     if log_every < 1:
         raise ValueError(f"training.replay_warmup_log_every must be >= 1, got {log_every}")
+
+
+def _validate_epoch_checkpoint_cadence(cfg: DictConfig) -> None:
+    target = str(OmegaConf.select(cfg, "_target_", default="") or "").rsplit(".", 1)[-1]
+    if target == "WorldModelTrainingRunner":
+        if OmegaConf.select(cfg, "training.warmup_checkpoint_every", default=None) is not None:
+            raise ValueError(
+                "training.warmup_checkpoint_every was removed; use "
+                "training.warmup_checkpoint_every_epochs"
+            )
+        cadence = int(
+            OmegaConf.select(
+                cfg, "training.warmup_checkpoint_every_epochs", default=1
+            )
+        )
+        if cadence < 0:
+            raise ValueError(
+                "training.warmup_checkpoint_every_epochs must be >= 0, "
+                f"got {cadence}"
+            )
+        epochs = int(OmegaConf.select(cfg, "training.warmup_replay_epochs", default=0) or 0)
+        if epochs > 1 and cadence == 0:
+            raise ValueError(
+                "training.warmup_checkpoint_every_epochs must be > 0 when "
+                "training.warmup_replay_epochs > 1"
+            )
+    if target == "SuccessClassifierTrainingRunner":
+        if OmegaConf.select(cfg, "training.ckpt_every", default=None) is not None:
+            raise ValueError(
+                "training.ckpt_every was removed; use training.checkpoint_every_epochs"
+            )
+        cadence = int(
+            OmegaConf.select(cfg, "training.checkpoint_every_epochs", default=1)
+        )
+        if cadence < 0:
+            raise ValueError(
+                f"training.checkpoint_every_epochs must be >= 0, got {cadence}"
+            )
+        epochs = int(OmegaConf.select(cfg, "training.num_epochs", default=1) or 0)
+        if epochs > 1 and cadence == 0:
+            raise ValueError(
+                "training.checkpoint_every_epochs must be > 0 when training.num_epochs > 1"
+            )
 
 
 def _validate_model_registry_refs(cfg: DictConfig) -> None:

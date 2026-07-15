@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 from omegaconf import OmegaConf
 from torch.utils.data import IterableDataset, SequentialSampler
@@ -34,6 +35,54 @@ def test_classifier_checkpoint_includes_all_resume_loop_state() -> None:
         "best_window_ckpt_path",
         "best_episode_ckpt_path",
     }.issubset(set(SuccessClassifierTrainingRunner.include_keys))
+
+
+def test_classifier_strict_resume_rejects_missing_optimizer() -> None:
+    import pytest
+
+    runner = object.__new__(SuccessClassifierTrainingRunner)
+    runner.model = torch.nn.Linear(2, 2)
+    runner.optim = torch.optim.SGD(runner.model.parameters(), lr=0.1)
+    runner.distributed = _FakeDistributed()
+
+    with pytest.raises(RuntimeError, match="optim"):
+        runner.load_payload(
+            {
+                "format_version": 2,
+                "state_dicts": {"model": runner.model.state_dict()},
+                "pickles": {},
+                "rng_by_rank": [],
+            },
+            restore_rng=True,
+        )
+
+    with pytest.raises(RuntimeError, match="global_step/epoch"):
+        runner.load_payload(
+            {
+                "format_version": 2,
+                "state_dicts": {
+                    "model": runner.model.state_dict(),
+                    "optim": runner.optim.state_dict(),
+                },
+                "pickles": {},
+                "rng_by_rank": [],
+            },
+            restore_rng=True,
+        )
+
+    with pytest.raises(ValueError, match="format_version=3"):
+        runner.load_payload(
+            {
+                "format_version": 3,
+                "state_dicts": {
+                    "model": runner.model.state_dict(),
+                    "optim": runner.optim.state_dict(),
+                },
+                "pickles": {"global_step": b"x", "epoch": b"x"},
+                "rng_by_rank": [],
+            },
+            restore_rng=True,
+        )
 
 
 class _FixedLogitClassifier(torch.nn.Module):
@@ -163,7 +212,7 @@ def test_classifier_run_profiles_full_optimizer_update(tmp_path: Path) -> None:
                 "num_epochs": 1,
                 "steps_per_epoch": 1,
                 "eval_every": 100,
-                "ckpt_every": 100,
+                "checkpoint_every_epochs": 1,
                 "log_every": 100,
                 "label_smoothing": 0.0,
                 "loss_type": "ce",
@@ -218,6 +267,75 @@ def test_classifier_run_profiles_full_optimizer_update(tmp_path: Path) -> None:
         assert f"time/classifier_update_{stage}_ms" in profile_keys
     assert "time/classifier_update_device_active_fraction" in profile_keys
     assert summary["total_steps"] == 1
+
+
+@pytest.mark.parametrize(
+    ("num_epochs", "cadence", "start_epoch", "expected_saves", "expected_loader_epochs"),
+    [
+        (2, 1, 0, [("latest", 1, 2), ("latest", 2, 4)], [0, 1]),
+        (1, 0, 0, [("latest", 1, 2)], [0]),
+        (4, 1, 3, [("latest", 4, 2)], [3]),
+    ],
+)
+def test_classifier_latest_checkpoint_is_saved_only_after_epoch_boundary(
+    tmp_path: Path,
+    num_epochs: int,
+    cadence: int,
+    start_epoch: int,
+    expected_saves: list[tuple[str, int, int]],
+    expected_loader_epochs: list[int],
+) -> None:
+    runner = object.__new__(SuccessClassifierTrainingRunner)
+    runner.cfg = OmegaConf.create(
+        {
+            "training": {
+                "num_epochs": num_epochs,
+                "steps_per_epoch": 2,
+                "eval_every": 100,
+                "checkpoint_every_epochs": cadence,
+                "log_every": 100,
+                "label_smoothing": 0.0,
+                "loss_type": "ce",
+                "class_balanced": False,
+                "precision": "fp32",
+            }
+        }
+    )
+    runner.config = runner.cfg
+    runner._output_dir = str(tmp_path)
+    runner.device = torch.device("cpu")
+    runner.model = torch.nn.Linear(3, 2)
+    runner.optim = torch.optim.SGD(runner.model.parameters(), lr=0.01)
+    runner.train_loader = [
+        (torch.ones(2, 3), torch.tensor([0, 1], dtype=torch.long)),
+        (torch.ones(2, 3), torch.tensor([0, 1], dtype=torch.long)),
+    ]
+    runner.val_loader = []
+    runner.train_ds = object()
+    runner.distributed = _FakeDistributed()
+    runner.epoch = start_epoch
+    runner.global_step = 0
+    runner.best_window_f1 = -1.0
+    runner.best_episode_f1 = -1.0
+    runner.best_window_ckpt_path = None
+    runner.best_episode_ckpt_path = None
+    runner._log = lambda _payload: None
+    runner.console_banner = lambda *_args, **_kwargs: None
+    runner.console_progress = lambda *_args, **_kwargs: None
+    runner.console_metrics = lambda *_args, **_kwargs: None
+    runner._finalize_validation_checkpoints = lambda: {}
+    runner.log_metrics = lambda *_args, **_kwargs: None
+    loader_epochs: list[int] = []
+    runner.set_dataloader_epoch = lambda _loader, epoch: loader_epochs.append(int(epoch))
+    saves: list[tuple[str, int, int]] = []
+    runner.save_checkpoint = lambda *, tag: saves.append(
+        (str(tag), int(runner.epoch), int(runner.global_step))
+    ) or ""
+
+    runner.run()
+
+    assert saves == expected_saves
+    assert loader_epochs == expected_loader_epochs
 
 
 def test_demo_pair_partition_is_deterministic_disjoint_and_complete() -> None:
