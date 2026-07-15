@@ -6,6 +6,23 @@ import sys
 from pathlib import Path
 
 import pytest
+from omegaconf import OmegaConf
+
+
+def _cotrain_smoke_command(repo: Path, out_dir: Path) -> list[str]:
+    return [
+        sys.executable,
+        "-m",
+        "dreamervla.train",
+        "--config-path",
+        str(repo / "tests" / "fixtures"),
+        "--config-name",
+        "cotrain_tiny",
+        "manual_cotrain.learner_update_step=1",
+        f"hydra.run.dir={out_dir}",
+        f"training.out_dir={out_dir}",
+        "hydra.job.chdir=false",
+    ]
 
 
 def test_cotrain_tiny_completes_full_global_step(tmp_path: Path) -> None:
@@ -18,13 +35,7 @@ def test_cotrain_tiny_completes_full_global_step(tmp_path: Path) -> None:
     env["WANDB_MODE"] = "offline"
     env["HYDRA_FULL_ERROR"] = "1"
     env["PYTHONPATH"] = str(repo)
-    cmd = [
-        sys.executable,
-        str(repo / "tests" / "helpers" / "run_cotrain_fixture.py"),
-        str(repo / "tests" / "fixtures" / "cotrain_tiny.yaml"),
-        "manual_cotrain.learner_update_step=1",
-        f"training.out_dir={out_dir}",
-    ]
+    cmd = _cotrain_smoke_command(repo, out_dir)
 
     result = subprocess.run(
         cmd,
@@ -39,8 +50,11 @@ def test_cotrain_tiny_completes_full_global_step(tmp_path: Path) -> None:
 
     assert result.returncode == 0, output
     assert "[manual-cotrain] groups=LearnerGroup,ActorGroup,RolloutGroup,EnvGroup" in output
-    assert (out_dir / "resolved_config.yaml").is_file()
     assert (out_dir / "run_manifest.json").is_file()
-    resolved = (out_dir / "resolved_config.yaml").read_text()
-    assert "global_steps: 1" in resolved
-    assert "learner_update_step: 1" in resolved
+    hydra_dir = out_dir / ".hydra"
+    for name in ("config.yaml", "overrides.yaml", "hydra.yaml"):
+        assert (hydra_dir / name).is_file()
+    assert not (out_dir / "resolved_config.yaml").exists()
+    hydra_config = OmegaConf.load(hydra_dir / "config.yaml")
+    assert hydra_config.manual_cotrain.global_steps == 1
+    assert hydra_config.manual_cotrain.learner_update_step == 1

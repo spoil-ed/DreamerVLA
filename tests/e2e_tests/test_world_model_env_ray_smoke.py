@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from omegaconf import OmegaConf
 
 
 def test_world_model_env_ray_smoke(tmp_path: Path) -> None:
@@ -40,10 +41,13 @@ def test_world_model_env_ray_smoke(tmp_path: Path) -> None:
     output = f"{result.stdout}\n{result.stderr}"
 
     assert result.returncode == 0, output
-    assert (out_dir / "resolved_config.yaml").is_file()
     assert (out_dir / "run_manifest.json").is_file()
-    resolved = (out_dir / "resolved_config.yaml").read_text()
-    assert "emit_hidden_sidecar: false" in resolved
+    hydra_dir = out_dir / ".hydra"
+    for name in ("config.yaml", "overrides.yaml", "hydra.yaml"):
+        assert (hydra_dir / name).is_file()
+    assert not (out_dir / "resolved_config.yaml").exists()
+    hydra_config = OmegaConf.load(hydra_dir / "config.yaml")
+    assert hydra_config.inference.cfg.emit_hidden_sidecar is False
     for metric in (
         "sync/policy_version=",
         "sync/wm_version=",
