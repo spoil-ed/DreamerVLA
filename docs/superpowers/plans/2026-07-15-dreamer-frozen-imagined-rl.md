@@ -291,3 +291,58 @@ git log -4 --oneline
 ```
 
 Expected: only the planned runner, config, tests, and documentation are changed; the user's pre-existing `task_plan.md`, `findings.md`, and `progress.md` remain untracked and untouched.
+
+### Task 5: Add the Dreamer training entrypoint
+
+**Files:**
+- Create: `scripts/experiments/dreamer/train.sh`
+- Create: `tests/unit_tests/test_dreamer_train_script.py`
+- Modify: `scripts/README.md`
+
+- [ ] **Step 1: Write the failing launcher-script contract**
+
+Add a test that requires the script to exist, pass `bash -n`, invoke
+`dreamervla.launchers.cotrain`, fix `--config openvla_libero`, and forward `"$@"`.
+
+- [ ] **Step 2: Run the test and verify RED**
+
+Run:
+
+```bash
+PYTHONPATH=. /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest -q \
+  tests/unit_tests/test_dreamer_train_script.py
+```
+
+Expected: FAIL because `scripts/experiments/dreamer/train.sh` does not exist.
+
+- [ ] **Step 3: Add the thin shell entrypoint**
+
+Create an executable script that changes to the repository root and executes:
+
+```bash
+python -m dreamervla.launchers.cotrain --config openvla_libero "$@"
+```
+
+Do not reproduce checkpoint or resume parsing in shell. The launcher remains the
+single implementation for `--wm_ckpt`, `--cls_ckpt`, and `--resume`, including
+original-run-root reuse.
+
+- [ ] **Step 4: Document train and resume commands**
+
+Add the Dreamer entrypoint to `scripts/README.md`, including one fresh-start command
+with both warmup checkpoints and one `--resume` command accepting a run root,
+checkpoint directory, or checkpoint file.
+
+- [ ] **Step 5: Run the script and launcher regression tests**
+
+Run:
+
+```bash
+PYTHONPATH=. /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest -q \
+  tests/unit_tests/test_dreamer_train_script.py \
+  tests/unit_tests/test_cotrain_launcher.py::test_cotrain_launcher_resume_reuses_original_run_root \
+  tests/unit_tests/test_cotrain_launcher.py::test_cotrain_launcher_rejects_resume_with_output_override
+bash -n scripts/experiments/dreamer/train.sh
+```
+
+Expected: all tests and shell syntax checks pass.
