@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Mapping
 from pathlib import Path
 
 import hydra
 import numpy as np
 import torch
 import torch.nn.functional as F
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader, Subset
 
 from dreamervla.diagnostics.eval_chunkwm_closeloop import (
@@ -126,13 +127,25 @@ def load_dino_token_world_model(
     return model.to(device=device, dtype=torch.float32).eval()
 
 
+def _payload_runner_config(value: object, *, key: str) -> DictConfig | None:
+    if value is None:
+        return None
+    if isinstance(value, DictConfig):
+        return value
+    if isinstance(value, Mapping):
+        config = OmegaConf.create(dict(value))
+        if isinstance(config, DictConfig):
+            return config
+    raise TypeError(f"checkpoint payload {key} must be a mapping")
+
+
 def _runner_config_from_checkpoint(
     payload: dict,
     checkpoint_path: Path,
     config_path: str | None,
-) -> object:
+) -> DictConfig:
     for key in ("cfg", "config"):
-        config = payload.get(key)
+        config = _payload_runner_config(payload.get(key), key=key)
         if config is not None and OmegaConf.select(config, "dataset.valid") is not None:
             return config
     try:

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import h5py
 import numpy as np
+import pytest
 import torch
 from omegaconf import OmegaConf
 
@@ -158,6 +159,79 @@ def test_dino_runner_config_accepts_complete_config_payload_without_disk_config(
     )
 
     assert loaded.dataset.valid.source == "config-payload"
+
+
+def test_dino_runner_config_accepts_plain_dict_cfg_payload(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "run" / "checkpoints" / "latest.ckpt"
+
+    loaded = _runner_config_from_checkpoint(
+        {"cfg": {"dataset": {"valid": {"source": "dict-cfg"}}}},
+        checkpoint,
+        config_path=None,
+    )
+
+    assert OmegaConf.is_config(loaded)
+    assert loaded.dataset.valid.source == "dict-cfg"
+
+
+def test_dino_runner_config_accepts_plain_dict_config_payload(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "run" / "checkpoints" / "latest.ckpt"
+
+    loaded = _runner_config_from_checkpoint(
+        {"config": {"dataset": {"valid": {"source": "dict-config"}}}},
+        checkpoint,
+        config_path=None,
+    )
+
+    assert OmegaConf.is_config(loaded)
+    assert loaded.dataset.valid.source == "dict-config"
+
+
+def test_dino_runner_config_checks_config_after_incomplete_cfg(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "run" / "checkpoints" / "latest.ckpt"
+
+    loaded = _runner_config_from_checkpoint(
+        {
+            "cfg": {"dataset": {"train": {"source": "incomplete"}}},
+            "config": {"dataset": {"valid": {"source": "complete"}}},
+        },
+        checkpoint,
+        config_path=None,
+    )
+
+    assert loaded.dataset.valid.source == "complete"
+
+
+def test_dino_runner_config_falls_back_after_incomplete_payload_configs(
+    tmp_path: Path,
+) -> None:
+    run_root = tmp_path / "run"
+    checkpoint = run_root / "checkpoints" / "latest.ckpt"
+    persisted = run_root / ".hydra" / "config.yaml"
+    persisted.parent.mkdir(parents=True)
+    OmegaConf.save({"dataset": {"valid": {"source": "disk"}}}, persisted)
+
+    loaded = _runner_config_from_checkpoint(
+        {
+            "cfg": {"dataset": {"train": {"source": "incomplete"}}},
+            "config": {"dataset": {}},
+        },
+        checkpoint,
+        config_path=None,
+    )
+
+    assert loaded.dataset.valid.source == "disk"
+
+
+def test_dino_runner_config_rejects_malformed_payload_config(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "run" / "checkpoints" / "latest.ckpt"
+
+    with pytest.raises(TypeError, match="payload cfg must be a mapping"):
+        _runner_config_from_checkpoint(
+            {"cfg": ["not", "a", "mapping"]},
+            checkpoint,
+            config_path=None,
+        )
 
 
 def test_dino_runner_config_discovers_native_hydra_config_from_checkpoint(
