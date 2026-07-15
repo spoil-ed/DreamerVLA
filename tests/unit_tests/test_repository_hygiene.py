@@ -448,6 +448,21 @@ def test_cotrain_eval_observer_lives_in_runtime() -> None:
     assert not (project_root / "dreamervla/diagnostics/eval_cotrain_transaction.py").exists()
 
 
+def test_runtime_fragments_are_consolidated() -> None:
+    from dreamervla.runtime.metrics import SuccessTracker
+    from dreamervla.runtime.rollout_collection_ray import build_oft_collect_config
+
+    assert SuccessTracker(window=2).rate() == 0.0
+    assert callable(build_oft_collect_config)
+    project_root = Path(__file__).resolve().parents[2]
+    for relative in (
+        "dreamervla/runtime/online_utils.py",
+        "dreamervla/runtime/rollout_collection_config.py",
+        "dreamervla/runtime/world_model_training_utils.py",
+    ):
+        assert not (project_root / relative).exists()
+
+
 def test_chunkwm_closeloop_diagnostic_usage_uses_role_based_wm_path() -> None:
     project_root = Path(__file__).resolve().parents[2]
     source = (project_root / "dreamervla" / "diagnostics" / "eval_chunkwm_closeloop.py").read_text(

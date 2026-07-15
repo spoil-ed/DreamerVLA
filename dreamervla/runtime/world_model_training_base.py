@@ -43,7 +43,6 @@ from dreamervla.algorithms.registry import get_actor_update_route
 from dreamervla.dataset import BaseDataset
 from dreamervla.runners.base_runner import BaseRunner
 from dreamervla.runtime.distributed import NopretokenizeSFTDistributedHelper
-from dreamervla.runtime.world_model_training_utils import save_viz_strip
 from dreamervla.utils.checkpoint_util import TopKCheckpointManager
 from dreamervla.utils.ema import EMAHelper
 from dreamervla.utils.hf_checkpoint import (
@@ -54,6 +53,36 @@ from dreamervla.utils.optim import build_optimizer
 from dreamervla.utils.paths import checkpoints_path, data_path
 from dreamervla.utils.seed import set_seed
 from dreamervla.utils.torch_utils import freeze_module
+
+
+def save_viz_strip(path: pathlib.Path, panels: list[tuple[str, Any]], cell_size: int) -> None:
+    """Write labelled image panels used by the optional WM visualizer."""
+
+    from PIL import Image, ImageDraw
+
+    header = 22
+    canvas = Image.new(
+        "RGB", (cell_size * len(panels), cell_size + header), color=(32, 32, 32)
+    )
+    draw = ImageDraw.Draw(canvas)
+    for index, (label, image) in enumerate(panels):
+        x0 = index * cell_size
+        if image is not None:
+            canvas.paste(
+                image.convert("RGB").resize((cell_size, cell_size)), (x0, header)
+            )
+        else:
+            draw.rectangle(
+                [x0, header, x0 + cell_size, header + cell_size], fill=(70, 20, 20)
+            )
+            draw.text(
+                (x0 + 8, header + cell_size // 2),
+                "(missing)",
+                fill=(230, 230, 230),
+            )
+        draw.text((x0 + 4, 4), str(label), fill=(230, 230, 230))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(path)
 
 
 class WorldModelTrainingBase(BaseRunner):
