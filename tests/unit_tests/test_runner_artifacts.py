@@ -128,3 +128,23 @@ def test_base_runner_setup_writes_only_shallow_run_artifacts(tmp_path: Path) -> 
     assert manifest["logging"]["backends"] == ["tensorboard", "wandb"]
     assert manifest["distributed"]["strategy"] == "ddp"
     assert "git" in manifest
+
+
+def test_base_runner_metric_logger_keeps_tensorboard_artifacts_shallow(
+    tmp_path: Path,
+) -> None:
+    out_dir = tmp_path / "run"
+    cfg = OmegaConf.create(
+        {
+            "training": {"out_dir": str(out_dir)},
+            "runner": {"logger": {"logger_backends": ["tensorboard"]}},
+        }
+    )
+    runner = _ConcreteRunner(cfg)
+
+    runner.log_metrics({"train/loss": 1.0}, step=0)
+    runner.finish_metric_logger()
+
+    tensorboard_dir = out_dir / "tensorboard"
+    assert any(path.name.startswith("events.out.tfevents") for path in tensorboard_dir.iterdir())
+    assert not (tensorboard_dir / "config.yaml").exists()

@@ -148,11 +148,12 @@ class MetricLogger:
         if "wandb" in self.logger_backends:
             import wandb
 
-            wandb_log_path = Path(log_path) / "wandb" / log_path_suffix
-            wandb_log_path.mkdir(parents=True, exist_ok=True)
+            sdk_base = Path(log_path) / log_path_suffix
+            identity_dir = sdk_base / "wandb"
+            identity_dir.mkdir(parents=True, exist_ok=True)
             wandb_run_id, existing_run = _resolve_wandb_run_id(
                 wandb,
-                wandb_log_path,
+                identity_dir,
                 resume=self.resume,
             )
 
@@ -165,7 +166,7 @@ class MetricLogger:
                 "id": wandb_run_id,
                 "config": self.config,
                 "settings": settings,
-                "dir": str(wandb_log_path),
+                "dir": str(sdk_base),
                 "mode": self.wandb_mode,
                 "reinit": True,
             }
@@ -178,9 +179,7 @@ class MetricLogger:
                     self.resume_step is not None
                     and "resume_from" in inspect.signature(wandb.init).parameters
                 ):
-                    init_kwargs["resume_from"] = (
-                        f"{wandb_run_id}?_step={self.resume_step}"
-                    )
+                    init_kwargs["resume_from"] = f"{wandb_run_id}?_step={self.resume_step}"
                 else:
                     init_kwargs["resume"] = "allow"
             wandb.init(
@@ -205,11 +204,6 @@ class MetricLogger:
         if "tensorboard" in self.logger_backends:
             tensorboard_log_path = Path(log_path) / "tensorboard" / log_path_suffix
             tensorboard_log_path.mkdir(parents=True, exist_ok=True)
-            OmegaConf.save(
-                config=self.cfg,
-                f=str(tensorboard_log_path / "config.yaml"),
-                resolve=True,
-            )
             purge_step = self.resume_step if self.resume else None
             bundle["tensorboard"] = _TensorboardLogger(
                 tensorboard_log_path,

@@ -34,7 +34,7 @@ class _CaptureMetricLogger:
         self.finished = True
 
 
-def test_metric_logger_writes_tensorboard_run_and_config(tmp_path: Path) -> None:
+def test_metric_logger_writes_tensorboard_events_without_config_copy(tmp_path: Path) -> None:
     log_root = tmp_path / "logs"
     cfg = OmegaConf.create(
         {
@@ -55,7 +55,7 @@ def test_metric_logger_writes_tensorboard_run_and_config(tmp_path: Path) -> None
     logger.finish()
 
     tensorboard_dir = log_root / "tensorboard"
-    assert (tensorboard_dir / "config.yaml").is_file()
+    assert not (tensorboard_dir / "config.yaml").exists()
     assert any(path.name.startswith("events.out.tfevents") for path in tensorboard_dir.iterdir())
 
 
@@ -69,7 +69,58 @@ def test_metric_logger_defaults_to_training_output_root(
     logger.log({"train/loss": 1.0}, step=0)
     logger.finish()
 
-    assert (out_dir / "tensorboard" / "config.yaml").is_file()
+    tensorboard_dir = out_dir / "tensorboard"
+    assert not (tensorboard_dir / "config.yaml").exists()
+    assert any(path.name.startswith("events.out.tfevents") for path in tensorboard_dir.iterdir())
+
+
+def test_metric_logger_writes_flat_offline_wandb_layout(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class FakeWandb:
+        class util:
+            @staticmethod
+            def generate_id() -> str:
+                return "stableid"
+
+        @staticmethod
+        def init(**kwargs) -> None:
+            calls.append(dict(kwargs))
+            run_dir = Path(kwargs["dir"]) / "wandb" / "offline-run-20260715_120000-stableid"
+            run_dir.mkdir(parents=True)
+            (run_dir / "run-stableid.wandb").touch()
+
+        @staticmethod
+        def finish() -> None:
+            return None
+
+    run_root = tmp_path / "run"
+    cfg = OmegaConf.create(
+        {
+            "runner": {
+                "logger": {
+                    "log_path": str(run_root),
+                    "project_name": "dreamervla",
+                    "experiment_name": "unit-offline",
+                    "logger_backends": ["wandb"],
+                    "wandb_mode": "offline",
+                }
+            },
+            "training": {"out_dir": str(run_root)},
+        }
+    )
+    monkeypatch.setitem(sys.modules, "wandb", FakeWandb)
+
+    logger = MetricLogger(cfg)
+    logger.finish()
+
+    assert calls[0]["dir"] == str(run_root)
+    assert (run_root / "wandb" / "run_id.txt").is_file()
+    assert list((run_root / "wandb").glob("offline-run-*"))
+    assert not (run_root / "wandb" / "wandb").exists()
 
 
 def test_metric_logger_passes_online_mode_to_wandb_init(
@@ -131,7 +182,7 @@ def test_metric_logger_passes_online_mode_to_wandb_init(
             "id": "newrun01",
             "config": OmegaConf.to_container(cfg, resolve=True),
             "settings": {"settings": {"https_proxy": "http://proxy.local:8080"}},
-            "dir": str(log_root / "wandb"),
+            "dir": str(log_root),
             "mode": "online",
             "reinit": True,
         }
