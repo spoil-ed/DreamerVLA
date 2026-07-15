@@ -18,10 +18,10 @@ def test_default_artifact_paths_follow_dvla_data_root(
 
     args = diag.parse_args()
 
-    assert args.resolved_config == data_root / (
+    assert args.run_config == data_root / (
         "outputs/coldstart_warmup_cotrain/"
         "fixed_cls_wm_vla_eval_g7_component_20260707_205109/"
-        "cotrain/resolved_config.yaml"
+        "cotrain/.hydra/config.yaml"
     )
     assert args.wm_ckpt == data_root / (
         "outputs/world_model_probe/current_actions_reward0_20260708_01/"
@@ -68,3 +68,27 @@ def test_split_stage_cli_accepts_trained_checkpoint_override(
 
     assert args.stage == "eval"
     assert args.trained_wm_ckpt == trained_ckpt
+
+
+def test_legacy_resolved_config_flag_is_hidden_alias(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from dreamervla.diagnostics import wm_single_episode_overfit as diag
+
+    legacy = tmp_path / "resolved_config.yaml"
+    monkeypatch.setattr(
+        "sys.argv",
+        ["wm_single_episode_overfit", "--resolved-config", str(legacy)],
+    )
+
+    args = diag.parse_args()
+
+    assert args.run_config == legacy
+    monkeypatch.setattr("sys.argv", ["wm_single_episode_overfit", "--help"])
+    with pytest.raises(SystemExit):
+        diag.parse_args()
+    help_text = capsys.readouterr().out
+    assert "--run-config" in help_text
+    assert "--resolved-config" not in help_text

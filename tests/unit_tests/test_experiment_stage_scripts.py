@@ -416,3 +416,140 @@ def test_classifier_check_treats_missing_failure_dirs_as_optional(
     assert payload["hdf5_counts"]["failure_dir_hidden"] == 0
     assert payload["optional_directories"]["failure_dir_raw"] == "missing"
     assert payload["optional_directories"]["failure_dir_hidden"] == "missing"
+
+
+def test_collection_output_records_run_config_without_snapshot_or_copy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_config = tmp_path / "collect-run" / ".hydra" / "config.yaml"
+    run_config.parent.mkdir(parents=True)
+    run_config.write_text("task: collect\n", encoding="utf-8")
+    collection_root = tmp_path / "collection"
+    written: dict[str, object] = {}
+    monkeypatch.setattr(
+        experiment_stage_checks,
+        "summarize_collection",
+        lambda *_args, **_kwargs: {
+            "total": 1,
+            "per_task": {0: 1},
+            "complete": True,
+            "remaining": 0,
+            "target_total": 1,
+            "target_per_task": 1,
+            "num_tasks": 1,
+        },
+    )
+
+    def fake_write_manifest(root: Path, data: dict[str, object]) -> Path:
+        written.update(data)
+        return root / "collection_manifest.json"
+
+    monkeypatch.setattr(experiment_stage_checks, "write_manifest", fake_write_manifest)
+
+    payload = experiment_stage_checks._collection_output_payload(
+        root=collection_root,
+        reward_dir=collection_root / "reward",
+        hidden_dir=collection_root / "hidden",
+        suite="libero_goal",
+        task="goal",
+        target_episodes=1,
+        num_tasks=1,
+        run_config=run_config,
+        collect_cmd=None,
+    )
+
+    assert written["run_config"] == str(run_config)
+    assert "resolved_config_snapshot" not in written
+    assert payload["run_config"] == str(run_config)
+    assert not (collection_root / "resolved_config.yaml").exists()
+
+
+@pytest.mark.parametrize("command", ["collect-output", "wm-check"])
+def test_stage_check_run_config_cli_hides_legacy_alias(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    command: str,
+) -> None:
+    parser = experiment_stage_checks.build_parser()
+    config = tmp_path / ".hydra" / "config.yaml"
+
+    args = parser.parse_args([command, "--run-config", str(config)])
+
+    assert args.run_config == str(config)
+    with pytest.raises(SystemExit):
+        parser.parse_args([command, "--help"])
+    help_text = capsys.readouterr().out
+    assert "--run-config" in help_text
+    assert "--resolved-config" not in help_text
+
+    legacy = parser.parse_args([command, "--resolved-config", str(config)])
+    assert legacy.run_config == str(config)
+
+
+def test_collect_run_records_native_hydra_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    out_dir = tmp_path / "collect-run"
+    cfg = OmegaConf.create(
+        {
+            "task": {"suite": "libero_goal", "openvla_oft": {}},
+            "collect": {"episodes_per_task": 1, "task_ids": [0]},
+        }
+    )
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(experiment_stage_checks, "_compose_collect_config", lambda _args: cfg)
+    monkeypatch.setattr(experiment_stage_checks.subprocess, "run", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        experiment_stage_checks,
+        "_collection_output_payload",
+        lambda **kwargs: captured.update(kwargs) or {"status": "ok"},
+    )
+    args = argparse.Namespace(
+        experiment="collect_rollouts",
+        task="goal",
+        reward_dir=str(tmp_path / "collection" / "reward"),
+        hidden_dir=str(tmp_path / "collection" / "hidden"),
+        out_dir=str(out_dir),
+        python="python",
+        target_episodes=1,
+        num_tasks=1,
+        dry_run=False,
+        overrides=[],
+    )
+
+    assert experiment_stage_checks.collect_run(args) == 0
+    assert captured["run_config"] == out_dir / ".hydra" / "config.yaml"
+
+
+@pytest.mark.parametrize(
+    ("config_relative", "expected_relative"),
+    [
+        (Path(".hydra/config.yaml"), Path(".hydra/config.yaml")),
+        (Path("resolved_config.yaml"), Path("resolved_config.yaml")),
+    ],
+)
+def test_cotrain_check_discovers_native_and_legacy_run_configs(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    config_relative: Path,
+    expected_relative: Path,
+) -> None:
+    run_root = tmp_path / "cotrain"
+    run_config = run_root / config_relative
+    run_config.parent.mkdir(parents=True)
+    run_config.write_text("run: cotrain\n", encoding="utf-8")
+    checkpoints = run_root / "checkpoints"
+    checkpoints.mkdir()
+    (checkpoints / "wm_warmup.ckpt").touch()
+    (checkpoints / "classifier_warmup.ckpt").touch()
+
+    result = experiment_stage_checks.cotrain_check(
+        argparse.Namespace(run_root=str(run_root), init_ckpt=None)
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert result == 0
+    assert payload["run_config"] == str(run_root / expected_relative)
+    assert "resolved_config" not in payload

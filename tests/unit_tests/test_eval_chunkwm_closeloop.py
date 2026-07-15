@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import h5py
 import numpy as np
 import torch
@@ -11,6 +13,7 @@ from dreamervla.diagnostics.eval_chunkwm_closeloop import (
     rollout,
     truncate_demo_to_wm_context,
 )
+from dreamervla.diagnostics.eval_dino_token_wm import _runner_config_from_checkpoint
 from dreamervla.models.embodiment.world_model.wm_chunk import ChunkAwareWorldModel
 
 
@@ -52,7 +55,9 @@ def test_eval_chunkwm_loader_accepts_pipeline_split_warmup_ckpt(tmp_path) -> Non
     run_dir = tmp_path / "cotrain"
     ckpt_dir = run_dir / "ckpt"
     ckpt_dir.mkdir(parents=True)
-    OmegaConf.save({"world_model": cfg}, run_dir / "resolved_config.yaml")
+    config_path = run_dir / ".hydra" / "config.yaml"
+    config_path.parent.mkdir()
+    OmegaConf.save({"world_model": cfg}, config_path)
     ckpt_path = ckpt_dir / "wm_warmup.ckpt"
     torch.save({"global_step": 0, "world_model": wm.state_dict()}, ckpt_path)
 
@@ -88,6 +93,7 @@ def test_eval_chunkwm_loader_materializes_worker_target_config(tmp_path) -> None
         "target": cfg["_target_"],
         "kwargs": {k: v for k, v in cfg.items() if k != "_target_"},
     }
+    (run_dir / ".hydra").mkdir()
     OmegaConf.save(
         {
             "world_model": {
@@ -96,7 +102,7 @@ def test_eval_chunkwm_loader_materializes_worker_target_config(tmp_path) -> None
             },
             "ray_components": {"world_model": worker_cfg},
         },
-        run_dir / "resolved_config.yaml",
+        run_dir / ".hydra" / "config.yaml",
     )
     ckpt_path = ckpt_dir / "wm_step_00000100.ckpt"
     torch.save(
@@ -115,12 +121,54 @@ def test_eval_chunkwm_loader_materializes_worker_target_config(tmp_path) -> None
     loaded = load_chunk_wm(
         str(ckpt_path),
         torch.device("cpu"),
-        config_path=str(run_dir / "resolved_config.yaml"),
+        config_path=str(run_dir / ".hydra" / "config.yaml"),
     )
 
     assert loaded.model_dim == 10
     assert loaded.proprio_dim == 3
     assert loaded.lang_dim == 5
+
+
+def test_dino_runner_config_prefers_complete_checkpoint_payload(tmp_path) -> None:
+    checkpoint = tmp_path / "run" / "checkpoints" / "latest.ckpt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.touch()
+    persisted = checkpoint.parents[1] / ".hydra" / "config.yaml"
+    persisted.parent.mkdir()
+    OmegaConf.save({"dataset": {"valid": {"source": "disk"}}}, persisted)
+    payload_cfg = OmegaConf.create({"dataset": {"valid": {"source": "payload"}}})
+
+    loaded = _runner_config_from_checkpoint(
+        {"cfg": payload_cfg}, checkpoint, config_path=None
+    )
+
+    assert loaded.dataset.valid.source == "payload"
+
+
+def test_dino_runner_config_discovers_native_hydra_config_from_checkpoint(
+    tmp_path: Path,
+) -> None:
+    checkpoint = tmp_path / "run" / "checkpoints" / "global_step_7" / "latest.ckpt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.touch()
+    persisted = checkpoint.parents[2] / ".hydra" / "config.yaml"
+    persisted.parent.mkdir()
+    OmegaConf.save({"dataset": {"valid": {"source": "canonical"}}}, persisted)
+
+    loaded = _runner_config_from_checkpoint({}, checkpoint, config_path=None)
+
+    assert loaded.dataset.valid.source == "canonical"
+
+
+def test_dino_runner_config_accepts_explicit_yaml_path(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "checkpoint.ckpt"
+    config = tmp_path / "different" / "runner.yaml"
+    config.parent.mkdir()
+    OmegaConf.save({"dataset": {"valid": {"source": "explicit"}}}, config)
+
+    loaded = _runner_config_from_checkpoint({}, checkpoint, config_path=str(config))
+
+    assert loaded.dataset.valid.source == "explicit"
 
 
 def test_eval_chunkwm_truncates_demo_to_world_model_context() -> None:

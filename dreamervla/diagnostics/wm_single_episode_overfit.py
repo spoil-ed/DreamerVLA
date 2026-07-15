@@ -26,6 +26,7 @@ import torch
 from omegaconf import OmegaConf
 
 from dreamervla.utils.paths import data_path
+from dreamervla.utils.run_config import load_run_config
 
 
 def _parse_report_steps(text: str) -> set[int]:
@@ -52,14 +53,22 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--resolved-config",
+        "--run-config",
+        dest="run_config",
         type=Path,
         default=data_path(
             "outputs/coldstart_warmup_cotrain/"
             "fixed_cls_wm_vla_eval_g7_component_20260707_205109/"
-            "cotrain/resolved_config.yaml"
+            "cotrain/.hydra/config.yaml"
         ),
-        help="Resolved cotrain config containing ray_components.world_model/classifier.",
+        help="Cotrain run config containing ray_components.world_model/classifier.",
+    )
+    parser.add_argument(
+        "--resolved-config",
+        dest="run_config",
+        type=Path,
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--wm-ckpt",
@@ -165,7 +174,7 @@ def _default_trained_wm_ckpt(args: argparse.Namespace) -> Path:
 
 def _required_paths(args: argparse.Namespace) -> dict[str, Path]:
     paths = {
-        "resolved config": args.resolved_config,
+        "run config": args.run_config,
         "classifier checkpoint": args.classifier_ckpt,
         "hidden HDF5": args.hidden_hdf5,
         "raw HDF5": args.raw_hdf5,
@@ -242,7 +251,7 @@ def main() -> None:
             {
                 "name": "data_check",
                 "checks": [
-                    "resolved config exists",
+                    "run config exists",
                     "source WM checkpoint exists for train/all stages",
                     "trained WM checkpoint exists for eval stage",
                     "classifier checkpoint exists",
@@ -273,7 +282,7 @@ def main() -> None:
             },
         ],
         "stage": args.stage,
-        "resolved_config": str(args.resolved_config),
+        "run_config": str(args.run_config),
         "wm_ckpt": str(args.wm_ckpt),
         "trained_wm_ckpt": str(args.trained_wm_ckpt),
         "classifier_ckpt": str(args.classifier_ckpt),
@@ -331,7 +340,7 @@ def _run_probe(
         args.hidden_hdf5, args.raw_hdf5, args.demo_key
     )
 
-    cfg = OmegaConf.load(args.resolved_config)
+    cfg = load_run_config(args.run_config)
     wm_cfg = OmegaConf.to_container(cfg.ray_components.world_model, resolve=True)
     wm_cfg["kwargs"]["reward_loss_scale"] = 0.0
     wm_cfg["kwargs"]["chunk_rollout_chunks"] = 1

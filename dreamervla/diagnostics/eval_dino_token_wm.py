@@ -18,6 +18,7 @@ from dreamervla.diagnostics.eval_chunkwm_closeloop import (
     _load_world_model_state,
 )
 from dreamervla.models.embodiment.world_model import DinoTokenWorldModel
+from dreamervla.utils.run_config import load_run_config
 
 
 def deterministic_window_starts(
@@ -133,15 +134,17 @@ def _runner_config_from_checkpoint(
     config = payload.get("cfg")
     if config is not None and OmegaConf.select(config, "dataset.valid") is not None:
         return config
-    candidates = [Path(config_path).expanduser()] if config_path else []
-    candidates.extend(parent / "resolved_config.yaml" for parent in checkpoint_path.parents)
-    for candidate in candidates:
-        if candidate.is_file():
-            config = OmegaConf.load(candidate)
-            if OmegaConf.select(config, "dataset.valid") is not None:
-                return config
+    try:
+        config = load_run_config(config_path or checkpoint_path)
+    except FileNotFoundError as exc:
+        raise ValueError(
+            "DINO token evaluation requires a run config containing dataset.valid so "
+            "frameskip, action concatenation, split, and normalization match training"
+        ) from exc
+    if OmegaConf.select(config, "dataset.valid") is not None:
+        return config
     raise ValueError(
-        "DINO token evaluation requires the persisted dataset.valid config so "
+        "DINO token evaluation requires the run config's dataset.valid section so "
         "frameskip, action concatenation, split, and normalization match training"
     )
 

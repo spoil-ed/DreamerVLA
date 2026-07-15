@@ -37,6 +37,7 @@ from omegaconf import DictConfig, OmegaConf
 from dreamervla.dataset.wm_replay_classifier_dataset import _find_demo_pairs
 from dreamervla.models.embodiment.world_model.wm_chunk import ChunkAwareWorldModel
 from dreamervla.runtime.world_model_training_common import _component_hydra_cfg
+from dreamervla.utils.run_config import load_run_config
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -49,14 +50,6 @@ def _cfg_get(mapping: object, key: str, default: object = None) -> object:
     return default
 
 
-def _infer_resolved_config_path(ckpt_path: Path) -> Path | None:
-    for parent in (ckpt_path.parent, ckpt_path.parent.parent):
-        candidate = parent / "resolved_config.yaml"
-        if candidate.is_file():
-            return candidate
-    return None
-
-
 def _load_world_model_config(sd: dict, ckpt_path: Path, config_path: str | None) -> object:
     if isinstance(sd, dict):
         for config_key in ("config", "cfg"):
@@ -65,18 +58,17 @@ def _load_world_model_config(sd: dict, ckpt_path: Path, config_path: str | None)
             if wm_cfg and _cfg_get(wm_cfg, "_target_", None):
                 return wm_cfg
 
-    resolved_config = Path(config_path) if config_path else _infer_resolved_config_path(ckpt_path)
-    if resolved_config is not None and resolved_config.is_file():
-        cfg = OmegaConf.load(resolved_config)
-        return _component_hydra_cfg(
-            cfg,
-            component_path="world_model",
-            worker_component_path="ray_components.world_model",
-        )
-
-    raise ValueError(
-        f"ckpt {ckpt_path} does not carry cfg.world_model and no resolved_config.yaml "
-        "was found next to it; pass --config explicitly"
+    try:
+        cfg = load_run_config(config_path or ckpt_path)
+    except FileNotFoundError as exc:
+        raise ValueError(
+            f"ckpt {ckpt_path} does not carry cfg.world_model and no run config "
+            "was found; pass --config explicitly"
+        ) from exc
+    return _component_hydra_cfg(
+        cfg,
+        component_path="world_model",
+        worker_component_path="ray_components.world_model",
     )
 
 
@@ -345,7 +337,7 @@ def main() -> None:
     parser.add_argument(
         "--config",
         default=None,
-        help="Optional resolved_config.yaml for split warmup checkpoints.",
+        help="Optional run config for split warmup checkpoints.",
     )
     parser.add_argument(
         "--success-dir-raw",

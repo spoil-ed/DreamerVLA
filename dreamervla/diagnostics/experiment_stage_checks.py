@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import subprocess
 import sys
 import time
@@ -23,6 +22,7 @@ from dreamervla.config_resolvers import register_dreamervla_resolvers
 from dreamervla.dataset.collection_manifest import summarize_collection, write_manifest
 from dreamervla.preprocess.sidecar_schema import validate_hidden_token_sidecar_dir
 from dreamervla.utils.paths import PROJECT_ROOT, data_path
+from dreamervla.utils.run_config import find_run_config
 
 DEFAULT_COLLECT_EXPERIMENT = "collect_rollouts"
 DEFAULT_COLLECT_TASK = "openvla_onetraj_coldstart_libero"
@@ -196,7 +196,7 @@ def _collection_output_payload(
     task: str,
     target_episodes: int | None,
     num_tasks: int | None,
-    resolved_config: Path | None,
+    run_config: Path | None,
     collect_cmd: list[str] | None,
 ) -> dict[str, Any]:
     summary = summarize_collection(
@@ -230,26 +230,17 @@ def _collection_output_payload(
     }
     if collect_cmd is not None:
         manifest_data["collect_cmd"] = list(collect_cmd)
-    if resolved_config is not None and resolved_config.is_file():
-        manifest_data["resolved_config_snapshot"] = resolved_config.read_text(encoding="utf-8")
+    if run_config is not None and run_config.is_file():
+        manifest_data["run_config"] = str(run_config)
     root.mkdir(parents=True, exist_ok=True)
     manifest = write_manifest(root, manifest_data)
-    copied_resolved = None
-    if resolved_config is not None and resolved_config.is_file():
-        copied_resolved = root / "resolved_config.yaml"
-        if resolved_config.resolve() != copied_resolved.resolve():
-            shutil.copy2(resolved_config, copied_resolved)
-    printed_summary = dict(manifest_data)
-    if "resolved_config_snapshot" in printed_summary:
-        snapshot = str(printed_summary.pop("resolved_config_snapshot"))
-        printed_summary["resolved_config_snapshot_bytes"] = len(snapshot.encode("utf-8"))
     return {
         "status": "ok",
         "stage": "collect-output",
         "root": str(root),
         "manifest": str(manifest),
-        "resolved_config": str(copied_resolved) if copied_resolved else None,
-        "summary": printed_summary,
+        "run_config": str(run_config) if run_config is not None and run_config.is_file() else None,
+        "summary": dict(manifest_data),
     }
 
 
@@ -325,7 +316,7 @@ def collect_run(args: argparse.Namespace) -> int:
         task=args.task,
         target_episodes=target_episodes,
         num_tasks=num_tasks,
-        resolved_config=out_dir / "resolved_config.yaml",
+        run_config=out_dir / ".hydra" / "config.yaml",
         collect_cmd=cmd,
     )
     _print_json(payload)
@@ -356,7 +347,7 @@ def collect_output(args: argparse.Namespace) -> int:
     _require_path(reward_dir, "collection reward directory")
     _require_path(hidden_dir, "collection hidden directory")
     root = Path(args.root).expanduser() if args.root else reward_dir.parent
-    resolved_config = Path(args.resolved_config).expanduser() if args.resolved_config else None
+    run_config = find_run_config(args.run_config) if args.run_config else None
     target_episodes, num_tasks = _collect_target(args, cfg)
     payload = _collection_output_payload(
         root=root,
@@ -366,7 +357,7 @@ def collect_output(args: argparse.Namespace) -> int:
         task=args.task,
         target_episodes=target_episodes,
         num_tasks=num_tasks,
-        resolved_config=resolved_config,
+        run_config=run_config,
         collect_cmd=None,
     )
     _print_json(payload)
@@ -723,12 +714,12 @@ def wm_check(args: argparse.Namespace) -> int:
     hidden_count = _count_hdf5(hidden_dir)
     if reward_count <= 0 or hidden_count <= 0:
         raise FileNotFoundError("WM warmup requires non-empty reward and hidden HDF5 dirs")
-    resolved = Path(args.resolved_config).expanduser()
+    run_config = find_run_config(args.run_config) if args.run_config else None
     manifest = Path(args.manifest).expanduser()
     if args.require_manifest:
         _require_path(manifest, "collection manifest")
-    if args.require_resolved_config:
-        _require_path(resolved, "collection resolved config")
+    if args.require_run_config and run_config is None:
+        raise FileNotFoundError("collection run config path is required")
     _print_json(
         {
             "status": "ok",
@@ -738,7 +729,7 @@ def wm_check(args: argparse.Namespace) -> int:
             "reward_hdf5_count": reward_count,
             "hidden_hdf5_count": hidden_count,
             "manifest": str(manifest),
-            "resolved_config": str(resolved),
+            "run_config": str(run_config) if run_config is not None else None,
         }
     )
     return 0
@@ -818,18 +809,18 @@ def cotrain_check(args: argparse.Namespace) -> int:
         if args.run_root
         else _latest_child(data_path("outputs/coldstart_warmup_cotrain"))
     )
+    _require_path(run_root, "run root")
+    candidate = run_root / "cotrain" if (run_root / "cotrain").is_dir() else run_root
+    run_config = find_run_config(candidate)
     cotrain_dir = (
-        run_root / "cotrain"
-        if (run_root / "cotrain" / "resolved_config.yaml").is_file()
-        else run_root
+        run_config.parent.parent
+        if run_config.name == "config.yaml" and run_config.parent.name == ".hydra"
+        else run_config.parent
     )
     wm = _warmup_artifact(cotrain_dir, "wm_warmup.ckpt")
     cls = _warmup_artifact(cotrain_dir, "classifier_warmup.ckpt")
     wm_hf = _warmup_artifact(cotrain_dir, "wm_warmup_hf")
     cls_hf = _warmup_artifact(cotrain_dir, "classifier_warmup_hf")
-    resolved = cotrain_dir / "resolved_config.yaml"
-    _require_path(run_root, "run root")
-    _require_path(resolved, "cotrain resolved config")
     if not wm.is_file() and not wm_hf.is_dir():
         raise FileNotFoundError(f"warmup world-model checkpoint not found: {wm}")
     if not cls.is_file() and not cls_hf.is_dir():
@@ -845,7 +836,7 @@ def cotrain_check(args: argparse.Namespace) -> int:
             "cotrain_dir": str(cotrain_dir),
             "wm_warmup": str(wm),
             "classifier_warmup": str(cls),
-            "resolved_config": str(resolved),
+            "run_config": str(run_config),
             "init_ckpt": str(init_ckpt) if init_ckpt else None,
         }
     )
@@ -885,7 +876,13 @@ def build_parser() -> argparse.ArgumentParser:
     collect_output_p.add_argument("--reward-dir", default=None)
     collect_output_p.add_argument("--hidden-dir", default=None)
     collect_output_p.add_argument("--root", default=None)
-    collect_output_p.add_argument("--resolved-config", default=None)
+    collect_output_p.add_argument("--run-config", default=None)
+    collect_output_p.add_argument(
+        "--resolved-config",
+        dest="run_config",
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
+    )
     collect_output_p.add_argument("--target-episodes", type=int, default=None)
     collect_output_p.add_argument("--num-tasks", type=int, default=None)
     collect_output_p.add_argument("overrides", nargs="*")
@@ -974,9 +971,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--manifest",
         default=str(data_path("collected_rollouts/libero_goal/collection_manifest.json")),
     )
+    wm_check_p.add_argument("--run-config", default=None)
     wm_check_p.add_argument(
         "--resolved-config",
-        default=str(data_path("collected_rollouts/libero_goal/resolved_config.yaml")),
+        dest="run_config",
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
     )
     wm_check_p.add_argument(
         "--require-manifest",
@@ -984,9 +984,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
     )
     wm_check_p.add_argument(
-        "--require-resolved-config",
+        "--require-run-config",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
+    )
+    wm_check_p.add_argument(
+        "--require-resolved-config",
+        dest="require_run_config",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
     )
     wm_check_p.set_defaults(func=wm_check)
 
