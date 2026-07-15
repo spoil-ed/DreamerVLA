@@ -1576,6 +1576,139 @@ class _FakeDistributed:
         return module
 
 
+def _configure_non_main_torch_checkpoint(runner, tmp_path):
+    runner.distributed = SimpleNamespace(rank=1, world_size=2, is_main_process=False)
+    checkpoint_calls = []
+    runner.checkpoint_save_torch = lambda: True
+    runner.checkpoint_save_hf = lambda: False
+    runner.save_checkpoint = lambda: (
+        checkpoint_calls.append("torch") or str(tmp_path / "latest.ckpt")
+    )
+    return checkpoint_calls
+
+
+def test_non_main_hf_only_checkpoint_skips_sidecars_and_print(tmp_path, monkeypatch):
+    import dreamervla.runtime.world_model_training_common as mod
+
+    runner = mod._WorldModelTrainingCommon.__new__(mod._WorldModelTrainingCommon)
+    runner.distributed = SimpleNamespace(rank=1, world_size=2, is_main_process=False)
+    runner.checkpoint_save_torch = lambda: False
+    runner.checkpoint_save_hf = lambda: True
+
+    def unexpected_path():
+        raise AssertionError("non-main HF-only save must not create a checkpoint path")
+
+    def unexpected_sidecars(*_args, **_kwargs):
+        raise AssertionError("non-main HF-only save must not write sidecars")
+
+    runner.get_checkpoint_path = unexpected_path
+    runner._save_checkpoint_sidecars = unexpected_sidecars
+    print_calls = []
+    monkeypatch.setattr("builtins.print", lambda *_args, **_kwargs: print_calls.append(1))
+
+    runner._save_cotrain_ckpt()
+
+    assert print_calls == []
+
+
+def test_non_main_periodic_cotrain_burst_enters_torch_checkpoint_save(
+    tmp_path, monkeypatch, capsys
+):
+    from omegaconf import OmegaConf
+
+    import dreamervla.runtime.world_model_training_common as mod
+
+    runner = mod._WorldModelTrainingCommon.__new__(mod._WorldModelTrainingCommon)
+    checkpoint_calls = _configure_non_main_torch_checkpoint(runner, tmp_path)
+    runner.device = torch.device("cpu")
+    runner.global_step = 0
+    runner.world_model = torch.nn.Linear(1, 1)
+    runner.world_model_optimizer = object()
+    runner.policy = torch.nn.Linear(1, 1)
+    runner.critic = torch.nn.Linear(1, 1)
+    runner.classifier = torch.nn.Linear(1, 1)
+    runner._build_wm_pretrain_batch = lambda batch: batch
+    runner.console_metrics = lambda *_args, **_kwargs: None
+    runner.log_metrics = lambda *_args, **_kwargs: None
+
+    class Replay:
+        num_transitions = 1
+
+        @staticmethod
+        def sample(*_args, **_kwargs):
+            return {"obs_embedding": torch.zeros(1, 1, 1)}
+
+    monkeypatch.setattr(
+        mod,
+        "get_replay_task_stats_global",
+        lambda *_args, **_kwargs: ({}, True, True),
+    )
+    monkeypatch.setattr(mod, "world_model_pretrain_step", lambda **_kwargs: {"loss": 0.0})
+
+    runner._run_training_bursts(
+        env_step=1,
+        total_env_steps=1,
+        replay=Replay(),
+        env_task_ids=(0,),
+        knobs={
+            "train_trigger": "env_step",
+            "train_every": 1,
+            "updates_per_train": 1,
+            "min_replay": 0,
+            "min_eps": 0,
+            "is_dist": True,
+            "batch_size": 1,
+            "max_train_updates": None,
+            "warmup_steps": 1,
+            "train_cls_inline": False,
+            "train_actor_after": False,
+            "optim_cfg": OmegaConf.create({}),
+            "num_envs": 1,
+            "episode_horizon": 1,
+            "ckpt_every": 1,
+        },
+        counters={},
+        history=[],
+    )
+
+    assert checkpoint_calls == ["torch"]
+    assert capsys.readouterr().out == ""
+
+
+def test_non_main_vectorized_cotrain_finalizer_enters_torch_checkpoint_save(tmp_path, monkeypatch):
+    from omegaconf import OmegaConf
+
+    import dreamervla.runtime.world_model_training_common as mod
+
+    class FakeVec:
+        def close(self):
+            return None
+
+    runner = mod._WorldModelTrainingCommon.__new__(mod._WorldModelTrainingCommon)
+    checkpoint_calls = _configure_non_main_torch_checkpoint(runner, tmp_path)
+    runner._oft_hidden_token_extractor = object()
+    runner._build_oft_hidden_token_extractor = lambda _cfg: object()
+    runner._env_cfg_kwargs = lambda _cfg: {}
+    runner._vectorized_cotrain_rollout = lambda **_kwargs: None
+    monkeypatch.setattr(mod, "build_rollout_vec_env", lambda **_kwargs: FakeVec())
+
+    runner._run_vectorized_cotrain(
+        OmegaConf.create({"env": {"image_size": 64}}),
+        replay=object(),
+        num_envs=2,
+        render_backend="osmesa",
+        render_devices=None,
+        total_env_steps=1,
+        episode_horizon=1,
+        env_task_ids=(0,),
+        knobs={},
+        counters={},
+        history=[],
+    )
+
+    assert checkpoint_calls == ["torch"]
+
+
 def test_online_cotrain_loop_passes_full_ready_gates(monkeypatch):
     import dreamervla.runtime.world_model_training_common as mod
 
@@ -2166,7 +2299,7 @@ def test_online_rollout_uses_only_oft_hidden_token_extractor():
     ]
 
 
-def test_single_env_rollout_executes_full_chunk_and_clears_on_reset(monkeypatch):
+def test_single_env_rollout_executes_full_chunk_and_clears_on_reset(tmp_path, monkeypatch):
     from omegaconf import OmegaConf
 
     import dreamervla.runtime.world_model_training_common as mod
@@ -2234,8 +2367,8 @@ def test_single_env_rollout_executes_full_chunk_and_clears_on_reset(monkeypatch)
     fake_env = FakeEnv()
     monkeypatch.setattr(mod, "OnlineReplay", FakeReplay)
     runner = mod._WorldModelTrainingCommon.__new__(mod._WorldModelTrainingCommon)
+    checkpoint_calls = _configure_non_main_torch_checkpoint(runner, tmp_path)
     runner.device = torch.device("cpu")
-    runner.distributed = _FakeDistributed()
     runner.processor = None
     runner.world_model = FakeWorldModel()
     runner.policy = FakePolicy()
@@ -2244,7 +2377,6 @@ def test_single_env_rollout_executes_full_chunk_and_clears_on_reset(monkeypatch)
     runner.resume = lambda: None
     runner.console_progress = lambda *_args, **_kwargs: None
     runner.console_record_success = lambda *_args, **_kwargs: None
-    runner._save_cotrain_ckpt = lambda: None
 
     cfg = OmegaConf.create(
         {
@@ -2278,6 +2410,7 @@ def test_single_env_rollout_executes_full_chunk_and_clears_on_reset(monkeypatch)
     np.testing.assert_array_equal(fake_env.actions[0], np.full(7, 0.25, np.float32))
     np.testing.assert_array_equal(fake_env.actions[1], np.full(7, 0.75, np.float32))
     np.testing.assert_array_equal(fake_env.actions[2], np.full(7, 0.25, np.float32))
+    assert checkpoint_calls == ["torch"]
 
 
 def test_run_resume_skips_seed_and_warmups_when_ckpts_exist(tmp_path, monkeypatch):

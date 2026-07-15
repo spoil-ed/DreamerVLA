@@ -10,6 +10,7 @@ import pathlib
 import pickle
 import shutil
 import subprocess
+import threading
 import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
@@ -47,6 +48,7 @@ from dreamervla.utils.seed import (
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
 _LEGACY_RNG_WARNING_EMITTED = False
+_LEGACY_RNG_WARNING_LOCK = threading.Lock()
 
 
 def _group_metric_rows(metrics: dict, *, skip_success: bool = False) -> list[str]:
@@ -895,6 +897,7 @@ class BaseRunner(ABC):
         payload: dict[str, Any],
         exclude_keys: tuple[str, ...] | None = None,
         include_keys: tuple[str, ...] | None = None,
+        restore_rng: bool = False,
         **kwargs: Any,
     ) -> None:
         # Key filters
@@ -916,6 +919,9 @@ class BaseRunner(ABC):
         for key in include_keys:
             if key in pickles:
                 self.__dict__[key] = pickle.loads(pickles[key])
+
+        if not restore_rng:
+            return
 
         distributed = getattr(self, "distributed", None)
         rank = 0 if distributed is None else int(getattr(distributed, "rank", 0))
@@ -946,12 +952,14 @@ class BaseRunner(ABC):
 
         global _LEGACY_RNG_WARNING_EMITTED
         if not _LEGACY_RNG_WARNING_EMITTED:
-            warnings.warn(
-                "legacy runner checkpoint has no RNG state; continuing from current seed",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-            _LEGACY_RNG_WARNING_EMITTED = True
+            with _LEGACY_RNG_WARNING_LOCK:
+                if not _LEGACY_RNG_WARNING_EMITTED:
+                    warnings.warn(
+                        "legacy runner checkpoint has no RNG state; continuing from current seed",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+                    _LEGACY_RNG_WARNING_EMITTED = True
 
     def _state_dict_for_checkpoint(self, key: str, value: Any) -> dict[str, Any] | None:
         return value.state_dict()
@@ -971,6 +979,7 @@ class BaseRunner(ABC):
         tag: str = "latest",
         exclude_keys: tuple[str, ...] | None = None,
         include_keys: tuple[str, ...] | None = None,
+        restore_rng: bool = True,
         **kwargs: Any,
     ) -> dict[str, Any]:
         # Checkpoint path
@@ -987,6 +996,7 @@ class BaseRunner(ABC):
             payload=payload,
             exclude_keys=exclude_keys,
             include_keys=include_keys,
+            restore_rng=restore_rng,
         )
         return payload
 

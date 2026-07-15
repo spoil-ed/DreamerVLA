@@ -1136,8 +1136,7 @@ class _WorldModelTrainingCommon(WorldModelTrainingBase):
                 episode_added=episode_added,
             )
 
-        if self.distributed.is_main_process:
-            self._save_cotrain_ckpt()
+        self._save_cotrain_ckpt()
         try:
             env.close()
         except Exception:
@@ -1347,11 +1346,7 @@ class _WorldModelTrainingCommon(WorldModelTrainingBase):
             history.append(metrics)
             counters["current_episodes"] = 0
             counters["current_success"] = 0
-            if (
-                self.distributed.is_main_process
-                and knobs["ckpt_every"] > 0
-                and (self.global_step + 1) % knobs["ckpt_every"] == 0
-            ):
+            if knobs["ckpt_every"] > 0 and (self.global_step + 1) % knobs["ckpt_every"] == 0:
                 self._save_cotrain_ckpt()
             self.global_step += 1
         return False
@@ -1450,8 +1445,7 @@ class _WorldModelTrainingCommon(WorldModelTrainingBase):
                 vec.close()
             except Exception:
                 pass
-        if self.distributed.is_main_process:
-            self._save_cotrain_ckpt()
+        self._save_cotrain_ckpt()
         return history
 
     @torch.no_grad()
@@ -1627,12 +1621,15 @@ class _WorldModelTrainingCommon(WorldModelTrainingBase):
             path = Path(self.save_checkpoint())
         elif self.checkpoint_save_hf():
             # HF-only export (not resumable): write just the sidecars.
+            if not self.distributed.is_main_process:
+                return
             path = self.get_checkpoint_path()
             path.parent.mkdir(parents=True, exist_ok=True)
             self._save_checkpoint_sidecars(path, payload={})
         else:
             return
-        print(f"[online-cotrain] ckpt -> {path.parent}", flush=True)
+        if self.distributed.is_main_process:
+            print(f"[online-cotrain] ckpt -> {path.parent}", flush=True)
 
     def _save_checkpoint_sidecars(self, path: Path, payload: dict) -> None:
         # Portable per-component HF artifacts next to the torch checkpoint, e.g.

@@ -6,7 +6,10 @@ modules out of the payload.
 import json
 import pathlib
 import random
+import threading
+import time
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pytest
@@ -184,7 +187,8 @@ def test_base_load_selects_distributed_rank_rng(tmp_path):
             "state_dicts": {},
             "pickles": {},
             "rng_by_rank": [rank_zero, rank_one],
-        }
+        },
+        restore_rng=True,
     )
 
     assert random.random() == expected[0]
@@ -192,16 +196,54 @@ def test_base_load_selects_distributed_rank_rng(tmp_path):
     torch.testing.assert_close(torch.rand(()), expected[2], rtol=0, atol=0)
 
 
-def test_base_load_payload_rejects_v2_without_current_rank_rng(tmp_path):
+@pytest.mark.parametrize("rng_by_rank", [None, []])
+def test_base_direct_model_only_load_ignores_v2_rng_contract(tmp_path, rng_by_rank):
+    source = _Mini(OmegaConf.create({}), tmp_path)
+    with torch.no_grad():
+        source.policy.weight.fill_(4.25)
+        source.policy.bias.fill_(-2.5)
     runner = _Mini(OmegaConf.create({}), tmp_path)
+    runner.distributed = _FakeDistributed(rank=3, is_main_process=False, gathered=[])
+    payload = {
+        "format_version": 2,
+        "state_dicts": {"policy": source.policy.state_dict()},
+        "pickles": {},
+    }
+    if rng_by_rank is not None:
+        payload["rng_by_rank"] = rng_by_rank
+
+    random.seed(314)
+    np.random.seed(314)
+    torch.manual_seed(314)
+    expected = (random.random(), np.random.random(), torch.rand(()))
+    random.seed(314)
+    np.random.seed(314)
+    torch.manual_seed(314)
+
+    runner.load_payload(payload, include_keys=())
+
+    for name, parameter in runner.policy.named_parameters():
+        torch.testing.assert_close(parameter, source.policy.get_parameter(name), rtol=0, atol=0)
+    assert random.random() == expected[0]
+    assert np.random.random() == expected[1]
+    torch.testing.assert_close(torch.rand(()), expected[2], rtol=0, atol=0)
+
+
+def test_base_load_checkpoint_rejects_v2_without_current_rank_rng(tmp_path):
+    runner = _Mini(OmegaConf.create({}), tmp_path)
+    missing_path = tmp_path / "missing_rng.ckpt"
+    torch.save({"format_version": 2, "state_dicts": {}, "pickles": {}}, missing_path)
 
     with pytest.raises(RuntimeError, match="rng_by_rank"):
-        runner.load_payload({"format_version": 2, "state_dicts": {}, "pickles": {}})
+        runner.load_checkpoint(path=missing_path)
 
+    missing_rank_path = tmp_path / "missing_rank_rng.ckpt"
+    torch.save(
+        {"format_version": 2, "state_dicts": {}, "pickles": {}, "rng_by_rank": []},
+        missing_rank_path,
+    )
     with pytest.raises(RuntimeError, match="rank 0"):
-        runner.load_payload(
-            {"format_version": 2, "state_dicts": {}, "pickles": {}, "rng_by_rank": []}
-        )
+        runner.load_checkpoint(path=missing_rank_path)
 
 
 def test_base_load_payload_legacy_rng_and_missing_rng_warning_once(tmp_path, monkeypatch):
@@ -215,7 +257,10 @@ def test_base_load_payload_legacy_rng_and_missing_rng_warning_once(tmp_path, mon
     np.random.seed(999)
     torch.manual_seed(999)
 
-    runner.load_payload({"format_version": 1, "state_dicts": {}, "pickles": {}, "rng": legacy_rng})
+    runner.load_payload(
+        {"format_version": 1, "state_dicts": {}, "pickles": {}, "rng": legacy_rng},
+        restore_rng=True,
+    )
     assert random.random() == expected[0]
     assert np.random.random() == expected[1]
     torch.testing.assert_close(torch.rand(()), expected[2], rtol=0, atol=0)
@@ -224,11 +269,38 @@ def test_base_load_payload_legacy_rng_and_missing_rng_warning_once(tmp_path, mon
     legacy_without_rng = {"format_version": 1, "state_dicts": {}, "pickles": {}}
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        runner.load_payload(legacy_without_rng)
-        runner.load_payload({"state_dicts": {}, "pickles": {}})
+        runner.load_payload(legacy_without_rng, restore_rng=True)
+        runner.load_payload({"state_dicts": {}, "pickles": {}}, restore_rng=True)
     matching = [item for item in caught if issubclass(item.category, RuntimeWarning)]
     assert len(matching) == 1
     assert "RNG" in str(matching[0].message)
+
+
+def test_base_legacy_missing_rng_warning_is_thread_safe(tmp_path, monkeypatch):
+    import dreamervla.runners.base_runner as base_runner_module
+
+    runner = _Mini(OmegaConf.create({}), tmp_path)
+    monkeypatch.setattr(base_runner_module, "_LEGACY_RNG_WARNING_EMITTED", False)
+    warning_calls = []
+    start = threading.Barrier(8)
+
+    def slow_warning(*args, **kwargs):
+        time.sleep(0.02)
+        warning_calls.append((args, kwargs))
+
+    monkeypatch.setattr(base_runner_module.warnings, "warn", slow_warning)
+
+    def load_legacy_payload(_index):
+        start.wait()
+        runner.load_payload(
+            {"format_version": 1, "state_dicts": {}, "pickles": {}},
+            restore_rng=True,
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(load_legacy_payload, range(8)))
+
+    assert len(warning_calls) == 1
 
 
 class _Ready:
