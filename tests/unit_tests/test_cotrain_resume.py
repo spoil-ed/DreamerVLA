@@ -522,6 +522,52 @@ def test_cotrain_common_resume_path_loads_manual_payload(tmp_path):
     assert payload["global_step"] == 7
 
 
+def test_cotrain_run_sets_resume_global_step_before_metric_logger(monkeypatch):
+    import dreamervla.runners.cotrain_runner as cotrain_runner_module
+
+    class _Cluster:
+        def __init__(self, _cfg):
+            self.shutdown_called = False
+
+        def require_single_node(self):
+            return None
+
+        def shutdown(self):
+            self.shutdown_called = True
+
+    runner = object.__new__(CotrainRunner)
+    runner.cfg = OmegaConf.create({"cluster": {}, "training": {"resume": True}})
+    runner.config = runner.cfg
+    runner.global_step = 0
+    runner._metric_logger = None
+    runner._metric_resume_step = None
+    resume_setter_calls: list[int] = []
+
+    def set_metric_resume_step(step: int) -> None:
+        assert runner._metric_logger is None
+        resume_setter_calls.append(int(step))
+        runner._metric_resume_step = int(step)
+
+    runner.set_metric_resume_step = set_metric_resume_step
+    runner._pending_manual_resume_payload = None
+    runner._manual_resume_payload = lambda: {"global_step": 7, "state_dicts": {}}
+    runner._build_groups = lambda _cluster: {}
+    runner._restore_manual_resume_state = lambda _groups, _payload: None
+    runner._target_group_names = lambda: []
+    runner._global_steps = lambda: 7
+    runner._eval_initial_global_step = lambda: False
+    runner._print_training_summary = lambda: None
+    monkeypatch.setattr(cotrain_runner_module, "Cluster", _Cluster)
+
+    metrics = runner.run()
+
+    assert metrics["global_step"] == 7
+    assert runner.global_step == 7
+    assert runner._metric_logger is None
+    assert runner._metric_resume_step == 7
+    assert resume_setter_calls == [7]
+
+
 def test_cotrain_manual_loader_rejects_future_format_version(tmp_path):
     checkpoint = tmp_path / "manual_cotrain.ckpt"
     torch.save(

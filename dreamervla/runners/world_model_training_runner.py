@@ -1977,6 +1977,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             else None
         )
         trained_active_warmup = bool(need_wm or need_cls)
+        warmup_metric_resume_step_set = False
 
         if need_wm:
             if resume:
@@ -1986,6 +1987,8 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 )
                 wm_start_step = min(int(wm_progress["step"]), int(wm_steps))
                 wm_start_epoch = int(wm_progress["epoch"])
+                self.set_metric_resume_step(wm_start_step)
+                warmup_metric_resume_step_set = True
             self.console_banner("[1/3] WM WARMUP", subtitle=f"{wm_steps} steps")
             wm_last = self._run_wm_warmup_epochs(
                 warmup_replay,
@@ -2026,6 +2029,8 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 )
                 cls_start_step = min(int(cls_progress["step"]), int(cls_steps))
                 cls_start_epoch = int(cls_progress["epoch"])
+                if not warmup_metric_resume_step_set:
+                    self.set_metric_resume_step(int(wm_steps) + cls_start_step)
             self.console_banner("[2/3] CLASSIFIER WARMUP", subtitle=f"{cls_steps} steps")
             cls_last = self._run_cls_warmup_epochs(
                 warmup_replay,

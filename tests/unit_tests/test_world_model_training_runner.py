@@ -2023,6 +2023,93 @@ def test_run_stops_after_warmup_when_total_env_steps_zero(tmp_path, monkeypatch)
     assert os.path.exists(os.path.join(str(tmp_path), "checkpoints", "classifier_warmup.ckpt"))
 
 
+def test_wm_only_resume_sets_restored_wm_metric_axis_before_logging(
+    tmp_path, monkeypatch
+):
+    calls: list[str] = []
+    runner = _make_orchestration_runner(
+        tmp_path,
+        monkeypatch,
+        calls,
+        resume=True,
+        total_env_steps=0,
+        cfg_updates={
+            "training.classifier_warmup_steps": 0,
+            "offline_warmup.debug_classifier_warmup_steps": 0,
+        },
+    )
+    runner._metric_logger = None
+    runner._metric_resume_step = None
+    resume_setter_calls: list[int] = []
+
+    def set_metric_resume_step(step: int) -> None:
+        assert runner._metric_logger is None
+        resume_setter_calls.append(int(step))
+        runner._metric_resume_step = int(step)
+
+    runner.set_metric_resume_step = set_metric_resume_step
+    runner._load_latest_wm_warmup_progress = lambda **_kwargs: {
+        "epoch": 0,
+        "step": 1,
+        "complete": False,
+    }
+
+    runner.run()
+
+    assert runner._metric_logger is None
+    assert runner._metric_resume_step == 1
+    assert resume_setter_calls == [1]
+
+
+def test_classifier_resume_offsets_metric_axis_by_total_wm_steps(
+    tmp_path, monkeypatch
+):
+    import dreamervla.runners.world_model_training_runner as mod
+
+    calls: list[str] = []
+    runner = _make_orchestration_runner(
+        tmp_path,
+        monkeypatch,
+        calls,
+        resume=True,
+        total_env_steps=0,
+    )
+    runner._metric_logger = None
+    runner._metric_resume_step = None
+    resume_setter_calls: list[int] = []
+
+    def set_metric_resume_step(step: int) -> None:
+        assert runner._metric_logger is None
+        resume_setter_calls.append(int(step))
+        runner._metric_resume_step = int(step)
+
+    runner.set_metric_resume_step = set_metric_resume_step
+    runner._canonical_warmup_is_complete = lambda component: component == "wm"
+    wm_checkpoint = tmp_path / "checkpoints" / "wm_warmup.ckpt"
+    wm_checkpoint.parent.mkdir(parents=True, exist_ok=True)
+    wm_checkpoint.touch()
+    runner._existing_warmup_checkpoint = lambda name: (
+        wm_checkpoint if name == "wm_warmup.ckpt" else None
+    )
+    runner._load_wm_warmup_checkpoint = lambda *_args, **_kwargs: {
+        "epoch": 1,
+        "step": 2,
+        "complete": True,
+    }
+    runner._load_latest_cls_warmup_progress = lambda **_kwargs: {
+        "epoch": 0,
+        "step": 1,
+        "complete": False,
+    }
+    monkeypatch.setattr(mod, "load_runner_payload", lambda _path: {"global_step": 2})
+
+    runner.run()
+
+    assert runner._metric_logger is None
+    assert runner._metric_resume_step == 3
+    assert resume_setter_calls == [3]
+
+
 def test_offline_warmup_requires_every_hydra_declared_task(
     tmp_path,
     monkeypatch,

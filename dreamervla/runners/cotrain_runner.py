@@ -149,6 +149,8 @@ class CotrainRunner(BaseRunner):
                 resume_step = int(resume_payload.get("global_step", 0))
                 _hs_trace(f"[cotrain] restore resume state start step={resume_step}")
                 self._restore_manual_resume_state(groups, resume_payload)
+                self.global_step = resume_step
+                self.set_metric_resume_step(resume_step)
                 _hs_trace("[cotrain] restore resume state done")
             else:
                 _hs_trace("[cotrain] no resume payload")

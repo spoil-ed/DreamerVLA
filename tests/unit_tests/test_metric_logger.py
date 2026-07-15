@@ -301,6 +301,41 @@ def test_metric_logger_tensorboard_resume_purges_post_checkpoint_tail(tmp_path: 
     ]
 
 
+def test_metric_logger_forwards_exact_resume_step_to_tensorboard_purge(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import torch.utils.tensorboard
+
+    purge_steps: list[int | None] = []
+
+    class FakeSummaryWriter:
+        def __init__(self, _log_path: str, *, purge_step: int | None = None) -> None:
+            purge_steps.append(purge_step)
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(torch.utils.tensorboard, "SummaryWriter", FakeSummaryWriter)
+    cfg = OmegaConf.create(
+        {
+            "runner": {
+                "logger": {
+                    "log_path": str(tmp_path / "logs"),
+                    "logger_backends": ["tensorboard"],
+                }
+            },
+            "training": {"out_dir": str(tmp_path / "out")},
+        }
+    )
+
+    fresh = MetricLogger(cfg, resume=False, resume_step=17)
+    fresh.finish()
+    resumed = MetricLogger(cfg, resume=True, resume_step=17)
+    resumed.finish()
+
+    assert purge_steps == [None, 17]
+
+
 def test_base_runner_log_metrics_normalizes_current_metric_names(
     tmp_path: Path,
 ) -> None:
