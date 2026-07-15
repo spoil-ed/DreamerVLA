@@ -8,6 +8,14 @@ from omegaconf import OmegaConf
 from dreamervla.runners import CotrainRunner, DreamerRunner
 
 
+def _compose_experiment(name: str):
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        cfg = compose(config_name="train", overrides=[f"experiment={name}"])
+    OmegaConf.resolve(cfg)
+    return cfg
+
+
 def test_dreamer_runner_preserves_original_cotrain_runner() -> None:
     assert CotrainRunner.__module__ == "dreamervla.runners.cotrain_runner"
     assert DreamerRunner.__module__ == "dreamervla.runners.dreamer_runner"
@@ -15,11 +23,7 @@ def test_dreamer_runner_preserves_original_cotrain_runner() -> None:
 
 
 def test_dreamer_runner_places_frozen_learner_on_cpu() -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        cfg = compose(config_name="train", overrides=["experiment=openvla_libero"])
-    OmegaConf.resolve(cfg)
-
+    cfg = _compose_experiment("openvla_libero")
     runner = DreamerRunner(cfg)
     plan = runner._placement_plan()
 
@@ -28,3 +32,13 @@ def test_dreamer_runner_places_frozen_learner_on_cpu() -> None:
     ]
     assert plan.learner_spec is not None
     assert plan.learner_spec.gpu_ids == []
+
+
+def test_cotrain_and_dreamer_are_separate_public_routes() -> None:
+    cotrain_cfg = _compose_experiment("openvla_onetraj_libero_cotrain")
+    dreamer_cfg = _compose_experiment("openvla_libero")
+
+    assert cotrain_cfg._target_ == "dreamervla.runners.CotrainRunner"
+    assert dreamer_cfg._target_ == "dreamervla.runners.DreamerRunner"
+    assert CotrainRunner.runner_family == "cotrain"
+    assert DreamerRunner.runner_family == "dreamer"

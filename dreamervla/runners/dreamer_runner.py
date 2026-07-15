@@ -58,7 +58,7 @@ class DreamerRunner(BaseRunner):
 
     runner_name = "dreamer"
     runner_status = "current"
-    runner_family = "cotrain"
+    runner_family = "dreamer"
 
     def __init__(self, cfg: dict[str, Any] | DictConfig) -> None:
         config = cfg if isinstance(cfg, DictConfig) else OmegaConf.create(cfg)
