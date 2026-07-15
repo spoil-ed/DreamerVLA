@@ -7,7 +7,6 @@ import re
 import subprocess
 from pathlib import Path
 
-import h5py
 import pytest
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
@@ -304,251 +303,46 @@ def test_offline_world_model_ddp_defaults_remain_configurable() -> None:
     }
 
 
-def test_experiment_stage_check_module_exposes_required_commands() -> None:
-    root = Path(__file__).resolve().parents[2]
-    source = (root / "dreamervla" / "diagnostics" / "experiment_stage_checks.py").read_text(
-        encoding="utf-8"
+def test_experiment_stage_checks_only_exposes_classifier_eval() -> None:
+    parser = experiment_stage_checks.build_parser()
+    subparsers = next(
+        action for action in parser._actions if isinstance(action, argparse._SubParsersAction)
     )
-
-    for command in (
-        "collect-check",
-        "collect-run",
-        "collect-output",
-        "cls-check",
-        "cls-eval",
-        "wm-check",
-        "pack-init",
-        "cotrain-check",
-        "libero-original-check",
-        "libero-original-cls-run",
-        "libero-original-warmup-run",
-        "libero-original-rl-run",
-    ):
-        assert command in source
+    assert set(subparsers.choices) == {"cls-eval"}
 
 
-def test_classifier_check_treats_missing_failure_dirs_as_optional(
+def test_classifier_eval_summarizes_validation_records(
     tmp_path: Path,
-    monkeypatch,
-    capsys,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    success_raw = tmp_path / "success_raw"
-    success_hidden = tmp_path / "success_hidden"
-    success_raw.mkdir()
-    success_hidden.mkdir()
-    with h5py.File(success_raw / "demo.hdf5", "w") as handle:
-        handle.attrs["complete"] = True
-        demo = handle.create_group("data/demo_0")
-        demo.create_dataset("actions", shape=(1, 7), dtype="float32")
-        demo.create_dataset("rewards", shape=(1,), dtype="float32")
-        demo.create_dataset("dones", shape=(1,), dtype="uint8")
-        demo.create_dataset("robot_states", shape=(1, 9), dtype="float32")
-        demo.create_dataset("states", shape=(1, 5), dtype="float32")
-        obs = demo.create_group("obs")
-        obs.create_dataset("agentview_rgb", shape=(1, 1, 1, 3), dtype="uint8")
-        obs.create_dataset("eye_in_hand_rgb", shape=(1, 1, 1, 3), dtype="uint8")
-        obs.create_dataset("ee_pos", shape=(1, 3), dtype="float32")
-        obs.create_dataset("ee_ori", shape=(1, 3), dtype="float32")
-        obs.create_dataset("ee_states", shape=(1, 6), dtype="float32")
-        obs.create_dataset("gripper_states", shape=(1, 2), dtype="float32")
-        obs.create_dataset("joint_states", shape=(1, 7), dtype="float32")
-    with h5py.File(success_hidden / "demo.hdf5", "w") as handle:
-        handle.attrs["complete"] = True
-        handle.create_dataset(
-            "data/demo_0/obs_embedding",
-            shape=(1, 256, 4096),
-            dtype="float16",
-            fillvalue=0,
-        )
-    (success_hidden / "preprocess_config.json").write_text(
-        json.dumps(
-            {
-                "action_head_type": "oft_discrete_token",
-                "obs_hidden_source": "hidden_token",
-                "hidden_key": "obs_embedding",
-                "token_count": 256,
-                "token_dim": 4096,
-                "hidden_dim": 1_048_576,
-                "obs_embedding_shape": [256, 4096],
-                "hidden_storage_format": "tokenized",
-                "num_images_in_input": 1,
-                "patches_per_image": 256,
-                "history": 1,
-                "include_state": False,
-                "sidecar_schema_version": 1,
-                "required_demo_datasets": ["obs_embedding"],
-            }
+    run_dir = tmp_path / "classifier-run"
+    log_dir = run_dir / "log"
+    checkpoints = run_dir / "checkpoints"
+    log_dir.mkdir(parents=True)
+    checkpoints.mkdir()
+    (run_dir / "summary.json").write_text('{"best_f1": 0.8}', encoding="utf-8")
+    (log_dir / "train_log.jsonl").write_text(
+        "\n".join(
+            [
+                '{"event": "val_window"}',
+                '{"event": "val_episode"}',
+                '{"event": "train"}',
+            ]
         ),
         encoding="utf-8",
     )
-    failure_raw = tmp_path / "missing_failures"
-    failure_hidden = tmp_path / "missing_failure_hidden"
-    cfg = OmegaConf.create(
-        {
-            "data": {
-                "success_dir_raw": str(success_raw),
-                "success_dir_hidden": str(success_hidden),
-                "failure_dir_raw": str(failure_raw),
-                "failure_dir_hidden": str(failure_hidden),
-                "window": 8,
-                "sampling_protocol": "wmpo",
-            },
-            "training": {"out_dir": str(tmp_path / "out")},
-            "classifier": {"_target_": "classifier.Target"},
-        }
-    )
-    monkeypatch.setattr(
-        experiment_stage_checks,
-        "_compose_train_config",
-        lambda _experiment, _overrides: cfg,
+    checkpoint = checkpoints / "classifier_warmup.ckpt"
+    checkpoint.touch()
+    out = tmp_path / "classifier_eval_summary.json"
+
+    result = experiment_stage_checks.cls_eval(
+        argparse.Namespace(run_dir=str(run_dir), family="unused", out=str(out))
     )
 
-    exit_code = experiment_stage_checks.cls_check(
-        argparse.Namespace(experiment="classifier_exp", overrides=[])
-    )
-
-    payload = json.loads(capsys.readouterr().out)
-    assert exit_code == 0
-    assert payload["hdf5_counts"]["success_dir_raw"] == 1
-    assert payload["hdf5_counts"]["success_dir_hidden"] == 1
-    assert payload["hdf5_counts"]["failure_dir_raw"] == 0
-    assert payload["hdf5_counts"]["failure_dir_hidden"] == 0
-    assert payload["optional_directories"]["failure_dir_raw"] == "missing"
-    assert payload["optional_directories"]["failure_dir_hidden"] == "missing"
-
-
-def test_collection_output_records_run_config_without_snapshot_or_copy(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    run_config = tmp_path / "collect-run" / ".hydra" / "config.yaml"
-    run_config.parent.mkdir(parents=True)
-    run_config.write_text("task: collect\n", encoding="utf-8")
-    collection_root = tmp_path / "collection"
-    written: dict[str, object] = {}
-    monkeypatch.setattr(
-        experiment_stage_checks,
-        "summarize_collection",
-        lambda *_args, **_kwargs: {
-            "total": 1,
-            "per_task": {0: 1},
-            "complete": True,
-            "remaining": 0,
-            "target_total": 1,
-            "target_per_task": 1,
-            "num_tasks": 1,
-        },
-    )
-
-    def fake_write_manifest(root: Path, data: dict[str, object]) -> Path:
-        written.update(data)
-        return root / "collection_manifest.json"
-
-    monkeypatch.setattr(experiment_stage_checks, "write_manifest", fake_write_manifest)
-
-    payload = experiment_stage_checks._collection_output_payload(
-        root=collection_root,
-        reward_dir=collection_root / "reward",
-        hidden_dir=collection_root / "hidden",
-        suite="libero_goal",
-        task="goal",
-        target_episodes=1,
-        num_tasks=1,
-        run_config=run_config,
-        collect_cmd=None,
-    )
-
-    assert written["run_config"] == str(run_config)
-    assert "resolved_config_snapshot" not in written
-    assert payload["run_config"] == str(run_config)
-    assert not (collection_root / "resolved_config.yaml").exists()
-
-
-@pytest.mark.parametrize("command", ["collect-output", "wm-check"])
-def test_stage_check_run_config_cli_hides_legacy_alias(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-    command: str,
-) -> None:
-    parser = experiment_stage_checks.build_parser()
-    config = tmp_path / ".hydra" / "config.yaml"
-
-    args = parser.parse_args([command, "--run-config", str(config)])
-
-    assert args.run_config == str(config)
-    with pytest.raises(SystemExit):
-        parser.parse_args([command, "--help"])
-    help_text = capsys.readouterr().out
-    assert "--run-config" in help_text
-    assert "--resolved-config" not in help_text
-
-    legacy = parser.parse_args([command, "--resolved-config", str(config)])
-    assert legacy.run_config == str(config)
-
-
-def test_collect_run_records_native_hydra_config(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    out_dir = tmp_path / "collect-run"
-    cfg = OmegaConf.create(
-        {
-            "task": {"suite": "libero_goal", "openvla_oft": {}},
-            "collect": {"episodes_per_task": 1, "task_ids": [0]},
-        }
-    )
-    captured: dict[str, object] = {}
-    monkeypatch.setattr(experiment_stage_checks, "_compose_collect_config", lambda _args: cfg)
-    monkeypatch.setattr(experiment_stage_checks.subprocess, "run", lambda *_a, **_k: None)
-    monkeypatch.setattr(
-        experiment_stage_checks,
-        "_collection_output_payload",
-        lambda **kwargs: captured.update(kwargs) or {"status": "ok"},
-    )
-    args = argparse.Namespace(
-        experiment="collect_rollouts",
-        task="goal",
-        reward_dir=str(tmp_path / "collection" / "reward"),
-        hidden_dir=str(tmp_path / "collection" / "hidden"),
-        out_dir=str(out_dir),
-        python="python",
-        target_episodes=1,
-        num_tasks=1,
-        dry_run=False,
-        overrides=[],
-    )
-
-    assert experiment_stage_checks.collect_run(args) == 0
-    assert captured["run_config"] == out_dir / ".hydra" / "config.yaml"
-
-
-@pytest.mark.parametrize(
-    ("config_relative", "expected_relative"),
-    [
-        (Path(".hydra/config.yaml"), Path(".hydra/config.yaml")),
-        (Path("resolved_config.yaml"), Path("resolved_config.yaml")),
-    ],
-)
-def test_cotrain_check_discovers_native_and_legacy_run_configs(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-    config_relative: Path,
-    expected_relative: Path,
-) -> None:
-    run_root = tmp_path / "cotrain"
-    run_config = run_root / config_relative
-    run_config.parent.mkdir(parents=True)
-    run_config.write_text("run: cotrain\n", encoding="utf-8")
-    checkpoints = run_root / "checkpoints"
-    checkpoints.mkdir()
-    (checkpoints / "wm_warmup.ckpt").touch()
-    (checkpoints / "classifier_warmup.ckpt").touch()
-
-    result = experiment_stage_checks.cotrain_check(
-        argparse.Namespace(run_root=str(run_root), init_ckpt=None)
-    )
-
+    written = json.loads(out.read_text(encoding="utf-8"))
     payload = json.loads(capsys.readouterr().out)
     assert result == 0
-    assert payload["run_config"] == str(run_root / expected_relative)
-    assert "resolved_config" not in payload
+    assert written["num_val_window_records"] == 1
+    assert written["num_val_episode_records"] == 1
+    assert written["checkpoints"] == [str(checkpoint)]
+    assert payload["out"] == str(out)
