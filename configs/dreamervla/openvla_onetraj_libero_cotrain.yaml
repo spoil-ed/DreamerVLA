@@ -143,6 +143,7 @@ actor:
       precision: bf16
       cpu_offload: false
       activation_checkpointing: false
+      enable_gradient_accumulation: false
       backend: nccl
       use_orig_params: true
     optimizers:

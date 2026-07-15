@@ -159,9 +159,7 @@ class EmbodiedFSDPActor(Worker):
         config = _as_plain_dict(self.train_cfg.get("encoder_sft", {}))
         epochs = max(1, int(config.get("epochs", 1)))
         batch_size = max(1, int(config.get("batch_size", 1)))
-        total_optimizer_steps = epochs * (
-            (len(decisions) + batch_size - 1) // batch_size
-        )
+        total_optimizer_steps = epochs * ((len(decisions) + batch_size - 1) // batch_size)
         progress = ProgressReporter(
             total_optimizer_steps,
             f"cotrain-vla-real-sft/{int(self.global_step):08d}",
@@ -169,9 +167,7 @@ class EmbodiedFSDPActor(Worker):
             min_interval_s=float(self.train_cfg.get("progress_every_s", 5.0)),
             unit="update",
         )
-        progress.set_status(
-            f"phase=encoder_sft epoch=1/{epochs} update=0/{total_optimizer_steps}"
-        )
+        progress.set_status(f"phase=encoder_sft epoch=1/{epochs} update=0/{total_optimizer_steps}")
         progress.set(0, force=True)
         zero_grad_set_to_none = bool(config.get("zero_grad_set_to_none", True))
         policy = self._policy()
@@ -738,6 +734,11 @@ class EmbodiedFSDPActor(Worker):
         progress_ops = 0
         zero_loss_micro_batches = 0
         fsdp_policy = _is_fsdp_module(policy)
+        fsdp_gradient_accumulation = bool(
+            fsdp_policy
+            and self.fsdp_manager is not None
+            and self.fsdp_manager.enable_gradient_accumulation
+        )
         policy.train()
 
         for epoch in range(update_epochs):
@@ -783,7 +784,9 @@ class EmbodiedFSDPActor(Worker):
                     )
                     is_last_micro = micro_index == micro_batches_per_global - 1
                     backward_context = (
-                        policy.no_sync() if fsdp_policy and not is_last_micro else nullcontext()
+                        policy.no_sync()
+                        if fsdp_gradient_accumulation and not is_last_micro
+                        else nullcontext()
                     )
                     with backward_context:
                         new_logprob, entropy, _ = policy(eval_batch)

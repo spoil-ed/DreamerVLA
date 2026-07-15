@@ -45,6 +45,7 @@ class FSDPStrategyBase(ABC):
         precision: str = "fp32",
         cpu_offload: bool = False,
         activation_checkpointing: bool = False,
+        enable_gradient_accumulation: bool = False,
         backend: str | None = None,
         use_orig_params: bool = False,
         sync_module_states: bool = False,
@@ -52,6 +53,7 @@ class FSDPStrategyBase(ABC):
         self.precision = precision
         self.cpu_offload = bool(cpu_offload)
         self.activation_checkpointing = bool(activation_checkpointing)
+        self.enable_gradient_accumulation = bool(enable_gradient_accumulation)
         self.backend = backend
         self.use_orig_params = bool(use_orig_params)
         self.sync_module_states = bool(sync_module_states)
@@ -111,8 +113,7 @@ class FSDPStrategyBase(ABC):
         ]
         if missing:
             raise RuntimeError(
-                "FSDP multi-worker setup requires rendezvous env vars: "
-                f"{', '.join(missing)}"
+                f"FSDP multi-worker setup requires rendezvous env vars: {', '.join(missing)}"
             )
         backend = self.backend or ("nccl" if torch.cuda.is_available() else "gloo")
         dist.init_process_group(

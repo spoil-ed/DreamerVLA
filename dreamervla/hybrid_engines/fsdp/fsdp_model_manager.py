@@ -25,6 +25,7 @@ class FSDPModelManager:
     precision: str = "fp32"
     cpu_offload: bool = False
     activation_checkpointing: bool = False
+    enable_gradient_accumulation: bool = False
     backend: str | None = None
     use_orig_params: bool = False
     sync_module_states: bool = False
@@ -52,6 +53,7 @@ class FSDPModelManager:
             precision=self.precision,
             cpu_offload=self.cpu_offload,
             activation_checkpointing=self.activation_checkpointing,
+            enable_gradient_accumulation=self.enable_gradient_accumulation,
             backend=self.backend,
             use_orig_params=self.use_orig_params,
             sync_module_states=self.sync_module_states,

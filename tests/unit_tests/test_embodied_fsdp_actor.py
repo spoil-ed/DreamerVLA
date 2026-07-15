@@ -573,11 +573,7 @@ def test_actor_microbatch_slices_hidden_before_device_transfer(monkeypatch) -> N
     original_to = torch.Tensor.to
 
     def tracked_to(tensor, *args, **kwargs):
-        if (
-            tensor.ndim == 2
-            and int(tensor.shape[-1]) == 4
-            and tensor.device.type == "cpu"
-        ):
+        if tensor.ndim == 2 and int(tensor.shape[-1]) == 4 and tensor.device.type == "cpu":
             transferred_batch_sizes.append(int(tensor.shape[0]))
         return original_to(tensor, *args, **kwargs)
 
@@ -606,12 +602,34 @@ def test_actor_hidden_transfer_uses_configured_fsdp_precision() -> None:
     assert eval_batch["hidden"].dtype == torch.bfloat16
 
 
-def test_actor_fsdp_no_syncs_all_but_final_accumulated_backward(
+def test_actor_fsdp_syncs_every_accumulated_backward_by_default(
     monkeypatch,
 ) -> None:
     cfg = _actor_cfg()
     cfg["train_cfg"]["global_batch_size"] = 8
     cfg["train_cfg"]["micro_batch_size"] = 2
+    actor = EmbodiedFSDPActor(**cfg)
+    actor.init()
+    policy = _NoSyncProbePolicy()
+    actor.policy = policy
+    actor.optimizer = torch.optim.SGD(policy.parameters(), lr=1e-3)
+    actor.load_trajectory_shards([_shard(0.0, 1.0), _shard(2.0, 3.0)])
+    actor.compute_advantages_and_returns()
+    monkeypatch.setattr(embodied_fsdp_actor, "_is_fsdp_module", lambda _policy: True)
+
+    actor.run_training()
+
+    assert policy.no_sync_calls == 0
+    assert policy.forward_sync_states == [True, True, True, True]
+
+
+def test_actor_fsdp_no_syncs_nonfinal_backward_when_explicitly_enabled(
+    monkeypatch,
+) -> None:
+    cfg = _actor_cfg()
+    cfg["train_cfg"]["global_batch_size"] = 8
+    cfg["train_cfg"]["micro_batch_size"] = 2
+    cfg["train_cfg"]["fsdp"]["enable_gradient_accumulation"] = True
     actor = EmbodiedFSDPActor(**cfg)
     actor.init()
     policy = _NoSyncProbePolicy()
@@ -750,12 +768,8 @@ def test_sync_model_to_rollout_casts_snapshot_to_configured_bfloat16() -> None:
 
     metrics = actor.sync_model_to_rollout("policy", version=3)
 
-    floating_dtypes = {
-        value.dtype for value in pushed.values() if value.is_floating_point()
-    }
-    expected_bytes = sum(
-        value.numel() * value.element_size() for value in pushed.values()
-    )
+    floating_dtypes = {value.dtype for value in pushed.values() if value.is_floating_point()}
+    expected_bytes = sum(value.numel() * value.element_size() for value in pushed.values())
     assert floating_dtypes == {torch.bfloat16}
     assert metrics["sync/policy_bytes"] == float(expected_bytes)
 
