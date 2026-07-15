@@ -1003,6 +1003,7 @@ def test_release_scripts_tree_is_curated() -> None:
         "experiments",
         "install",
         "preprocess",
+        "utils",
     }
     assert sorted(path.name for path in (scripts / "experiments").iterdir()) == [
         "classifier_training",
@@ -1013,7 +1014,7 @@ def test_release_scripts_tree_is_curated() -> None:
         "single_trajectory_overfit",
         "world_model_training",
     ]
-    assert len(list(scripts.rglob("*.sh"))) == 32
+    assert len(list(scripts.rglob("*.sh"))) == 33
     gitignore = (root / ".gitignore").read_text(encoding="utf-8")
     assert "__pycache__/" in gitignore
     assert "*.pyc" in gitignore

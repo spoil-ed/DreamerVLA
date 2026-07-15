@@ -15,6 +15,8 @@ For noninteractive authentication, provide `WANDB_API_KEY` instead. No entity or
 project argument is required because the uploader reads that metadata from the
 offline run.
 
+- `utils/wandb_sync.sh`
+
 Training and evaluation entries under `scripts/experiments/` select recipes directly
 from `configs/experiment/`. The only configs under `configs/scripts/` are grouped as
 `install/`, `download/`, and `preprocess/` workflows.
