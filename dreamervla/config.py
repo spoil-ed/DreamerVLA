@@ -53,7 +53,7 @@ def validate_cfg(cfg: DictConfig, *, world_size: int | None = None) -> DictConfi
     _validate_model_registry_refs(cfg)
     _validate_dino_token_training(cfg)
     _validate_epoch_checkpoint_cadence(cfg)
-    _validate_online_cotrain_pipeline(cfg)
+    _validate_world_model_training_pipeline(cfg)
     _validate_ray_manual_resources(cfg)
     _validate_fsdp_config(cfg)
     if bool(OmegaConf.select(cfg, "validation.require_existing_paths", default=False)):
@@ -1025,10 +1025,18 @@ def _validate_dino_token_training(cfg: DictConfig) -> None:
             )
 
 
-def _validate_online_cotrain_pipeline(cfg: DictConfig) -> None:
+def _validate_world_model_training_pipeline(cfg: DictConfig) -> None:
     target = str(OmegaConf.select(cfg, "_target_", default="") or "")
     if target.rsplit(".", 1)[-1] != "WorldModelTrainingRunner":
         return
+    total_env_steps = int(
+        OmegaConf.select(cfg, "online_rollout.total_env_steps", default=0) or 0
+    )
+    if total_env_steps != 0:
+        raise ValueError(
+            "WorldModelTrainingRunner only supports offline warmup; "
+            "use CotrainRunner and the Ray cotrain experiment for online training"
+        )
     data_dir = OmegaConf.select(cfg, "offline_warmup.data_dir", default=None)
     hidden_dir = OmegaConf.select(cfg, "offline_warmup.hidden_dir", default=None)
     if not data_dir or not os.path.isdir(str(data_dir)):

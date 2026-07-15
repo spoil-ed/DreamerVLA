@@ -11,7 +11,7 @@ def test_world_model_training_common_has_extracted_methods():
     from dreamervla.runtime.world_model_training_common import _WorldModelTrainingCommon
 
     assert hasattr(_WorldModelTrainingCommon, "_build_components")
-    assert hasattr(_WorldModelTrainingCommon, "_online_cotrain_loop")
+    assert not hasattr(_WorldModelTrainingCommon, "_online_cotrain_loop")
 
 
 def test_wm_pretrain_batch_omits_images_when_hidden_token_exist():
@@ -401,220 +401,6 @@ def test_dreamer_wm_replay_budget_uses_dino_style_epoch_progress():
         total_steps=31_300,
         batch_size=16,
     ) == (1, 313, "dreamer-wm epoch 2/100", "step")
-
-
-def test_online_cotrain_actor_update_uses_registry():
-    import inspect
-
-    import dreamervla.runtime.world_model_training_common as mod
-
-    loop_src = inspect.getsource(mod._WorldModelTrainingCommon._online_cotrain_loop)
-    burst_src = inspect.getsource(mod._WorldModelTrainingCommon._run_training_bursts)
-
-    assert "get_actor_update_route" in loop_src
-    assert "actor_update_route.step_fn" in burst_src
-    assert "dino_lumos_step(" not in burst_src
-    assert "build_rollout_progress_metrics" in burst_src
-    helper_src = inspect.getsource(mod.build_rollout_progress_metrics)
-    assert "rollout/episodes" in helper_src
-    assert "rollout/successes" in helper_src
-    assert "rollout/success_rate_valid" in helper_src
-    assert "rollout/recent_success_rate" in helper_src
-    assert "rollout/avg_success_rate" not in helper_src
-
-
-def test_training_bursts_episode_trigger_waits_for_completed_episode(monkeypatch):
-    import dreamervla.runtime.world_model_training_common as mod
-
-    runner = mod._WorldModelTrainingCommon.__new__(mod._WorldModelTrainingCommon)
-    runner.device = torch.device("cpu")
-    runner.distributed = _FakeDistributed()
-    runner.global_step = 0
-    calls: list[int] = []
-
-    def fake_stats(*_args, **_kwargs):
-        calls.append(1)
-        return {}, False, False
-
-    monkeypatch.setattr(mod, "get_replay_task_stats_global", fake_stats)
-    knobs = {
-        "min_replay": 0,
-        "min_eps": 0,
-        "is_dist": False,
-        "train_trigger": "episode_end",
-        "train_every": 1,
-        "updates_per_train": 1,
-    }
-
-    assert (
-        runner._run_training_bursts(
-            1,
-            10,
-            replay=object(),
-            env_task_ids=(0,),
-            knobs=knobs,
-            counters={},
-            history=[],
-            episode_added=False,
-        )
-        is False
-    )
-    assert calls == []
-
-    assert (
-        runner._run_training_bursts(
-            2,
-            10,
-            replay=object(),
-            env_task_ids=(0,),
-            knobs=knobs,
-            counters={},
-            history=[],
-            episode_added=True,
-        )
-        is False
-    )
-    assert calls == [1]
-
-
-def test_training_bursts_env_step_trigger_keeps_train_every_gate(monkeypatch):
-    import dreamervla.runtime.world_model_training_common as mod
-
-    runner = mod._WorldModelTrainingCommon.__new__(mod._WorldModelTrainingCommon)
-    runner.device = torch.device("cpu")
-    runner.distributed = _FakeDistributed()
-    runner.global_step = 0
-    calls: list[int] = []
-
-    def fake_stats(*_args, **_kwargs):
-        calls.append(1)
-        return {}, False, False
-
-    monkeypatch.setattr(mod, "get_replay_task_stats_global", fake_stats)
-    knobs = {
-        "min_replay": 0,
-        "min_eps": 0,
-        "is_dist": False,
-        "train_trigger": "env_step",
-        "train_every": 4,
-        "updates_per_train": 1,
-    }
-
-    runner._run_training_bursts(
-        3,
-        10,
-        replay=object(),
-        env_task_ids=(0,),
-        knobs=knobs,
-        counters={},
-        history=[],
-        episode_added=True,
-    )
-    runner._run_training_bursts(
-        4,
-        10,
-        replay=object(),
-        env_task_ids=(0,),
-        knobs=knobs,
-        counters={},
-        history=[],
-        episode_added=False,
-    )
-    assert calls == [1]
-
-
-def test_training_bursts_rl_samples_without_images(monkeypatch):
-    from omegaconf import OmegaConf
-
-    import dreamervla.runtime.world_model_training_common as mod
-
-    runner = mod._WorldModelTrainingCommon.__new__(mod._WorldModelTrainingCommon)
-    runner.device = torch.device("cpu")
-    runner.distributed = _FakeDistributed()
-    runner.global_step = 0
-    runner.world_model = torch.nn.Linear(1, 1)
-    runner.world_model_optimizer = object()
-    runner.policy = torch.nn.Linear(1, 1)
-    runner.policy_optimizer = object()
-    runner.critic = torch.nn.Linear(1, 1)
-    runner.classifier = torch.nn.Linear(1, 1)
-    runner.classifier_threshold = 0.5
-    runner.ref_policy = None
-    runner._build_wm_pretrain_batch = lambda batch: batch
-    runner.console_metrics = lambda *_args, **_kwargs: None
-    runner.log_metrics = lambda *_args, **_kwargs: None
-
-    sample_kwargs = []
-
-    class Replay:
-        num_transitions = 128
-
-        def sample(self, batch_size, **kwargs):
-            del batch_size
-            sample_kwargs.append(dict(kwargs))
-            return {
-                "obs_embedding": torch.zeros(2, 3, 4),
-                "actions": torch.zeros(2, 3, 7),
-                "current_actions": torch.zeros(2, 3, 7),
-                "rewards": torch.zeros(2, 3),
-                "dones": torch.zeros(2, 3),
-                "is_first": torch.zeros(2, 3, dtype=torch.bool),
-                "is_terminal": torch.zeros(2, 3),
-                "is_last": torch.zeros(2, 3),
-            }
-
-    def fake_ready(*_args, **_kwargs):
-        return {}, True, True
-
-    def fake_wm_step(**kwargs):
-        assert "images" not in kwargs["batch"]
-        return {"loss": 0.1}
-
-    def fake_actor_step(**kwargs):
-        assert "images" not in kwargs["obs"]
-        return {"actor_loss": 0.2, "returns_mean": 0.3}
-
-    monkeypatch.setattr(mod, "get_replay_task_stats_global", fake_ready)
-    monkeypatch.setattr(mod, "world_model_pretrain_step", fake_wm_step)
-
-    actor_route = SimpleNamespace(
-        name="test-route",
-        world_model_arg="chunk_world_model",
-        step_fn=fake_actor_step,
-    )
-
-    runner._run_training_bursts(
-        env_step=1,
-        total_env_steps=10,
-        replay=Replay(),
-        env_task_ids=(0,),
-        knobs={
-            "train_trigger": "env_step",
-            "train_every": 1,
-            "updates_per_train": 1,
-            "min_replay": 0,
-            "min_eps": 0,
-            "min_sampleable_windows": 0,
-            "require_classifier_evidence": False,
-            "is_dist": False,
-            "batch_size": 2,
-            "max_train_updates": None,
-            "warmup_steps": 0,
-            "train_actor_after": True,
-            "train_cls_inline": False,
-            "optim_cfg": OmegaConf.create({}),
-            "actor_update_route": actor_route,
-            "algo": OmegaConf.create({}),
-            "num_envs": 1,
-            "episode_horizon": 10,
-            "ckpt_every": 0,
-        },
-        counters={},
-        history=[],
-        episode_added=False,
-    )
-
-    assert sample_kwargs == [{"include_images": False}, {"include_images": False}]
 
 
 def test_trainable_classifier_preserves_hydra_target(monkeypatch):
@@ -1363,7 +1149,7 @@ def test_warmup_replay_epochs_cap_to_configured_budget(tmp_path):
     ) == (1200, 1200)
 
 
-def test_debug_overrides_disable_replay_epoch_and_lumos_bounds():
+def test_debug_overrides_only_shrink_offline_warmup():
     from omegaconf import OmegaConf
 
     from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
@@ -1380,14 +1166,6 @@ def test_debug_overrides_disable_replay_epoch_and_lumos_bounds():
                 "debug_wm_warmup_steps": 2,
                 "debug_classifier_warmup_steps": 2,
             },
-            "algorithm": {
-                "debug_ppo_rollouts_per_start": 2,
-                "ppo_rollouts_per_start": 4,
-                "lumos": {
-                    "ppo_rollouts_per_start_min": 4,
-                    "ppo_rollouts_per_start_max": 16,
-                },
-            },
         }
     )
 
@@ -1396,9 +1174,6 @@ def test_debug_overrides_disable_replay_epoch_and_lumos_bounds():
     assert OmegaConf.select(cfg, "training.warmup_replay_epochs") == 0
     assert OmegaConf.select(cfg, "training.wm_warmup_steps") == 2
     assert OmegaConf.select(cfg, "training.classifier_warmup_steps") == 2
-    assert OmegaConf.select(cfg, "algorithm.ppo_rollouts_per_start") == 2
-    assert OmegaConf.select(cfg, "algorithm.lumos.ppo_rollouts_per_start_min") == 2
-    assert OmegaConf.select(cfg, "algorithm.lumos.ppo_rollouts_per_start_max") == 2
 
 
 def test_task_conditioned_classifier_receives_replay_task_ids():
@@ -1521,10 +1296,10 @@ def test_world_model_metrics_namespace_aliases_chunk_hidden_mse():
 
 # --------------------------------------------------------------------------
 # run() orchestration tests — no models / no LIBERO. We monkeypatch the heavy
-# pieces (component build, seeding, warmup loops, online loop) and assert run()
+# pieces (component build, seeding, and warmup loops) and assert run()
 # wires them together in the right order and writes the split warmup ckpts.
 # --------------------------------------------------------------------------
-def _orchestration_cfg(tmp_path, *, resume=False, total_env_steps=None):
+def _orchestration_cfg(tmp_path, *, resume=False):
     from omegaconf import OmegaConf
 
     cfg = OmegaConf.create(
@@ -1553,15 +1328,6 @@ def _orchestration_cfg(tmp_path, *, resume=False, total_env_steps=None):
             },
         }
     )
-    if total_env_steps is not None:
-        OmegaConf.update(
-            cfg, "online_rollout.total_env_steps", int(total_env_steps), force_add=True
-        )
-        # cfg sets debug=True, so _apply_debug_overrides swaps in the debug knob;
-        # pin it too or the requested step count is overwritten by the fallback.
-        OmegaConf.update(
-            cfg, "online_rollout.debug_total_env_steps", int(total_env_steps), force_add=True
-        )
     return cfg
 
 
@@ -1574,201 +1340,19 @@ class _FakeDistributed:
         return module
 
 
-def _configure_non_main_torch_checkpoint(runner, tmp_path):
-    runner.distributed = SimpleNamespace(rank=1, world_size=2, is_main_process=False)
-    checkpoint_calls = []
-    runner.checkpoint_save_torch = lambda: True
-    runner.checkpoint_save_hf = lambda: False
-    runner.save_checkpoint = lambda: (
-        checkpoint_calls.append("torch") or str(tmp_path / "latest.ckpt")
-    )
-    return checkpoint_calls
-
-
-def test_non_main_hf_only_checkpoint_skips_sidecars_and_print(tmp_path, monkeypatch):
-    import dreamervla.runtime.world_model_training_common as mod
-
-    runner = mod._WorldModelTrainingCommon.__new__(mod._WorldModelTrainingCommon)
-    runner.distributed = SimpleNamespace(rank=1, world_size=2, is_main_process=False)
-    runner.checkpoint_save_torch = lambda: False
-    runner.checkpoint_save_hf = lambda: True
-
-    def unexpected_path():
-        raise AssertionError("non-main HF-only save must not create a checkpoint path")
-
-    def unexpected_sidecars(*_args, **_kwargs):
-        raise AssertionError("non-main HF-only save must not write sidecars")
-
-    runner.get_checkpoint_path = unexpected_path
-    runner._save_checkpoint_sidecars = unexpected_sidecars
-    print_calls = []
-    monkeypatch.setattr("builtins.print", lambda *_args, **_kwargs: print_calls.append(1))
-
-    runner._save_cotrain_ckpt()
-
-    assert print_calls == []
-
-
-def test_non_main_periodic_cotrain_burst_enters_torch_checkpoint_save(
-    tmp_path, monkeypatch, capsys
-):
-    from omegaconf import OmegaConf
-
-    import dreamervla.runtime.world_model_training_common as mod
-
-    runner = mod._WorldModelTrainingCommon.__new__(mod._WorldModelTrainingCommon)
-    checkpoint_calls = _configure_non_main_torch_checkpoint(runner, tmp_path)
-    runner.device = torch.device("cpu")
-    runner.global_step = 0
-    runner.world_model = torch.nn.Linear(1, 1)
-    runner.world_model_optimizer = object()
-    runner.policy = torch.nn.Linear(1, 1)
-    runner.critic = torch.nn.Linear(1, 1)
-    runner.classifier = torch.nn.Linear(1, 1)
-    runner._build_wm_pretrain_batch = lambda batch: batch
-    runner.console_metrics = lambda *_args, **_kwargs: None
-    runner.log_metrics = lambda *_args, **_kwargs: None
-
-    class Replay:
-        num_transitions = 1
-
-        @staticmethod
-        def sample(*_args, **_kwargs):
-            return {"obs_embedding": torch.zeros(1, 1, 1)}
-
-    monkeypatch.setattr(
-        mod,
-        "get_replay_task_stats_global",
-        lambda *_args, **_kwargs: ({}, True, True),
-    )
-    monkeypatch.setattr(mod, "world_model_pretrain_step", lambda **_kwargs: {"loss": 0.0})
-
-    runner._run_training_bursts(
-        env_step=1,
-        total_env_steps=1,
-        replay=Replay(),
-        env_task_ids=(0,),
-        knobs={
-            "train_trigger": "env_step",
-            "train_every": 1,
-            "updates_per_train": 1,
-            "min_replay": 0,
-            "min_eps": 0,
-            "is_dist": True,
-            "batch_size": 1,
-            "max_train_updates": None,
-            "warmup_steps": 1,
-            "train_cls_inline": False,
-            "train_actor_after": False,
-            "optim_cfg": OmegaConf.create({}),
-            "num_envs": 1,
-            "episode_horizon": 1,
-            "ckpt_every": 1,
-        },
-        counters={},
-        history=[],
-    )
-
-    assert checkpoint_calls == ["torch"]
-    assert capsys.readouterr().out == ""
-
-
-def test_non_main_vectorized_cotrain_finalizer_enters_torch_checkpoint_save(tmp_path, monkeypatch):
-    from omegaconf import OmegaConf
-
-    import dreamervla.runtime.world_model_training_common as mod
-
-    class FakeVec:
-        def close(self):
-            return None
-
-    runner = mod._WorldModelTrainingCommon.__new__(mod._WorldModelTrainingCommon)
-    checkpoint_calls = _configure_non_main_torch_checkpoint(runner, tmp_path)
-    runner._oft_hidden_token_extractor = object()
-    runner._build_oft_hidden_token_extractor = lambda _cfg: object()
-    runner._env_cfg_kwargs = lambda _cfg: {}
-    runner._vectorized_cotrain_rollout = lambda **_kwargs: None
-    monkeypatch.setattr(mod, "build_rollout_vec_env", lambda **_kwargs: FakeVec())
-
-    runner._run_vectorized_cotrain(
-        OmegaConf.create({"env": {"image_size": 64}}),
-        replay=object(),
-        num_envs=2,
-        render_backend="osmesa",
-        render_devices=None,
-        total_env_steps=1,
-        episode_horizon=1,
-        env_task_ids=(0,),
-        knobs={},
-        counters={},
-        history=[],
-    )
-
-    assert checkpoint_calls == ["torch"]
-
-
-def test_online_cotrain_loop_passes_full_ready_gates(monkeypatch):
-    import dreamervla.runtime.world_model_training_common as mod
-
-    captured = {}
-    runner = mod._WorldModelTrainingCommon.__new__(mod._WorldModelTrainingCommon)
-    runner.device = torch.device("cpu")
-    runner.distributed = _FakeDistributed()
-    runner.global_step = 0
-
-    class Replay:
-        num_transitions = 16
-
-    def fake_global_ready(replay, **kwargs):
-        del replay
-        captured.update(kwargs)
-        return {}, False, False
-
-    monkeypatch.setattr(mod, "get_replay_task_stats_global", fake_global_ready)
-
-    stop = runner._run_training_bursts(
-        env_step=1,
-        total_env_steps=1,
-        replay=Replay(),
-        env_task_ids=(0,),
-        knobs={
-            "train_trigger": "episode_end",
-            "updates_per_episode": 1,
-            "updates_per_train": 1,
-            "train_every": 1,
-            "min_replay": 12,
-            "min_eps": 1,
-            "min_sampleable_windows": 9,
-            "require_classifier_evidence": True,
-            "is_dist": False,
-            "batch_size": 1,
-            "max_train_updates": 0,
-            "warmup_steps": 0,
-        },
-        counters={"n_episodes": 1, "n_success": 0},
-        history=[],
-        episode_added=True,
-    )
-
-    assert stop is False
-    assert captured["min_sampleable_windows"] == 9
-    assert captured["require_classifier_evidence"] is True
-
-
 def _make_orchestration_runner(
     tmp_path,
     monkeypatch,
     calls,
     *,
     resume=False,
-    total_env_steps=None,
     cfg_updates=None,
     seed_capture=None,
 ):
     import dreamervla.runners.world_model_training_runner as mod
 
     runner = mod.WorldModelTrainingRunner.__new__(mod.WorldModelTrainingRunner)
-    runner.cfg = _orchestration_cfg(tmp_path, resume=resume, total_env_steps=total_env_steps)
+    runner.cfg = _orchestration_cfg(tmp_path, resume=resume)
     if cfg_updates:
         from omegaconf import OmegaConf
 
@@ -1860,11 +1444,6 @@ def _make_orchestration_runner(
         calls.append("alternating_warmup")
         return 0.0, 0.0
 
-    def fake_online_loop(self, cfg, *, resume_online=True):
-        del resume_online
-        calls.append("online")
-        return []
-
     monkeypatch.setattr(mod.WorldModelTrainingRunner, "_build_components", fake_build_components)
     monkeypatch.setattr(mod, "seed_replay_from_offline", fake_seed)
     monkeypatch.setattr(mod.WorldModelTrainingRunner, "_offline_warmup_wm", fake_wm_warmup)
@@ -1872,7 +1451,6 @@ def _make_orchestration_runner(
     monkeypatch.setattr(
         mod.WorldModelTrainingRunner, "_offline_warmup_alternating", fake_alternating_warmup
     )
-    monkeypatch.setattr(mod.WorldModelTrainingRunner, "_online_cotrain_loop", fake_online_loop)
     # wrap _save_* so we can record their order while still writing the files
     real_save_wm = mod.WorldModelTrainingRunner._save_wm_warmup
     real_save_cls = mod.WorldModelTrainingRunner._save_cls_warmup
@@ -1920,11 +1498,11 @@ def _make_orchestration_runner(
     return runner
 
 
-def test_run_orchestrates_seed_warmup_split_ckpt_online(tmp_path, monkeypatch, capsys):
+def test_run_orchestrates_seed_warmup_and_split_checkpoints(tmp_path, monkeypatch, capsys):
     import os
 
     calls: list[str] = []
-    runner = _make_orchestration_runner(tmp_path, monkeypatch, calls, total_env_steps=1)
+    runner = _make_orchestration_runner(tmp_path, monkeypatch, calls)
 
     history = runner.run()
 
@@ -1933,8 +1511,7 @@ def test_run_orchestrates_seed_warmup_split_ckpt_online(tmp_path, monkeypatch, c
     assert "[pipeline][replay] loading offline shards" in out
     assert "[pipeline][replay] loaded complete episodes=1" in out
     assert "[pipeline][warmup] resolved replay warmup" in out
-    # order: build -> seed -> WM warmup/checkpoint -> classifier warmup/checkpoint -> online
-    assert calls == ["build", "seed", "wm_warmup", "save_wm", "cls_warmup", "save_cls", "online"]
+    assert calls == ["build", "seed", "wm_warmup", "save_wm", "cls_warmup", "save_cls"]
     assert os.path.exists(os.path.join(str(tmp_path), "checkpoints", "wm_warmup.ckpt"))
     assert os.path.exists(os.path.join(str(tmp_path), "checkpoints", "classifier_warmup.ckpt"))
     wm_payload = torch.load(
@@ -1955,7 +1532,6 @@ def test_run_passes_replay_capacity_mode_and_seed_cap_from_hydra(tmp_path, monke
         tmp_path,
         monkeypatch,
         calls,
-        total_env_steps=0,
         cfg_updates={
             "online_rollout.buffer_size": 321,
             "online_rollout.replay_capacity_mode": "total_sharded",
@@ -1999,7 +1575,7 @@ def test_run_fails_fast_when_collected_dump_missing(tmp_path, monkeypatch):
     import pytest
 
     calls: list[str] = []
-    runner = _make_orchestration_runner(tmp_path, monkeypatch, calls, total_env_steps=1)
+    runner = _make_orchestration_runner(tmp_path, monkeypatch, calls)
     # Remove the offline dirs the helper created so the dump looks un-collected.
     for sub in ("offline_data", "offline_hidden"):
         shutil.rmtree(tmp_path / sub)
@@ -2007,20 +1583,6 @@ def test_run_fails_fast_when_collected_dump_missing(tmp_path, monkeypatch):
     with pytest.raises(FileNotFoundError, match="cold-start collection"):
         runner.run()
     assert "build" not in calls  # never reached the model load
-
-
-def test_run_stops_after_warmup_when_total_env_steps_zero(tmp_path, monkeypatch):
-    import os
-
-    calls: list[str] = []
-    runner = _make_orchestration_runner(tmp_path, monkeypatch, calls, total_env_steps=0)
-
-    history = runner.run()
-
-    assert history == []
-    assert calls == ["build", "seed", "wm_warmup", "save_wm", "cls_warmup", "save_cls"]
-    assert os.path.exists(os.path.join(str(tmp_path), "checkpoints", "wm_warmup.ckpt"))
-    assert os.path.exists(os.path.join(str(tmp_path), "checkpoints", "classifier_warmup.ckpt"))
 
 
 def test_wm_only_resume_sets_restored_wm_metric_axis_before_logging(
@@ -2032,7 +1594,6 @@ def test_wm_only_resume_sets_restored_wm_metric_axis_before_logging(
         monkeypatch,
         calls,
         resume=True,
-        total_env_steps=0,
         cfg_updates={
             "training.classifier_warmup_steps": 0,
             "offline_warmup.debug_classifier_warmup_steps": 0,
@@ -2072,7 +1633,6 @@ def test_classifier_resume_offsets_metric_axis_by_total_wm_steps(
         monkeypatch,
         calls,
         resume=True,
-        total_env_steps=0,
     )
     runner._metric_logger = None
     runner._metric_resume_step = None
@@ -2121,7 +1681,6 @@ def test_offline_warmup_requires_every_hydra_declared_task(
         tmp_path,
         monkeypatch,
         calls,
-        total_env_steps=0,
         cfg_updates={"offline_warmup.required_task_ids": [0, 1]},
     )
 
@@ -2137,7 +1696,6 @@ def test_wm_only_run_never_calibrates_or_checkpoints_classifier(tmp_path, monkey
         tmp_path,
         monkeypatch,
         calls,
-        total_env_steps=0,
         cfg_updates={
             "training.classifier_warmup_steps": 0,
             "offline_warmup.debug_classifier_warmup_steps": 0,
@@ -2557,243 +2115,6 @@ def test_warmup_only_component_build_skips_rollout_encoder(monkeypatch):
     assert calls == ["world_model"]
 
 
-def test_online_cotrain_env_preserves_hidden_token_discrete_contract(monkeypatch):
-    from omegaconf import OmegaConf
-
-    import dreamervla.runtime.world_model_training_common as mod
-
-    runner = mod._WorldModelTrainingCommon.__new__(mod._WorldModelTrainingCommon)
-    runner.distributed = _FakeDistributed()
-    captured: dict[str, object] = {}
-
-    def fake_env_factory(cfg):
-        captured.update(dict(cfg))
-        return object()
-
-    monkeypatch.setattr(mod, "default_env_factory", fake_env_factory)
-
-    cfg = OmegaConf.create(
-        {
-            "seed": 7,
-            "env": {
-                "_target_": "tests.fake.Env",
-                "task_suite_name": "libero_goal",
-                "task_ids": [0],
-                "episode_horizon": 64,
-                "history_length": 1,
-                "include_state": False,
-                "vla_rotate_180": True,
-                "obs_hidden_source": "hidden_token",
-                "action_head_type": "oft_discrete_token",
-            },
-        }
-    )
-
-    runner._build_env(cfg)
-
-    assert captured["_target_"] == "tests.fake.Env"
-    assert captured["obs_hidden_source"] == "hidden_token"
-    assert captured["action_head_type"] == "oft_discrete_token"
-    assert captured["history_length"] == 1
-    assert captured["include_state"] is False
-
-
-def test_online_env_validation_accepts_oft_discrete_hidden_token_contract():
-    from dreamervla.envs.libero.libero_env import (
-        DreamerVLAOnlineTrainEnv,
-        DreamerVLAOnlineTrainEnvConfig,
-    )
-
-    env = DreamerVLAOnlineTrainEnv.__new__(DreamerVLAOnlineTrainEnv)
-    env.cfg = DreamerVLAOnlineTrainEnvConfig(
-        history_length=1,
-        include_state=False,
-        obs_hidden_source="hidden_token",
-        action_head_type="oft_discrete_token",
-    )
-
-    env._validate_canonical_config()
-
-
-def test_online_rollout_uses_only_oft_hidden_token_extractor():
-    import dreamervla.runtime.world_model_training_common as mod
-
-    runner = mod._WorldModelTrainingCommon.__new__(mod._WorldModelTrainingCommon)
-    runner.device = torch.device("cpu")
-    calls: list[str] = []
-
-    class FakeExtractor:
-        def reset(self):
-            calls.append("reset")
-
-        def step(self, obs, task_description):
-            calls.append(f"step:{task_description}")
-
-            class DecodeOutput:
-                lang_emb = torch.arange(6, dtype=torch.float16)
-
-                def __iter__(self):
-                    yield []
-                    yield torch.zeros(1, 256, 4096, dtype=torch.float16)
-
-            return DecodeOutput()
-
-    class FakeWorldModel:
-        def __call__(self, batch):
-            if batch["mode"] == "encode_latent":
-                calls.append(f"encode:{tuple(batch['hidden'].shape)}")
-                return {"hidden": batch["hidden"]}
-            if batch["mode"] == "actor_input":
-                calls.append("actor_input")
-                return torch.zeros(1, 6)
-            raise AssertionError(batch["mode"])
-
-    class FakePolicy:
-        def __call__(self, batch):
-            calls.append(f"policy:{tuple(batch['hidden'].shape)}")
-            return torch.zeros(1, 2, 7), torch.zeros(1), {}
-
-    runner._oft_hidden_token_extractor = FakeExtractor()
-
-    action, obs_embedding, latent = runner._rollout_action(
-        FakeWorldModel(),
-        FakePolicy(),
-        processor=None,
-        obs={"is_first": True, "task_description": "Pick up the block"},
-        latent=None,
-        prev_action=torch.zeros(1, 7),
-        target_token_id=10004,
-    )
-
-    assert action.shape == (7,)
-    assert obs_embedding.shape == (1, 256, 4096)
-    assert latent["hidden"].shape == (1, 256, 4096)
-    assert torch.equal(runner._last_rollout_lang_emb, torch.arange(6, dtype=torch.float16))
-    assert calls == [
-        "reset",
-        "step:Pick up the block",
-        "encode:(1, 256, 4096)",
-        "actor_input",
-        "policy:(1, 6)",
-    ]
-
-
-def test_single_env_rollout_executes_full_chunk_and_clears_on_reset(tmp_path, monkeypatch):
-    from omegaconf import OmegaConf
-
-    import dreamervla.runtime.world_model_training_common as mod
-
-    class FakeReplay:
-        num_transitions = 0
-
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        def add_episode(self, _episode, *, source="online"):
-            assert source == "online"
-            return None
-
-    class FakeEnv:
-        def __init__(self):
-            self.episode_step = 0
-            self.actions: list[np.ndarray] = []
-
-        def reset(self):
-            self.episode_step = 0
-            return {"is_first": True, "task_description": "task"}, {}
-
-        def step(self, action):
-            self.actions.append(np.asarray(action, dtype=np.float32).copy())
-            self.episode_step += 1
-            done = self.episode_step >= 2
-            return (
-                {"is_first": False, "task_description": "task"},
-                1.0 if done else 0.0,
-                done,
-                False,
-                {},
-            )
-
-        def make_transition(self, *_args, **_kwargs):
-            return {}
-
-        def close(self):
-            pass
-
-    class FakeExtractor:
-        def reset(self):
-            pass
-
-        def step(self, _obs, _desc):
-            return [], torch.zeros(1, 256, 4096)
-
-    class FakeWorldModel:
-        def __call__(self, batch):
-            if batch["mode"] == "encode_latent":
-                return {"hidden": batch["hidden"]}
-            if batch["mode"] == "observe_next":
-                return {"hidden": batch["hidden"], "prev": batch["actions"]}
-            if batch["mode"] == "actor_input":
-                return torch.zeros(1, 6)
-            raise AssertionError(batch["mode"])
-
-    class FakePolicy:
-        def __call__(self, _batch):
-            first = torch.full((1, 1, 7), 0.25)
-            second = torch.full((1, 1, 7), 0.75)
-            return torch.cat([first, second], dim=1), torch.zeros(1), {}
-
-    fake_env = FakeEnv()
-    monkeypatch.setattr(mod, "OnlineReplay", FakeReplay)
-    runner = mod._WorldModelTrainingCommon.__new__(mod._WorldModelTrainingCommon)
-    checkpoint_calls = _configure_non_main_torch_checkpoint(runner, tmp_path)
-    runner.device = torch.device("cpu")
-    runner.processor = None
-    runner.world_model = FakeWorldModel()
-    runner.policy = FakePolicy()
-    runner._oft_hidden_token_extractor = FakeExtractor()
-    runner._build_env = lambda _cfg: fake_env
-    runner.resume = lambda: (_ for _ in ()).throw(
-        AssertionError("resume must be skipped without an online latest checkpoint")
-    )
-    runner.console_progress = lambda *_args, **_kwargs: None
-    runner.console_record_success = lambda *_args, **_kwargs: None
-
-    cfg = OmegaConf.create(
-        {
-            "algorithm": {"update_type": "LUMOS"},
-            "dataloader": {"batch_size": 1},
-            "env": {"episode_horizon": 2, "task_ids": [0]},
-            "online_rollout": {
-                "buffer_size": 10,
-                "max_train_updates": 0,
-                "min_episodes_per_task": 99,
-                "min_replay": 99,
-                "num_envs": 1,
-                "render_backend": "osmesa",
-                "sequence_length": 2,
-                "total_env_steps": 3,
-                "train_trigger": "episode_end",
-            },
-            "optim": {},
-            "training": {
-                "checkpoint_every": 0,
-                "train_actor_after_warmup": False,
-                "train_classifier_inline": False,
-                "warmup_steps": 0,
-            },
-        }
-    )
-
-    runner._online_cotrain_loop(cfg, resume_online=False)
-
-    assert len(fake_env.actions) == 3
-    np.testing.assert_array_equal(fake_env.actions[0], np.full(7, 0.25, np.float32))
-    np.testing.assert_array_equal(fake_env.actions[1], np.full(7, 0.75, np.float32))
-    np.testing.assert_array_equal(fake_env.actions[2], np.full(7, 0.25, np.float32))
-    assert checkpoint_calls == ["torch"]
-
-
 def test_run_resume_skips_seed_and_warmups_when_ckpts_exist(tmp_path, monkeypatch):
     import os
 
@@ -2832,7 +2153,6 @@ def test_run_resume_skips_seed_and_warmups_when_ckpts_exist(tmp_path, monkeypatc
         monkeypatch,
         calls,
         resume=True,
-        total_env_steps=1,
     )
 
     history = runner.run()
@@ -2844,102 +2164,11 @@ def test_run_resume_skips_seed_and_warmups_when_ckpts_exist(tmp_path, monkeypatc
     assert "cls_warmup" not in calls
     assert "save_wm" not in calls
     assert "save_cls" not in calls
-    assert calls == ["build", "online"]
+    assert calls == ["build"]
     assert runner.world_model_optimizer.state_dict()["state"]
     assert runner.classifier_optimizer.state_dict()["state"]
     # threshold restored from the cls warmup ckpt
     assert runner.classifier_threshold == 0.42
-
-
-def test_online_resume_without_latest_uses_last_complete_warmup_rng(tmp_path):
-    from omegaconf import OmegaConf
-
-    from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
-
-    runner = WorldModelTrainingRunner.__new__(WorldModelTrainingRunner)
-    runner._output_dir = str(tmp_path)
-    runner.cfg = OmegaConf.create({"training": {"resume": True}})
-    ckpt = tmp_path / "checkpoints"
-    ckpt.mkdir(parents=True)
-    (ckpt / "wm_warmup.ckpt").touch()
-    (ckpt / "classifier_warmup.ckpt").touch()
-    restored: list[str] = []
-    runner._restore_warmup_rng_from_checkpoint = lambda path: restored.append(path.name)
-
-    resume_online = runner._prepare_online_resume(
-        trained_active_warmup=False, classifier_enabled=True
-    )
-
-    assert resume_online is False
-    assert restored == ["classifier_warmup.ckpt"]
-
-
-def test_online_resume_wm_only_uses_complete_wm_rng(tmp_path):
-    from omegaconf import OmegaConf
-
-    from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
-
-    runner = WorldModelTrainingRunner.__new__(WorldModelTrainingRunner)
-    runner._output_dir = str(tmp_path)
-    runner.cfg = OmegaConf.create({"training": {"resume": True}})
-    ckpt = tmp_path / "checkpoints"
-    ckpt.mkdir(parents=True)
-    (ckpt / "wm_warmup.ckpt").touch()
-    restored: list[str] = []
-    runner._restore_warmup_rng_from_checkpoint = lambda path: restored.append(path.name)
-
-    resume_online = runner._prepare_online_resume(
-        trained_active_warmup=False, classifier_enabled=False
-    )
-
-    assert resume_online is False
-    assert restored == ["wm_warmup.ckpt"]
-
-
-def test_online_latest_owns_rng_and_skips_warmup_rng_restore(tmp_path):
-    from omegaconf import OmegaConf
-
-    from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
-
-    runner = WorldModelTrainingRunner.__new__(WorldModelTrainingRunner)
-    runner._output_dir = str(tmp_path)
-    runner.cfg = OmegaConf.create({"training": {"resume": True}})
-    ckpt = tmp_path / "checkpoints"
-    ckpt.mkdir(parents=True)
-    (ckpt / "wm_warmup.ckpt").touch()
-    (ckpt / "classifier_warmup.ckpt").touch()
-    (ckpt / "latest.ckpt").touch()
-    restored: list[str] = []
-    runner._restore_warmup_rng_from_checkpoint = lambda path: restored.append(path.name)
-
-    resume_online = runner._prepare_online_resume(
-        trained_active_warmup=False, classifier_enabled=True
-    )
-
-    assert resume_online is True
-    assert restored == []
-
-
-def test_explicit_external_online_latest_owns_resume(tmp_path):
-    from omegaconf import OmegaConf
-
-    from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
-
-    explicit = tmp_path / "external" / "latest.ckpt"
-    explicit.parent.mkdir()
-    explicit.touch()
-    runner = WorldModelTrainingRunner.__new__(WorldModelTrainingRunner)
-    runner._output_dir = str(tmp_path / "current")
-    runner.cfg = OmegaConf.create(
-        {"training": {"resume": True, "resume_path": str(explicit)}}
-    )
-    runner._restore_warmup_rng_from_checkpoint = lambda _path: (_ for _ in ()).throw(
-        AssertionError("explicit online checkpoint must own RNG")
-    )
-
-    assert runner._prepare_online_resume(
-        trained_active_warmup=False, classifier_enabled=True
-    ) is True
 
 
 # ---------------------------------------------------------------------------

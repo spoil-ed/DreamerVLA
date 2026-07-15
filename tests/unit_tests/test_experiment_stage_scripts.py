@@ -290,15 +290,14 @@ def test_hidden_token_preprocess_uses_configured_torchrun_world_size() -> None:
     assert "obs_hidden_source=hidden_token" in text
 
 
-def test_cotrain_world_model_ddp_keeps_online_defaults_configurable() -> None:
+def test_offline_world_model_ddp_defaults_remain_configurable() -> None:
     from omegaconf import OmegaConf
 
     from dreamervla.runtime.world_model_training_common import (
         _world_model_ddp_wrap_kwargs,
     )
 
-    # Mixed-mode online cotrain retains the historical safety settings. The
-    # static-graph optimization is selected only by the offline WM recipe.
+    # Offline recipes retain conservative defaults and may opt into static graph.
     assert _world_model_ddp_wrap_kwargs(OmegaConf.create({"training": {}})) == {
         "find_unused_parameters": True,
         "broadcast_buffers": True,

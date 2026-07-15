@@ -272,6 +272,37 @@ def test_validate_cfg_warmup(tmp_path):
         validate_cfg(removed_ckpt_every)
 
 
+def test_world_model_training_runner_rejects_non_ray_online_cotrain(tmp_path):
+    import pytest
+    from omegaconf import OmegaConf
+
+    from dreamervla.config import validate_cfg
+
+    cfg = OmegaConf.create(
+        {
+            "_target_": "dreamervla.runners.WorldModelTrainingRunner",
+            "offline_warmup": {
+                "data_dir": str(tmp_path),
+                "hidden_dir": str(tmp_path),
+            },
+            "online_rollout": {"total_env_steps": 1},
+            "training": {
+                "wm_warmup_steps": 1,
+                "classifier_warmup_steps": 0,
+            },
+        }
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WorldModelTrainingRunner only supports offline warmup; "
+            "use CotrainRunner"
+        ),
+    ):
+        validate_cfg(cfg)
+
+
 def test_classifier_checkpoint_cadence_uses_epochs_and_rejects_removed_field(tmp_path):
     import pytest
     from omegaconf import OmegaConf

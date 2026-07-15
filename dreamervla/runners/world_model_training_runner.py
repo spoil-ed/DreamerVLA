@@ -1,10 +1,9 @@
-"""Offline-warmup -> online-cotrain pipeline runner.
+"""Offline world-model and success-classifier warmup runner.
 
 Pre-seeds the OnlineReplay buffer from previously-collected cold-start
 trajectory HDF5, warms up the world model + success classifier on that unified
-buffer (same step functions as the online phase, so zero semantic drift), then
-runs the existing world-model training common online loop with RL enabled. WM and
-classifier warmup checkpoints are saved separately for independent resume.
+buffer, and saves independent WM/classifier checkpoints for strict epoch resume.
+Online cotrain is owned by the Ray ``CotrainRunner`` route.
 """
 
 from __future__ import annotations
@@ -78,11 +77,11 @@ def _assert_offline_seed_present(*, data_dir: Any, hidden_dir: Any) -> None:
 
 
 class WorldModelTrainingRunner(_WorldModelTrainingCommon):
-    """Offline-seeded warmup then online cotrain (see module docstring)."""
+    """Offline-seeded world-model and classifier warmup."""
 
-    runner_name = "online_cotrain_pipeline"
+    runner_name = "world_model_training"
     runner_status = "current"
-    runner_family = "actor"
+    runner_family = "world_model"
 
     # ------------------------------------------------------------------ warmup
     def _log_replay_warmup_metrics(self, metrics: dict[str, float], *, step: int) -> None:
@@ -1426,46 +1425,6 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 )
         return bool(payload.get("complete", True))
 
-    def _restore_warmup_rng_from_checkpoint(self, path: Path) -> None:
-        payload = load_runner_payload(path)
-        self._restore_warmup_rng(payload, strict=True)
-
-    def _prepare_online_resume(
-        self,
-        *,
-        trained_active_warmup: bool,
-        classifier_enabled: bool,
-    ) -> bool:
-        """Choose exactly one RNG owner before entering the old online loop."""
-
-        if not bool(OmegaConf.select(self.cfg, "training.resume", default=False)):
-            return False
-        explicit_resume = OmegaConf.select(
-            self.cfg, "training.resume_path", default=None
-        )
-        if explicit_resume not in (None, ""):
-            explicit_path = Path(str(explicit_resume)).expanduser().resolve()
-            is_warmup = explicit_path.name in {
-                "wm_warmup.ckpt",
-                "classifier_warmup.ckpt",
-            } or explicit_path.parent.name == "warmup_progress"
-            if explicit_path.is_file() and not is_warmup:
-                return True
-        online_latest = self.get_checkpoint_path(prefer_existing=True)
-        if online_latest.is_file():
-            return True
-        if trained_active_warmup:
-            return False
-        component = "classifier" if classifier_enabled else "wm"
-        name = "classifier_warmup.ckpt" if classifier_enabled else "wm_warmup.ckpt"
-        checkpoint = self._existing_warmup_checkpoint(name)
-        if checkpoint is None:
-            raise RuntimeError(
-                f"training.resume requested but no complete {component} warmup RNG exists"
-            )
-        self._restore_warmup_rng_from_checkpoint(checkpoint)
-        return False
-
     @staticmethod
     def _warmup_epoch_count(*, total_steps: int, steps_per_epoch: int) -> int:
         return max(1, (int(total_steps) + int(steps_per_epoch) - 1) // int(steps_per_epoch))
@@ -1600,8 +1559,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
     def _apply_debug_overrides(cfg) -> None:
         """When training.debug is set, swap every full knob for its debug_* value.
 
-        Applied once at the top of run() (force_add) so every downstream read —
-        warmup steps and the online loop alike — sees the small smoke values.
+        Applied once at the top of run() so all warmup reads see smoke values.
         """
         if not bool(OmegaConf.select(cfg, "training.debug", default=False)):
             return
@@ -1611,48 +1569,13 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             ("training.classifier_warmup_steps", "offline_warmup.debug_classifier_warmup_steps", 2),
             ("training.warmup_replay_epochs", "offline_warmup.debug_warmup_replay_epochs", 0),
             ("training.global_batch_size", "training.debug_global_batch_size", None),
-            ("online_rollout.total_env_steps", "online_rollout.debug_total_env_steps", 160),
-            ("online_rollout.max_train_updates", "online_rollout.debug_max_train_updates", 4),
-            ("online_rollout.episode_horizon", "online_rollout.debug_episode_horizon", 50),
-            ("online_rollout.min_replay", "online_rollout.debug_min_replay", 48),
             ("dataloader.batch_size", "dataloader.debug_batch_size", 2),
-            ("algorithm.imagination_horizon", "algorithm.debug_imagination_horizon", 3),
-            ("algorithm.ppo_rollouts_per_start", "algorithm.debug_ppo_rollouts_per_start", 2),
-            (
-                "algorithm.lumos.ppo_rollouts_per_start_min",
-                "algorithm.debug_ppo_rollouts_per_start",
-                2,
-            ),
-            (
-                "algorithm.lumos.ppo_rollouts_per_start_max",
-                "algorithm.debug_ppo_rollouts_per_start",
-                2,
-            ),
-            ("algorithm.lumos.episode_max_steps", "algorithm.lumos.debug_episode_max_steps", 150),
         ]
         for full_key, debug_key, fallback in swaps:
             value = OmegaConf.select(cfg, debug_key, default=fallback)
             if value is None:
                 continue
             OmegaConf.update(cfg, full_key, value, force_add=True)
-
-    # ------------------------------------------------------------- gpu reclaim
-    def _empty_cuda_cache(self) -> None:
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-    def _set_encoder_device(self, device: Any) -> None:
-        """Move the frozen encoder on/off the GPU and reclaim freed blocks.
-
-        The encoder is unused during warmup (warmup reads pre-seeded sidecar
-        embeddings), so parking it on CPU frees its weights until the online phase
-        restores it. Frozen + inference-only, so the round trip is numerically inert.
-        No-op when there is no encoder (e.g. total_env_steps<=0 builds encoder=None).
-        """
-        encoder = getattr(self, "encoder", None)
-        if encoder is not None:
-            encoder.to(device)
-        self._empty_cuda_cache()
 
     # ------------------------------------------------------------------ main
     def run(self) -> list[dict[str, Any]]:
@@ -1954,10 +1877,6 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             )
             wm_start_step = cls_start_step = 0
             wm_start_epoch = cls_start_epoch = 0
-            # The frozen encoder is idle during warmup — park it off-GPU to reclaim
-            # its weights (restored before the online phase below).
-            self._set_encoder_device("cpu")
-            self._print_pipeline_event("[pipeline][device] encoder parked on cpu for replay warmup")
         else:
             wm_start_step = 0
             cls_start_step = 0
@@ -1976,7 +1895,6 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             if self.distributed.is_main_process
             else None
         )
-        trained_active_warmup = bool(need_wm or need_cls)
         warmup_metric_resume_step_set = False
 
         if need_wm:
@@ -1989,7 +1907,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 wm_start_epoch = int(wm_progress["epoch"])
                 self.set_metric_resume_step(wm_start_step)
                 warmup_metric_resume_step_set = True
-            self.console_banner("[1/3] WM WARMUP", subtitle=f"{wm_steps} steps")
+            self.console_banner("[1/2] WM WARMUP", subtitle=f"{wm_steps} steps")
             wm_last = self._run_wm_warmup_epochs(
                 warmup_replay,
                 total_steps=wm_steps,
@@ -2002,7 +1920,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 topk_manager=wm_topk_manager,
             )
             if self.distributed.is_main_process:
-                self.console_banner("[1/3] WM WARMUP", subtitle=f"wm_loss {wm_last:.3f}", done=True)
+                self.console_banner("[1/2] WM WARMUP", subtitle=f"wm_loss {wm_last:.3f}", done=True)
         if not need_wm:
             wm_checkpoint = self._existing_warmup_checkpoint("wm_warmup.ckpt")
             wm_hf_dir = self._existing_warmup_hf_dir("wm_warmup_hf")
@@ -2031,7 +1949,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 cls_start_epoch = int(cls_progress["epoch"])
                 if not warmup_metric_resume_step_set:
                     self.set_metric_resume_step(int(wm_steps) + cls_start_step)
-            self.console_banner("[2/3] CLASSIFIER WARMUP", subtitle=f"{cls_steps} steps")
+            self.console_banner("[2/2] CLASSIFIER WARMUP", subtitle=f"{cls_steps} steps")
             cls_last = self._run_cls_warmup_epochs(
                 warmup_replay,
                 total_steps=cls_steps,
@@ -2051,7 +1969,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             )
             if self.distributed.is_main_process:
                 self.console_banner(
-                    "[2/3] CLASSIFIER WARMUP", subtitle=f"acc {cls_last:.3f}", done=True
+                    "[2/2] CLASSIFIER WARMUP", subtitle=f"acc {cls_last:.3f}", done=True
                 )
         if not need_cls:
             cls_checkpoint = self._existing_warmup_checkpoint("classifier_warmup.ckpt")
@@ -2071,26 +1989,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 src = load_module_pretrained(cls_hf_dir)
                 _unwrap(self.classifier).load_state_dict(src.state_dict())
 
-        # online cotrain with RL from the start (already warm): force warmup_steps=0.
-        # Debug runs would otherwise re-read online_rollout.debug_warmup_steps in the online
-        # loop, re-defeating the 0 — zero it too so the "already warm" intent holds in every mode.
-        OmegaConf.update(cfg, "training.warmup_steps", 0, force_add=True)
-        OmegaConf.update(cfg, "online_rollout.debug_warmup_steps", 0, force_add=True)
         self.cfg = cfg
-        total_env_steps = int(OmegaConf.select(cfg, "online_rollout.total_env_steps", default=0))
-        if total_env_steps <= 0:
-            self.console_banner(
-                "[3/3] ONLINE COTRAIN", subtitle="skipped · total_env_steps=0", done=True
-            )
-            return []
-        # Restore the encoder onto the device for the online phase that uses it.
-        self._set_encoder_device(self.device)
-        self._print_pipeline_event(
-            f"[pipeline][device] encoder restored to {self.device} for online rollout"
-        )
-        self.console_banner("[3/3] ONLINE COTRAIN", subtitle=f"{total_env_steps} env steps")
-        resume_online = self._prepare_online_resume(
-            trained_active_warmup=trained_active_warmup,
-            classifier_enabled=int(cls_steps) > 0,
-        )
-        return self._online_cotrain_loop(cfg, resume_online=resume_online)
+        if self.distributed.is_main_process:
+            self.console_banner("WARMUP COMPLETE", done=True)
+        return []
