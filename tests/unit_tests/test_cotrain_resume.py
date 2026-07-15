@@ -5,7 +5,11 @@ modules out of the payload.
 
 import json
 import pathlib
+import random
+import warnings
 
+import numpy as np
+import pytest
 import torch
 from omegaconf import OmegaConf
 
@@ -14,13 +18,14 @@ from dreamervla.runners.cotrain_runner import CotrainRunner
 
 
 class _Mini(BaseRunner):
-    include_keys = ("global_step", "classifier_threshold")
+    include_keys = ("global_step", "epoch", "classifier_threshold")
     exclude_keys = ("frozen",)
 
     def __init__(self, cfg, tmp):
         self.cfg = cfg
         self._out = tmp
         self.global_step = 0
+        self.epoch = 0
         self.classifier_threshold = 0.5
         self.policy = torch.nn.Linear(3, 2)
         self.frozen = torch.nn.Linear(3, 2)  # must NOT be checkpointed
@@ -33,7 +38,20 @@ class _Mini(BaseRunner):
         return None
 
 
-def test_base_checkpoint_roundtrips_optimizer_and_scalars(tmp_path):
+class _FakeDistributed:
+    def __init__(self, *, rank, is_main_process, gathered):
+        self.rank = rank
+        self.is_main_process = is_main_process
+        self.requires_collective_checkpointing = False
+        self.gathered = gathered
+        self.calls = []
+
+    def all_gather_objects(self, value):
+        self.calls.append(value)
+        return self.gathered
+
+
+def test_base_checkpoint_roundtrips_optimizer_scalars_and_rng(tmp_path):
     cfg = OmegaConf.create({})
     a = _Mini(cfg, tmp_path)
     # take an optimizer step so momentum buffers are non-empty
@@ -41,19 +59,137 @@ def test_base_checkpoint_roundtrips_optimizer_and_scalars(tmp_path):
     loss.backward()
     a.policy_optimizer.step()
     a.global_step = 7
+    a.epoch = 4
     a.classifier_threshold = 0.73
     path = a.save_checkpoint()
+
+    expected_python = random.random()
+    expected_numpy = np.random.random()
+    expected_torch = torch.rand(())
 
     payload = torch.load(path, map_location="cpu", weights_only=False)
     assert "policy" in payload["state_dicts"]
     assert "policy_optimizer" in payload["state_dicts"]
     assert "frozen" not in payload["state_dicts"]  # exclude_keys honored
+    assert len(payload["rng_by_rank"]) == 1
 
+    random.seed(999)
+    np.random.seed(999)
+    torch.manual_seed(999)
     b = _Mini(cfg, tmp_path)
     b.load_checkpoint(path=path)
     assert b.global_step == 7
+    assert b.epoch == 4
     assert abs(b.classifier_threshold - 0.73) < 1e-9
     assert b.policy_optimizer.state_dict()["state"]  # momentum restored
+    assert random.random() == expected_python
+    assert np.random.random() == expected_numpy
+    torch.testing.assert_close(torch.rand(()), expected_torch, rtol=0, atol=0)
+
+
+def test_base_save_gathers_rng_before_non_main_early_return(tmp_path):
+    runner = _Mini(OmegaConf.create({}), tmp_path)
+    distributed = _FakeDistributed(rank=1, is_main_process=False, gathered=[])
+    runner.distributed = distributed
+
+    path = runner.save_checkpoint()
+
+    assert len(distributed.calls) == 1
+    assert set(distributed.calls[0]) == {"python", "numpy", "torch", "cuda"}
+    assert not pathlib.Path(path).exists()
+
+
+def test_base_save_persists_all_gathered_rank_rng_states(tmp_path):
+    from dreamervla.utils.seed import capture_rng_state
+
+    states = [capture_rng_state(), capture_rng_state()]
+    runner = _Mini(OmegaConf.create({}), tmp_path)
+    distributed = _FakeDistributed(rank=0, is_main_process=True, gathered=states)
+    runner.distributed = distributed
+
+    path = runner.save_checkpoint()
+
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    assert len(payload["rng_by_rank"]) == 2
+    assert payload["rng_by_rank"][0]["python"] == states[0]["python"]
+    np.testing.assert_array_equal(payload["rng_by_rank"][1]["numpy"][1], states[1]["numpy"][1])
+    torch.testing.assert_close(
+        payload["rng_by_rank"][1]["torch"], states[1]["torch"], rtol=0, atol=0
+    )
+
+
+def test_base_load_selects_distributed_rank_rng(tmp_path):
+    from dreamervla.utils.seed import capture_rng_state
+
+    random.seed(10)
+    np.random.seed(10)
+    torch.manual_seed(10)
+    rank_zero = capture_rng_state()
+    random.seed(20)
+    np.random.seed(20)
+    torch.manual_seed(20)
+    rank_one = capture_rng_state()
+    expected = (random.random(), np.random.random(), torch.rand(()))
+
+    runner = _Mini(OmegaConf.create({}), tmp_path)
+    runner.distributed = _FakeDistributed(
+        rank=1, is_main_process=False, gathered=[rank_zero, rank_one]
+    )
+    random.seed(999)
+    np.random.seed(999)
+    torch.manual_seed(999)
+
+    runner.load_payload(
+        {
+            "format_version": 2,
+            "state_dicts": {},
+            "pickles": {},
+            "rng_by_rank": [rank_zero, rank_one],
+        }
+    )
+
+    assert random.random() == expected[0]
+    assert np.random.random() == expected[1]
+    torch.testing.assert_close(torch.rand(()), expected[2], rtol=0, atol=0)
+
+
+def test_base_load_payload_rejects_v2_without_current_rank_rng(tmp_path):
+    runner = _Mini(OmegaConf.create({}), tmp_path)
+
+    with pytest.raises(RuntimeError, match="rng_by_rank"):
+        runner.load_payload({"format_version": 2, "state_dicts": {}, "pickles": {}})
+
+    with pytest.raises(RuntimeError, match="rank 0"):
+        runner.load_payload(
+            {"format_version": 2, "state_dicts": {}, "pickles": {}, "rng_by_rank": []}
+        )
+
+
+def test_base_load_payload_legacy_rng_and_missing_rng_warning_once(tmp_path, monkeypatch):
+    import dreamervla.runners.base_runner as base_runner_module
+    from dreamervla.utils.seed import capture_rng_state
+
+    runner = _Mini(OmegaConf.create({}), tmp_path)
+    legacy_rng = capture_rng_state()
+    expected = (random.random(), np.random.random(), torch.rand(()))
+    random.seed(999)
+    np.random.seed(999)
+    torch.manual_seed(999)
+
+    runner.load_payload({"format_version": 1, "state_dicts": {}, "pickles": {}, "rng": legacy_rng})
+    assert random.random() == expected[0]
+    assert np.random.random() == expected[1]
+    torch.testing.assert_close(torch.rand(()), expected[2], rtol=0, atol=0)
+
+    monkeypatch.setattr(base_runner_module, "_LEGACY_RNG_WARNING_EMITTED", False)
+    legacy_without_rng = {"format_version": 1, "state_dicts": {}, "pickles": {}}
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        runner.load_payload(legacy_without_rng)
+        runner.load_payload({"state_dicts": {}, "pickles": {}})
+    matching = [item for item in caught if issubclass(item.category, RuntimeWarning)]
+    assert len(matching) == 1
+    assert "RNG" in str(matching[0].message)
 
 
 class _Ready:

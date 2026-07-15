@@ -10,6 +10,7 @@ import pathlib
 import pickle
 import shutil
 import subprocess
+import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -38,8 +39,14 @@ from dreamervla.utils.hf_checkpoint import (
 from dreamervla.utils.metric_logger import MetricLogger, NullMetricLogger
 from dreamervla.utils.progress import ProgressReporter
 from dreamervla.utils.run_paths import infer_run_root, resolve_resume_checkpoint
+from dreamervla.utils.seed import (
+    capture_rng_state,
+    restore_rng_state,
+    select_rank_rng_state,
+)
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
+_LEGACY_RNG_WARNING_EMITTED = False
 
 
 def _group_metric_rows(metrics: dict, *, skip_success: bool = False) -> list[str]:
@@ -805,6 +812,13 @@ class BaseRunner(ABC):
             if distributed is None
             else bool(getattr(distributed, "requires_collective_checkpointing", False))
         )
+        local_rng_state = capture_rng_state()
+        gather_rng_states = (
+            None if distributed is None else getattr(distributed, "all_gather_objects", None)
+        )
+        rng_by_rank = (
+            gather_rng_states(local_rng_state) if callable(gather_rng_states) else [local_rng_state]
+        )
         if distributed is not None and not requires_collective and not is_main_process:
             return str(path.absolute())
 
@@ -813,6 +827,7 @@ class BaseRunner(ABC):
             "cfg": self.cfg,
             "state_dicts": {},
             "pickles": {},
+            "rng_by_rank": rng_by_rank,
         }
 
         # State dicts
@@ -901,6 +916,42 @@ class BaseRunner(ABC):
         for key in include_keys:
             if key in pickles:
                 self.__dict__[key] = pickle.loads(pickles[key])
+
+        distributed = getattr(self, "distributed", None)
+        rank = 0 if distributed is None else int(getattr(distributed, "rank", 0))
+        version = payload.get("format_version")
+        if (
+            isinstance(version, int)
+            and not isinstance(version, bool)
+            and version >= CHECKPOINT_FORMAT_VERSION
+        ):
+            if "rng_by_rank" not in payload:
+                raise RuntimeError(
+                    f"format v{CHECKPOINT_FORMAT_VERSION} runner checkpoint is missing rng_by_rank"
+                )
+            rank_rng_state = select_rank_rng_state(payload["rng_by_rank"], rank)
+            if rank_rng_state is None:
+                raise RuntimeError(
+                    f"format v{CHECKPOINT_FORMAT_VERSION} runner checkpoint has no RNG "
+                    f"state for rank {rank}"
+                )
+            restore_rng_state(rank_rng_state, strict=True)
+            return
+
+        legacy_states = payload.get("rng_by_rank", payload.get("rng"))
+        rank_rng_state = select_rank_rng_state(legacy_states, rank)
+        if rank_rng_state is not None:
+            restore_rng_state(rank_rng_state, strict=False)
+            return
+
+        global _LEGACY_RNG_WARNING_EMITTED
+        if not _LEGACY_RNG_WARNING_EMITTED:
+            warnings.warn(
+                "legacy runner checkpoint has no RNG state; continuing from current seed",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            _LEGACY_RNG_WARNING_EMITTED = True
 
     def _state_dict_for_checkpoint(self, key: str, value: Any) -> dict[str, Any] | None:
         return value.state_dict()

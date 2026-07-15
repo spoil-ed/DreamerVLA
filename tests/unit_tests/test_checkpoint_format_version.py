@@ -19,6 +19,10 @@ def _make_hf_dir(path):
     return path.resolve()
 
 
+def test_checkpoint_format_version_is_two() -> None:
+    assert CHECKPOINT_FORMAT_VERSION == 2
+
+
 def test_load_runner_payload_roundtrips_versioned_payload(tmp_path) -> None:
     path = tmp_path / "latest.ckpt"
     payload = {

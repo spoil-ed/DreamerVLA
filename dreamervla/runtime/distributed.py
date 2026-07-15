@@ -307,6 +307,15 @@ class NopretokenizeSFTDistributedHelper:
         dist.broadcast_object_list(object_list, src=0)
         return object_list[0]
 
+    def all_gather_objects(self, value: Any) -> list[Any]:
+        """Gather one picklable value from every rank in rank order."""
+
+        if not self.is_distributed:
+            return [value]
+        gathered: list[Any] = [None] * self.world_size
+        dist.all_gather_object(gathered, value)
+        return gathered
+
     def model_state_dict_context(
         self,
         module: torch.nn.Module,
