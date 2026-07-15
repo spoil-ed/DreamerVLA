@@ -145,6 +145,21 @@ def test_dino_runner_config_prefers_complete_checkpoint_payload(tmp_path) -> Non
     assert loaded.dataset.valid.source == "payload"
 
 
+def test_dino_runner_config_accepts_complete_config_payload_without_disk_config(
+    tmp_path: Path,
+) -> None:
+    checkpoint = tmp_path / "run" / "checkpoints" / "latest.ckpt"
+    payload_config = OmegaConf.create(
+        {"dataset": {"valid": {"source": "config-payload"}}}
+    )
+
+    loaded = _runner_config_from_checkpoint(
+        {"config": payload_config}, checkpoint, config_path=None
+    )
+
+    assert loaded.dataset.valid.source == "config-payload"
+
+
 def test_dino_runner_config_discovers_native_hydra_config_from_checkpoint(
     tmp_path: Path,
 ) -> None:

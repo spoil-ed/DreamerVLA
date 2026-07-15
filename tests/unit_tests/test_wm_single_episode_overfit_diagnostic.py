@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from omegaconf import DictConfig, OmegaConf
 
 
 def test_default_artifact_paths_follow_dvla_data_root(
@@ -92,3 +93,46 @@ def test_legacy_resolved_config_flag_is_hidden_alias(
     help_text = capsys.readouterr().out
     assert "--run-config" in help_text
     assert "--resolved-config" not in help_text
+
+
+def test_component_config_loading_uses_shared_run_config_loader(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from dreamervla.diagnostics import wm_single_episode_overfit as diag
+
+    run_config = tmp_path / ".hydra" / "config.yaml"
+    observed: list[Path] = []
+    persisted = OmegaConf.create(
+        {
+            "ray_components": {
+                "world_model": {
+                    "target": "world.Model",
+                    "kwargs": {
+                        "reward_loss_scale": 1.0,
+                        "chunk_rollout_chunks": 4,
+                        "chunk_rollout_loss_scale": 0.5,
+                    },
+                },
+                "classifier": {
+                    "target": "classifier.Model",
+                    "kwargs": {"hidden_dim": 8},
+                },
+            }
+        }
+    )
+
+    def spy_load(path: str | Path) -> DictConfig:
+        observed.append(Path(path))
+        return persisted
+
+    monkeypatch.setattr(diag, "load_run_config", spy_load)
+
+    world_model, classifier = diag._load_component_configs(run_config)
+
+    assert observed == [run_config]
+    assert world_model["target"] == "world.Model"
+    assert world_model["kwargs"]["reward_loss_scale"] == 0.0
+    assert world_model["kwargs"]["chunk_rollout_chunks"] == 1
+    assert world_model["kwargs"]["chunk_rollout_loss_scale"] == 0.0
+    assert classifier["target"] == "classifier.Model"

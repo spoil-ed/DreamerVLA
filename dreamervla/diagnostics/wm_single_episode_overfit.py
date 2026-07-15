@@ -239,6 +239,22 @@ def _load_episode(
     return hidden, lang, actions, rewards, proprio
 
 
+def _load_component_configs(
+    run_config: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Load the probe's WM and classifier configs from a persisted run config."""
+
+    cfg = load_run_config(run_config)
+    wm_cfg = OmegaConf.to_container(cfg.ray_components.world_model, resolve=True)
+    cls_cfg = OmegaConf.to_container(cfg.ray_components.classifier, resolve=True)
+    if not isinstance(wm_cfg, dict) or not isinstance(cls_cfg, dict):
+        raise TypeError("run config components must be mappings")
+    wm_cfg["kwargs"]["reward_loss_scale"] = 0.0
+    wm_cfg["kwargs"]["chunk_rollout_chunks"] = 1
+    wm_cfg["kwargs"]["chunk_rollout_loss_scale"] = 0.0
+    return wm_cfg, cls_cfg
+
+
 def main() -> None:
     args = parse_args()
     if args.trained_wm_ckpt is None:
@@ -340,12 +356,7 @@ def _run_probe(
         args.hidden_hdf5, args.raw_hdf5, args.demo_key
     )
 
-    cfg = load_run_config(args.run_config)
-    wm_cfg = OmegaConf.to_container(cfg.ray_components.world_model, resolve=True)
-    wm_cfg["kwargs"]["reward_loss_scale"] = 0.0
-    wm_cfg["kwargs"]["chunk_rollout_chunks"] = 1
-    wm_cfg["kwargs"]["chunk_rollout_loss_scale"] = 0.0
-    cls_cfg = OmegaConf.to_container(cfg.ray_components.classifier, resolve=True)
+    wm_cfg, cls_cfg = _load_component_configs(args.run_config)
 
     load_wm_ckpt = args.trained_wm_ckpt if args.stage == "eval" else args.wm_ckpt
     wm = _build_component(wm_cfg).to(device).train()

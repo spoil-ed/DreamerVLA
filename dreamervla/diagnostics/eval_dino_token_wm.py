@@ -131,9 +131,10 @@ def _runner_config_from_checkpoint(
     checkpoint_path: Path,
     config_path: str | None,
 ) -> object:
-    config = payload.get("cfg")
-    if config is not None and OmegaConf.select(config, "dataset.valid") is not None:
-        return config
+    for key in ("cfg", "config"):
+        config = payload.get(key)
+        if config is not None and OmegaConf.select(config, "dataset.valid") is not None:
+            return config
     try:
         config = load_run_config(config_path or checkpoint_path)
     except FileNotFoundError as exc:
