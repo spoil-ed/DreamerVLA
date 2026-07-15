@@ -109,6 +109,8 @@ bash scripts/experiments/cotrain/train.sh \
 The dedicated Dreamer mainline entrypoint selects the same frozen-WM/CLS recipe
 without requiring a `--config` argument:
 
+- `experiments/dreamer/train.sh`
+
 ```bash
 bash scripts/experiments/dreamer/train.sh \
   --wm_ckpt /path/to/wm.ckpt \

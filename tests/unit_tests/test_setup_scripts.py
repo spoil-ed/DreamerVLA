@@ -1008,11 +1008,12 @@ def test_release_scripts_tree_is_curated() -> None:
         "classifier_training",
         "collect_rollouts",
         "cotrain",
+        "dreamer",
         "openvla_oft_official_eval",
         "single_trajectory_overfit",
         "world_model_training",
     ]
-    assert len(list(scripts.rglob("*.sh"))) == 31
+    assert len(list(scripts.rglob("*.sh"))) == 32
     gitignore = (root / ".gitignore").read_text(encoding="utf-8")
     assert "__pycache__/" in gitignore
     assert "*.pyc" in gitignore
