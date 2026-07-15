@@ -2,27 +2,12 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 from omegaconf import OmegaConf
 
-
-def _cotrain_smoke_command(repo: Path, out_dir: Path) -> list[str]:
-    return [
-        sys.executable,
-        "-m",
-        "dreamervla.train",
-        "--config-path",
-        str(repo / "tests" / "fixtures"),
-        "--config-name",
-        "cotrain_tiny",
-        "manual_cotrain.learner_update_step=1",
-        f"hydra.run.dir={out_dir}",
-        f"training.out_dir={out_dir}",
-        "hydra.job.chdir=false",
-    ]
+from tests.helpers.cotrain_smoke import cotrain_smoke_command
 
 
 def test_cotrain_tiny_completes_full_global_step(tmp_path: Path) -> None:
@@ -35,7 +20,7 @@ def test_cotrain_tiny_completes_full_global_step(tmp_path: Path) -> None:
     env["WANDB_MODE"] = "offline"
     env["HYDRA_FULL_ERROR"] = "1"
     env["PYTHONPATH"] = str(repo)
-    cmd = _cotrain_smoke_command(repo, out_dir)
+    cmd = cotrain_smoke_command(repo, out_dir)
 
     result = subprocess.run(
         cmd,

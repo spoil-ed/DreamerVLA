@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import runpy
 import subprocess
 import sys
 from pathlib import Path
 
 import yaml
+
+from tests.helpers.cotrain_smoke import cotrain_smoke_command
 
 
 def test_native_hydra_writes_its_metadata_under_training_out_dir(
@@ -49,12 +50,8 @@ def test_cotrain_smoke_command_composes_fixture_through_native_hydra(
     tmp_path: Path,
 ) -> None:
     project_root = Path(__file__).resolve().parents[2]
-    smoke_module = runpy.run_path(
-        str(project_root / "tests" / "e2e_tests" / "test_cotrain_smoke.py")
-    )
-    assert "_cotrain_smoke_command" in smoke_module
     run_root = tmp_path / "cotrain-fixture-hydra"
-    command = smoke_module["_cotrain_smoke_command"](project_root, run_root)
+    command = cotrain_smoke_command(project_root, run_root)
     assert command[:3] == [sys.executable, "-m", "dreamervla.train"]
     assert command[3:7] == [
         "--config-path",

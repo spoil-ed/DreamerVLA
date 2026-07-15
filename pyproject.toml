@@ -29,7 +29,10 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["dreamervla*"]
+include = ["configs*", "dreamervla*"]
+
+[tool.setuptools.package-data]
+configs = ["**/*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit_tests"]
