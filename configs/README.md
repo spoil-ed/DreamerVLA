@@ -8,6 +8,8 @@ stable training entrypoint; `experiment=<name>` selects one recipe under
 configs/
 ├── train.yaml
 ├── experiment/
+├── profile/
+├── launch/
 ├── dreamervla/
 ├── worldmodel/
 ├── classifier/
@@ -29,7 +31,7 @@ and smoke-run limits.
 ## Common Commands
 
 ```bash
-python -m dreamervla.train experiment=openvla_onetraj_libero_cotrain task=openvla_onetraj_coldstart_libero
+python -m dreamervla.train experiment=openvla_onetraj_libero_cotrain profile=production
 bash scripts/experiments/collect_rollouts/train.sh task=openvla_onetraj_coldstart_libero
 python -m dreamervla.train experiment=wm_full_dataset_train task=openvla_onetraj_coldstart_libero
 bash scripts/experiments/world_model_training/train.sh --config dino-wm
@@ -56,6 +58,7 @@ bash scripts/utils/wandb_sync.sh /path/to/run_root/wandb
 
 | Stage | Script | Default Config |
 | --- | --- | --- |
+| Full online cotrain | `scripts/experiments/cotrain/train.sh --config openvla_onetraj_libero_cotrain --wm_ckpt <wm> --cls_ckpt <cls>` | `openvla_onetraj_libero_cotrain` |
 | Failure-conditioned imagined RL | `scripts/experiments/cotrain/train.sh --config openvla_libero --wm_ckpt <wm> --cls_ckpt <cls>` | `openvla_libero` |
 | Cotrain policy eval | `scripts/experiments/cotrain/eval.sh` | `eval_cotrain` |
 | Official-data world model | `scripts/experiments/world_model_training/train.sh --config dino-wm\|dreamer-wm` | `dino-wm` / `dreamer-wm` |
@@ -79,6 +82,11 @@ bash scripts/utils/wandb_sync.sh /path/to/run_root/wandb
 | `wmpo_token_classifier_openvla_onetraj_libero_goal_h1` | token classifier recipe |
 | `openvla_libero` | frozen-WM/CLS failure-conditioned OpenVLA imagined RL (Ray backend) |
 | `eval_libero_vla` | LIBERO rollout eval |
+
+`profile=production` preserves the selected experiment. `profile=debug` declares
+short budgets, while `profile=smoke` declares a complete two-GPU real+WM topology.
+Profiles are composed after experiments, so every effective budget remains visible
+in Hydra's `.hydra/config.yaml`.
 
 The release training path is OpenVLA-OFT one-trajectory cold-start cotrain.
 The two `*_official_upper_bound` stages form an isolated `libero_goal`-only

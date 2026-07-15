@@ -33,10 +33,9 @@ def test_cotrain_launcher_accepts_atomic_warm_start_pair(
     classifier = tmp_path / "classifier.ckpt"
     wm.touch()
     classifier.touch()
-    monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm))
-    monkeypatch.setenv("CLASSIFIER_CKPT", str(classifier))
-
-    launch = build_launch([])
+    launch = build_launch(
+        ["--wm_ckpt", str(wm), "--cls_ckpt", str(classifier)]
+    )
 
     assert f"init.world_model_state_ckpt={json.dumps(str(wm.resolve()))}" in launch.command
     assert f"init.classifier_state_ckpt={json.dumps(str(classifier.resolve()))}" in launch.command
@@ -65,10 +64,9 @@ def test_cotrain_launcher_matches_classifier_head_to_checkpoint(
         },
         classifier,
     )
-    monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm))
-    monkeypatch.setenv("CLASSIFIER_CKPT", str(classifier))
-
-    launch = build_launch([])
+    launch = build_launch(
+        ["--wm_ckpt", str(wm), "--cls_ckpt", str(classifier)]
+    )
 
     assert launch.cfg.ray_components.classifier.kwargs.output_dim == 2
     assert launch.cfg.learner.train_cfg.classifier_loss_type == "ce"
@@ -76,7 +74,7 @@ def test_cotrain_launcher_matches_classifier_head_to_checkpoint(
     assert "learner.train_cfg.classifier_loss_type=ce" in launch.command
 
 
-def test_cotrain_launcher_reads_global_steps_environment_override(
+def test_cotrain_launcher_ignores_global_steps_environment_override(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -84,14 +82,20 @@ def test_cotrain_launcher_reads_global_steps_environment_override(
     classifier = tmp_path / "classifier.ckpt"
     wm.touch()
     classifier.touch()
-    monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm))
-    monkeypatch.setenv("CLASSIFIER_CKPT", str(classifier))
     monkeypatch.setenv("WMCLS_COTRAIN_GLOBAL_STEPS", "10")
 
-    launch = build_launch([])
+    launch = build_launch(
+        [
+            "--wm_ckpt",
+            str(wm),
+            "--cls_ckpt",
+            str(classifier),
+            "manual_cotrain.global_steps=11",
+        ]
+    )
 
-    assert "manual_cotrain.global_steps=10" in launch.command
-    assert launch.cfg.manual_cotrain.global_steps == 10
+    assert "manual_cotrain.global_steps=10" not in launch.command
+    assert launch.cfg.manual_cotrain.global_steps == 11
 
 
 def test_cotrain_launcher_accepts_huggingface_component_directories(
@@ -104,16 +108,15 @@ def test_cotrain_launcher_accepts_huggingface_component_directories(
     classifier.mkdir()
     (wm / "config.json").write_text("{}", encoding="utf-8")
     (classifier / "config.json").write_text("{}", encoding="utf-8")
-    monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm))
-    monkeypatch.setenv("CLASSIFIER_CKPT", str(classifier))
-
-    launch = build_launch([])
+    launch = build_launch(
+        ["--wm_ckpt", str(wm), "--cls_ckpt", str(classifier)]
+    )
 
     assert f"init.world_model_state_ckpt={json.dumps(str(wm.resolve()))}" in launch.command
     assert f"init.classifier_state_ckpt={json.dumps(str(classifier.resolve()))}" in launch.command
 
 
-def test_cotrain_launcher_rejects_partial_warm_start_pair(
+def test_cotrain_launcher_ignores_checkpoint_environment_variables(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -122,10 +125,7 @@ def test_cotrain_launcher_rejects_partial_warm_start_pair(
     monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm))
     monkeypatch.delenv("CLASSIFIER_CKPT", raising=False)
 
-    with pytest.raises(
-        ValueError,
-        match="both WORLD_MODEL_CKPT and CLASSIFIER_CKPT",
-    ):
+    with pytest.raises(ValueError, match="requires both --wm_ckpt and --cls_ckpt"):
         build_launch([])
 
 
@@ -137,12 +137,14 @@ def test_cotrain_launcher_reads_gpu_count_from_hydra(
     classifier = tmp_path / "classifier.ckpt"
     wm.touch()
     classifier.touch()
-    monkeypatch.setenv("WORLD_MODEL_CKPT", str(wm))
-    monkeypatch.setenv("CLASSIFIER_CKPT", str(classifier))
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2,5")
 
     launch = build_launch(
         [
+            "--wm_ckpt",
+            str(wm),
+            "--cls_ckpt",
+            str(classifier),
             "manual_cotrain.ngpu=2",
             "cluster.num_gpus=2",
         ]
@@ -178,6 +180,29 @@ def test_cotrain_launcher_translates_public_cli_options(
     assert f"init.world_model_state_ckpt={json.dumps(str(wm.resolve()))}" in launch.command
     assert f"init.classifier_state_ckpt={json.dumps(str(classifier.resolve()))}" in launch.command
     assert launch.cfg.manual_cotrain.global_steps == 3
+
+
+def test_full_cotrain_uses_same_hydra_launch_contract(tmp_path: Path) -> None:
+    wm = tmp_path / "wm.ckpt"
+    classifier = tmp_path / "classifier.ckpt"
+    wm.touch()
+    classifier.touch()
+
+    launch = _build_launch(
+        [
+            "--config",
+            "openvla_onetraj_libero_cotrain",
+            "--wm_ckpt",
+            str(wm),
+            "--cls_ckpt",
+            str(classifier),
+        ]
+    )
+
+    assert launch.cfg._target_ == "dreamervla.runners.CotrainRunner"
+    assert launch.cfg.manual_cotrain.training_mode == "staged_full_cotrain"
+    assert Path(launch.cfg.init.world_model_state_ckpt) == wm.resolve()
+    assert Path(launch.cfg.init.classifier_state_ckpt) == classifier.resolve()
 
 
 def test_cotrain_launcher_rejects_partial_public_checkpoint_pair(
@@ -291,7 +316,7 @@ def test_cotrain_train_script_uses_unified_train_launcher() -> None:
 
 def test_openvla_experiment_selects_cotrain_launch_contract() -> None:
     root = Path(__file__).resolve().parents[2]
-    config = (root / "configs/experiment/openvla_libero.yaml").read_text(encoding="utf-8")
+    config = (root / "configs/launch/cotrain.yaml").read_text(encoding="utf-8")
     launcher = (root / "dreamervla/launchers/train.py").read_text(encoding="utf-8")
 
     assert "dreamervla.launchers.contracts.CotrainLaunchContract" in config

@@ -1,0 +1,27 @@
+# @package _global_
+# Short, fully declared run for local debugging. Python code must not reinterpret
+# training.debug or replace these values at runtime.
+profile:
+  name: debug
+
+training:
+  debug: true
+  num_epochs: 3
+  max_train_steps: 2
+  checkpoint_every: 1
+  checkpoint_every_epochs: 1
+  wm_warmup_steps: 2
+  classifier_warmup_steps: 2
+  warmup_replay_epochs: 0
+
+dataloader:
+  batch_size: 2
+
+manual_cotrain:
+  global_steps: 10
+  checkpoint_every: 1
+  eval_interval_global_steps: 1
+  real_env_workers: 1
+  real_envs_per_worker: 1
+  real_rollout_target_trajectories: 8
+  wm_rollout_target_trajectories: 256

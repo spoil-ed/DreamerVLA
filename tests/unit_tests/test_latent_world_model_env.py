@@ -188,9 +188,7 @@ def test_latent_world_model_env_step_returns_env_tuple():
     assert "latent" in obs
     assert info["task_id"] == 1
 
-    next_obs, reward, terminated, truncated, info = env.step(
-        np.ones(7, dtype=np.float32)
-    )
+    next_obs, reward, terminated, truncated, info = env.step(np.ones(7, dtype=np.float32))
 
     assert "latent" in next_obs
     assert reward > 0.0
@@ -225,9 +223,7 @@ def test_latent_world_model_env_converts_two_class_logits_to_success_probability
     )
 
     env.reset()
-    _next_obs, reward, terminated, truncated, info = env.step(
-        np.zeros(2, dtype=np.float32)
-    )
+    _next_obs, reward, terminated, truncated, info = env.step(np.zeros(2, dtype=np.float32))
 
     assert reward == pytest.approx(0.5)
     assert info["success_score"] == pytest.approx(0.5)
@@ -245,9 +241,7 @@ def test_latent_world_model_env_converts_single_logit_to_success_probability():
     )
 
     env.reset()
-    _next_obs, reward, terminated, truncated, info = env.step(
-        np.zeros(2, dtype=np.float32)
-    )
+    _next_obs, reward, terminated, truncated, info = env.step(np.zeros(2, dtype=np.float32))
 
     assert reward == pytest.approx(0.5)
     assert info["success_score"] == pytest.approx(0.5)
@@ -413,14 +407,12 @@ def test_chunk_granularity_classifier_scores_once_per_policy_chunk() -> None:
     )
     env.reset_slot(0, task_id=0, episode_id=0)
 
-    _observations, rewards, _terminations, _truncations, infos = (
-        env.chunk_step_batch(
-            np.array(
-                [[[1.0, 0.0], [0.0, 2.0], [3.0, 0.0]]],
-                dtype=np.float32,
-            ),
-            env_ids=[0],
-        )
+    _observations, rewards, _terminations, _truncations, infos = env.chunk_step_batch(
+        np.array(
+            [[[1.0, 0.0], [0.0, 2.0], [3.0, 0.0]]],
+            dtype=np.float32,
+        ),
+        env_ids=[0],
     )
 
     assert len(classifier.windows) == 1
@@ -461,12 +453,10 @@ def test_classifier_temporal_windows_do_not_cat_or_stack_slot_histories(
     monkeypatch.setattr(torch, "cat", tracked_cat)
     monkeypatch.setattr(torch, "stack", tracked_stack)
 
-    windows, _proprio, updates, _proprio_updates = (
-        env._classifier_temporal_windows(
-            torch.tensor([[1.0, 2.0], [3.0, 4.0]]),
-            window=3,
-            slots=[0, 1],
-        )
+    windows, _proprio, updates, _proprio_updates = env._classifier_temporal_windows(
+        torch.tensor([[1.0, 2.0], [3.0, 4.0]]),
+        window=3,
+        slots=[0, 1],
     )
 
     assert windows.tolist() == [
@@ -547,11 +537,9 @@ def test_latent_world_model_env_chunk_step_batch_marks_done_only_on_final_step()
     )
     timeout_env.reset_slot(0, task_id=0, episode_id=0)
 
-    _observations, _rewards, terminations, truncations, infos = (
-        timeout_env.chunk_step_batch(
-            np.array([[[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]], dtype=np.float32),
-            env_ids=[0],
-        )
+    _observations, _rewards, terminations, truncations, infos = timeout_env.chunk_step_batch(
+        np.array([[[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]], dtype=np.float32),
+        env_ids=[0],
     )
 
     assert terminations.tolist() == [[False, False, False]]
@@ -708,9 +696,7 @@ def test_latent_world_model_env_can_return_tensor_observation_snapshots() -> Non
     assert isinstance(obs["latent"], torch.Tensor)
     obs["latent"][0] = 42.0
 
-    next_obs, _reward, _terminated, _truncated, _info = env.step(
-        np.zeros(2, dtype=np.float32)
-    )
+    next_obs, _reward, _terminated, _truncated, _info = env.step(np.zeros(2, dtype=np.float32))
 
     assert isinstance(next_obs["latent"], torch.Tensor)
     assert next_obs["latent"].tolist() == [0.0, 0.0]
@@ -875,7 +861,5 @@ def test_chunk_step_batch_fallback_warns_once(caplog) -> None:
         env.chunk_step_batch(actions, env_ids=[0])
         env.chunk_step_batch(actions, env_ids=[0])
 
-    fallback_warnings = [
-        record for record in caplog.records if "chunk mode" in record.getMessage()
-    ]
+    fallback_warnings = [record for record in caplog.records if "chunk mode" in record.getMessage()]
     assert len(fallback_warnings) == 1

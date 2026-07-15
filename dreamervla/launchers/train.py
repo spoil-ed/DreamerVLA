@@ -24,20 +24,23 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = PROJECT_ROOT / "configs"
 
 _LAUNCHER_KEYS = {
-    "batch_size",
     "data_root",
     "distributed",
     "dry_run",
     "gpus",
     "master_port",
-    "max_steps",
     "ngpu",
-    "num_epochs",
-    "num_workers",
-    "out_dir",
     "print_config",
     "python",
     "write_libero_config",
+}
+
+_REMOVED_SEMANTIC_ALIASES = {
+    "batch_size",
+    "max_steps",
+    "num_epochs",
+    "num_workers",
+    "out_dir",
 }
 
 
@@ -82,7 +85,7 @@ def _experiment_from_argv(argv: Sequence[str]) -> str:
 def _parse_args(
     argv: Sequence[str],
 ) -> tuple[str, dict[str, str], list[str]]:
-    """Split the experiment choice, launcher aliases, and Hydra overrides."""
+    """Split experiment choice, launch mechanics, and Hydra overrides."""
 
     experiment: str | None = None
     launcher: dict[str, str] = {}
@@ -129,6 +132,11 @@ def _parse_args(
         key = raw_key.lstrip("+")
         if key == "experiment":
             experiment = raw_value
+        elif key in _REMOVED_SEMANTIC_ALIASES:
+            raise SystemExit(
+                f"Launcher alias {key!r} was removed. Use the experiment's explicit "
+                "Hydra key=value override."
+            )
         elif key in _LAUNCHER_KEYS:
             launcher[key] = raw_value
         else:
@@ -148,11 +156,6 @@ def _parse_value(value: str) -> Any:
 
 def _select(cfg: DictConfig, key: str, default: Any = None) -> Any:
     return OmegaConf.select(cfg, key, default=default)
-
-
-def _has_path(cfg: DictConfig, dotted: str) -> bool:
-    sentinel = object()
-    return OmegaConf.select(cfg, dotted, default=sentinel) is not sentinel
 
 
 def _compose(experiment: str, overrides: Sequence[str]) -> DictConfig:
@@ -191,21 +194,9 @@ def _build_contract(cfg: DictConfig) -> LaunchContract:
 
 
 def _target_overrides(
-    cfg: DictConfig,
     launcher: Mapping[str, str],
     raw_overrides: Sequence[str] = (),
 ) -> list[str]:
-    mapping = {
-        "batch_size": (
-            "training.global_batch_size",
-            "dataloader.batch_size",
-            "training.batch_size",
-        ),
-        "num_workers": ("dataloader.num_workers", "training.num_workers"),
-        "max_steps": ("training.max_steps", "training.max_train_steps"),
-        "num_epochs": ("training.num_epochs",),
-        "out_dir": ("training.out_dir",),
-    }
     overrides: list[str] = []
     resume_source = launcher.get("resume")
     if resume_source not in (None, ""):
@@ -218,7 +209,7 @@ def _target_overrides(
                 "training.resume_path",
             }
         )
-        if launcher.get("out_dir") not in (None, "") or conflicts:
+        if conflicts:
             raise ValueError(
                 "--resume cannot be combined with out_dir or training.out_dir/resume overrides"
             )
@@ -235,14 +226,6 @@ def _target_overrides(
                 f"training.out_dir={json.dumps(str(run_root))}",
             ]
         )
-    for alias, candidates in mapping.items():
-        value = launcher.get(alias)
-        if value in (None, ""):
-            continue
-        target = next((key for key in candidates if _has_path(cfg, key)), None)
-        if target is None:
-            raise ValueError(f"experiment does not expose a target for launcher alias {alias!r}")
-        overrides.append(f"{target}={value}")
     return overrides
 
 
@@ -349,7 +332,7 @@ def build_launch(argv: Sequence[str]) -> ExperimentLaunch:
     experiment, launcher, overrides = _parse_args(normalized_argv)
     cfg = _compose(experiment, overrides)
 
-    alias_overrides = _target_overrides(cfg, launcher, overrides)
+    alias_overrides = _target_overrides(launcher, overrides)
     if alias_overrides:
         overrides = [*overrides, *alias_overrides]
         cfg = _compose(experiment, overrides)

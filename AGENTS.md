@@ -32,7 +32,7 @@ do not replace the collect/warmup/online-cotrain flow.
   - `launchers/` - thin Python launchers for one command, generic train/eval dispatch,
     and shell workflow execution.
   - `runners/` - `BaseRunner` plus public runner targets. Current mainline runners are
-    `RolloutCollectionRunner`, `CotrainRunner`, `WorldModelTrainingRunner`,
+    `RolloutCollectionRunner`, `CotrainRunner`, `DreamerRunner`, `WorldModelTrainingRunner`,
     `SuccessClassifierTrainingRunner`, and `LIBEROVLAEvaluationRunner`.
     WM, classifier, VLA SFT, and eval runners are also here.
   - `models/` - embodiment model implementations only. `models/embodiment/`
@@ -94,6 +94,10 @@ Cotrain is a single-node Ray implementation with manual-notes-style groups:
 `LearnerGroup` owns world-model/classifier updates, `ActorGroup` owns VLA FSDP
 training, `RolloutGroup` owns no-grad policy inference, and `EnvGroup` owns real/WM
 environment interaction.
+
+`DreamerRunner` is the frozen-WM/CLS imagined-RL specialization of
+`CotrainRunner`. It reuses the same Ray loop and complete checkpoint/resume
+implementation; it does not own a copied training loop or a second shell launcher.
 
 ## 参考实现与学习要求
 

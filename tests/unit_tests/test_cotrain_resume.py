@@ -351,12 +351,15 @@ class _LearnerGroup:
         return _Ready(self.rng_states)
 
 
-def test_cotrain_checkpoint_uses_one_canonical_step_dir_and_latest(tmp_path):
+def _make_manual_checkpoint_runner(tmp_path, *, keep_last: int = 2):
     runner = object.__new__(CotrainRunner)
     runner.cfg = OmegaConf.create(
         {
             "training": {"out_dir": str(tmp_path)},
-            "manual_cotrain": {"checkpoint_every": 1, "save_replay_state": False},
+            "manual_cotrain": {
+                "checkpoint_every": 1,
+                "keep_last_checkpoints": keep_last,
+            },
             "actor": {"train_cfg": {"optimizers": {"encoder": None}}},
         }
     )
@@ -365,6 +368,11 @@ def test_cotrain_checkpoint_uses_one_canonical_step_dir_and_latest(tmp_path):
     runner._policy_initial_hash = ""
     runner._policy_final_hash = ""
     runner._applied_policy_steps = 3
+    return runner
+
+
+def test_cotrain_checkpoint_uses_one_canonical_step_dir_and_latest(tmp_path):
+    runner = _make_manual_checkpoint_runner(tmp_path)
 
     actor_group = _ActorGroup()
     learner_group = _LearnerGroup()
@@ -387,6 +395,32 @@ def test_cotrain_checkpoint_uses_one_canonical_step_dir_and_latest(tmp_path):
     assert set(payload["rng"]) == {"python", "numpy", "torch", "cuda"}
     _assert_nested_state_equal(payload["actor_rng_by_rank"], actor_group.rng_states)
     _assert_nested_state_equal(payload["learner_rng_by_rank"], learner_group.rng_states)
+
+
+def test_cotrain_checkpoint_has_no_replay_state(tmp_path):
+    runner = _make_manual_checkpoint_runner(tmp_path)
+    path = runner._maybe_save_manual_checkpoint(
+        {"ActorGroup": _ActorGroup(), "LearnerGroup": _LearnerGroup()},
+        global_step=1,
+        metrics={},
+    )
+
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    assert "replay" not in payload
+    assert "replay_sampling_state" not in payload
+
+
+def test_cotrain_checkpoint_retention_keeps_latest_two_steps(tmp_path):
+    runner = _make_manual_checkpoint_runner(tmp_path, keep_last=2)
+    groups = {"ActorGroup": _ActorGroup(), "LearnerGroup": _LearnerGroup()}
+    for step in (1, 2, 3):
+        runner._maybe_save_manual_checkpoint(groups, step, {})
+
+    checkpoint_dir = tmp_path / "checkpoints"
+    assert sorted(path.name for path in checkpoint_dir.glob("global_step_*")) == [
+        "global_step_2",
+        "global_step_3",
+    ]
 
 
 class _RngRestoreGroup:

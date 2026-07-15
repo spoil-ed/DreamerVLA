@@ -71,6 +71,7 @@ def test_runner_public_api_exports_only_canonical_mainline_roles() -> None:
         "WorldModelTrainingRunner",
         "SuccessClassifierTrainingRunner",
         "CotrainRunner",
+        "DreamerRunner",
         "LIBEROVLAEvaluationRunner",
     ]
 
@@ -111,6 +112,7 @@ def test_runner_directory_contains_only_canonical_route_runners() -> None:
         "world_model_training_runner.py",
         "success_classifier_training_runner.py",
         "cotrain_runner.py",
+        "dreamer_runner.py",
         "libero_vla_evaluation_runner.py",
     }.issubset(top_level_python_files)
     assert {
@@ -135,6 +137,7 @@ def test_canonical_runners_do_not_wrap_legacy_runner_classes() -> None:
         "world_model_training_runner.py",
         "success_classifier_training_runner.py",
         "cotrain_runner.py",
+        "dreamer_runner.py",
         "libero_vla_evaluation_runner.py",
     ):
         text = (runner_dir / filename).read_text(encoding="utf-8")
@@ -236,7 +239,7 @@ def test_active_configs_target_route_specific_runner_classes() -> None:
         "wmpo_token_classifier_openvla_onetraj_libero_goal_h1": (
             "dreamervla.runners.SuccessClassifierTrainingRunner"
         ),
-        "openvla_libero": "dreamervla.runners.CotrainRunner",
+        "openvla_libero": "dreamervla.runners.DreamerRunner",
     }
 
     config_dir = Path(__file__).resolve().parents[2] / "configs"
@@ -279,17 +282,15 @@ def test_train_config_exposes_tensorboard_and_wandb_logger_routes() -> None:
     assert wandb_cfg.runner.logger.wandb_mode == "online"
 
 
-def test_train_config_resolves_public_default_experiment() -> None:
+def test_train_config_requires_explicit_experiment() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
 
     train_config = (config_dir / "train.yaml").read_text(encoding="utf-8")
-    assert "experiment: openvla_onetraj_libero_cotrain" in train_config
+    assert "experiment: null" in train_config
 
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         cfg = compose(config_name="train")
-        assert cfg._target_ == "dreamervla.runners.CotrainRunner"
-    assert cfg.run.name == "openvla_onetraj_libero_cotrain"
-    assert Path(cfg.training.out_dir).parent.name == cfg.run.name
+    assert OmegaConf.select(cfg, "_target_", default=None) is None
 
 
 def test_train_main_is_native_hydra_entrypoint() -> None:

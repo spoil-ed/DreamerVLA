@@ -54,21 +54,21 @@ Shell launchers expose a small set of convenience keys and pass remaining
 | `online_rollout.sequence_length` | offline warmup replay window length |
 | `online_rollout.buffer_size` | offline warmup replay capacity |
 
-### Manual Ray failure-conditioned imagined RL
+### Manual Ray cotrain
 
 | Key | Meaning |
 | --- | --- |
-| `manual_cotrain.training_mode` | active mainline is `failure_imagined_rl` |
+| `manual_cotrain.training_mode` | `staged_full_cotrain` for the release route; `failure_imagined_rl` for frozen Dreamer |
 | `manual_cotrain.global_steps` | Ray online-cotrain update budget |
 | `manual_cotrain.initial_condition_selector` | active selector is `failed_episode_start`; future selectors remain config extensions |
-| `manual_cotrain.staged_policy_update` | legacy full-cotrain barrier switch; `false` in imagined-only mode |
-| `manual_cotrain.learner_updates_enabled` | WM/CLS optimizer switch; `false` in imagined-only mode |
+| `manual_cotrain.staged_policy_update` | real-SFT/learner/imagined-PPO barrier switch |
+| `manual_cotrain.learner_updates_enabled` | WM/CLS optimizer switch |
 | `manual_cotrain.real_rollout_target_trajectories` | exact completed real trajectories drained per global step; mainline is `32` |
 | `manual_cotrain.max_policy_kl` | per-step actor PPO trust-region allowance |
 | `manual_cotrain.wm_rollout_target_trajectories` | imagined trajectories used by actor PPO |
 | `manual_cotrain.wm_env_write_replay` | whether imagined episodes enter replay; mainline keeps this `false` |
-| `manual_cotrain.save_replay_state` | persist the historical failed-episode pool for exact resume |
 | `manual_cotrain.checkpoint_every` | completed global-step checkpoint cadence; segmented eval forces its boundary checkpoint |
+| `manual_cotrain.keep_last_checkpoints` | number of numeric step directories retained; default `2` |
 | `training.resume` | enable restoration for the selected runner |
 | `training.resume_path` | exact checkpoint resolved by the launcher |
 | `training.resume_dir` | owning run root reused by the resumed invocation |
@@ -88,6 +88,9 @@ bash scripts/experiments/cotrain/train.sh \
 
 `--resume` cannot be combined with a new `out_dir`; it intentionally appends logs and
 checkpoints to the original run root.
+Cotrain checkpoints restore model, optimizer, progress, RNG, TensorBoard, and W&B
+state. Replay contents and sampling cursors are intentionally not checkpointed;
+legacy replay fields are ignored.
 
 Cotrain real-rollout and evaluation progress bars use completed trajectories as the
 numerator and the configured trajectory total as the denominator. `chunks` remains a

@@ -52,7 +52,6 @@ def _cfg(*, training_mode: str = "staged_full_cotrain"):
                 "wm_envs_per_worker": 1,
                 "sync_every": 1,
                 "checkpoint_every": 0,
-                "save_replay_state": False,
                 "publish_learner_weights": False,
                 "training_mode": training_mode,
                 "initial_condition_selector": "failed_episode_start",
@@ -367,7 +366,7 @@ def test_staged_global_step_has_explicit_real_model_imagination_barriers(monkeyp
     ("runner_cls", "share_target"),
     [
         (CotrainRunner, "dreamervla.runners.cotrain_runner._share_ray_value"),
-        (DreamerRunner, "dreamervla.runners.dreamer_runner._share_ray_value"),
+        (DreamerRunner, "dreamervla.runners.cotrain_runner._share_ray_value"),
     ],
 )
 def test_failure_imagined_rl_skips_encoder_and_learner_updates(

@@ -53,7 +53,7 @@
   Run:
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/unit_tests/test_runner_public_api.py \
     tests/unit_tests/test_native_hydra_artifacts.py -q
   ```
@@ -127,7 +127,7 @@
 - [ ] **Step 6: Run focused tests**
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/unit_tests/test_runner_public_api.py \
     tests/unit_tests/test_native_hydra_artifacts.py \
     tests/unit_tests/test_runner_artifacts.py \
@@ -181,7 +181,7 @@
 - [ ] **Step 2: Run the new test and confirm failure**
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/unit_tests/test_run_config.py -q
   ```
 
@@ -225,7 +225,7 @@
 - [ ] **Step 5: Run diagnostics-focused tests**
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/unit_tests/test_run_config.py \
     tests/unit_tests/test_eval_chunkwm_closeloop.py \
     tests/unit_tests/test_wm_single_episode_overfit_diagnostic.py -q
@@ -286,7 +286,7 @@
 - [ ] **Step 2: Run RNG tests and confirm failure**
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/unit_tests/test_rng_checkpoint.py -q
   ```
 
@@ -357,7 +357,7 @@
 - [ ] **Step 9: Run RNG/resume tests**
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/unit_tests/test_rng_checkpoint.py \
     tests/unit_tests/test_checkpoint_format_version.py \
     tests/unit_tests/test_checkpoint_version_guard.py \
@@ -430,7 +430,7 @@
   Run:
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/unit_tests/test_world_model_training_runner.py \
     tests/unit_tests/test_success_classifier_training_runner.py \
     tests/unit_tests/test_world_model_training_config.py \
@@ -496,7 +496,7 @@
 - [ ] **Step 8: Run focused checkpoint tests**
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/unit_tests/test_world_model_training_runner.py \
     tests/unit_tests/test_success_classifier_training_runner.py \
     tests/unit_tests/test_world_model_training_config.py \
@@ -553,7 +553,7 @@
 - [ ] **Step 2: Confirm current failures**
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/unit_tests/test_world_model_training_runner.py \
     tests/unit_tests/test_cotrain_resume.py -q
   ```
@@ -589,7 +589,7 @@
 - [ ] **Step 5: Run focused tests and commit**
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/unit_tests/test_world_model_training_runner.py \
     tests/unit_tests/test_cotrain_resume.py \
     tests/unit_tests/test_metric_logger.py -q
@@ -626,7 +626,7 @@
 - [ ] **Step 2: Confirm current failure**
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/unit_tests/test_metric_logger.py \
     tests/unit_tests/test_runner_artifacts.py -q
   ```
@@ -654,7 +654,7 @@
 - [ ] **Step 5: Run tests and commit**
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/unit_tests/test_metric_logger.py \
     tests/unit_tests/test_runner_artifacts.py -q
   git add dreamervla/utils/metric_logger.py \
@@ -687,7 +687,7 @@
 - [ ] **Step 2: Run the new test and confirm failure**
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/unit_tests/test_wandb_sync_launcher.py -q
   ```
 
@@ -734,7 +734,7 @@
 
   ```bash
   bash -n scripts/utils/wandb_sync.sh
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/unit_tests/test_wandb_sync_launcher.py -q
   ```
 
@@ -785,7 +785,7 @@
 - [ ] **Step 3: Run documentation/config tests**
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/unit_tests/test_world_model_training_config.py \
     tests/unit_tests/test_runner_artifacts.py \
     tests/unit_tests/test_run_config.py -q
@@ -817,7 +817,7 @@
 - [ ] **Step 2: Run the complete focused suite**
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/unit_tests/test_runner_public_api.py \
     tests/unit_tests/test_native_hydra_artifacts.py \
     tests/unit_tests/test_runner_artifacts.py \
@@ -836,7 +836,7 @@
 - [ ] **Step 3: Run broader unit coverage**
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest tests/unit_tests -q
+  python -m pytest tests/unit_tests -q
   ```
 
   Do not treat replay-specific pre-existing failures as authorization to modify replay behavior. Record any unrelated failure with its exact command and traceback.
@@ -844,7 +844,7 @@
 - [ ] **Step 4: Run gated smoke tests when their prerequisites are available**
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/e2e_tests/test_world_model_env_ray_smoke.py \
     tests/e2e_tests/test_cotrain_smoke.py -q
   ```

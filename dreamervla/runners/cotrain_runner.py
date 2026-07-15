@@ -2,9 +2,8 @@
 
 This route follows ``spec/99_manual_notes.md``: LearnerGroup owns WM/classifier
 state, ActorGroup owns VLA PPO, RolloutGroup owns no-grad policy inference, and
-EnvGroup owns real/WM env interaction.  The active failure-imagined-RL recipe keeps
-the encoder, world model, and classifier frozen and updates only the actor through
-imagined PPO.
+EnvGroup owns real/WM env interaction. The public cotrain recipe updates the world
+model and classifier from real trajectories before staged policy updates.
 """
 
 from __future__ import annotations
@@ -19,7 +18,6 @@ import warnings
 from dataclasses import dataclass
 from math import gcd
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import ray
@@ -35,7 +33,6 @@ from dreamervla.runtime.render_device import (
 from dreamervla.scheduler.channel import Channel
 from dreamervla.scheduler.cluster import Cluster
 from dreamervla.scheduler.placement import (
-    ComponentPlacement,
     NodePlacementStrategy,
     ResourceMapPlacementStrategy,
 )
@@ -46,12 +43,12 @@ from dreamervla.utils.hf_checkpoint import load_runner_payload
 from dreamervla.utils.seed import capture_rng_state, restore_rng_state
 from dreamervla.workers.actor.embodied_fsdp_actor import EmbodiedFSDPActor
 from dreamervla.workers.actor.learner_worker import LearnerWorker
+from dreamervla.workers.cotrain.config_placement import (
+    build_manual_cotrain_placement_from_config,
+)
 from dreamervla.workers.cotrain.handshake_trace import trace as _hs_trace
 from dreamervla.workers.cotrain.messages import RealTrajectoryBatch, StopMsg
-from dreamervla.workers.cotrain.placement import (
-    ManualCotrainPlacementPlan,
-    build_manual_cotrain_placement,
-)
+from dreamervla.workers.cotrain.placement import ManualCotrainPlacementPlan
 from dreamervla.workers.env.evaluation_env_worker import EvaluationEnvironmentWorker
 from dreamervla.workers.env.trajectory_env_worker import RealEnvWorker, WMEnvWorker
 from dreamervla.workers.replay.replay_worker import ReplayWorker
@@ -70,16 +67,6 @@ class CotrainRunner(BaseRunner):
 
     def __init__(self, cfg: dict[str, Any] | DictConfig) -> None:
         config = cfg if isinstance(cfg, DictConfig) else OmegaConf.create(cfg)
-        if bool(OmegaConf.select(config, "training.debug", default=False)):
-            # Debug is a complete driver budget, not a launcher hint.  Resolve the
-            # exact target before Ray groups launch so a stale one-step segment or
-            # production override cannot silently shorten or lengthen the run.
-            config.manual_cotrain.global_steps = 10
-            config.manual_cotrain.eval_interval_global_steps = 1
-            config.manual_cotrain.debug_eval_interval_global_steps = 1
-            config.manual_cotrain.checkpoint_every = 1
-            config.manual_cotrain.real_rollout_target_trajectories = 8
-            config.manual_cotrain.wm_rollout_target_trajectories = 256
         training_mode = str(
             OmegaConf.select(
                 config,
@@ -229,32 +216,7 @@ class CotrainRunner(BaseRunner):
         print(f"[cotrain] checkpoints {rendered}", flush=True)
 
     def _placement_plan(self) -> ManualCotrainPlacementPlan:
-        return build_manual_cotrain_placement(
-            self._ngpu(),
-            real_env_workers=self._real_env_workers(),
-            include_learner=True,
-            component_gpu_groups=self._component_gpu_groups(),
-        )
-
-    def _component_gpu_groups(self) -> dict[str, list[list[int]]] | None:
-        component_cfg = OmegaConf.select(
-            self.cfg,
-            "cluster.component_placement",
-            default=None,
-        )
-        if component_cfg is None:
-            return None
-        placement = ComponentPlacement(self.cfg)
-        cluster = SimpleNamespace(num_gpus=self._ngpu())
-        groups: dict[str, list[list[int]]] = {}
-        for component in ("env", "real_env", "wm_env", "rollout", "actor", "learner"):
-            if not placement.has_component(component):
-                continue
-            resolved = placement.get_strategy(component).get_placement(cluster)
-            groups[component] = [
-                [int(gpu) for gpu in item.visible_accelerators] for item in resolved
-            ]
-        return groups or None
+        return build_manual_cotrain_placement_from_config(self.cfg)
 
     def _target_group_names(self) -> list[str]:
         return ["LearnerGroup", "ActorGroup", "RolloutGroup", "EnvGroup"]
@@ -295,10 +257,11 @@ class CotrainRunner(BaseRunner):
         ]
 
     def _manual_cotrain_progress_dir(self, global_step: int) -> Path:
+        del global_step
         return (
             self.get_diagnostics_dir()
             / "manual_cotrain_progress"
-            / f"global_step_{int(global_step):08d}"
+            / "current"
         )
 
     def _prepare_manual_cotrain_progress_dir(self, global_step: int) -> Path:
@@ -340,7 +303,6 @@ class CotrainRunner(BaseRunner):
         replay_group = None
         replay = None
         replay_seed_metrics: dict[str, float] = {}
-        replay_resume_restored = False
         replay_cfg = OmegaConf.select(self.cfg, "replay.cfg", default=None)
         if replay_cfg is not None:
             _hs_trace("[build_groups] launch ReplayWorker start")
@@ -355,28 +317,12 @@ class CotrainRunner(BaseRunner):
                 "replay.seed",
                 default=None,
             )
-            resume_replay_state = (
-                self._pending_manual_resume_payload.get("replay")
-                if self._pending_manual_resume_payload is not None
-                else None
-            )
-            if resume_replay_state is not None:
-                replay_group.load_state_dict(dict(resume_replay_state)).wait()
-                replay_resume_restored = True
-            elif replay_seed_cfg is not None:
+            if replay_seed_cfg is not None:
                 _hs_trace("[build_groups] seed ReplayWorker start")
                 replay_seed_metrics = _merge_metric_lists(
                     [replay_group.seed_from_offline(self._cfg_dict("replay.seed")).wait()]
                 )
                 _hs_trace("[build_groups] seed ReplayWorker done")
-            resume_sampling_state = (
-                self._pending_manual_resume_payload.get("replay_sampling_state")
-                if self._pending_manual_resume_payload is not None
-                else None
-            )
-            if resume_sampling_state is not None:
-                replay_group.load_sampling_state_dict(dict(resume_sampling_state)).wait()
-                replay_resume_restored = True
 
         real_specs = [spec for spec in plan.env_specs if spec.role == "real_env"]
         real_env_group = None
@@ -388,7 +334,7 @@ class CotrainRunner(BaseRunner):
         real_env_group = WorkerGroup(
             RealEnvWorker,
             self._real_env_cfg(),
-            self._envs_per_worker(),
+            self._real_envs_per_worker(),
             initial_real_rollout_epoch,
             self._real_max_steps_per_rollout_epoch(),
             self._num_action_chunks(),
@@ -397,6 +343,7 @@ class CotrainRunner(BaseRunner):
             replay=replay,
             dump=None,
             rank_offset=0,
+            request_key=self._real_rollout_request_key(),
             request_final_bootstrap=self._requires_bootstrap_value(),
             replay_write_enabled=False,
         ).launch(
@@ -423,7 +370,7 @@ class CotrainRunner(BaseRunner):
                 task_id=self._task_id(),
                 replay=replay,
                 dump=None,
-                rank_offset=len(real_specs),
+                rank_offset=self._wm_env_rank_offset(len(real_specs)),
                 request_final_bootstrap=self._requires_bootstrap_value(),
                 replay_write_enabled=self._wm_env_write_replay(),
             ).launch(
@@ -539,7 +486,6 @@ class CotrainRunner(BaseRunner):
             "ActorGroup": actor_group,
             "RolloutGroup": rollout_group,
             "ReplayGroup": replay_group,
-            "replay_resume_restored": bool(replay_resume_restored),
             "replay_seed_metrics": replay_seed_metrics,
             "cluster": cluster,
             "replay": replay,
@@ -681,7 +627,7 @@ class CotrainRunner(BaseRunner):
         self._configure_env_progress(wm_env, progress_dir)
         configured_real_target = self._real_rollout_target_trajectories()
         real_trajectory_target = configured_real_target or (
-            self._envs_per_worker()
+            self._real_envs_per_worker()
             * sum(self._real_rollout_epochs_by_worker(self._real_env_workers()))
         )
         real_progress_monitor = _EvaluationProgressMonitor(
@@ -719,18 +665,22 @@ class CotrainRunner(BaseRunner):
             rollout_channel_name,
             actor_channel_name,
         )
-        real_rollout_result = rollout.generate(
+        real_rollout_args: list[Any] = [
             env_channel_name,
             rollout_channel_name,
-            self._envs_per_worker(),
-        )
+            self._real_envs_per_worker(),
+        ]
+        real_request_key = self._real_rollout_request_key()
+        if real_request_key is not None:
+            real_rollout_args.append(real_request_key)
+        real_rollout_result = rollout.generate(*real_rollout_args)
         real_env_metrics = _wait_env_metrics_with_rollout_guard(
             [real_env_result],
             real_rollout_result,
             timeout_s=self._env_rollout_timeout_s(),
             progress=real_progress_monitor,
         )
-        self._stop_rollout_workers(groups)
+        self._stop_rollout_workers(groups, input_key=real_request_key)
         real_rollout_metrics = _sum_metric_lists([real_rollout_result.wait()])
         stage_start = mark_stage("collect_real_trajectories", stage_start)
 
@@ -1415,11 +1365,12 @@ class CotrainRunner(BaseRunner):
         groups: dict[str, Any],
         *,
         channel_key: str = "env_channel",
+        input_key: str | None = None,
     ) -> None:
         for rollout_rank, _worker in enumerate(groups["RolloutGroup"].workers):
             groups[channel_key].put(
                 StopMsg(reason="global_step_complete"),
-                key=str(int(rollout_rank)),
+                key=(str(int(rollout_rank)) if input_key is None else str(input_key)),
             )
 
     def _report_global_step_progress(
@@ -1526,18 +1477,6 @@ class CotrainRunner(BaseRunner):
         return metrics
 
     def _eval_interval_global_steps(self) -> int:
-        debug_enabled = bool(OmegaConf.select(self.cfg, "training.debug", default=False))
-        if debug_enabled:
-            debug_interval = OmegaConf.select(
-                self.cfg,
-                "manual_cotrain.debug_eval_interval_global_steps",
-                default=None,
-            )
-            if debug_interval is not None:
-                return _nonnegative_int(
-                    debug_interval,
-                    "manual_cotrain.debug_eval_interval_global_steps",
-                )
         return _nonnegative_int(
             OmegaConf.select(
                 self.cfg,
@@ -1809,10 +1748,10 @@ class CotrainRunner(BaseRunner):
         return self._rollout_epochs_by_worker(
             worker_count,
             target_trajectories=self._real_rollout_target_trajectories(),
-            envs_per_worker=self._envs_per_worker(),
+            envs_per_worker=self._real_envs_per_worker(),
             fallback_epoch=self._real_rollout_epoch(),
             target_name="manual_cotrain.real_rollout_target_trajectories",
-            envs_name="manual_cotrain.envs_per_worker",
+            envs_name="manual_cotrain.real_envs_per_worker",
             role_name="real",
         )
 
@@ -1829,6 +1768,22 @@ class CotrainRunner(BaseRunner):
                 "and divisible by manual_cotrain.num_action_chunks"
             )
         return resolved
+
+    def _real_rollout_total_chunks(self) -> int:
+        configured_real_workers = (
+            min(self._real_env_workers(), self._ngpu()) if self._ngpu() > 0 else 1
+        )
+        real_worker_epochs = self._real_rollout_epochs_by_worker(
+            int(configured_real_workers)
+        )
+        return (
+            sum(real_worker_epochs)
+            * self._real_envs_per_worker()
+            * _chunk_steps(
+                self._max_steps_per_rollout_epoch(),
+                self._num_action_chunks(),
+            )
+        )
 
     def _wm_rollout_epoch(self) -> int:
         return self._positive_manual_int(
@@ -1921,6 +1876,19 @@ class CotrainRunner(BaseRunner):
     def _envs_per_worker(self) -> int:
         return self._positive_manual_int("envs_per_worker", default=1)
 
+    def _real_envs_per_worker(self) -> int:
+        return self._positive_manual_int(
+            "real_envs_per_worker",
+            default=self._envs_per_worker(),
+        )
+
+    def _real_rollout_request_key(self) -> str | None:
+        return None
+
+    @staticmethod
+    def _wm_env_rank_offset(real_env_workers: int) -> int:
+        return int(real_env_workers)
+
     def _wm_envs_per_worker(self) -> int:
         return self._positive_manual_int(
             "wm_envs_per_worker",
@@ -1928,7 +1896,7 @@ class CotrainRunner(BaseRunner):
         )
 
     def _rollout_num_slots(self) -> int:
-        return max(self._envs_per_worker(), self._wm_envs_per_worker())
+        return max(self._real_envs_per_worker(), self._wm_envs_per_worker())
 
     def _task_id(self) -> int:
         return int(OmegaConf.select(self.cfg, "manual_cotrain.task_id", default=0))
@@ -2042,15 +2010,6 @@ class CotrainRunner(BaseRunner):
     def _real_env_write_replay(self) -> bool:
         return False
 
-    def _save_replay_state(self) -> bool:
-        return bool(
-            OmegaConf.select(
-                self.cfg,
-                "manual_cotrain.save_replay_state",
-                default=False,
-            )
-        )
-
     def _actor_group_size(self) -> int:
         return max(
             1,
@@ -2091,18 +2050,7 @@ class CotrainRunner(BaseRunner):
         pending_real = list(real_env_results)
         completed_metrics: list[Any] = []
         start = time.monotonic()
-        configured_real_workers = (
-            min(self._real_env_workers(), self._ngpu()) if self._ngpu() > 0 else 1
-        )
-        real_worker_epochs = self._real_rollout_epochs_by_worker(int(configured_real_workers))
-        real_total_chunks = (
-            sum(real_worker_epochs)
-            * self._envs_per_worker()
-            * _chunk_steps(
-                self._max_steps_per_rollout_epoch(),
-                self._num_action_chunks(),
-            )
-        )
+        real_total_chunks = self._real_rollout_total_chunks()
         wm_chunks_per_epoch = self._wm_envs_per_worker() * _chunk_steps(
             self._wm_max_steps_per_rollout_epoch(),
             self._num_action_chunks(),
@@ -2572,7 +2520,7 @@ class CotrainRunner(BaseRunner):
             cfg["render_backend"] = real_render_backend
         elif "render_backend" not in cfg:
             cfg["render_backend"] = self._render_backend()
-        cfg.setdefault("num_envs_per_worker", self._envs_per_worker())
+        cfg.setdefault("num_envs_per_worker", self._real_envs_per_worker())
         if str(cfg.get("render_backend", "osmesa")).strip().lower() == "egl":
             self._ensure_real_env_render_gpu_pool(cfg)
         return cfg
@@ -2703,21 +2651,6 @@ class CotrainRunner(BaseRunner):
                 )
 
         resume_step = int(payload.get("global_step", 0) or 0)
-        replay_state = payload.get("replay")
-        replay_sampling_state = payload.get("replay_sampling_state")
-        if (replay_state is not None or replay_sampling_state is not None) and not bool(
-            groups.get("replay_resume_restored", False)
-        ):
-            replay_group = groups.get("ReplayGroup")
-            if replay_group is None:
-                raise ValueError(
-                    "manual checkpoint contains replay state but active config has no ReplayGroup"
-                )
-            if replay_state is not None:
-                replay_group.load_state_dict(dict(replay_state)).wait()
-            if replay_sampling_state is not None:
-                replay_group.load_sampling_state_dict(dict(replay_sampling_state)).wait()
-
         wm_env = groups.get("WMEnvGroup")
         state_dicts = payload.get("state_dicts", {})
         if wm_env is not None and isinstance(state_dicts, dict):
@@ -2784,15 +2717,6 @@ class CotrainRunner(BaseRunner):
         if not isinstance(raw_learner_states, dict):
             raise TypeError("LearnerGroup.state_dicts() must return a mapping")
         learner_states: dict[str, Any] = raw_learner_states
-        replay_group = groups.get("ReplayGroup")
-        replay_state = None
-        replay_sampling_state = None
-        if replay_group is not None:
-            replay_sampling_state = _first_result(replay_group.sampling_state_dict().wait())
-            if not isinstance(replay_sampling_state, dict):
-                raise TypeError("ReplayGroup.sampling_state_dict() must return a mapping")
-        if replay_group is not None and self._save_replay_state():
-            replay_state = replay_group.state_dict().wait()[0]
         ckpt_path = ckpt_dir / "manual_cotrain.ckpt"
         state_dicts = {"policy": dict(actor_state)}
         optimizer_state = _first_nonempty_mapping(
@@ -2839,8 +2763,6 @@ class CotrainRunner(BaseRunner):
             "cfg": _plain(self.cfg),
             "metrics": dict(metrics),
             "state_dicts": state_dicts,
-            "replay": replay_state,
-            "replay_sampling_state": replay_sampling_state,
             "policy_initial_hash": str(self._policy_initial_hash),
             "policy_final_hash": str(self._policy_final_hash),
             "applied_policy_steps": int(self._applied_policy_steps),
@@ -2865,11 +2787,32 @@ class CotrainRunner(BaseRunner):
                 for name, state in state_dicts.items()
                 if not name.endswith("_optimizer")
             },
-            has_replay=replay_state is not None,
             run=run_metadata,
         )
         _atomic_write_json(ckpt_dir / "manual_cotrain_manifest.json", manifest)
+        self._prune_manual_checkpoints()
         return ckpt_path
+
+    def _prune_manual_checkpoints(self) -> None:
+        keep = int(
+            OmegaConf.select(
+                self.cfg,
+                "manual_cotrain.keep_last_checkpoints",
+                default=2,
+            )
+        )
+        checkpoint_dir = self.get_checkpoint_dir()
+        step_dirs: list[tuple[int, Path]] = []
+        for path in checkpoint_dir.glob("global_step_*"):
+            if not path.is_dir():
+                continue
+            try:
+                step = int(path.name.removeprefix("global_step_"))
+            except ValueError:
+                continue
+            step_dirs.append((step, path))
+        for _step, path in sorted(step_dirs)[:-keep]:
+            shutil.rmtree(path)
 
     def _manual_checkpoint_run_metadata(self, manifest_dir: Path) -> dict[str, str]:
         return {
@@ -3711,7 +3654,6 @@ def _manual_checkpoint_manifest(
     metrics: dict[str, float],
     ckpt_name: str,
     state_dicts: dict[str, dict[str, Any]],
-    has_replay: bool,
     run: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     policy_version = int(metrics.get("sync/policy_version", global_step))
@@ -3738,13 +3680,6 @@ def _manual_checkpoint_manifest(
                 "tensors": len(state),
             }
             for name, state in sorted(state_dicts.items())
-        },
-        "replay": {
-            "path": str(ckpt_name),
-            "state_dict_key": "replay",
-            "present": bool(has_replay),
-            "size": float(metrics.get("replay_buffer/size", 0.0)),
-            "transitions": float(metrics.get("replay_buffer/transitions", 0.0)),
         },
         "run": dict(run or {}),
         "metrics_keys": sorted(str(key) for key in metrics),

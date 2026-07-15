@@ -1149,31 +1149,21 @@ def test_warmup_replay_epochs_cap_to_configured_budget(tmp_path):
     ) == (1200, 1200)
 
 
-def test_debug_overrides_only_shrink_offline_warmup():
-    from omegaconf import OmegaConf
+def test_debug_profile_owns_offline_warmup_budget():
+    from hydra import compose, initialize_config_dir
 
-    from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        cfg = compose(
+            config_name="train",
+            overrides=["experiment=wm_full_dataset_train", "profile=debug"],
+        )
 
-    cfg = OmegaConf.create(
-        {
-            "training": {
-                "debug": True,
-                "warmup_replay_epochs": 1,
-                "wm_warmup_steps": 1200,
-                "classifier_warmup_steps": 1200,
-            },
-            "offline_warmup": {
-                "debug_wm_warmup_steps": 2,
-                "debug_classifier_warmup_steps": 2,
-            },
-        }
-    )
-
-    WorldModelTrainingRunner._apply_debug_overrides(cfg)
-
-    assert OmegaConf.select(cfg, "training.warmup_replay_epochs") == 0
-    assert OmegaConf.select(cfg, "training.wm_warmup_steps") == 2
-    assert OmegaConf.select(cfg, "training.classifier_warmup_steps") == 2
+    assert cfg.profile.name == "debug"
+    assert cfg.training.wm_warmup_steps == 2
+    assert cfg.training.classifier_warmup_steps == 2
+    assert cfg.training.warmup_replay_epochs == 0
+    assert cfg.dataloader.batch_size == 2
 
 
 def test_task_conditioned_classifier_receives_replay_task_ids():
@@ -1308,6 +1298,9 @@ def _orchestration_cfg(tmp_path, *, resume=False):
                 "out_dir": str(tmp_path),
                 "debug": True,
                 "resume": resume,
+                "wm_warmup_steps": 2,
+                "classifier_warmup_steps": 2,
+                "warmup_replay_epochs": 0,
                 # orchestration uses fake nn.Linear modules; HF export needs real
                 # target/init_args, so pin torch-only (the test asserts the .ckpt).
                 "checkpoint_format": "torch",
@@ -1315,8 +1308,6 @@ def _orchestration_cfg(tmp_path, *, resume=False):
             "offline_warmup": {
                 "data_dir": str(tmp_path / "offline_data"),
                 "hidden_dir": str(tmp_path / "offline_hidden"),
-                "debug_wm_warmup_steps": 2,
-                "debug_classifier_warmup_steps": 2,
             },
             # run() reads optim.grad_clip_norm; the real config always supplies optim.
             "optim": {"grad_clip_norm": 1.0},
@@ -1596,7 +1587,6 @@ def test_wm_only_resume_sets_restored_wm_metric_axis_before_logging(
         resume=True,
         cfg_updates={
             "training.classifier_warmup_steps": 0,
-            "offline_warmup.debug_classifier_warmup_steps": 0,
         },
     )
     runner._metric_logger = None
@@ -1775,7 +1765,6 @@ def test_wm_only_run_never_calibrates_or_checkpoints_classifier(tmp_path, monkey
         calls,
         cfg_updates={
             "training.classifier_warmup_steps": 0,
-            "offline_warmup.debug_classifier_warmup_steps": 0,
             "algorithm.lumos.calibrate_threshold": True,
             "algorithm.lumos.classifier_min_val_f1": 0.9,
         },

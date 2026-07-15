@@ -87,7 +87,7 @@ After the cleanup:
 - [ ] **Step 2: Run the hygiene test and verify it fails**
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/unit_tests/test_repository_hygiene.py::test_retired_diagnostics_and_runtime_helpers_are_absent -q
   ```
 
@@ -105,7 +105,7 @@ After the cleanup:
 - [ ] **Step 4: Run focused tests**
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/unit_tests/test_repository_hygiene.py \
     tests/unit_tests/test_ray_coldstart_real_config.py \
     tests/unit_tests/test_libero_rollout_runner.py \
@@ -161,7 +161,7 @@ After the cleanup:
 - [ ] **Step 2: Run the test and verify it fails**
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/unit_tests/test_config_validation.py::test_world_model_training_runner_rejects_non_ray_online_cotrain -q
   ```
 
@@ -237,7 +237,7 @@ After the cleanup:
   ```bash
   ! rg -n "_online_cotrain_loop|_prepare_online_resume|build_cotrain_replay_transition|build_rollout_vec_env" \
     dreamervla tests/unit_tests
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/unit_tests/test_config_validation.py \
     tests/unit_tests/test_world_model_training_config.py \
     tests/unit_tests/test_world_model_training_device.py \
@@ -285,7 +285,7 @@ After the cleanup:
 - [ ] **Step 2: Run the test and verify it fails**
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/unit_tests/test_experiment_stage_scripts.py::test_experiment_stage_checks_only_exposes_classifier_eval -q
   ```
 
@@ -309,7 +309,7 @@ After the cleanup:
 - [ ] **Step 4: Run focused tests and shell syntax**
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/unit_tests/test_experiment_stage_scripts.py \
     tests/unit_tests/test_repository_hygiene.py -q
   bash -n scripts/experiments/classifier_training/eval.sh
@@ -351,7 +351,7 @@ After the cleanup:
 - [ ] **Step 2: Run the test and verify it fails**
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/unit_tests/test_repository_hygiene.py::test_cotrain_eval_observer_lives_in_runtime -q
   ```
 
@@ -372,7 +372,7 @@ After the cleanup:
 - [ ] **Step 4: Run evaluation tests**
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/unit_tests/test_cotrain_transaction_eval.py \
     tests/unit_tests/test_libero_eval_protocol_compat.py \
     tests/unit_tests/test_repository_hygiene.py -q
@@ -432,7 +432,7 @@ After the cleanup:
 - [ ] **Step 2: Run the test and verify it fails**
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/unit_tests/test_repository_hygiene.py::test_runtime_fragments_are_consolidated -q
   ```
 
@@ -487,7 +487,7 @@ After the cleanup:
 - [ ] **Step 5: Run focused tests**
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/unit_tests/test_console.py \
     tests/unit_tests/test_rng_checkpoint.py \
     tests/unit_tests/test_ray_coldstart_real_config.py \
@@ -542,8 +542,8 @@ After the cleanup:
 - [ ] **Step 2: Run static validation**
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m ruff check dreamervla tests
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m ruff format --check dreamervla tests
+  python -m ruff check dreamervla tests
+  python -m ruff format --check dreamervla tests
   find scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
   git diff --check
   ```
@@ -553,7 +553,7 @@ After the cleanup:
 - [ ] **Step 3: Run route-focused regression tests**
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest \
+  python -m pytest \
     tests/unit_tests/test_world_model_training_runner.py \
     tests/unit_tests/test_success_classifier_training_runner.py \
     tests/unit_tests/test_cotrain_resume.py \
@@ -567,7 +567,7 @@ After the cleanup:
 - [ ] **Step 4: Run the complete unit test suite**
 
   ```bash
-  /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest tests/unit_tests -q
+  python -m pytest tests/unit_tests -q
   ```
 
   Expected: PASS. GPU/Ray/real-environment e2e tests may remain gated, but collection/cotrain module

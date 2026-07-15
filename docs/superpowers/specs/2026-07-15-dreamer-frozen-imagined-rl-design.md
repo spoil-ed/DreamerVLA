@@ -7,13 +7,13 @@ OpenVLA-OFT actor only from world-model-imagined latent trajectories. Encoder SF
 world-model updates, and classifier updates remain disabled. Resolve the first PPO
 micro-batch CUDA OOM without changing the retained `CotrainRunner` behavior.
 
-## Preserved implementation
+## Shared implementation
 
-`dreamervla/runners/cotrain_runner.py` remains unchanged and continues to export
-`CotrainRunner`. Its copied implementation in
-`dreamervla/runners/dreamer_runner.py` is renamed to `DreamerRunner` and specialized
-for frozen imagined RL. Existing full-cotrain behavior therefore remains available
-through the original module and unchanged.
+`CotrainRunner` owns the Ray group lifecycle, training loop, checkpoint format,
+optimizer state, worker RNG state, and resume implementation. `DreamerRunner` is a
+thin subclass that changes only frozen-route placement and real-rollout geometry.
+There is no copied training loop. Full cotrain remains available through
+`CotrainRunner`, while both routes resume through the same checkpoint code.
 
 ## Training semantics
 
@@ -56,7 +56,8 @@ implementation.
 
 `DreamerRunner` is exported from `dreamervla.runners`. The `openvla_libero`
 experiment targets `dreamervla.runners.DreamerRunner`. Other experiments keep their
-current targets.
+current targets. Both routes are launched through `scripts/experiments/cotrain/train.sh`;
+there is no second Dreamer shell entrypoint.
 
 ## Validation and tests
 
@@ -66,5 +67,6 @@ Tests will prove that:
 - `DreamerRunner` is exported and selected by `openvla_libero`;
 - the Dreamer placement keeps all actor GPU ranks but assigns LearnerGroup no GPU;
 - the active route keeps encoder, WM, and classifier update stages disabled;
+- Dreamer inherits the complete Cotrain checkpoint and RNG resume implementation;
 - the configured actor micro-batch is 8 while the global batch remains 16384;
 - the focused runner/config/stage-order tests and lint checks pass.

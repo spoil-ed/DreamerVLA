@@ -1187,7 +1187,7 @@ class BaseRunner(ABC):
 
 def _atomic_torch_save(payload: Any, path: pathlib.Path) -> None:
     # Temp-then-rename write so a crash mid-write never leaves a half-written
-    # checkpoint at the destination (mirrors _dreamer_runner_common._save_ckpt).
+    # checkpoint at the destination (mirrors the component checkpoint writer).
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     torch.save(payload, tmp_path)

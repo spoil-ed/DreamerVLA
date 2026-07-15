@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import re
@@ -10,8 +9,6 @@ from pathlib import Path
 import pytest
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
-
-from dreamervla.diagnostics import experiment_stage_checks
 
 
 def test_cotrain_experiment_directory_contains_train_and_eval() -> None:
@@ -28,13 +25,19 @@ def test_cotrain_experiment_directory_contains_train_and_eval() -> None:
         "world_model_training",
     ]
     assert sorted(path.name for path in cotrain.iterdir()) == ["eval.sh", "train.sh"]
-    for folder in (
-        "classifier_training",
-        "single_trajectory_overfit",
-        "world_model_training",
-    ):
+    assert sorted(path.name for path in (experiments / "classifier_training").iterdir()) == [
+        "train.sh"
+    ]
+    for folder in ("single_trajectory_overfit", "world_model_training"):
         assert (experiments / folder / "train.sh").is_file()
         assert (experiments / folder / "eval.sh").is_file()
+
+
+def test_stale_classifier_summarizer_is_removed() -> None:
+    root = Path(__file__).resolve().parents[2]
+
+    assert not (root / "dreamervla/diagnostics/experiment_stage_checks.py").exists()
+    assert not (root / "scripts/experiments/classifier_training/eval.sh").exists()
 
 
 def test_cotrain_train_script_uses_train_only_recipe_without_pinned_warm_states() -> None:
@@ -105,7 +108,7 @@ def test_mainline_experiments_compose_only_the_components_their_stage_needs() ->
     assert classifier.task.classifier.dataset.train._target_
     assert world_model._target_ == "dreamervla.runners.WorldModelTrainingRunner"
     assert world_model.world_model._target_
-    assert cotrain._target_ == "dreamervla.runners.CotrainRunner"
+    assert cotrain._target_ == "dreamervla.runners.DreamerRunner"
     assert cotrain.world_model._target_
     assert cotrain.classifier._target_
     assert cotrain.manual_cotrain.real_env_enabled is True
@@ -172,28 +175,11 @@ def test_world_model_training_config_switch_selects_expected_recipe() -> None:
         assert f"experiment={experiment}" in result.stdout
 
 
-def test_world_model_training_launcher_maps_batch_size_to_dino_dataloader() -> None:
-    root = Path(__file__).resolve().parents[2]
-    result = subprocess.run(
-        [
-            "python",
-            "-m",
-            "dreamervla.launchers.train",
-            "--config",
-            "dino-wm",
-            "dry_run=true",
-            "ngpu=1",
-            "batch_size=7",
-        ],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+def test_world_model_training_launcher_rejects_batch_alias() -> None:
+    from dreamervla.launchers.train import build_launch
 
-    assert result.returncode == 0, result.stderr
-    assert "dataloader.batch_size=7" in result.stdout
-    assert "training.global_batch_size=7" not in result.stdout
+    with pytest.raises(SystemExit, match="Hydra key=value"):
+        build_launch(["--config", "dino-wm", "batch_size=7"])
 
 
 def test_experiment_launcher_resume_reuses_original_run_root(
@@ -243,7 +229,7 @@ def test_experiment_launcher_rejects_resume_with_output_override(
                 "dreamer-wm",
                 "--resume",
                 str(run_dir),
-                "out_dir=/tmp/fork",
+                "training.out_dir=/tmp/fork",
                 "dry_run=true",
             ]
         )
@@ -302,48 +288,3 @@ def test_offline_world_model_ddp_defaults_remain_configurable() -> None:
         "find_unused_parameters": True,
         "broadcast_buffers": True,
     }
-
-
-def test_experiment_stage_checks_only_exposes_classifier_eval() -> None:
-    parser = experiment_stage_checks.build_parser()
-    subparsers = next(
-        action for action in parser._actions if isinstance(action, argparse._SubParsersAction)
-    )
-    assert set(subparsers.choices) == {"cls-eval"}
-
-
-def test_classifier_eval_summarizes_validation_records(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    run_dir = tmp_path / "classifier-run"
-    log_dir = run_dir / "log"
-    checkpoints = run_dir / "checkpoints"
-    log_dir.mkdir(parents=True)
-    checkpoints.mkdir()
-    (run_dir / "summary.json").write_text('{"best_f1": 0.8}', encoding="utf-8")
-    (log_dir / "train_log.jsonl").write_text(
-        "\n".join(
-            [
-                '{"event": "val_window"}',
-                '{"event": "val_episode"}',
-                '{"event": "train"}',
-            ]
-        ),
-        encoding="utf-8",
-    )
-    checkpoint = checkpoints / "classifier_warmup.ckpt"
-    checkpoint.touch()
-    out = tmp_path / "classifier_eval_summary.json"
-
-    result = experiment_stage_checks.cls_eval(
-        argparse.Namespace(run_dir=str(run_dir), family="unused", out=str(out))
-    )
-
-    written = json.loads(out.read_text(encoding="utf-8"))
-    payload = json.loads(capsys.readouterr().out)
-    assert result == 0
-    assert written["num_val_window_records"] == 1
-    assert written["num_val_episode_records"] == 1
-    assert written["checkpoints"] == [str(checkpoint)]
-    assert payload["out"] == str(out)

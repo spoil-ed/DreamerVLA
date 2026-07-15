@@ -61,9 +61,7 @@ class MultiStepRolloutWorker(Worker):
         if configured_device == "auto":
             configured_device = self.device
         self.torch_device = torch.device(configured_device)
-        self.policy_dtype = dtype_from_precision(
-            self.train_cfg.get("precision", "fp32")
-        )
+        self.policy_dtype = dtype_from_precision(self.train_cfg.get("precision", "fp32"))
         self.enable_offload = bool(self.train_cfg.get("enable_offload", False))
         self._model_offloaded = False
         self.encoder: Any | None = None
@@ -71,9 +69,7 @@ class MultiStepRolloutWorker(Worker):
         self.syncer: BucketWeightSyncer | None = None
         self.extractors: dict[str, Any] = {}
         self.global_step = 0
-        self.versions: dict[str, int] = {
-            "policy": int(self.train_cfg.get("policy_version", 0))
-        }
+        self.versions: dict[str, int] = {"policy": int(self.train_cfg.get("policy_version", 0))}
 
     def init(self) -> None:
         """Build the local inference copy and load optional initial policy weights."""
@@ -88,9 +84,7 @@ class MultiStepRolloutWorker(Worker):
             raise TypeError("MultiStepRolloutWorker policy must be a torch.nn.Module")
         policy.to(device=self.torch_device, dtype=self.policy_dtype)
         if "policy" in self.init_ckpt:
-            policy.load_state_dict(
-                _to_device_state(self.init_ckpt["policy"], self.torch_device)
-            )
+            policy.load_state_dict(_to_device_state(self.init_ckpt["policy"], self.torch_device))
         policy.eval()
         self.policy = policy
         if self.enable_offload:
@@ -314,9 +308,7 @@ class MultiStepRolloutWorker(Worker):
                     key=(str(input_key) if input_key is not None else None),
                 )
             if input_key is not None:
-                return self._generate_from_key(
-                    input_channel, output_channel, str(input_key)
-                )
+                return self._generate_from_key(input_channel, output_channel, str(input_key))
 
             return self._generate_from_key(input_channel, output_channel, "default")
         finally:
@@ -335,47 +327,32 @@ class MultiStepRolloutWorker(Worker):
         channel_put_s = 0.0
         loop_start = time.perf_counter()
         while True:
-            _hs_trace(
-                f"[rollout rank={int(self.rank)}] recv action request WAIT key={key}"
-            )
+            _hs_trace(f"[rollout rank={int(self.rank)}] recv action request WAIT key={key}")
             get_start = time.perf_counter()
             msg = input_channel.get(key=str(key))
             channel_get_s += time.perf_counter() - get_start
             if isinstance(msg, StopMsg):
-                _hs_trace(
-                    f"[rollout rank={int(self.rank)}] recv StopMsg key={key}"
-                )
+                _hs_trace(f"[rollout rank={int(self.rank)}] recv StopMsg key={key}")
                 break
             if not isinstance(msg, ObservationMsg):
                 raise TypeError(
                     "MultiStepRolloutWorker.generate expected ObservationMsg or StopMsg, "
                     f"got {type(msg).__name__}"
                 )
-            _hs_trace(
-                f"[rollout rank={int(self.rank)}] recv action request "
-                f"batch_size=1 key={key}"
-            )
+            _hs_trace(f"[rollout rank={int(self.rank)}] recv action request batch_size=1 key={key}")
             _sync_if_cuda(self.torch_device)
-            _hs_trace(
-                f"[rollout rank={int(self.rank)}] policy forward start batch_size=1"
-            )
+            _hs_trace(f"[rollout rank={int(self.rank)}] policy forward start batch_size=1")
             forward_start = time.perf_counter()
             result = self._generate_once_with_context(msg, key=str(key))
             _sync_if_cuda(self.torch_device)
             policy_forward_s += time.perf_counter() - forward_start
-            _hs_trace(
-                f"[rollout rank={int(self.rank)}] policy forward done batch_size=1"
-            )
+            _hs_trace(f"[rollout rank={int(self.rank)}] policy forward done batch_size=1")
             put_start = time.perf_counter()
             output_channel.put(result, key=result.key)
             channel_put_s += time.perf_counter() - put_start
-            _hs_trace(
-                f"[rollout rank={int(self.rank)}] send action response batch_size=1"
-            )
+            _hs_trace(f"[rollout rank={int(self.rank)}] send action response batch_size=1")
             generated += 1
-        _hs_trace(
-            f"[rollout rank={int(self.rank)}] generate exit generated={int(generated)}"
-        )
+        _hs_trace(f"[rollout rank={int(self.rank)}] generate exit generated={int(generated)}")
         return _rollout_loop_metrics(
             generated=generated,
             loop_s=time.perf_counter() - loop_start,
@@ -401,9 +378,7 @@ class MultiStepRolloutWorker(Worker):
         channel_put_s = 0.0
         loop_start = time.perf_counter()
         while True:
-            _hs_trace(
-                f"[rollout rank={int(self.rank)}] recv action request WAIT key={key}"
-            )
+            _hs_trace(f"[rollout rank={int(self.rank)}] recv action request WAIT key={key}")
             get_start = time.perf_counter()
             msg = input_channel.get(key=key)
             channel_get_s += time.perf_counter() - get_start
@@ -437,9 +412,7 @@ class MultiStepRolloutWorker(Worker):
                     )
             keys = [obs_msg.key for obs_msg in observations]
             keys_csv = ",".join(keys)
-            _hs_trace(
-                f"[rollout rank={int(self.rank)}] recv action request OK key={key}"
-            )
+            _hs_trace(f"[rollout rank={int(self.rank)}] recv action request OK key={key}")
             _hs_trace(
                 f"[rollout rank={int(self.rank)}] recv action request "
                 f"batch_size={len(observations)} key={key} keys={keys_csv}"
@@ -472,9 +445,7 @@ class MultiStepRolloutWorker(Worker):
                 f"batch_size={result_count} key={result_batch.key} "
                 f"keys={result_keys_csv}"
             )
-        _hs_trace(
-            f"[rollout rank={int(self.rank)}] generate exit generated={int(generated)}"
-        )
+        _hs_trace(f"[rollout rank={int(self.rank)}] generate exit generated={int(generated)}")
         return _rollout_loop_metrics(
             generated=generated,
             loop_s=time.perf_counter() - loop_start,
@@ -546,9 +517,7 @@ class MultiStepRolloutWorker(Worker):
         """Apply the latest ActorGroup policy patch to the local rollout copy."""
 
         resolved_local_version = (
-            int(self.versions.get(str(key), 0))
-            if local_version is None
-            else int(local_version)
+            int(self.versions.get(str(key), 0)) if local_version is None else int(local_version)
         )
         pull_start = time.perf_counter()
         syncer = self._syncer()
@@ -647,12 +616,8 @@ class MultiStepRolloutWorker(Worker):
                     reset()
             prepare = getattr(extractor, "prepare", None)
             if prepare is None:
-                raise TypeError(
-                    "native full policy extractor must expose prepare(obs, task)"
-                )
-            task_description = str(
-                obs.get("task_description", obs.get("language", ""))
-            )
+                raise TypeError("native full policy extractor must expose prepare(obs, task)")
+            task_description = str(obs.get("task_description", obs.get("language", "")))
             preps.append(dict(prepare(obs, task_description)))
 
         from dreamervla.runtime.rollout_hidden_extractor import _left_pad_batch
@@ -663,21 +628,13 @@ class MultiStepRolloutWorker(Worker):
             # uniform prompt batch without exposing the HF processor.
             lengths = {int(prep["input_ids"].shape[-1]) for prep in preps}
             if len(lengths) != 1:
-                raise ValueError(
-                    "native policy without processor must emit uniform prompt lengths"
-                )
+                raise ValueError("native policy without processor must emit uniform prompt lengths")
             input_ids = torch.cat([prep["input_ids"] for prep in preps], dim=0)
-            attention_mask = torch.cat(
-                [prep["attention_mask"] for prep in preps], dim=0
-            )
+            attention_mask = torch.cat([prep["attention_mask"] for prep in preps], dim=0)
         else:
             pad_id = tokenizer.pad_token_id
             if pad_id is None:
-                pad_id = (
-                    tokenizer.eos_token_id
-                    if tokenizer.eos_token_id is not None
-                    else 0
-                )
+                pad_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else 0
             bos_id = tokenizer.bos_token_id if tokenizer.bos_token_id is not None else 1
             input_ids, attention_mask = _left_pad_batch(
                 [prep["input_ids"] for prep in preps],
@@ -685,9 +642,7 @@ class MultiStepRolloutWorker(Worker):
                 int(pad_id),
                 int(bos_id),
             )
-        pixel_values = torch.cat(
-            [prep["pixel_values"] for prep in preps], dim=0
-        )
+        pixel_values = torch.cat([prep["pixel_values"] for prep in preps], dim=0)
         return {
             "input_ids": input_ids.to(self.torch_device),
             "attention_mask": attention_mask.to(self.torch_device),
@@ -939,10 +894,7 @@ def _as_plain_dict(value: Any) -> dict[str, Any]:
 
 
 def _to_device_state(value: Any, device: torch.device) -> dict[str, torch.Tensor]:
-    return {
-        str(name): torch.as_tensor(tensor).to(device)
-        for name, tensor in dict(value).items()
-    }
+    return {str(name): torch.as_tensor(tensor).to(device) for name, tensor in dict(value).items()}
 
 
 def _to_cpu_tensor(value: Any) -> torch.Tensor:
@@ -973,10 +925,7 @@ def _to_device_float_batch(values: list[Any], device: torch.device) -> torch.Ten
     if not values:
         return torch.empty((0, 0), dtype=torch.float32, device=device)
     if all(isinstance(value, np.ndarray) for value in values):
-        arrays = [
-            np.asarray(value, dtype=np.float32)
-            for value in values
-        ]
+        arrays = [np.asarray(value, dtype=np.float32) for value in values]
         return torch.from_numpy(np.stack(arrays, axis=0)).to(
             device=device,
             dtype=torch.float32,

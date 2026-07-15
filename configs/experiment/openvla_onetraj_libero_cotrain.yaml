@@ -4,6 +4,7 @@ defaults:
   - override /dreamervla: openvla_onetraj_libero_cotrain
   - override /worldmodel: dreamer-wm
   - override /classifier: dreamer-cls
+  - override /launch: cotrain
   - _self_
 
 run:

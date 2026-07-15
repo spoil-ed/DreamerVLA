@@ -4,7 +4,7 @@
 
 **Goal:** Route `openvla_libero` through a dedicated `DreamerRunner` that disables encoder/WM/CLS updates, keeps the frozen LearnerGroup off GPU, and avoids PPO activation OOM with micro-batch 8.
 
-**Architecture:** Preserve `dreamervla/runners/cotrain_runner.py` unchanged. Rename the copied runner class in `dreamervla/runners/dreamer_runner.py` to `DreamerRunner`, retain its failure-imagined-RL control flow, and specialize its placement so the checkpoint-owning but non-updating LearnerGroup runs on CPU. Select the runner and memory-safe micro-batch through Hydra.
+**Architecture:** Keep the Ray loop and complete resume implementation in `CotrainRunner`. Add narrow real-rollout hooks to that shared runner, then implement `DreamerRunner` as a thin subclass that selects the shared request key, CPU Learner placement, and frozen imagined-RL mode. Select the specialized runner and memory-safe micro-batch through Hydra.
 
 **Tech Stack:** Python 3.11, PyTorch, Ray, Hydra/OmegaConf, pytest, Ruff
 
@@ -12,7 +12,8 @@
 
 ## File map
 
-- `dreamervla/runners/dreamer_runner.py`: dedicated frozen imagined-RL runner; copied implementation is retained while the public class is renamed and its Learner placement is specialized.
+- `dreamervla/runners/cotrain_runner.py`: shared Ray loop and overridable real-rollout geometry hooks.
+- `dreamervla/runners/dreamer_runner.py`: thin frozen imagined-RL specialization; no copied training loop.
 - `dreamervla/runners/__init__.py`: lazy public export for `DreamerRunner`; the existing `CotrainRunner` export remains unchanged.
 - `configs/dreamervla/wmcls_cotrain.yaml`: select `DreamerRunner` and override the active PPO micro-batch to 8.
 - `tests/unit_tests/test_dreamer_runner.py`: focused public-export, placement, and preservation contracts.
@@ -103,23 +104,30 @@ git add tests/unit_tests/test_dreamer_runner.py \
 git commit -s -m "test: define Dreamer imagined RL runner contracts"
 ```
 
-### Task 2: Implement and export DreamerRunner
+### Task 2: Add shared hooks and export DreamerRunner
 
 **Files:**
-- Modify: `dreamervla/runners/dreamer_runner.py`
+- Modify: `dreamervla/runners/cotrain_runner.py`
+- Create: `dreamervla/runners/dreamer_runner.py`
 - Modify: `dreamervla/runners/__init__.py`
 
-- [ ] **Step 1: Rename the copied public runner**
+- [ ] **Step 1: Add narrow shared rollout hooks**
 
-In `dreamervla/runners/dreamer_runner.py`, rename only the copied public class and its public metadata/error text:
+Make real-env slot count, request key, WM rank offset, and real progress geometry
+overridable in `CotrainRunner`. Their defaults must preserve the existing full-cotrain
+behavior.
+
+- [ ] **Step 2: Add the thin specialization**
+
+Create `dreamervla/runners/dreamer_runner.py` with:
 
 ```python
-class DreamerRunner(BaseRunner):
+class DreamerRunner(CotrainRunner):
     """Frozen latent-imagination RL runner for the DreamerVLA mainline."""
 
     runner_name = "dreamer"
     runner_status = "current"
-    runner_family = "cotrain"
+    runner_family = "dreamer"
 ```
 
 Update the module `__all__` to:
@@ -128,20 +136,13 @@ Update the module `__all__` to:
 __all__ = ["DreamerRunner"]
 ```
 
-Do not edit `dreamervla/runners/cotrain_runner.py`.
-
-- [ ] **Step 2: Put the non-updating LearnerGroup on CPU**
+- [ ] **Step 3: Put the non-updating LearnerGroup on CPU**
 
 Import `replace` from `dataclasses` and change `DreamerRunner._placement_plan` to retain every existing placement except the Learner GPU list:
 
 ```python
 def _placement_plan(self) -> ManualCotrainPlacementPlan:
-    plan = build_manual_cotrain_placement(
-        self._ngpu(),
-        real_env_workers=self._real_env_workers(),
-        include_learner=True,
-        component_gpu_groups=self._component_gpu_groups(),
-    )
+    plan = super()._placement_plan()
     if plan.learner_spec is None:
         raise ValueError("DreamerRunner requires a checkpoint-owning LearnerGroup")
     return replace(
@@ -152,7 +153,7 @@ def _placement_plan(self) -> ManualCotrainPlacementPlan:
 
 This keeps the inherited state-load/checkpoint protocol intact while ensuring the disabled WM/CLS optimizers cannot consume Actor rank-0 CUDA memory.
 
-- [ ] **Step 3: Export the new runner without replacing CotrainRunner**
+- [ ] **Step 4: Export the new runner without replacing CotrainRunner**
 
 Add this mapping to `_RUNNER_MODULES` in `dreamervla/runners/__init__.py`:
 
@@ -166,7 +167,7 @@ Leave this existing mapping unchanged:
 "CotrainRunner": "dreamervla.runners.cotrain_runner",
 ```
 
-- [ ] **Step 4: Run the new runner tests and verify GREEN**
+- [ ] **Step 5: Run the new runner tests and verify GREEN**
 
 Run:
 
@@ -176,7 +177,7 @@ pytest -q tests/unit_tests/test_dreamer_runner.py
 
 Expected: all tests pass.
 
-- [ ] **Step 5: Commit the runner implementation**
+- [ ] **Step 6: Commit the runner implementation**
 
 ```bash
 git add dreamervla/runners/dreamer_runner.py dreamervla/runners/__init__.py
@@ -234,18 +235,13 @@ git commit -s -m "fix: bound Dreamer actor PPO memory"
 ### Task 4: Verify preservation and regression scope
 
 **Files:**
-- Verify: `dreamervla/runners/cotrain_runner.py`
 - Verify: all files above
 
-- [ ] **Step 1: Prove the retained runner was not edited**
+- [ ] **Step 1: Prove shared resume ownership**
 
-Run:
-
-```bash
-git diff --exit-code HEAD~3 -- dreamervla/runners/cotrain_runner.py
-```
-
-Expected: exit code 0 and no output.
+Assert that `DreamerRunner._restore_manual_resume_state` and
+`DreamerRunner._maybe_save_manual_checkpoint` are inherited unchanged from
+`CotrainRunner`, and that the Dreamer module contains no copied training loop.
 
 - [ ] **Step 2: Run focused regression tests**
 
@@ -291,58 +287,3 @@ git log -4 --oneline
 ```
 
 Expected: only the planned runner, config, tests, and documentation are changed; the user's pre-existing `task_plan.md`, `findings.md`, and `progress.md` remain untracked and untouched.
-
-### Task 5: Add the Dreamer training entrypoint
-
-**Files:**
-- Create: `scripts/experiments/dreamer/train.sh`
-- Create: `tests/unit_tests/test_dreamer_train_script.py`
-- Modify: `scripts/README.md`
-
-- [ ] **Step 1: Write the failing launcher-script contract**
-
-Add a test that requires the script to exist, pass `bash -n`, invoke
-`dreamervla.launchers.cotrain`, fix `--config openvla_libero`, and forward `"$@"`.
-
-- [ ] **Step 2: Run the test and verify RED**
-
-Run:
-
-```bash
-PYTHONPATH=. /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest -q \
-  tests/unit_tests/test_dreamer_train_script.py
-```
-
-Expected: FAIL because `scripts/experiments/dreamer/train.sh` does not exist.
-
-- [ ] **Step 3: Add the thin shell entrypoint**
-
-Create an executable script that changes to the repository root and executes:
-
-```bash
-python -m dreamervla.launchers.cotrain --config openvla_libero "$@"
-```
-
-Do not reproduce checkpoint or resume parsing in shell. The launcher remains the
-single implementation for `--wm_ckpt`, `--cls_ckpt`, and `--resume`, including
-original-run-root reuse.
-
-- [ ] **Step 4: Document train and resume commands**
-
-Add the Dreamer entrypoint to `scripts/README.md`, including one fresh-start command
-with both warmup checkpoints and one `--resume` command accepting a run root,
-checkpoint directory, or checkpoint file.
-
-- [ ] **Step 5: Run the script and launcher regression tests**
-
-Run:
-
-```bash
-PYTHONPATH=. /home/user01/miniconda3/envs/dreamervla/bin/python -m pytest -q \
-  tests/unit_tests/test_dreamer_train_script.py \
-  tests/unit_tests/test_cotrain_launcher.py::test_cotrain_launcher_resume_reuses_original_run_root \
-  tests/unit_tests/test_cotrain_launcher.py::test_cotrain_launcher_rejects_resume_with_output_override
-bash -n scripts/experiments/dreamer/train.sh
-```
-
-Expected: all tests and shell syntax checks pass.

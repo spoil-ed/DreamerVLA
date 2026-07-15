@@ -305,7 +305,7 @@ def test_task_latent_specs_are_canonical_hidden_token(task_name: str) -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
 
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        cfg = compose(config_name="train", overrides=[f"task={task_name}"])
+        cfg = compose(config_name="train", overrides=[f"+task={task_name}"])
 
     assert cfg.task.action_dim == 7
     assert cfg.task.time_horizon == 8

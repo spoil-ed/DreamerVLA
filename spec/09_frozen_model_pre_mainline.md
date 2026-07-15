@@ -224,37 +224,27 @@ bash scripts/experiments/world_model_training/train.sh
 bash scripts/experiments/classifier_training/train.sh
 ```
 
-They create separate timestamped run directories. The manual policy-only frozen
-Ray cotrain handoff accepts those run directories or explicit compatible
-checkpoint files. Unlike the complete proof-chain selector, its WM handoff does
-not require training completion: a run directory resolves current top-k, final,
-or latest progress state in that order. Its classifier handoff accepts any
-compatible `best_window_*.ckpt`, `final.ckpt`, or `latest.ckpt`; a run directory
-prefers the highest held-out window F1, then final, then latest. BaseRunner
-classifier checkpoints load `state_dicts.model` plus `cfg.classifier`. Because old
-final/latest files do not embed the calibrated threshold, the manual launcher uses
-the highest-F1 sibling threshold when present and otherwise emits an explicit
-Hydra threshold of `0.5`.
+They create separate timestamped run directories. The frozen Ray route accepts
+the canonical `wm_warmup.ckpt` and `classifier_warmup.ckpt` files through the
+shared Hydra train launcher.
 
 ```bash
-WORLD_MODEL_CKPT=/path/to/world_model/run \
-CLASSIFIER_CKPT=/path/to/classifier/run \
-  python -m dreamervla.launchers.frozen_model_cotrain_ray \
-  experiment=dreamervla_frozen_models_rl_ray
+bash scripts/experiments/cotrain/train.sh \
+  --config openvla_libero \
+  --wm_ckpt /path/to/wm_warmup.ckpt \
+  --cls_ckpt /path/to/classifier_warmup.ckpt
 ```
 
-Resume requires the same two immutable sources plus the Ray policy checkpoint:
+Resume uses the full manual-cotrain checkpoint and reuses its owning run root:
 
 ```bash
-WORLD_MODEL_CKPT=/path/to/world_model/run \
-CLASSIFIER_CKPT=/path/to/classifier/run \
-COTRAIN_RESUME_CKPT=/path/to/frozen_cotrain_run/checkpoints/manual_cotrain_step_500/manual_cotrain.ckpt \
-  python -m dreamervla.launchers.frozen_model_cotrain_ray \
-  experiment=dreamervla_frozen_models_rl_ray
+bash scripts/experiments/cotrain/train.sh \
+  --config openvla_libero \
+  --resume /path/to/openvla_libero/<timestamp>
 ```
 
-The launcher infers the original run root from the checkpoint path; assign
-`COTRAIN_RUN_ROOT=/path/to/run` only when the checkpoint was relocated.
+Replay contents are intentionally rebuilt rather than restored. Model, optimizer,
+RNG, metric logger, TensorBoard, and W&B state resume from the checkpoint.
 
 This gate is not a `configs/scripts` workflow. Its retained WM and classifier
 stages enter through `configs/experiment/wm_official_upper_bound.yaml` and

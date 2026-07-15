@@ -45,6 +45,7 @@ training:
   log_every: 10
   eval_every: 250
   checkpoint_every_epochs: 1
+  topk_k: 0
   thresh_min: 0.05
   thresh_max: 0.95
   thresh_steps: 19

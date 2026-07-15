@@ -7,6 +7,7 @@ from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
 from dreamervla.config import validate_cfg
+from dreamervla.runners.cotrain_runner import CotrainRunner
 
 MATRIX = [
     ("openvla_onetraj_libero", "openvla_onetraj_coldstart_libero", "libero_goal"),
@@ -124,12 +125,12 @@ def test_openvla_traj1_hidden_token_dims_are_resolver_expressions(
     _coldstart_task,
     _suite,
 ) -> None:
-    raw_cfg = _compose_unresolved([f"task={offline_task}"])
+    raw_cfg = _compose_unresolved([f"+task={offline_task}"])
     raw = OmegaConf.to_container(
         raw_cfg.task.openvla_oft.hidden_token,
         resolve=False,
     )
-    cfg = _compose([f"task={offline_task}"])
+    cfg = _compose([f"+task={offline_task}"])
 
     assert raw["token_count"] == (
         "${dvla_mul:${task.openvla_oft.hidden_token.num_images_in_input},"
@@ -200,6 +201,12 @@ def test_openvla_onetraj_cotrain_uses_wmpo_classifier_protocol() -> None:
     cfg = _compose(["experiment=openvla_onetraj_libero_cotrain"])
 
     assert cfg._target_ == "dreamervla.runners.CotrainRunner"
+    assert cfg.manual_cotrain.training_mode == "staged_full_cotrain"
+    assert cfg.manual_cotrain.learner_updates_enabled is True
+    assert cfg.manual_cotrain.staged_policy_update is True
+    placement = CotrainRunner(cfg)._placement_plan()
+    assert placement.real_env_ranks
+    assert placement.wm_env_ranks
     assert cfg.ray_components.classifier.kwargs.output_dim == 1
     assert cfg.learner.train_cfg.classifier_loss_type == "bce"
     assert cfg.learner.train_cfg.classifier_sampling_protocol == "wmpo"
@@ -216,7 +223,7 @@ def test_cotrain_components_are_selected_from_worldmodel_and_classifier_groups()
     assert cfg.manual_cotrain.initial_condition_selector == "failed_episode_start"
     assert cfg.manual_cotrain.learner_updates_enabled is False
     assert cfg.manual_cotrain.staged_policy_update is False
-    assert cfg.manual_cotrain.save_replay_state is True
+    assert cfg.manual_cotrain.keep_last_checkpoints == 2
     assert cfg.actor.train_cfg.global_batch_size == 16384
     assert cfg.actor.train_cfg.micro_batch_size == 8
     assert cfg.env.wm.cfg.initial_condition_selector == "failed_episode_start"

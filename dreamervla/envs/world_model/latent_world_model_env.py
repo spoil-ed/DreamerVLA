@@ -47,10 +47,7 @@ def _resolve_inference_dtype(value: str | torch.dtype | None) -> torch.dtype | N
         return torch.bfloat16
     if normalized in {"fp16", "float16"}:
         return torch.float16
-    raise ValueError(
-        "inference_dtype must be one of fp32, bf16, or fp16; "
-        f"got {value!r}"
-    )
+    raise ValueError(f"inference_dtype must be one of fp32, bf16, or fp16; got {value!r}")
 
 
 class LatentWorldModelEnv:
@@ -99,8 +96,7 @@ class LatentWorldModelEnv:
             normalized_observation_format = "tensor"
         if normalized_observation_format not in {"numpy", "tensor"}:
             raise ValueError(
-                "observation_format must be either 'numpy' or 'tensor', "
-                f"got {observation_format!r}"
+                f"observation_format must be either 'numpy' or 'tensor', got {observation_format!r}"
             )
         self.observation_format = normalized_observation_format
         if self.num_envs <= 0:
@@ -288,13 +284,10 @@ class LatentWorldModelEnv:
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         if len(task_ids) != self.num_envs or len(episode_ids) != self.num_envs:
             raise ValueError(
-                "reset_batch task_ids and episode_ids must match num_envs "
-                f"({self.num_envs})"
+                f"reset_batch task_ids and episode_ids must match num_envs ({self.num_envs})"
             )
         infos: list[dict[str, Any]] = []
-        for slot_id, (task_id, episode_id) in enumerate(
-            zip(task_ids, episode_ids, strict=True)
-        ):
+        for slot_id, (task_id, episode_id) in enumerate(zip(task_ids, episode_ids, strict=True)):
             info = self._reset_slot_state(
                 slot_id,
                 task_id=int(task_id),
@@ -308,9 +301,7 @@ class LatentWorldModelEnv:
 
         latent = torch.as_tensor(latents, dtype=torch.float32, device=self.device)
         if latent.numel() == self.latent_dim:
-            self._initial_latent = (
-                latent.reshape(self.latent_dim).detach().cpu().numpy()
-            )
+            self._initial_latent = latent.reshape(self.latent_dim).detach().cpu().numpy()
             return
         if latent.numel() == self.num_envs * self.latent_dim:
             self._initial_latent = (
@@ -329,9 +320,7 @@ class LatentWorldModelEnv:
             return
         lang = torch.as_tensor(lang_embs, dtype=torch.float32, device=self.device)
         if lang.numel() == self.lang_dim:
-            self._initial_lang_emb = (
-                lang.reshape(self.lang_dim).detach().cpu().numpy()
-            )
+            self._initial_lang_emb = lang.reshape(self.lang_dim).detach().cpu().numpy()
             return
         if lang.numel() == self.num_envs * self.lang_dim:
             self._initial_lang_emb = (
@@ -350,16 +339,11 @@ class LatentWorldModelEnv:
             return
         proprio = torch.as_tensor(proprios, dtype=torch.float32, device=self.device)
         if proprio.numel() == self.proprio_dim:
-            self._initial_proprio = (
-                proprio.reshape(self.proprio_dim).detach().cpu().numpy()
-            )
+            self._initial_proprio = proprio.reshape(self.proprio_dim).detach().cpu().numpy()
             return
         if proprio.numel() == self.num_envs * self.proprio_dim:
             self._initial_proprio = (
-                proprio.reshape(self.num_envs, self.proprio_dim)
-                .detach()
-                .cpu()
-                .numpy()
+                proprio.reshape(self.num_envs, self.proprio_dim).detach().cpu().numpy()
             )
             return
         raise ValueError(
@@ -379,11 +363,7 @@ class LatentWorldModelEnv:
         list[bool],
         list[dict[str, Any]],
     ]:
-        slots = (
-            list(range(self.num_envs))
-            if env_ids is None
-            else [int(v) for v in env_ids]
-        )
+        slots = list(range(self.num_envs)) if env_ids is None else [int(v) for v in env_ids]
         if not slots:
             return [], [], [], [], []
         for slot_id in slots:
@@ -407,20 +387,14 @@ class LatentWorldModelEnv:
             )
         batch = {
             "mode": "predict_next",
-            "latent": self._token_grid(
-                self._latent[slots].reshape(batch_size, self.latent_dim)
-            ),
+            "latent": self._token_grid(self._latent[slots].reshape(batch_size, self.latent_dim)),
             "action": action_t.reshape(batch_size, self.action_dim),
             "actions": action_t.reshape(batch_size, 1, self.action_dim),
         }
         if self.lang_dim > 0:
-            batch["lang_emb"] = self._lang_emb[slots].reshape(
-                batch_size, self.lang_dim
-            )
+            batch["lang_emb"] = self._lang_emb[slots].reshape(batch_size, self.lang_dim)
         if self.proprio_dim > 0:
-            batch["proprio"] = self._proprio[slots].reshape(
-                batch_size, self.proprio_dim
-            )
+            batch["proprio"] = self._proprio[slots].reshape(batch_size, self.proprio_dim)
         wm_start = time.perf_counter()
         with self._world_model_autocast():
             wm_out = self.world_model(batch)
@@ -436,9 +410,7 @@ class LatentWorldModelEnv:
             self._lang_emb[slots] = next_lang.reshape(batch_size, self.lang_dim).detach()
         next_proprio = self._extract_proprio(wm_out)
         if next_proprio is not None:
-            self._proprio[slots] = next_proprio.reshape(
-                batch_size, self.proprio_dim
-            ).detach()
+            self._proprio[slots] = next_proprio.reshape(batch_size, self.proprio_dim).detach()
         self._elapsed_steps[slots] += 1
         score_start = time.perf_counter()
         with self._world_model_autocast():
@@ -494,11 +466,7 @@ class LatentWorldModelEnv:
         ``[B, K, A]`` actions and performs one chunk world-model forward.
         """
 
-        slots = (
-            list(range(self.num_envs))
-            if env_ids is None
-            else [int(v) for v in env_ids]
-        )
+        slots = list(range(self.num_envs)) if env_ids is None else [int(v) for v in env_ids]
         if not slots:
             empty_rewards = np.zeros((0, 0), dtype=np.float32)
             empty_dones = np.zeros((0, 0), dtype=np.bool_)
@@ -560,8 +528,7 @@ class LatentWorldModelEnv:
         )
         if hidden_seq.ndim < 3 or int(hidden_seq.shape[0]) != batch_size:
             raise ValueError(
-                "world_model hidden_seq must be shaped [B,K,...], got "
-                f"{tuple(hidden_seq.shape)}"
+                f"world_model hidden_seq must be shaped [B,K,...], got {tuple(hidden_seq.shape)}"
             )
         if int(hidden_seq.shape[1]) != chunk_len:
             raise ValueError(
@@ -622,9 +589,7 @@ class LatentWorldModelEnv:
         score_start = time.perf_counter()
         recorded_scores: np.ndarray | None = None
         classifier_granularity = (
-            self._classifier_granularity()
-            if self.classifier is not None
-            else None
+            self._classifier_granularity() if self.classifier is not None else None
         )
         if self.classifier is None:
             rewards = np.zeros((batch_size, chunk_len), dtype=np.float32)
@@ -676,19 +641,15 @@ class LatentWorldModelEnv:
         success_by_slot = (rewards >= self.success_threshold).any(axis=1)
         if self.classifier is None:
             classifier_evaluations = np.zeros((batch_size,), dtype=np.int64)
-            classifier_success_evaluations = np.zeros(
-                (batch_size,), dtype=np.int64
-            )
+            classifier_success_evaluations = np.zeros((batch_size,), dtype=np.int64)
         elif classifier_granularity == "chunk":
             classifier_evaluations = np.ones((batch_size,), dtype=np.int64)
             classifier_success_evaluations = success_by_slot.astype(np.int64)
         else:
-            classifier_evaluations = np.full(
-                (batch_size,), chunk_len, dtype=np.int64
+            classifier_evaluations = np.full((batch_size,), chunk_len, dtype=np.int64)
+            classifier_success_evaluations = (rewards >= self.success_threshold).sum(
+                axis=1, dtype=np.int64
             )
-            classifier_success_evaluations = (
-                rewards >= self.success_threshold
-            ).sum(axis=1, dtype=np.int64)
         terminations = np.zeros((batch_size, chunk_len), dtype=np.bool_)
         terminations[:, -1] = success_by_slot
         timeout_by_slot = old_elapsed + chunk_len >= self.max_episode_steps
@@ -707,9 +668,7 @@ class LatentWorldModelEnv:
                 "success": bool(success_by_slot[index]),
                 "success_score": float(rewards[index, -1]),
                 "classifier_evaluations": int(classifier_evaluations[index]),
-                "classifier_success_evaluations": int(
-                    classifier_success_evaluations[index]
-                ),
+                "classifier_success_evaluations": int(classifier_success_evaluations[index]),
                 "wm_action": np.asarray(
                     action_arr[index, -1],
                     dtype=np.float32,
@@ -732,16 +691,8 @@ class LatentWorldModelEnv:
             dtype=torch.float32,
             device=self.device,
         )
-        lang = (
-            self._lang_emb[slot : slot + 1]
-            if self.lang_dim > 0
-            else None
-        )
-        proprio = (
-            self._proprio[slot : slot + 1]
-            if self.proprio_dim > 0
-            else None
-        )
+        lang = self._lang_emb[slot : slot + 1] if self.lang_dim > 0 else None
+        proprio = self._proprio[slot : slot + 1] if self.proprio_dim > 0 else None
         initializer = getattr(self.world_model, "initial_imagination_state", None)
         if callable(initializer):
             initialized = initializer(
@@ -758,9 +709,7 @@ class LatentWorldModelEnv:
             }
         else:
             history_size = max(1, int(getattr(self.world_model, "num_hist", 1)))
-            history = hidden[:, None].expand(
-                -1, history_size, *hidden.shape[1:]
-            ).clone()
+            history = hidden[:, None].expand(-1, history_size, *hidden.shape[1:]).clone()
             state = {
                 "hidden": hidden,
                 "history": history,
@@ -776,14 +725,10 @@ class LatentWorldModelEnv:
                 state["proprio"] = proprio.detach()
         for required in ("hidden", "history", "actions"):
             if required not in state:
-                raise ValueError(
-                    "WM imagination state must include hidden, history, and actions"
-                )
+                raise ValueError("WM imagination state must include hidden, history, and actions")
         self._wm_latent_states[slot] = state
 
-    def _batched_wm_latent_state(
-        self, slots: Sequence[int]
-    ) -> dict[str, torch.Tensor]:
+    def _batched_wm_latent_state(self, slots: Sequence[int]) -> dict[str, torch.Tensor]:
         states: list[dict[str, torch.Tensor]] = []
         for slot_id in slots:
             state = self._wm_latent_states[int(slot_id)]
@@ -801,9 +746,7 @@ class LatentWorldModelEnv:
             values = [state[key] for state in states]
             shape = tuple(values[0].shape[1:])
             if any(tuple(value.shape[1:]) != shape for value in values[1:]):
-                raise ValueError(
-                    f"WM slot state {key!r} shapes diverged across active slots"
-                )
+                raise ValueError(f"WM slot state {key!r} shapes diverged across active slots")
             batched[key] = torch.cat(values, dim=0)
         return batched
 
@@ -835,15 +778,11 @@ class LatentWorldModelEnv:
         else:
             action_history = current["actions"].clone()
             for index in range(int(action_chunk.shape[1])):
-                action_history[:, -1] = action_chunk[:, index].to(
-                    dtype=action_history.dtype
-                )
+                action_history[:, -1] = action_chunk[:, index].to(dtype=action_history.dtype)
                 action_history = torch.cat(
                     [
                         action_history[:, 1:],
-                        action_history.new_zeros(
-                            batch_size, 1, self.action_dim
-                        ),
+                        action_history.new_zeros(batch_size, 1, self.action_dim),
                     ],
                     dim=1,
                 )
@@ -857,11 +796,7 @@ class LatentWorldModelEnv:
             ("proprio", ("proprio", "state")),
         ):
             value = next(
-                (
-                    wm_out[key]
-                    for key in output_keys
-                    if isinstance(wm_out.get(key), torch.Tensor)
-                ),
+                (wm_out[key] for key in output_keys if isinstance(wm_out.get(key), torch.Tensor)),
                 current.get(state_key),
             )
             if isinstance(value, torch.Tensor):
@@ -870,8 +805,7 @@ class LatentWorldModelEnv:
                 next_state[state_key] = value.to(device=self.device).detach()
         for index, slot_id in enumerate(slots):
             self._wm_latent_states[int(slot_id)] = {
-                key: value[index : index + 1].detach()
-                for key, value in next_state.items()
+                key: value[index : index + 1].detach() for key, value in next_state.items()
             }
 
     def _chunk_step_batch_fallback(
@@ -956,22 +890,14 @@ class LatentWorldModelEnv:
             "wm_forward_time_s": float(self._wm_forward_time_s),
             "classifier_forward_time_s": float(self._classifier_forward_time_s),
             "batch_size_sum": float(self._batch_size_sum),
-            "batch_size_avg": float(
-                self._batch_size_sum / max(1, self._wm_forward_calls)
-            ),
-            "batch_size_min": float(
-                0 if self._batch_size_min is None else self._batch_size_min
-            ),
+            "batch_size_avg": float(self._batch_size_sum / max(1, self._wm_forward_calls)),
+            "batch_size_min": float(0 if self._batch_size_min is None else self._batch_size_min),
             "batch_size_max": float(self._batch_size_max),
             "score_sum": float(score_values.sum()) if score_count else 0.0,
             "score_count": float(score_count),
             "score_mean": float(score_values.mean()) if score_count else 0.0,
-            "score_p50": (
-                float(np.percentile(score_values, 50)) if score_count else 0.0
-            ),
-            "score_p90": (
-                float(np.percentile(score_values, 90)) if score_count else 0.0
-            ),
+            "score_p50": (float(np.percentile(score_values, 50)) if score_count else 0.0),
+            "score_p90": (float(np.percentile(score_values, 90)) if score_count else 0.0),
             "score_max": float(score_values.max()) if score_count else 0.0,
         }
         if reset:
@@ -1074,14 +1000,10 @@ class LatentWorldModelEnv:
             "task_id": int(obs.get("task_id", self._task_ids[0])),
             "episode_id": int(obs.get("episode_id", self._episode_ids[0])),
             "step": int(obs.get("step", self._elapsed_steps[0])),
-            "task_description": str(
-                obs.get("task_description", f"task {self._task_ids[0]}")
-            ),
+            "task_description": str(obs.get("task_description", f"task {self._task_ids[0]}")),
             "success": bool(info.get("success", terminated)),
             "wm_version": int(info.get("wm_version", self.wm_version)),
-            "classifier_version": int(
-                info.get("classifier_version", self.classifier_version)
-            ),
+            "classifier_version": int(info.get("classifier_version", self.classifier_version)),
         }
         if "lang_emb" in obs:
             transition["lang_emb"] = np.asarray(
@@ -1111,13 +1033,7 @@ class LatentWorldModelEnv:
                 dtype=obs_dtype,
             )
         else:
-            latent_batch = (
-                self._latent[slots]
-                .detach()
-                .cpu()
-                .numpy()
-                .astype(np.float32, copy=True)
-            )
+            latent_batch = self._latent[slots].detach().cpu().numpy().astype(np.float32, copy=True)
         latent_batch = self._token_grid(latent_batch)
 
         lang_batch: Any | None = None
@@ -1129,11 +1045,7 @@ class LatentWorldModelEnv:
                 )
             else:
                 lang_batch = (
-                    self._lang_emb[slots]
-                    .detach()
-                    .cpu()
-                    .numpy()
-                    .astype(np.float32, copy=True)
+                    self._lang_emb[slots].detach().cpu().numpy().astype(np.float32, copy=True)
                 )
 
         proprio_batch: Any | None = None
@@ -1145,11 +1057,7 @@ class LatentWorldModelEnv:
                 )
             else:
                 proprio_batch = (
-                    self._proprio[slots]
-                    .detach()
-                    .cpu()
-                    .numpy()
-                    .astype(np.float32, copy=True)
+                    self._proprio[slots].detach().cpu().numpy().astype(np.float32, copy=True)
                 )
 
         observations: list[dict[str, Any]] = []
@@ -1222,15 +1130,9 @@ class LatentWorldModelEnv:
                 raw = raw["logits"]
                 raw_is_logits = True
             else:
-                raise ValueError(
-                    "classifier output dict must include success, score, or logits"
-                )
+                raise ValueError("classifier output dict must include success, score, or logits")
         score_tensor = torch.as_tensor(raw, dtype=torch.float32, device=self.device)
-        if (
-            raw_is_logits
-            and score_tensor.ndim >= 2
-            and score_tensor.shape[0] == latent.shape[0]
-        ):
+        if raw_is_logits and score_tensor.ndim >= 2 and score_tensor.shape[0] == latent.shape[0]:
             if score_tensor.shape[-1] == 1:
                 score_tensor = torch.sigmoid(score_tensor[..., 0])
             elif score_tensor.shape[-1] == 2:
@@ -1275,8 +1177,7 @@ class LatentWorldModelEnv:
         granularity = str(getattr(classifier_cfg, "granularity", "action"))
         if granularity not in {"action", "chunk"}:
             raise ValueError(
-                "classifier granularity must be 'action' or 'chunk', got "
-                f"{granularity!r}"
+                f"classifier granularity must be 'action' or 'chunk', got {granularity!r}"
             )
         return granularity
 
@@ -1289,10 +1190,7 @@ class LatentWorldModelEnv:
             return sequence[:, 0]
         if pool == "mean":
             return sequence.mean(dim=1)
-        raise ValueError(
-            "chunk classifier pool must be 'last', 'first', or 'mean', got "
-            f"{pool!r}"
-        )
+        raise ValueError(f"chunk classifier pool must be 'last', 'first', or 'mean', got {pool!r}")
 
     def _ensure_classifier_history_window(self, window: int) -> None:
         window = max(1, int(window))
@@ -1316,15 +1214,11 @@ class LatentWorldModelEnv:
         self._ensure_classifier_history_window(window)
         slot = int(slot_id)
         self._classifier_latent_history[slot] = (
-            self._latent[slot]
-            .reshape(1, self.latent_dim)
-            .expand(window, self.latent_dim)
+            self._latent[slot].reshape(1, self.latent_dim).expand(window, self.latent_dim)
         )
         if self.proprio_dim > 0:
             self._classifier_proprio_history[slot] = (
-                self._proprio[slot]
-                .reshape(1, self.proprio_dim)
-                .expand(window, self.proprio_dim)
+                self._proprio[slot].reshape(1, self.proprio_dim).expand(window, self.proprio_dim)
             )
 
     def _classifier_temporal_windows(
@@ -1351,11 +1245,13 @@ class LatentWorldModelEnv:
         proprio_rows = None
         if self.proprio_dim > 0:
             proprio_rows = (
-                torch.as_tensor(proprio, dtype=torch.float32, device=self.device)
-                if proprio is not None
-                else self._proprio[slot_ids]
-            ).reshape(batch_size, self.proprio_dim).to(
-                dtype=self._classifier_proprio_history.dtype
+                (
+                    torch.as_tensor(proprio, dtype=torch.float32, device=self.device)
+                    if proprio is not None
+                    else self._proprio[slot_ids]
+                )
+                .reshape(batch_size, self.proprio_dim)
+                .to(dtype=self._classifier_proprio_history.dtype)
             )
 
         local_latent: dict[int, torch.Tensor] = {}
@@ -1422,9 +1318,7 @@ class LatentWorldModelEnv:
         else:
             slot_ids = [int(slot) for slot in slots]
         if len(slot_ids) != int(batch_size):
-            raise ValueError(
-                f"classifier slots length {len(slot_ids)} != batch size {batch_size}"
-            )
+            raise ValueError(f"classifier slots length {len(slot_ids)} != batch size {batch_size}")
         for slot_id in slot_ids:
             self._validate_slot(slot_id)
         return slot_ids
@@ -1525,7 +1419,11 @@ class LatentWorldModelEnv:
                 visual_dim = self.latent_dim // token_count
                 if 0 < visual_dim < int(latent.shape[-1]):
                     return latent[..., :visual_dim].reshape(batch, self.latent_dim)
-        returned = int(latent.reshape(batch, -1).shape[-1]) if latent.numel() % batch == 0 else int(latent.numel())
+        returned = (
+            int(latent.reshape(batch, -1).shape[-1])
+            if latent.numel() % batch == 0
+            else int(latent.numel())
+        )
         raise ValueError(
             f"world_model returned {returned} latent values; expected {self.latent_dim}"
         )

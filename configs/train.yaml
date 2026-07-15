@@ -9,4 +9,7 @@ defaults:
   - dreamervla: null
   - evaluation: null
   - logger: tensorboard_wandb
-  - experiment: openvla_onetraj_libero_cotrain
+  - launch: null
+  - experiment: null
+  # Profiles load after experiments so their explicit budgets take precedence.
+  - profile: production

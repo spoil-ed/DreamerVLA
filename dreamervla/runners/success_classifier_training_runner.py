@@ -218,6 +218,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         self.best_window_ckpt_path: str | None = None
         self.best_episode_ckpt_path: str | None = None
         self._log_path: pathlib.Path | None = None
+        self._pending_setup_logs: list[dict[str, Any]] = []
 
     def _make_classifier_loader(
         self,
@@ -321,10 +322,9 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         ckpt_dir.mkdir(parents=True, exist_ok=True)
         log_dir.mkdir(parents=True, exist_ok=True)
         self._log_path = log_dir / "train_log.jsonl"
-        if self.is_main_process:
-            self._log_path.write_text("")
+        self._pending_setup_logs = []
 
-        self._log(
+        self._pending_setup_logs.append(
             {
                 "event": "setup_begin",
                 "output_dir": str(self.output_dir),
@@ -443,8 +443,8 @@ class SuccessClassifierTrainingRunner(BaseRunner):
             split_seed=split_seed,
         )
         self._prepare_train_dataset_for_distributed(self.train_ds)
-        self._log(self._dataset_summary_payload("train", self.train_ds))
-        self._log(self._dataset_summary_payload("val", self.val_ds))
+        self._pending_setup_logs.append(self._dataset_summary_payload("train", self.train_ds))
+        self._pending_setup_logs.append(self._dataset_summary_payload("val", self.val_ds))
 
         # ----- dataloaders -----------------------------------------------
         tr = self.cfg.training
@@ -520,7 +520,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         )
         n_params = sum(p.numel() for p in self.model.parameters())
         n_trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-        self._log(
+        self._pending_setup_logs.append(
             {
                 "event": "model_built",
                 "head_type": str(cls_cfg.head_type),
@@ -536,10 +536,26 @@ class SuccessClassifierTrainingRunner(BaseRunner):
             weight_decay=float(OmegaConf.select(tr, "weight_decay") or 1e-4),
         )
 
-        # ----- resume (BaseRunner.resume) -----------------------------
-        if bool(OmegaConf.select(tr, "resume") or False):
-            self.resume(self.cfg)
+        self._finish_setup_after_optimizer()
 
+    def _prepare_train_log(self, *, resume: bool) -> None:
+        """Prepare classifier JSONL without truncating a resumed run."""
+        if not self.is_main_process or self._log_path is None:
+            return
+        self._log_path.parent.mkdir(parents=True, exist_ok=True)
+        if not resume:
+            self._log_path.write_text("", encoding="utf-8")
+
+    def _finish_setup_after_optimizer(self) -> None:
+        """Restore progress before initializing any metric or JSON logger."""
+        is_resume = bool(OmegaConf.select(self.cfg, "training.resume", default=False))
+        if is_resume:
+            self.resume(self.cfg)
+            self.set_metric_resume_step(int(self.global_step))
+        self._prepare_train_log(resume=is_resume)
+        for payload in list(getattr(self, "_pending_setup_logs", [])):
+            self._log(payload)
+        self._pending_setup_logs = []
         self._log({"event": "setup_done"})
 
     # --------------------------- run -----------------------------------
@@ -615,7 +631,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
             metrics = self._evaluate_window_level()
             if float(metrics["best_f1"]) > float(self.best_window_f1):
                 self.best_window_f1 = float(metrics["best_f1"])
-                self._save_named(
+                self._maybe_save_named(
                     "best_window_"
                     f"f1{float(metrics['best_f1']):.4f}_"
                     f"th{float(metrics['best_thresh']):.2f}",
@@ -636,7 +652,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
             metrics = self._evaluate_episode_level()
             if float(metrics["best_f1"]) > float(self.best_episode_f1):
                 self.best_episode_f1 = float(metrics["best_f1"])
-                self._save_named(
+                self._maybe_save_named(
                     "best_episode_"
                     f"f1{float(metrics['best_f1']):.4f}_"
                     f"th{float(metrics['best_thresh']):.2f}",
@@ -788,7 +804,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                     self._log({"event": "val_window", "step": self.global_step, **w_metrics})
                     if w_metrics["best_f1"] > self.best_window_f1:
                         self.best_window_f1 = float(w_metrics["best_f1"])
-                        self._save_named(
+                        self._maybe_save_named(
                             f"best_window_f1{w_metrics['best_f1']:.4f}_th{w_metrics['best_thresh']:.2f}",
                             extra={"val_window": w_metrics},
                         )
@@ -804,7 +820,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                         )
                         if e_metrics["best_f1"] > self.best_episode_f1:
                             self.best_episode_f1 = float(e_metrics["best_f1"])
-                            self._save_named(
+                            self._maybe_save_named(
                                 f"best_episode_f1{e_metrics['best_f1']:.4f}_th{e_metrics['best_thresh']:.2f}",
                                 extra={"val_episode": e_metrics},
                             )
@@ -843,7 +859,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                 }
             )
         # ---- final ckpt + summary ------------------------------------
-        self.save_checkpoint(tag="latest")
+        self._save_final_checkpoint()
         summary = {
             "best_window_f1": self.best_window_f1,
             "best_episode_f1": self.best_episode_f1,
@@ -1037,6 +1053,20 @@ class SuccessClassifierTrainingRunner(BaseRunner):
 
     # --------------------------- io helpers ----------------------------
 
+    def _maybe_save_named(self, name: str, *, extra: dict | None = None) -> None:
+        """Write a metric-named snapshot only when top-k is explicitly enabled."""
+        if int(OmegaConf.select(self.cfg, "training.topk_k", default=0) or 0) <= 0:
+            return
+        self._save_named(name, extra=extra)
+
+    def _save_final_checkpoint(self) -> str:
+        """Write one canonical classifier artifact plus the latest pointer."""
+        checkpoint_dir = self.get_checkpoint_dir()
+        return self.save_checkpoint(
+            path=checkpoint_dir / "classifier_warmup.ckpt",
+            extra_paths=(checkpoint_dir / "latest.ckpt",),
+        )
+
     def _save_named(self, name: str, *, extra: dict | None = None) -> None:
         """Save in the format consumed by the online LUMOS training script.
 
@@ -1052,7 +1082,8 @@ class SuccessClassifierTrainingRunner(BaseRunner):
             return
         ckpt_dir = self.get_checkpoint_dir()
         ckpt_dir.mkdir(parents=True, exist_ok=True)
-        path = ckpt_dir / f"{name}.ckpt"
+        path = ckpt_dir / "warmup_topk" / f"{name}.ckpt"
+        path.parent.mkdir(parents=True, exist_ok=True)
         # pick best F1/threshold out of the sweep dict that called us
         f1 = 0.0
         threshold = 0.5

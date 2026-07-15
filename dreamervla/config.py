@@ -16,6 +16,9 @@ from dreamervla.preprocess.sidecar_schema import (
 )
 from dreamervla.utils.metric_logger import MetricLogger
 from dreamervla.utils.paths import data_root
+from dreamervla.workers.cotrain.config_placement import (
+    build_manual_cotrain_placement_from_config,
+)
 
 _LIBERO_GOAL_OFFICIAL_SHARDS = (
     "open_the_middle_drawer_of_the_cabinet_demo.hdf5",
@@ -1152,6 +1155,7 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
     _require_non_negative_int_if_present(cfg, "manual_cotrain.task_id")
     _require_non_negative_if_present(cfg, "manual_cotrain.env_rollout_timeout_s")
     _require_non_negative_int_if_present(cfg, "manual_cotrain.checkpoint_every")
+    _require_positive_if_present(cfg, "manual_cotrain.keep_last_checkpoints")
     _require_positive_if_present(cfg, "manual_cotrain.global_steps")
     _require_positive_if_present(cfg, "manual_cotrain.learner_update_step")
     _require_positive_if_present(
@@ -1183,6 +1187,7 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
     _require_positive_if_present(cfg, "manual_cotrain.real_envs_per_worker")
     _require_positive_if_present(cfg, "manual_cotrain.wm_envs_per_worker")
     _validate_ray_single_node_placement(cfg)
+    _validate_manual_cotrain_placement(cfg)
 
     max_steps = OmegaConf.select(
         cfg,
@@ -1211,6 +1216,23 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
     _validate_manual_actor_ppo_batches(cfg)
     _validate_manual_cotrain_replay_window(cfg)
     _validate_manual_cotrain_classifier_window(cfg)
+
+
+def _validate_manual_cotrain_placement(cfg: DictConfig) -> None:
+    target = str(OmegaConf.select(cfg, "_target_", default="") or "")
+    if not target.endswith(("CotrainRunner", "DreamerRunner")):
+        return
+    if OmegaConf.select(cfg, "manual_cotrain", default=None) is None:
+        return
+
+    try:
+        plan = build_manual_cotrain_placement_from_config(cfg)
+    except Exception as exc:
+        raise ValueError(f"manual cotrain placement is invalid: {exc}") from exc
+    if not plan.real_env_ranks:
+        raise ValueError("manual cotrain placement requires at least one RealEnvWorker")
+    if not plan.wm_env_ranks:
+        raise ValueError("manual cotrain placement requires at least one WMEnvWorker")
 
     training_mode = str(
         OmegaConf.select(

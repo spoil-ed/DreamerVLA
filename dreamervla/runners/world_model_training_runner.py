@@ -1554,29 +1554,6 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         )
         return float(last)
 
-    # ------------------------------------------------------------- debug swap
-    @staticmethod
-    def _apply_debug_overrides(cfg) -> None:
-        """When training.debug is set, swap every full knob for its debug_* value.
-
-        Applied once at the top of run() so all warmup reads see smoke values.
-        """
-        if not bool(OmegaConf.select(cfg, "training.debug", default=False)):
-            return
-        # full key -> debug key + fallback when the debug key is absent
-        swaps = [
-            ("training.wm_warmup_steps", "offline_warmup.debug_wm_warmup_steps", 2),
-            ("training.classifier_warmup_steps", "offline_warmup.debug_classifier_warmup_steps", 2),
-            ("training.warmup_replay_epochs", "offline_warmup.debug_warmup_replay_epochs", 0),
-            ("training.global_batch_size", "training.debug_global_batch_size", None),
-            ("dataloader.batch_size", "dataloader.debug_batch_size", 2),
-        ]
-        for full_key, debug_key, fallback in swaps:
-            value = OmegaConf.select(cfg, debug_key, default=fallback)
-            if value is None:
-                continue
-            OmegaConf.update(cfg, full_key, value, force_add=True)
-
     # ------------------------------------------------------------------ main
     def run(self) -> list[dict[str, Any]]:
         import copy
@@ -1584,7 +1561,6 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         from dreamervla.runtime.online_replay import OnlineReplay
 
         cfg = copy.deepcopy(self.cfg)
-        self._apply_debug_overrides(cfg)
         resolved_batch_size = self._per_rank_batch_size(
             configured_batch_size=int(OmegaConf.select(cfg, "dataloader.batch_size", default=4)),
             global_batch_size=OmegaConf.select(
@@ -1667,7 +1643,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             print(f"[ok] model ready · {total / 1e6:.1f}M trainable", flush=True)
         self.get_checkpoint_dir().mkdir(parents=True, exist_ok=True)
 
-        # warmup knobs (debug values, if any, were applied by _apply_debug_overrides)
+        # Warmup budgets are fully resolved by Hydra profiles before the runner starts.
         wm_steps = int(OmegaConf.select(cfg, "training.wm_warmup_steps", default=2000))
         cls_steps = int(OmegaConf.select(cfg, "training.classifier_warmup_steps", default=2000))
         warmup_replay_epochs = int(

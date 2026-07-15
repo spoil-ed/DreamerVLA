@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
@@ -86,13 +85,6 @@ class CotrainLaunchContract(DefaultLaunchContract):
             path = _existing_path(raw, label=option)
             values.append(f"{hydra_key}={_hydra_string(path)}")
 
-        self._component_environment_overrides(values)
-        self._runtime_environment_overrides(values)
-        if _truthy_environment("COTRAIN_DRY_RUN") and not _has_override(
-            values,
-            "dry_run",
-        ):
-            values.append("dry_run=true")
         return values
 
     def derive_overrides(
@@ -181,16 +173,11 @@ class CotrainLaunchContract(DefaultLaunchContract):
         env: Mapping[str, str],
     ) -> list[str]:
         debug = bool(OmegaConf.select(cfg, "training.debug", default=False))
-        global_steps = 10 if debug else OmegaConf.select(cfg, "manual_cotrain.global_steps")
-        configured_eval_every = int(
-            OmegaConf.select(
-                cfg,
-                "manual_cotrain.eval_interval_global_steps",
-                default=0,
-            )
+        global_steps = OmegaConf.select(cfg, "manual_cotrain.global_steps")
+        eval_every = int(
+            OmegaConf.select(cfg, "manual_cotrain.eval_interval_global_steps", default=0)
         )
-        eval_every = 1 if debug else configured_eval_every
-        save_every = 1 if debug else OmegaConf.select(cfg, "manual_cotrain.checkpoint_every")
+        save_every = OmegaConf.select(cfg, "manual_cotrain.checkpoint_every")
         return [
             "[cotrain] "
             f"debug={str(debug).lower()} "
@@ -205,43 +192,6 @@ class CotrainLaunchContract(DefaultLaunchContract):
             f"classifier={OmegaConf.select(cfg, 'init.classifier_state_ckpt')}",
         ]
 
-    @staticmethod
-    def _component_environment_overrides(values: list[str]) -> None:
-        wm_key = "init.world_model_state_ckpt"
-        classifier_key = "init.classifier_state_ckpt"
-        wm_env = os.environ.get("WORLD_MODEL_CKPT", "").strip()
-        classifier_env = os.environ.get("CLASSIFIER_CKPT", "").strip()
-        wm_supplied = _has_override(values, wm_key) or bool(wm_env)
-        classifier_supplied = _has_override(values, classifier_key) or bool(classifier_env)
-        if wm_supplied != classifier_supplied:
-            raise ValueError(
-                "set both WORLD_MODEL_CKPT and CLASSIFIER_CKPT for a warm start, "
-                "or train the missing component with its independent runner first"
-            )
-        for env_name, raw, hydra_key in (
-            ("WORLD_MODEL_CKPT", wm_env, wm_key),
-            ("CLASSIFIER_CKPT", classifier_env, classifier_key),
-        ):
-            if not raw or _has_override(values, hydra_key):
-                continue
-            path = _existing_path(raw, label=env_name)
-            values.append(f"{hydra_key}={_hydra_string(path)}")
-
-    @staticmethod
-    def _runtime_environment_overrides(values: list[str]) -> None:
-        key = "manual_cotrain.global_steps"
-        raw = os.environ.get("WMCLS_COTRAIN_GLOBAL_STEPS", "").strip()
-        if not raw or _has_override(values, key):
-            return
-        try:
-            global_steps = int(raw)
-        except ValueError as exc:
-            raise ValueError("WMCLS_COTRAIN_GLOBAL_STEPS must be a positive integer") from exc
-        if global_steps <= 0:
-            raise ValueError("WMCLS_COTRAIN_GLOBAL_STEPS must be a positive integer")
-        values.append(f"{key}={global_steps}")
-
-
 def _hydra_string(value: str | Path) -> str:
     return json.dumps(str(value))
 
@@ -255,10 +205,6 @@ def _existing_path(value: str | Path, *, label: str) -> Path:
     if not (path.is_file() or path.is_dir()):
         raise FileNotFoundError(f"{label} checkpoint does not exist: {path}")
     return path
-
-
-def _truthy_environment(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _nested_output_dim(value: Any) -> int | None:

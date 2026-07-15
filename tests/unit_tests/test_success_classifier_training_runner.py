@@ -269,12 +269,73 @@ def test_classifier_run_profiles_full_optimizer_update(tmp_path: Path) -> None:
     assert summary["total_steps"] == 1
 
 
+def test_classifier_resume_precedes_first_log(tmp_path: Path) -> None:
+    runner = object.__new__(SuccessClassifierTrainingRunner)
+    runner.cfg = OmegaConf.create({"training": {"resume": True}})
+    runner.config = runner.cfg
+    runner._output_dir = str(tmp_path)
+    runner._log_path = tmp_path / "logs" / "train_log.jsonl"
+    runner._metric_logger = None
+    runner._metric_resume_step = None
+    runner.global_step = 0
+    runner._pending_setup_logs = []
+    events: list[str] = []
+
+    def resume(_cfg) -> None:
+        runner.global_step = 17
+        events.append("resume")
+
+    runner.resume = resume
+    runner._log = lambda _payload: events.append(f"log:{runner.global_step}")
+
+    runner._finish_setup_after_optimizer()
+
+    assert events[:2] == ["resume", "log:17"]
+    assert runner._metric_resume_step == 17
+
+
+def test_classifier_resume_keeps_jsonl(tmp_path: Path) -> None:
+    runner = object.__new__(SuccessClassifierTrainingRunner)
+    runner._log_path = tmp_path / "logs" / "train_log.jsonl"
+    runner._log_path.parent.mkdir(parents=True)
+    runner._log_path.write_text('{"event":"before"}\n', encoding="utf-8")
+
+    runner._prepare_train_log(resume=True)
+
+    assert runner._log_path.read_text(encoding="utf-8") == '{"event":"before"}\n'
+
+
+def test_classifier_final_save_writes_warmup_and_latest(tmp_path: Path) -> None:
+    runner = object.__new__(SuccessClassifierTrainingRunner)
+    runner.cfg = OmegaConf.create(
+        {"training": {"topk_k": 0}, "classifier": {"latent_dim": 2}}
+    )
+    runner.config = runner.cfg
+    runner._output_dir = str(tmp_path)
+    runner.model = torch.nn.Linear(2, 1)
+    runner.optim = torch.optim.AdamW(runner.model.parameters(), lr=1.0e-3)
+    runner.distributed = _FakeDistributed()
+    runner.global_step = 4
+    runner.epoch = 2
+    runner.best_window_f1 = -1.0
+    runner.best_episode_f1 = -1.0
+    runner.best_window_ckpt_path = None
+    runner.best_episode_ckpt_path = None
+
+    runner._save_final_checkpoint()
+
+    warmup = tmp_path / "checkpoints" / "classifier_warmup.ckpt"
+    latest = tmp_path / "checkpoints" / "latest.ckpt"
+    assert warmup.is_file()
+    assert latest.samefile(warmup)
+
+
 @pytest.mark.parametrize(
     ("num_epochs", "cadence", "start_epoch", "expected_saves", "expected_loader_epochs"),
     [
-        (2, 1, 0, [("latest", 1, 2), ("latest", 2, 4)], [0, 1]),
-        (1, 0, 0, [("latest", 1, 2)], [0]),
-        (4, 1, 3, [("latest", 4, 2)], [3]),
+        (2, 1, 0, [("latest", 1, 2), ("classifier_warmup", 2, 4)], [0, 1]),
+        (1, 0, 0, [("classifier_warmup", 1, 2)], [0]),
+        (4, 1, 3, [("classifier_warmup", 4, 2)], [3]),
     ],
 )
 def test_classifier_latest_checkpoint_is_saved_only_after_epoch_boundary(
@@ -330,6 +391,9 @@ def test_classifier_latest_checkpoint_is_saved_only_after_epoch_boundary(
     saves: list[tuple[str, int, int]] = []
     runner.save_checkpoint = lambda *, tag: saves.append(
         (str(tag), int(runner.epoch), int(runner.global_step))
+    ) or ""
+    runner._save_final_checkpoint = lambda: saves.append(
+        ("classifier_warmup", int(runner.epoch), int(runner.global_step))
     ) or ""
 
     runner.run()
@@ -492,7 +556,7 @@ def test_named_classifier_checkpoint_saves_unwrapped_model_state_dict(tmp_path: 
     runner._save_named("best_window_f10.5000_th0.50", extra={"val_window": {"best_f1": 0.5}})
 
     payload = torch.load(
-        tmp_path / "checkpoints" / "best_window_f10.5000_th0.50.ckpt",
+        tmp_path / "checkpoints" / "warmup_topk" / "best_window_f10.5000_th0.50.ckpt",
         map_location="cpu",
     )
     assert sorted(payload["model"].keys()) == ["bias", "weight"]
@@ -524,6 +588,7 @@ def test_configured_final_selection_materializes_window_best_checkpoint() -> Non
             "training": {
                 "episode_eval_enabled": False,
                 "final_selection_metric": "window_f1",
+                "topk_k": 1,
             }
         }
     )

@@ -24,7 +24,7 @@ bash scripts/download_assets.sh only=[20_libero_dataset] env.LIBERO_SUITES=liber
 
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   bash scripts/experiments/cotrain/train.sh \
-  --config openvla_libero \
+  --config openvla_onetraj_libero_cotrain \
   --wm_ckpt /path/to/wm_warmup.ckpt \
   --cls_ckpt /path/to/classifier_warmup.ckpt
 
@@ -69,8 +69,9 @@ to inspect commands. This test does not replace the
 1. Install the environment with `scripts/install_env.sh`.
 2. Download OpenVLA-OFT one-trajectory checkpoints and LIBERO data with
    `scripts/download_assets.sh`.
-3. Train with `scripts/experiments/cotrain/train.sh`, explicitly supplying the
-   frozen WM and classifier checkpoints.
+3. Train with `scripts/experiments/cotrain/train.sh --config
+   openvla_onetraj_libero_cotrain`, explicitly supplying the warmup WM and
+   classifier checkpoints.
 4. Evaluate an explicit policy checkpoint with
    `scripts/experiments/cotrain/eval.sh`.
 
@@ -93,7 +94,8 @@ docs/               documentation index, references, tutorials, reports, papers
 | Install | `bash scripts/install_env.sh` |
 | Download OpenVLA-OFT one-trajectory | `bash scripts/download_assets.sh download.openvla_one_traj=true only=[10_openvla_oft_one_trajectory]` |
 | Download LIBERO | `bash scripts/download_assets.sh only=[20_libero_dataset] env.LIBERO_SUITES=libero_goal` |
-| WM/CLS cotrain | `bash scripts/experiments/cotrain/train.sh --config openvla_libero --wm_ckpt <wm-ckpt> --cls_ckpt <cls-ckpt>` |
+| Full WM/CLS cotrain | `bash scripts/experiments/cotrain/train.sh --config openvla_onetraj_libero_cotrain --wm_ckpt <wm-ckpt> --cls_ckpt <cls-ckpt>` |
+| Frozen WM/CLS imagined RL | `bash scripts/experiments/cotrain/train.sh --config openvla_libero --wm_ckpt <wm-ckpt> --cls_ckpt <cls-ckpt>` |
 | Full-dataset WM warmup | `bash scripts/experiments/world_model_training/train.sh` |
 | Pre-mainline frozen WM/CLS policy test | `python -m dreamervla.launchers.frozen_model_pre_mainline task=goal ngpu=8` |
 | Cotrain eval | `bash scripts/experiments/cotrain/eval.sh eval.ckpt_path=<ckpt>` |
@@ -103,7 +105,7 @@ Common overrides:
 ```bash
 DVLA_DATA_ROOT=data
 bash scripts/experiments/cotrain/train.sh \
-  --config openvla_libero \
+  --config openvla_onetraj_libero_cotrain \
   --wm_ckpt /path/to/wm_warmup.ckpt \
   --cls_ckpt /path/to/classifier_warmup.ckpt \
   manual_cotrain.global_steps=20000
@@ -117,6 +119,14 @@ storage path when that is more convenient.
 Shell entrypoints do not define training or evaluation defaults. They select complete
 recipes directly under `configs/experiment/`; use Hydra `key=value` overrides for
 changes. `configs/scripts/` is reserved for install, download, and preprocess.
+Use `profile=debug` or `profile=smoke` for declared reduced budgets; Runner code
+never rewrites production budgets at runtime.
+
+Upload one completed offline W&B run with:
+
+```bash
+bash scripts/utils/wandb_sync.sh /path/to/run_root/wandb
+```
 
 ## Config Fields
 

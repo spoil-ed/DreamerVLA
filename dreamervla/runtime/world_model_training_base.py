@@ -1664,12 +1664,6 @@ class WorldModelTrainingBase(BaseRunner):
             **cfg.checkpoint.topk,
         )
 
-        if cfg.training.debug:
-            num_epochs = 3
-            cfg.training.num_epochs = num_epochs
-            cfg.training.max_train_steps = 2
-            cfg.training.checkpoint_every = 1
-
         if self.distributed.is_main_process:
             os.makedirs(self.output_dir, exist_ok=True)
         self.distributed.barrier()

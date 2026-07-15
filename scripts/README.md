@@ -69,10 +69,9 @@ Mainline rollout collection:
 
 - `experiments/collect_rollouts/train.sh`
 
-Classifier training and artifact evaluation:
+Classifier training:
 
 - `experiments/classifier_training/train.sh`
-- `experiments/classifier_training/eval.sh`
 
 Official OpenVLA-OFT evaluation:
 
@@ -104,13 +103,22 @@ rate to both its predictor and conditioning optimizers. Training and optimizer
 parameters remain under `configs/experiment/`; the shell launcher contains no
 training defaults.
 
-Trainable VLA + world-model + classifier cotrain:
+Full cotrain and frozen-WM/CLS imagined RL share one train/eval launcher pair:
 
 - `experiments/cotrain/train.sh`
 - `experiments/cotrain/eval.sh`
 
-Cotrain freezes WM/CLS, so both `--wm_ckpt` and `--cls_ckpt` are required unless
-the whole run is resumed:
+The release full-cotrain route updates WM/CLS and the policy:
+
+```bash
+bash scripts/experiments/cotrain/train.sh \
+  --config openvla_onetraj_libero_cotrain \
+  --wm_ckpt /path/to/wm.ckpt \
+  --cls_ckpt /path/to/classifier.ckpt
+```
+
+The supporting `openvla_libero` route freezes WM/CLS, so both component
+checkpoints are required unless the whole run is resumed:
 
 ```bash
 bash scripts/experiments/cotrain/train.sh \
@@ -118,6 +126,10 @@ bash scripts/experiments/cotrain/train.sh \
   --wm_ckpt /path/to/wm.ckpt \
   --cls_ckpt /path/to/classifier.ckpt
 ```
+
+`openvla_libero` selects the dedicated frozen imagined-RL `DreamerRunner`
+internally. It deliberately uses this same cotrain launcher, so checkpoint and
+resume parsing have only one shell entrypoint.
 
 Checkpoints are written below the owning run root as
 `checkpoints/global_step_<N>/manual_cotrain.ckpt`, with

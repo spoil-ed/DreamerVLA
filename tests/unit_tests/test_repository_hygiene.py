@@ -597,7 +597,7 @@ def test_repository_structure_doc_and_editable_package_metadata_exist() -> None:
     assert pyproject.is_file()
     text = pyproject.read_text(encoding="utf-8")
     assert 'name = "dreamer-vla"' in text
-    assert 'include = ["dreamervla*"]' in text
+    assert 'include = ["configs*", "dreamervla*"]' in text
 
 
 def test_files_live_under_their_architecture_domains() -> None:

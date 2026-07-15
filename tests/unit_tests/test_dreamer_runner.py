@@ -20,6 +20,11 @@ def test_dreamer_runner_preserves_original_cotrain_runner() -> None:
     assert CotrainRunner.__module__ == "dreamervla.runners.cotrain_runner"
     assert DreamerRunner.__module__ == "dreamervla.runners.dreamer_runner"
     assert DreamerRunner is not CotrainRunner
+    assert issubclass(DreamerRunner, CotrainRunner)
+    assert DreamerRunner._restore_manual_resume_state is CotrainRunner._restore_manual_resume_state
+    assert (
+        DreamerRunner._maybe_save_manual_checkpoint is CotrainRunner._maybe_save_manual_checkpoint
+    )
 
 
 def test_dreamer_runner_places_frozen_learner_on_cpu() -> None:

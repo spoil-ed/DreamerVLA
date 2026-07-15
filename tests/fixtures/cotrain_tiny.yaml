@@ -20,7 +20,7 @@ manual_cotrain:
   ngpu: 0
   global_steps: 1
   learner_update_step: 999999
-  save_replay_state: false
+  keep_last_checkpoints: 2
   sync_every: 1
   requires_bootstrap_value: false
   wm_env_write_replay: false

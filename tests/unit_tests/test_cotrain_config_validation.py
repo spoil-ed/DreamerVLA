@@ -8,7 +8,7 @@ from dreamervla.config import validate_cfg
 
 def _cfg(**manual_overrides):
     manual = {
-        "ngpu": 0,
+        "ngpu": 2,
         "global_steps": 1,
         "learner_update_step": 1,
         "sync_every": 1,
@@ -35,8 +35,18 @@ def _cfg(**manual_overrides):
     )
 
 
-def test_manual_cotrain_allows_zero_gpu() -> None:
-    validate_cfg(_cfg(ngpu=0))
+def test_manual_cotrain_rejects_topology_without_wm_worker() -> None:
+    with pytest.raises(ValueError, match="WMEnvWorker"):
+        validate_cfg(_cfg(ngpu=1, real_env_workers=1))
+
+
+def test_manual_cotrain_rejects_explicit_topology_without_wm_worker() -> None:
+    cfg = _cfg(ngpu=1, real_env_workers=1)
+    cfg.cluster.num_gpus = 1
+    cfg.cluster.component_placement = {"env": 0, "rollout": 0, "actor": 0}
+
+    with pytest.raises(ValueError, match="WMEnvWorker"):
+        validate_cfg(cfg)
 
 
 @pytest.mark.parametrize(

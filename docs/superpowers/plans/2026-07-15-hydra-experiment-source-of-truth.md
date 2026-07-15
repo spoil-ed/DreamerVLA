@@ -46,7 +46,7 @@ def test_validate_rejects_missing_wm_worker():
 
 - [ ] **Step 2: Verify RED**
 
-Run: `/home/user01/miniconda3/envs/dreamervla/bin/python -m pytest -q tests/unit_tests/test_runner_public_api.py tests/unit_tests/test_openvla_traj1_libero_matrix.py tests/unit_tests/test_cotrain_config_validation.py`
+Run: `python -m pytest -q tests/unit_tests/test_runner_public_api.py tests/unit_tests/test_openvla_traj1_libero_matrix.py tests/unit_tests/test_cotrain_config_validation.py`
 
 Expected: implicit selection, frozen flags, and missing placement validation fail.
 
@@ -92,7 +92,7 @@ def test_dreamer_constructor_does_not_mutate_config():
 
 - [ ] **Step 2: Verify RED**
 
-Run: `/home/user01/miniconda3/envs/dreamervla/bin/python -m pytest -q tests/unit_tests/test_cotrain_debug_config.py tests/unit_tests/test_world_model_training_runner.py`
+Run: `python -m pytest -q tests/unit_tests/test_cotrain_debug_config.py tests/unit_tests/test_world_model_training_runner.py`
 
 Expected: the profile group is absent and constructors/runtime code still change budgets.
 
@@ -127,7 +127,7 @@ def test_contract_ignores_step_environment(monkeypatch):
 
 - [ ] **Step 2: Verify RED**
 
-Run: `/home/user01/miniconda3/envs/dreamervla/bin/python -m pytest -q tests/unit_tests/test_unified_train_launcher.py tests/unit_tests/test_experiment_launchers.py`
+Run: `python -m pytest -q tests/unit_tests/test_unified_train_launcher.py tests/unit_tests/test_experiment_launchers.py`
 
 Expected: aliases and semantic environment variables remain active.
 
@@ -177,7 +177,7 @@ def test_classifier_final_save_writes_warmup_and_latest(tmp_path, runner):
 
 - [ ] **Step 3: Verify RED**
 
-Run: `/home/user01/miniconda3/envs/dreamervla/bin/python -m pytest -q tests/unit_tests/test_success_classifier_training_runner.py tests/unit_tests/test_metric_logger.py tests/unit_tests/test_run_paths.py`
+Run: `python -m pytest -q tests/unit_tests/test_success_classifier_training_runner.py tests/unit_tests/test_metric_logger.py tests/unit_tests/test_run_paths.py`
 
 Expected: logging precedes restore, JSONL is truncated, and the canonical artifact is absent.
 
@@ -220,7 +220,7 @@ def test_progress_reuses_current_dir(tmp_path):
 
 - [ ] **Step 2: Verify RED**
 
-Run: `/home/user01/miniconda3/envs/dreamervla/bin/python -m pytest -q tests/unit_tests/test_cotrain_resume.py tests/unit_tests/test_cotrain_phase_progress.py`
+Run: `python -m pytest -q tests/unit_tests/test_cotrain_resume.py tests/unit_tests/test_cotrain_phase_progress.py`
 
 Expected: replay fields remain, old checkpoints accumulate, and progress paths differ.
 
@@ -254,7 +254,7 @@ Require each retained `scripts/experiments/**/*.sh` to contain `dreamervla.launc
 
 - [ ] **Step 2: Verify RED**
 
-Run: `/home/user01/miniconda3/envs/dreamervla/bin/python -m pytest -q tests/unit_tests/test_experiment_stage_scripts.py tests/unit_tests/test_repository_hygiene.py`
+Run: `python -m pytest -q tests/unit_tests/test_experiment_stage_scripts.py tests/unit_tests/test_repository_hygiene.py`
 
 Expected: stale files exist and probes remain under experiments.
 
@@ -278,16 +278,16 @@ Document explicit experiment selection, full Cotrain versus frozen Dreamer, prof
 
 - [ ] **Step 2: Run focused verification**
 
-Run: `/home/user01/miniconda3/envs/dreamervla/bin/python -m pytest -q tests/unit_tests/test_runner_public_api.py tests/unit_tests/test_openvla_traj1_libero_matrix.py tests/unit_tests/test_cotrain_config_validation.py tests/unit_tests/test_cotrain_resume.py tests/unit_tests/test_cotrain_phase_progress.py tests/unit_tests/test_success_classifier_training_runner.py tests/unit_tests/test_metric_logger.py tests/unit_tests/test_wandb_sync_launcher.py tests/unit_tests/test_experiment_stage_scripts.py tests/unit_tests/test_repository_hygiene.py`
+Run: `python -m pytest -q tests/unit_tests/test_runner_public_api.py tests/unit_tests/test_openvla_traj1_libero_matrix.py tests/unit_tests/test_cotrain_config_validation.py tests/unit_tests/test_cotrain_resume.py tests/unit_tests/test_cotrain_phase_progress.py tests/unit_tests/test_success_classifier_training_runner.py tests/unit_tests/test_metric_logger.py tests/unit_tests/test_wandb_sync_launcher.py tests/unit_tests/test_experiment_stage_scripts.py tests/unit_tests/test_repository_hygiene.py`
 
 Expected: zero failures.
 
 - [ ] **Step 3: Run complete verification**
 
 ```bash
-/home/user01/miniconda3/envs/dreamervla/bin/python -m pytest -q tests/unit_tests
-/home/user01/miniconda3/envs/dreamervla/bin/python -m ruff check dreamervla tests
-/home/user01/miniconda3/envs/dreamervla/bin/python -m ruff format --check dreamervla tests
+python -m pytest -q tests/unit_tests
+python -m ruff check dreamervla tests
+python -m ruff format --check dreamervla tests
 find scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
 git diff --check
 ```

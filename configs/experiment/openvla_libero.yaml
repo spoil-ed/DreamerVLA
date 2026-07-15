@@ -4,6 +4,7 @@ defaults:
   - override /dreamervla: wmcls_cotrain
   - override /worldmodel: dreamer-wm
   - override /classifier: dreamer-cls
+  - override /launch: cotrain
   - _self_
 
 run:
@@ -14,18 +15,3 @@ runner:
     logger_backends: [tensorboard, wandb]
     wandb_mode: offline
     wandb_proxy: null
-
-launch:
-  distributed: false
-  ngpu: ${manual_cotrain.ngpu}
-  gpus: null
-  data_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}
-  write_libero_config: true
-  required_target_values: []
-  contract:
-    _target_: dreamervla.launchers.contracts.CotrainLaunchContract
-  env:
-    PYTHONUNBUFFERED: 1
-    HYDRA_FULL_ERROR: 1
-    NCCL_NVLS_ENABLE: 0
-    RAY_DEDUP_LOGS: 0

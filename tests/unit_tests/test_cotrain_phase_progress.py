@@ -7,12 +7,24 @@ from typing import Any
 from omegaconf import OmegaConf
 
 from dreamervla.runners.cotrain_runner import (
+    CotrainRunner,
     _EvaluationProgressMonitor,
     _read_manual_cotrain_progress_snapshot,
 )
 from dreamervla.workers.actor.learner_worker import LearnerWorker
 from dreamervla.workers.env import trajectory_env_worker
 from dreamervla.workers.env.evaluation_env_worker import EvaluationEnvironmentWorker
+
+
+def test_manual_cotrain_progress_reuses_current_directory(tmp_path) -> None:
+    runner = object.__new__(CotrainRunner)
+    runner._output_dir = str(tmp_path)
+
+    first = runner._prepare_manual_cotrain_progress_dir(1)
+    second = runner._prepare_manual_cotrain_progress_dir(2)
+
+    assert first == second
+    assert first == tmp_path / "diagnostics" / "manual_cotrain_progress" / "current"
 
 
 def test_env_progress_snapshot_filters_real_and_imagined_roles(tmp_path) -> None:
