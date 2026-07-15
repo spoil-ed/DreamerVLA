@@ -181,6 +181,69 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         value = OmegaConf.select(cfg, "training.wm_prefetch_workers", default=0) or 0
         return max(0, int(value))
 
+    def _wm_diagnostics_every(self) -> int:
+        """Return the update cadence for expensive optimizer-state diagnostics."""
+
+        cfg = getattr(self, "cfg", None)
+        if cfg is None:
+            return 0
+        value = OmegaConf.select(cfg, "training.wm_diagnostics_every", default=0) or 0
+        return max(0, int(value))
+
+    def _wm_learning_rate(self) -> float | None:
+        """Return the active WM learning rate when the optimizer exposes it."""
+
+        groups = getattr(self.world_model_optimizer, "param_groups", ())
+        for group in groups:
+            if "lr" in group:
+                return float(group["lr"])
+        return None
+
+    def _wm_optimizer_diagnostics(self) -> dict[str, torch.Tensor]:
+        """Measure WM parameters and Adam moments without changing optimizer state."""
+
+        parameters = [
+            parameter.detach()
+            for parameter in self.world_model.parameters()
+            if parameter.requires_grad
+        ]
+        if not parameters:
+            return {}
+        device = parameters[0].device
+
+        def combined_norm(tensors: list[torch.Tensor]) -> torch.Tensor:
+            if not tensors:
+                return torch.zeros((), device=device, dtype=torch.float32)
+            norms = torch._foreach_norm(tensors)
+            return torch.linalg.vector_norm(torch.stack([value.float() for value in norms]))
+
+        first_moments: list[torch.Tensor] = []
+        second_moments: list[torch.Tensor] = []
+        optimizer_steps: list[torch.Tensor] = []
+        for state in self.world_model_optimizer.state.values():
+            exp_avg = state.get("exp_avg")
+            if isinstance(exp_avg, torch.Tensor):
+                first_moments.append(exp_avg.detach())
+            exp_avg_sq = state.get("exp_avg_sq")
+            if isinstance(exp_avg_sq, torch.Tensor):
+                second_moments.append(exp_avg_sq.detach())
+            step = state.get("step")
+            if isinstance(step, torch.Tensor):
+                optimizer_steps.append(step.detach().to(device=device, dtype=torch.float32))
+            elif step is not None:
+                optimizer_steps.append(torch.tensor(float(step), device=device))
+
+        return {
+            "parameter_norm": combined_norm(parameters),
+            "optimizer_exp_avg_norm": combined_norm(first_moments),
+            "optimizer_exp_avg_sq_norm": combined_norm(second_moments),
+            "optimizer_step": (
+                torch.stack(optimizer_steps).max()
+                if optimizer_steps
+                else torch.zeros((), device=device)
+            ),
+        }
+
     def _sample_wm_pretrain_batch(
         self,
         replay,
@@ -232,8 +295,11 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         chunk = float(metrics.get("chunk_cosine_similarity", float("nan")))
         rollout = float(metrics.get("rollout_cosine_similarity", float("nan")))
         persistence = float(metrics.get("persistence_cosine_similarity", float("nan")))
+        grad_norm = float(metrics.get("grad_norm", float("nan")))
+        learning_rate = float(metrics.get("learning_rate", float("nan")))
         return (
             f"global_step={int(global_step)} loss={loss:.6f} "
+            f"grad_norm={grad_norm:.6f} lr={learning_rate:.3e} "
             f"one_step_cos={one_step:.6f} chunk_cos={chunk:.6f} "
             f"rollout_cos={rollout:.6f} persistence_cos={persistence:.6f}"
         )
@@ -255,6 +321,22 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         else:
             reduced = tensors
         output = {key: float(value) for key, value in reduced.items()}
+        rank_diagnostic_keys = {
+            "grad_norm",
+            "parameter_norm",
+            "optimizer_exp_avg_norm",
+            "optimizer_exp_avg_sq_norm",
+            "optimizer_step",
+        }
+        rank_diagnostics = {
+            key: value for key, value in tensors.items() if key in rank_diagnostic_keys
+        }
+        if (
+            rank_diagnostics
+            and distributed is not None
+            and hasattr(distributed, "reduce_min_max_dict")
+        ):
+            output.update(distributed.reduce_min_max_dict(rank_diagnostics))
         for key, value in metrics.items():
             if key in output or isinstance(value, torch.Tensor):
                 continue
@@ -357,6 +439,16 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 optim_cfg=optim_cfg,
                 profile_timings=profile_timings,
             )
+            learning_rate = self._wm_learning_rate()
+            if learning_rate is not None:
+                raw_metrics["learning_rate"] = torch.tensor(
+                    learning_rate,
+                    device=self.device,
+                    dtype=torch.float32,
+                )
+            diagnostics_every = self._wm_diagnostics_every()
+            if diagnostics_every > 0 and (i + 1) % diagnostics_every == 0:
+                raw_metrics.update(self._wm_optimizer_diagnostics())
             metrics = self._reduce_wm_warmup_metrics(raw_metrics)
             last = float(metrics.get("loss", 0.0))
             if profile_timings is not None:
@@ -368,22 +460,45 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 )
             if i % self._replay_warmup_log_every() == 0:
                 log_metrics = {"train/wm_warmup_loss": last}
-                for name in (
-                    "one_step_cosine_similarity",
-                    "persistence_cosine_similarity",
-                    "chunk_cosine_similarity",
-                    "rollout_cosine_similarity",
-                ):
-                    if name in metrics:
-                        log_metrics[f"train/wm_{name}"] = metrics[name]
+                for name in metrics:
+                    if name == "loss":
+                        continue
+                    log_metrics[f"train/wm_{name}"] = metrics[name]
                 self._log_replay_warmup_metrics(log_metrics, step=i)
                 cosine_suffix = (
                     f" cos={metrics['one_step_cosine_similarity']:.4f}"
                     if "one_step_cosine_similarity" in metrics
                     else ""
                 )
+                diagnostic_parts = []
+                for key, label, format_spec in (
+                    ("grad_norm", "grad", ".4f"),
+                    ("learning_rate", "lr", ".3e"),
+                    ("parameter_norm", "param", ".3e"),
+                    ("optimizer_exp_avg_norm", "adam_m1", ".3e"),
+                    ("optimizer_exp_avg_sq_norm", "adam_m2", ".3e"),
+                    ("optimizer_step", "opt_step", ".0f"),
+                    ("grad_norm_rank_min", "grad_min", ".3e"),
+                    ("grad_norm_rank_max", "grad_max", ".3e"),
+                    ("parameter_norm_rank_min", "param_min", ".3e"),
+                    ("parameter_norm_rank_max", "param_max", ".3e"),
+                    ("optimizer_step_rank_min", "opt_min", ".0f"),
+                    ("optimizer_step_rank_max", "opt_max", ".0f"),
+                    ("next_latent_mse", "one_mse", ".3e"),
+                    ("rollout_loss", "rollout_loss", ".3e"),
+                    ("hidden_pred_norm", "pred_norm", ".3e"),
+                    ("hidden_target_norm", "target_norm", ".3e"),
+                ):
+                    if key in metrics:
+                        diagnostic_parts.append(
+                            f"{label}={format(float(metrics[key]), format_spec)}"
+                        )
+                diagnostic_suffix = (
+                    " " + " ".join(diagnostic_parts) if diagnostic_parts else ""
+                )
                 self._print_pipeline_event(
-                    f"[pipeline][wm-warmup] step={i}/{total_steps} loss={last:.4f}{cosine_suffix}"
+                    f"[pipeline][wm-warmup] step={i}/{total_steps} loss={last:.4f}"
+                    f"{diagnostic_suffix}{cosine_suffix}"
                 )
             self._maybe_warmup_checkpoint(
                 current=i + 1,
@@ -1000,6 +1115,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         if "world_model_optimizer" in payload:
             self.world_model_optimizer.load_state_dict(payload["world_model_optimizer"])
         step = int(payload.get("warmup_step", 0))
+        self.set_metric_resume_step(step)
         self._print_pipeline_event(
             f"[pipeline][wm-warmup] resumed progress step={step} from {path}"
         )
@@ -1016,6 +1132,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         if "classifier_threshold" in payload:
             self.classifier_threshold = float(payload["classifier_threshold"])
         step = int(payload.get("warmup_step", 0))
+        self.set_metric_resume_step(step)
         self._print_pipeline_event(
             f"[pipeline][classifier-warmup] resumed progress step={step} from {path}"
         )

@@ -265,6 +265,41 @@ class NopretokenizeSFTDistributedHelper:
             values /= float(self.world_size)
         return dict(zip(keys, values.detach().cpu().tolist(), strict=True))
 
+    def reduce_min_max_dict(
+        self, metrics: dict[str, float | int | torch.Tensor]
+    ) -> dict[str, float]:
+        """Return per-key rank extrema using two batched collectives."""
+
+        keys = list(metrics.keys())
+        if not keys:
+            return {}
+        device = self._reduce_device()
+        values = torch.stack(
+            [
+                value.detach().to(device=device, dtype=torch.float32).reshape(())
+                if isinstance(value, torch.Tensor)
+                else torch.tensor(float(value), device=device, dtype=torch.float32)
+                for value in (metrics[key] for key in keys)
+            ]
+        )
+        minima = values.clone()
+        maxima = values.clone()
+        if self.is_distributed:
+            dist.all_reduce(minima, op=dist.ReduceOp.MIN)
+            dist.all_reduce(maxima, op=dist.ReduceOp.MAX)
+        minimum_values = minima.detach().cpu().tolist()
+        maximum_values = maxima.detach().cpu().tolist()
+        output: dict[str, float] = {}
+        for key, minimum, maximum in zip(
+            keys,
+            minimum_values,
+            maximum_values,
+            strict=True,
+        ):
+            output[f"{key}_rank_min"] = float(minimum)
+            output[f"{key}_rank_max"] = float(maximum)
+        return output
+
     def broadcast_object(self, value: Any) -> Any:
         if not self.is_distributed:
             return value

@@ -80,6 +80,11 @@ def test_metric_logger_passes_online_mode_to_wandb_init(
     settings_calls: list[dict[str, Any]] = []
 
     class FakeWandb:
+        class util:
+            @staticmethod
+            def generate_id() -> str:
+                return "newrun01"
+
         @staticmethod
         def Settings(**kwargs):
             settings_calls.append(dict(kwargs))
@@ -123,12 +128,176 @@ def test_metric_logger_passes_online_mode_to_wandb_init(
         {
             "project": "dreamervla",
             "name": "unit-online",
+            "id": "newrun01",
             "config": OmegaConf.to_container(cfg, resolve=True),
             "settings": {"settings": {"https_proxy": "http://proxy.local:8080"}},
             "dir": str(log_root / "wandb"),
             "mode": "online",
             "reinit": True,
         }
+    ]
+    assert (log_root / "wandb" / "run_id.txt").read_text().strip() == "newrun01"
+
+
+def test_metric_logger_resumes_existing_online_wandb_identity(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class FakeWandb:
+        @staticmethod
+        def init(**kwargs) -> None:
+            calls.append(dict(kwargs))
+
+        @staticmethod
+        def finish() -> None:
+            return None
+
+    log_root = tmp_path / "logs"
+    identity = log_root / "wandb" / "run_id.txt"
+    identity.parent.mkdir(parents=True)
+    identity.write_text("same1234\n", encoding="utf-8")
+    cfg = OmegaConf.create(
+        {
+            "runner": {
+                "logger": {
+                    "log_path": str(log_root),
+                    "project_name": "dreamervla",
+                    "experiment_name": "resume-online",
+                    "logger_backends": ["wandb"],
+                    "wandb_mode": "online",
+                }
+            },
+            "training": {"out_dir": str(tmp_path / "out"), "resume": True},
+        }
+    )
+    monkeypatch.setitem(sys.modules, "wandb", FakeWandb)
+
+    logger = MetricLogger(cfg, resume=True, resume_step=17)
+    logger.finish()
+
+    assert calls[0]["id"] == "same1234"
+    assert calls[0]["resume"] == "allow"
+
+
+def test_metric_logger_truncates_online_wandb_tail_when_sdk_supports_resume_from(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class FakeWandb:
+        @staticmethod
+        def init(*, resume_from=None, **kwargs) -> None:
+            calls.append({**kwargs, "resume_from": resume_from})
+
+        @staticmethod
+        def finish() -> None:
+            return None
+
+    log_root = tmp_path / "logs"
+    identity = log_root / "wandb" / "run_id.txt"
+    identity.parent.mkdir(parents=True)
+    identity.write_text("same1234\n", encoding="utf-8")
+    cfg = OmegaConf.create(
+        {
+            "runner": {
+                "logger": {
+                    "log_path": str(log_root),
+                    "project_name": "dreamervla",
+                    "experiment_name": "resume-online",
+                    "logger_backends": ["wandb"],
+                    "wandb_mode": "online",
+                }
+            },
+            "training": {"out_dir": str(tmp_path / "out"), "resume": True},
+        }
+    )
+    monkeypatch.setitem(sys.modules, "wandb", FakeWandb)
+
+    logger = MetricLogger(cfg, resume=True, resume_step=6000)
+    logger.finish()
+
+    assert calls[0]["id"] == "same1234"
+    assert calls[0]["resume_from"] == "same1234?_step=6000"
+    assert "resume" not in calls[0]
+
+
+def test_metric_logger_offline_resume_reuses_legacy_id_without_sdk_resume(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class FakeWandb:
+        @staticmethod
+        def init(**kwargs) -> None:
+            calls.append(dict(kwargs))
+
+        @staticmethod
+        def finish() -> None:
+            return None
+
+    log_root = tmp_path / "logs"
+    legacy = log_root / "wandb" / "wandb" / "offline-run-20260714_120000-oldrun42"
+    legacy.mkdir(parents=True)
+    (legacy / "run-oldrun42.wandb").touch()
+    cfg = OmegaConf.create(
+        {
+            "runner": {
+                "logger": {
+                    "log_path": str(log_root),
+                    "project_name": "dreamervla",
+                    "experiment_name": "resume-offline",
+                    "logger_backends": ["wandb"],
+                    "wandb_mode": "offline",
+                }
+            },
+            "training": {"out_dir": str(tmp_path / "out"), "resume": True},
+        }
+    )
+    monkeypatch.setitem(sys.modules, "wandb", FakeWandb)
+
+    logger = MetricLogger(cfg, resume=True, resume_step=17)
+    logger.finish()
+
+    assert calls[0]["id"] == "oldrun42"
+    assert "resume" not in calls[0]
+    assert (log_root / "wandb" / "run_id.txt").read_text().strip() == "oldrun42"
+
+
+def test_metric_logger_tensorboard_resume_purges_post_checkpoint_tail(tmp_path: Path) -> None:
+    from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+
+    log_root = tmp_path / "logs"
+    cfg = OmegaConf.create(
+        {
+            "runner": {
+                "logger": {
+                    "log_path": str(log_root),
+                    "logger_backends": ["tensorboard"],
+                }
+            },
+            "training": {"out_dir": str(tmp_path / "out")},
+        }
+    )
+    first = MetricLogger(cfg)
+    for step in range(4):
+        first.log({"train/loss": float(step)}, step=step)
+    first.finish()
+
+    resumed = MetricLogger(cfg, resume=True, resume_step=2)
+    resumed.log({"train/loss": 20.0}, step=2)
+    resumed.log({"train/loss": 30.0}, step=3)
+    resumed.finish()
+
+    events = EventAccumulator(str(log_root / "tensorboard")).Reload().Scalars("train/loss")
+    assert [(event.step, event.value) for event in events] == [
+        (0, 0.0),
+        (1, 1.0),
+        (2, 20.0),
+        (3, 30.0),
     ]
 
 

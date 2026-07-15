@@ -89,6 +89,7 @@ class BaseRunner(ABC):
         self.global_step = 0
         self.epoch = 0
         self._metric_logger: Any | None = None
+        self._metric_resume_step: int | None = None
         self._run_artifacts_written = False
 
     @property
@@ -693,8 +694,20 @@ class BaseRunner(ABC):
             default_log_path=str(self.get_run_dir()),
             default_project_name="dreamervla",
             default_experiment_name=output_name,
+            resume=bool(OmegaConf.select(self.cfg, "training.resume", default=False)),
+            resume_step=(
+                self._metric_resume_step
+                if self._metric_resume_step is not None
+                else int(self.global_step)
+            ),
         )
         return self._metric_logger
+
+    def set_metric_resume_step(self, step: int) -> None:
+        """Set the first valid metric step after restoring a checkpoint."""
+        if getattr(self, "_metric_logger", None) is not None:
+            raise RuntimeError("metric logger was initialized before resume state was restored")
+        self._metric_resume_step = max(0, int(step))
 
     def log_metrics(
         self,

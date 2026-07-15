@@ -46,6 +46,7 @@ Shell launchers expose a small set of convenience keys and pass remaining
 | `training.wm_profile_steps` | bounded WM update profile budget; `-1` is diagnostic-only all-step profiling |
 | `training.wm_prefetch_workers` | CPU replay batches built ahead of the current WM update |
 | `training.world_model_ddp.*` | opt-in WM-only DDP flags; the offline fixed-graph recipe enables `static_graph` and `gradient_as_bucket_view` |
+| `training.wm_diagnostics_every` | WM update cadence for parameter and Adam-moment norm diagnostics; `0` disables the expensive state scan |
 | `training.update_profile_steps` | bounded standalone classifier update profile budget |
 | `training.precision` | standalone classifier autocast precision (`bf16` on H100) |
 | `training.classifier_batch_size` | local classifier batch |

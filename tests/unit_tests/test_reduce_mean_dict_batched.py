@@ -51,6 +51,37 @@ def test_world_size_one_returns_input_means_as_floats():
 def test_empty_dict_returns_empty():
     helper = _make_helper(world_size=1)
     assert helper.reduce_mean_dict({}) == {}
+    assert helper.reduce_min_max_dict({}) == {}
+
+
+def test_world_size_one_returns_rank_extrema_as_floats():
+    helper = _make_helper(world_size=1)
+
+    out = helper.reduce_min_max_dict({"step": 7, "norm": torch.tensor(1.25)})
+
+    assert out == {
+        "step_rank_min": 7.0,
+        "step_rank_max": 7.0,
+        "norm_rank_min": 1.25,
+        "norm_rank_max": 1.25,
+    }
+
+
+def test_rank_extrema_issue_two_batched_collectives(monkeypatch):
+    helper = _make_helper(world_size=4)
+    monkeypatch.setattr(helper, "_reduce_device", lambda: torch.device("cpu"))
+    calls = []
+
+    def _fake_all_reduce(tensor, op=None):  # noqa: ANN001
+        calls.append(op)
+
+    monkeypatch.setattr(
+        "dreamervla.runtime.distributed.dist.all_reduce", _fake_all_reduce
+    )
+
+    helper.reduce_min_max_dict({"a": 1.0, "b": 2.0, "c": 3.0})
+
+    assert calls == [torch.distributed.ReduceOp.MIN, torch.distributed.ReduceOp.MAX]
 
 
 def test_issues_exactly_one_all_reduce_for_multi_key_dict(monkeypatch):

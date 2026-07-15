@@ -38,6 +38,8 @@ training:
   warmup_topk_k: 3
   wm_profile_steps: 8
   wm_prefetch_workers: 1
+  # Diagnose resume divergence without changing the optimizer update.
+  wm_diagnostics_every: 1
   # This offline recipe always executes the same chunk-loss graph. The binary
   # reward head is retained but has zero loss weight, so its unused-parameter
   # set is fixed. Static DDP removes the per-update autograd graph search while

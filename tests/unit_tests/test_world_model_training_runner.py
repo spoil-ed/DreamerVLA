@@ -333,6 +333,8 @@ def test_dreamer_wm_progress_status_reports_all_prediction_horizons():
     status = WorldModelTrainingRunner._progress_status(
         {
             "loss": 0.1234567,
+            "grad_norm": 1.25,
+            "learning_rate": 1.0e-4,
             "one_step_cosine_similarity": 0.9876543,
             "chunk_cosine_similarity": 0.5,
             "rollout_cosine_similarity": 0.375,
@@ -342,9 +344,35 @@ def test_dreamer_wm_progress_status_reports_all_prediction_horizons():
     )
 
     assert status == (
-        "global_step=39 loss=0.123457 one_step_cos=0.987654 "
+        "global_step=39 loss=0.123457 grad_norm=1.250000 lr=1.000e-04 "
+        "one_step_cos=0.987654 "
         "chunk_cos=0.500000 rollout_cos=0.375000 persistence_cos=0.250000"
     )
+
+
+def test_dreamer_wm_optimizer_diagnostics_report_adam_state():
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
+
+    runner = WorldModelTrainingRunner.__new__(WorldModelTrainingRunner)
+    runner.cfg = OmegaConf.create({"training": {"wm_diagnostics_every": 1}})
+    runner.world_model = torch.nn.Linear(3, 2)
+    runner.world_model_optimizer = torch.optim.AdamW(
+        runner.world_model.parameters(),
+        lr=1.0e-4,
+    )
+    loss = runner.world_model(torch.ones(2, 3)).square().mean()
+    loss.backward()
+    runner.world_model_optimizer.step()
+
+    metrics = runner._wm_optimizer_diagnostics()
+
+    assert runner._wm_diagnostics_every() == 1
+    assert metrics["parameter_norm"].item() > 0.0
+    assert metrics["optimizer_exp_avg_norm"].item() > 0.0
+    assert metrics["optimizer_exp_avg_sq_norm"].item() > 0.0
+    assert metrics["optimizer_step"].item() == 1.0
 
 
 def test_dreamer_wm_replay_budget_uses_dino_style_epoch_progress():

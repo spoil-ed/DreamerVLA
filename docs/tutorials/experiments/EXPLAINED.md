@@ -110,7 +110,10 @@ TensorBoard events: `${training.out_dir}/tensorboard`; W&B run files:
 ```bash
 tensorboard --logdir "${OUT_DIR}/tensorboard" --host 0.0.0.0 --port 6006
 ssh -L 6006:localhost:6006 user@host        # remote: forward then open localhost:6006
-wandb sync "${OUT_DIR}/wandb"               # upload an offline run
+wandb sync "${OUT_DIR}/wandb/wandb/offline-run-<FIRST>-<ID>"
+# After checkpoint resume, append each later offline segment to the same web run:
+wandb sync --id "$(cat "${OUT_DIR}/wandb/run_id.txt")" --append \
+  "${OUT_DIR}/wandb/wandb/offline-run-<LATER>-<ID>"
 ```
 
 "TensorFlow logging" in these recipes means the TensorBoard event writer, not a

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import inspect
 import math
 import numbers
 import os
+import re
+import uuid
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -11,10 +14,15 @@ from omegaconf import DictConfig, ListConfig, OmegaConf
 
 
 class _TensorboardLogger:
-    def __init__(self, log_path: str | os.PathLike[str]) -> None:
+    def __init__(
+        self,
+        log_path: str | os.PathLike[str],
+        *,
+        purge_step: int | None = None,
+    ) -> None:
         from torch.utils.tensorboard import SummaryWriter
 
-        self.writer = SummaryWriter(str(log_path))
+        self.writer = SummaryWriter(str(log_path), purge_step=purge_step)
 
     def log(self, data: Mapping[str, float], step: int) -> None:
         for key, value in data.items():
@@ -73,6 +81,8 @@ class MetricLogger:
         default_log_path: str | os.PathLike[str] | None = None,
         default_project_name: str = "dreamervla",
         default_experiment_name: str | None = None,
+        resume: bool = False,
+        resume_step: int | None = None,
     ) -> None:
         self.cfg = cfg
         logger_cfg = _select_logger_cfg(cfg)
@@ -114,6 +124,8 @@ class MetricLogger:
 
         self.wandb_proxy = _cfg_get(logger_cfg, "wandb_proxy", None)
         self.wandb_mode = str(_cfg_get(logger_cfg, "wandb_mode", "online"))
+        self.resume = bool(resume)
+        self.resume_step = int(resume_step) if resume_step is not None else None
         self.swanlab_mode = str(_cfg_get(logger_cfg, "swanlab_mode", "cloud"))
         self.config = OmegaConf.to_container(cfg, resolve=True)
         self._all_loggers: list[dict[str, Any]] = []
@@ -138,18 +150,41 @@ class MetricLogger:
 
             wandb_log_path = Path(log_path) / "wandb" / log_path_suffix
             wandb_log_path.mkdir(parents=True, exist_ok=True)
+            wandb_run_id, existing_run = _resolve_wandb_run_id(
+                wandb,
+                wandb_log_path,
+                resume=self.resume,
+            )
 
             settings = None
             if self.wandb_proxy:
                 settings = wandb.Settings(https_proxy=self.wandb_proxy)
+            init_kwargs: dict[str, Any] = {
+                "project": self.project_name,
+                "name": experiment_name,
+                "id": wandb_run_id,
+                "config": self.config,
+                "settings": settings,
+                "dir": str(wandb_log_path),
+                "mode": self.wandb_mode,
+                "reinit": True,
+            }
+            # W&B cannot resume an offline binary stream in place. Reusing the
+            # ID makes each process a segment of the same logical run; sync the
+            # later segments with `wandb sync --append`. Online mode resumes
+            # directly against the server.
+            if self.resume and existing_run and self.wandb_mode == "online":
+                if (
+                    self.resume_step is not None
+                    and "resume_from" in inspect.signature(wandb.init).parameters
+                ):
+                    init_kwargs["resume_from"] = (
+                        f"{wandb_run_id}?_step={self.resume_step}"
+                    )
+                else:
+                    init_kwargs["resume"] = "allow"
             wandb.init(
-                project=self.project_name,
-                name=experiment_name,
-                config=self.config,
-                settings=settings,
-                dir=str(wandb_log_path),
-                mode=self.wandb_mode,
-                reinit=True,
+                **init_kwargs,
             )
             bundle["wandb"] = wandb
 
@@ -175,7 +210,11 @@ class MetricLogger:
                 f=str(tensorboard_log_path / "config.yaml"),
                 resolve=True,
             )
-            bundle["tensorboard"] = _TensorboardLogger(tensorboard_log_path)
+            purge_step = self.resume_step if self.resume else None
+            bundle["tensorboard"] = _TensorboardLogger(
+                tensorboard_log_path,
+                purge_step=purge_step,
+            )
 
         self._all_loggers.append(bundle)
         return bundle
@@ -253,6 +292,46 @@ def _select_logger_cfg(cfg: DictConfig) -> Any:
     if logger_cfg is not None:
         return logger_cfg
     return OmegaConf.select(cfg, "logging", default=None)
+
+
+_WANDB_RUN_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _resolve_wandb_run_id(
+    wandb: Any,
+    wandb_log_path: Path,
+    *,
+    resume: bool,
+) -> tuple[str, bool]:
+    """Return a stable W&B identity, migrating pre-identity-file run dirs."""
+    identity_path = wandb_log_path / "run_id.txt"
+    if identity_path.is_file():
+        run_id = identity_path.read_text(encoding="utf-8").strip()
+        if not _WANDB_RUN_ID_RE.fullmatch(run_id):
+            raise ValueError(f"invalid W&B run id in {identity_path}: {run_id!r}")
+        return run_id, True
+
+    discovered = _discover_wandb_run_id(wandb_log_path) if resume else None
+    generate_id = getattr(getattr(wandb, "util", None), "generate_id", None)
+    run_id = str(discovered or (generate_id() if callable(generate_id) else uuid.uuid4().hex[:8]))
+    identity_path.write_text(run_id + "\n", encoding="utf-8")
+    return run_id, discovered is not None
+
+
+def _discover_wandb_run_id(wandb_log_path: Path) -> str | None:
+    """Discover the earliest legacy local segment under the owning run root."""
+    candidates: list[Path] = []
+    for parent in (wandb_log_path, wandb_log_path / "wandb"):
+        candidates.extend(parent.glob("offline-run-*"))
+        candidates.extend(parent.glob("run-*"))
+    for run_dir in sorted((path for path in candidates if path.is_dir()), key=lambda p: p.name):
+        streams = sorted(run_dir.glob("run-*.wandb"))
+        if not streams:
+            continue
+        run_id = streams[0].name.removeprefix("run-").removesuffix(".wandb")
+        if _WANDB_RUN_ID_RE.fullmatch(run_id):
+            return run_id
+    return None
 
 
 def _cfg_get(cfg: Any, key: str, default: Any = None) -> Any:

@@ -41,6 +41,14 @@ python -m dreamervla.train experiment=eval_libero_vla task=openvla_onetraj_liber
 `runner.logger.wandb_mode=offline` for local-only W&B files, or select a single
 backend with `logger=tensorboard` / `logger=wandb`.
 
+Logger resume follows the checkpoint-owning run root. TensorBoard writes another
+event file in the same `tensorboard/` directory and purges the abandoned tail at
+the restored step. W&B persists its stable ID in `wandb/run_id.txt`; online mode
+resumes that run directly and, on SDKs with `resume_from`, truncates its abandoned
+tail at the restored step. Offline mode writes one local `offline-run-*` segment per
+process with the same ID. Sync the oldest segment normally, then sync every later
+segment to that ID with `wandb sync --id <ID> --append <SEGMENT_DIR>`.
+
 ## Entry Points
 
 | Stage | Script | Default Config |
@@ -123,4 +131,5 @@ The default run root is
 `${RUN_ROOT:-${DVLA_DATA_ROOT}/outputs}/${run.name}/${run.timestamp}`. Warmup and
 periodic checkpoints are written under its `checkpoints/` directory. Supplying
 `--resume <run-or-checkpoint>` to a train launcher restores the checkpoint and keeps
-writing into that same run root.
+writing into that same run root, including the TensorBoard timeline and W&B run
+identity.

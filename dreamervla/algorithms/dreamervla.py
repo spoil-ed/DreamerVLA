@@ -219,10 +219,19 @@ def world_model_pretrain_step(
                 "grad_norm": torch.as_tensor(grad_norm).detach(),
             }
             for key in (
+                "next_latent_mse",
+                "hidden_cosine_loss",
+                "hidden_pred_norm",
+                "hidden_target_norm",
+                "rollout_loss",
+                "rollout_mse",
+                "rollout_cosine_loss",
                 "one_step_cosine_similarity",
                 "persistence_cosine_similarity",
                 "chunk_cosine_similarity",
                 "rollout_cosine_similarity",
+                "proprio_reconstruction_loss",
+                "reward_loss",
             ):
                 value = losses.get(key)
                 if isinstance(value, torch.Tensor):
