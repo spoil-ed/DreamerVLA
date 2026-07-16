@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from dreamervla.utils.run_paths import infer_run_root, resolve_resume_checkpoint
 
 
@@ -43,6 +45,41 @@ def test_resolve_resume_checkpoint_prefers_canonical_latest(
 
     assert resolve_resume_checkpoint(run_dir) == canonical.resolve()
     assert resolve_resume_checkpoint(legacy) == legacy.resolve()
+
+
+def test_resolve_resume_checkpoint_accepts_canonical_checkpoint_directory(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    checkpoint_dir = run_dir / "checkpoints"
+    latest = checkpoint_dir / "latest.ckpt"
+    checkpoint_dir.mkdir(parents=True)
+    latest.touch()
+
+    assert resolve_resume_checkpoint(checkpoint_dir) == latest.resolve()
+
+
+def test_resolve_resume_checkpoint_accepts_checkpoint_hf_directory(
+    tmp_path: Path,
+) -> None:
+    checkpoint_hf = tmp_path / "run" / "checkpoint_hf"
+    checkpoint_hf.mkdir(parents=True)
+    (checkpoint_hf / "config.json").write_text("{}", encoding="utf-8")
+    (checkpoint_hf / "model.safetensors").touch()
+
+    assert resolve_resume_checkpoint(checkpoint_hf) == checkpoint_hf.resolve()
+    assert infer_run_root(checkpoint_hf) == checkpoint_hf.parent.resolve()
+
+
+def test_resolve_resume_checkpoint_reports_expected_latest(tmp_path: Path) -> None:
+    checkpoint_dir = tmp_path / "run" / "checkpoints"
+    checkpoint_dir.mkdir(parents=True)
+
+    with pytest.raises(
+        FileNotFoundError,
+        match=r"requested directory: .*checkpoints.*expected latest: .*latest\.ckpt",
+    ):
+        resolve_resume_checkpoint(checkpoint_dir)
 
 
 def test_resolve_resume_checkpoint_finds_latest_global_step(

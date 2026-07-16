@@ -1,4 +1,28 @@
+import math
 import os
+import re
+
+_UNSAFE_METRIC_CHARS_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+
+
+def format_metric_checkpoint_name(
+    *,
+    epoch: int,
+    metric_name: str,
+    metric_value: float,
+) -> str:
+    """Return the canonical flat filename for a metric-selected checkpoint."""
+
+    completed_epoch = int(epoch)
+    if completed_epoch < 0:
+        raise ValueError("checkpoint epoch must be non-negative")
+    value = float(metric_value)
+    if not math.isfinite(value):
+        raise ValueError("checkpoint metric value must be finite")
+    safe_name = _UNSAFE_METRIC_CHARS_RE.sub("_", str(metric_name)).strip("._-")
+    if not safe_name:
+        raise ValueError("checkpoint metric name must not be empty")
+    return f"epoch={completed_epoch:04d}-{safe_name}={value:.6f}.ckpt"
 
 
 class TopKCheckpointManager:
@@ -6,26 +30,33 @@ class TopKCheckpointManager:
         self,
         save_dir,
         monitor_key: str,
+        metric_name: str | None = None,
         mode="min",
         k=1,
-        format_str="epoch={epoch:03d}-train_loss={train_loss:.3f}.ckpt",
     ):
         assert mode in ["max", "min"]
         assert k >= 0
 
         self.save_dir = save_dir
         self.monitor_key = monitor_key
+        self.metric_name = str(metric_name or monitor_key)
         self.mode = mode
         self.k = k
-        self.format_str = format_str
         self.path_value_map = dict()
 
     def get_ckpt_path(self, data: dict[str, float]) -> str | None:
         if self.k == 0:
             return None
 
-        value = data[self.monitor_key]
-        ckpt_path = os.path.join(self.save_dir, self.format_str.format(**data))
+        value = float(data[self.monitor_key])
+        ckpt_path = os.path.join(
+            self.save_dir,
+            format_metric_checkpoint_name(
+                epoch=int(data["epoch"]),
+                metric_name=self.metric_name,
+                metric_value=value,
+            ),
+        )
 
         if len(self.path_value_map) < self.k:
             # under-capacity

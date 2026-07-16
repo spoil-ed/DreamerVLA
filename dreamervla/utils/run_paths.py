@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from dreamervla.utils.hf_checkpoint import is_hf_checkpoint, resolve_hf_checkpoint_dir
+
 _STEP_DIR_RE = re.compile(r"(?:global_step_|manual_cotrain_step_)(\d+)$")
 _STEP_FILE_RE = re.compile(r"(?:wm_step_|global_step_)(\d+)")
 
@@ -19,7 +21,7 @@ def infer_run_root(path: str | Path) -> Path:
     candidate = Path(path).expanduser().resolve()
     directory = candidate.parent if candidate.is_file() else candidate
     for current in (directory, *directory.parents):
-        if current.name in {"checkpoints", "ckpt"}:
+        if current.name in {"checkpoints", "ckpt", "checkpoint_hf"}:
             return current.parent.resolve()
     return directory.resolve()
 
@@ -40,13 +42,13 @@ def resolve_resume_checkpoint(path: str | Path) -> Path:
         return candidate
     if not candidate.exists():
         raise FileNotFoundError(f"resume path does not exist: {candidate}")
-    if candidate.is_dir() and (candidate / "config.json").is_file():
-        return candidate
-
     run_root = infer_run_root(candidate)
     latest = run_root / "checkpoints" / "latest.ckpt"
     if latest.is_file():
         return latest.resolve()
+
+    if is_hf_checkpoint(candidate):
+        return resolve_hf_checkpoint_dir(candidate)
 
     manual = list(run_root.glob("checkpoints/global_step_*/manual_cotrain.ckpt"))
     if manual:
@@ -76,12 +78,14 @@ def resolve_resume_checkpoint(path: str | Path) -> Path:
     matches = [item for pattern in patterns for item in run_root.glob(pattern)]
     if matches:
         return max(matches, key=lambda item: (_step_value(item), item.stat().st_mtime_ns)).resolve()
-    direct = sorted(candidate.glob("*.ckpt"), key=lambda item: (_step_value(item), item.name))
+    direct = [
+        candidate / name
+        for name in ("latest.ckpt", "manual_cotrain.ckpt", "model.ckpt")
+        if (candidate / name).is_file()
+    ]
     if direct:
-        preferred = [
-            item
-            for item in direct
-            if item.name in {"latest.ckpt", "manual_cotrain.ckpt", "model.ckpt"}
-        ]
-        return (preferred[-1] if preferred else direct[-1]).resolve()
-    raise FileNotFoundError(f"no resumable checkpoint found under run root: {run_root}")
+        return direct[0].resolve()
+    raise FileNotFoundError(
+        "no resumable checkpoint found; "
+        f"requested directory: {candidate}; expected latest: {latest}"
+    )
