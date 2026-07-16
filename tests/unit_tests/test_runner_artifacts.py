@@ -187,6 +187,12 @@ def test_eval_only_runner_setup_does_not_create_checkpoint_directory(
     assert not (out_dir / "checkpoint_hf").exists()
 
 
+def test_libero_evaluation_runner_disables_checkpoint_output() -> None:
+    from dreamervla.runners.libero_vla_evaluation_runner import LIBEROVLAEvaluationRunner
+
+    assert LIBEROVLAEvaluationRunner.checkpoint_output_enabled is False
+
+
 def test_base_runner_metric_logger_keeps_tensorboard_artifacts_shallow(
     tmp_path: Path,
 ) -> None:

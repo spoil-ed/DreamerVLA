@@ -17,6 +17,9 @@ trainer:
   debug: false
 
 training:
+  # Evaluation owns a stable task-level run root; it never creates a timestamp
+  # layer or writes training checkpoints into this input-independent directory.
+  out_dir: ${run.output_root}/eval/${eval.task_suite_name}
   device: cuda:0
   debug: false
   distributed_strategy: ddp

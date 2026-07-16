@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
 
@@ -103,6 +104,31 @@ def test_eval_libero_config_uses_latent_dreamer_defaults() -> None:
     assert OmegaConf.select(cfg, "eval.dreamer_actor_input_source") == "latent"
     assert OmegaConf.select(cfg, "eval.dreamer_latent_action_source") == "env"
     assert OmegaConf.select(cfg, "eval.dreamer_rssm_action_source", default=None) is None
+
+
+@pytest.mark.parametrize("experiment", ["eval_libero_vla", "eval_cotrain"])
+def test_eval_experiments_use_task_owned_run_root(experiment: str) -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        cfg = compose(config_name="train", overrides=[f"experiment={experiment}"])
+    OmegaConf.resolve(cfg)
+
+    assert Path(cfg.training.out_dir) == Path(cfg.run.output_root) / "eval" / "libero_goal"
+    assert cfg.run.timestamp not in str(cfg.training.out_dir)
+
+
+def test_eval_checkpoint_input_resolves_file_checkpoint_dir_and_run_root(tmp_path) -> None:
+    from dreamervla.runners.libero_vla_evaluation_runner import LIBEROVLAEvaluationRunner
+
+    run_root = tmp_path / "train_run"
+    latest = run_root / "checkpoints" / "latest.ckpt"
+    latest.parent.mkdir(parents=True)
+    latest.touch()
+
+    for requested in (latest, latest.parent, run_root):
+        assert LIBEROVLAEvaluationRunner._resolve_eval_checkpoint_path(requested) == str(
+            latest.resolve()
+        )
 
 
 def test_compat_rssm_actor_input_source_normalizes_to_latent() -> None:

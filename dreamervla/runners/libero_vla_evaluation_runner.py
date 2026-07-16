@@ -54,6 +54,7 @@ from dreamervla.utils.hf_checkpoint import (
     resolve_hf_checkpoint_dir,
 )
 from dreamervla.utils.paths import data_path
+from dreamervla.utils.run_paths import resolve_resume_checkpoint
 from dreamervla.utils.torch_utils import freeze_module
 
 
@@ -146,6 +147,7 @@ class LIBEROVLAEvaluationRunner(
     runner_name = "libero_eval"
     runner_status = "current"
     runner_family = "eval"
+    checkpoint_output_enabled = False
 
     def _setup_cotrain_eval_observer(
         self,
@@ -258,7 +260,25 @@ class LIBEROVLAEvaluationRunner(
 
     @property
     def default_output_dir(self) -> str:
-        return str(data_path("outputs", "eval", "eval_libero_vla"))
+        output_root = OmegaConf.select(
+            self.config,
+            "run.output_root",
+            default=str(data_path("outputs")),
+        )
+        task_name = str(
+            OmegaConf.select(
+                self.config,
+                "eval.task_suite_name",
+                default="libero_goal",
+            )
+        )
+        return str(pathlib.Path(str(output_root)) / "eval" / task_name)
+
+    @staticmethod
+    def _resolve_eval_checkpoint_path(path: str | os.PathLike[str] | None) -> str | None:
+        if path in (None, ""):
+            return None
+        return str(resolve_resume_checkpoint(path))
 
     @staticmethod
     def _oft_base_policy_cfg(cfg: DictConfig, ckpt_path: str) -> dict[str, Any]:
@@ -450,8 +470,9 @@ class LIBEROVLAEvaluationRunner(
                 "Pass `training.distributed_strategy=ddp`."
             )
 
-        ckpt_path = OmegaConf.select(cfg, "eval.ckpt_path", default=None)
-        ckpt_path = str(pathlib.Path(str(ckpt_path)).expanduser().resolve()) if ckpt_path else None
+        ckpt_path = self._resolve_eval_checkpoint_path(
+            OmegaConf.select(cfg, "eval.ckpt_path", default=None)
+        )
         payload = None
         ckpt_kind = str(OmegaConf.select(cfg, "eval.ckpt_kind", default="auto")).lower()
         if ckpt_kind not in {"auto", "vla", "vla_policy", "dreamer"}:
