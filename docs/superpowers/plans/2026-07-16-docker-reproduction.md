@@ -47,7 +47,7 @@ def test_select_metric_checkpoint_uses_minimum_loss(tmp_path: Path) -> None:
 
 - [ ] **Step 2: Run focused pytest and observe failure because the module is absent**
 
-Run: `/home/user01/miniconda3/envs/dreamervla/bin/python -m pytest tests/unit_tests/test_reproduction_workflow.py -q`
+Run: `python -m pytest tests/unit_tests/test_reproduction_workflow.py -q`
 
 - [ ] **Step 3: Implement immutable result records, strict flat-name parsing, SHA-256, and atomic JSON writes**
 
@@ -107,7 +107,7 @@ The prepare route invokes only `scripts/download_assets.sh` and `scripts/preproc
 - [ ] **Step 6: Run focused tests**
 
 ```bash
-/home/user01/miniconda3/envs/dreamervla/bin/python -m pytest tests/unit_tests/test_reproduction_workflow.py tests/unit_tests/test_setup_scripts.py tests/unit_tests/test_experiment_stage_scripts.py -q
+python -m pytest tests/unit_tests/test_reproduction_workflow.py tests/unit_tests/test_setup_scripts.py tests/unit_tests/test_experiment_stage_scripts.py -q
 ```
 
 - [ ] **Step 7: Commit**
@@ -184,9 +184,9 @@ git commit -s -m "docs: publish Docker reproduction guide"
 - [ ] **Step 1: Run format, lint, full unit tests, and shell syntax**
 
 ```bash
-/home/user01/miniconda3/envs/dreamervla/bin/ruff format --check dreamervla tests
-/home/user01/miniconda3/envs/dreamervla/bin/ruff check dreamervla tests
-/home/user01/miniconda3/envs/dreamervla/bin/python -m pytest tests/unit_tests -q
+ruff format --check dreamervla tests
+ruff check dreamervla tests
+python -m pytest tests/unit_tests -q
 find scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
 ```
 
