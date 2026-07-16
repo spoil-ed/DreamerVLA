@@ -31,7 +31,7 @@ def _compose_experiment(name: str, extra_overrides: list[str] | None = None):
     return compose(config_name="train", overrides=overrides)
 
 
-def test_active_experiments_use_named_timestamped_run_roots() -> None:
+def test_active_experiments_use_expected_run_roots() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     experiment_dir = config_dir / "experiment"
     experiments = sorted(path.stem for path in experiment_dir.glob("*.yaml"))
@@ -42,8 +42,14 @@ def test_active_experiments_use_named_timestamped_run_roots() -> None:
             OmegaConf.resolve(cfg)
             out_dir = Path(str(cfg.training.out_dir))
             assert str(cfg.run.name) == experiment
-            assert out_dir.parent.name == experiment
-            assert out_dir.name == str(cfg.run.timestamp)
+            if str(cfg._target_) == "dreamervla.runners.LIBEROVLAEvaluationRunner":
+                expected_eval_dir = (
+                    Path(str(cfg.run.output_root)) / "eval" / str(cfg.eval.task_suite_name)
+                )
+                assert out_dir == expected_eval_dir
+            else:
+                assert out_dir.parent.name == experiment
+                assert out_dir.name == str(cfg.run.timestamp)
 
 
 def test_world_model_package_exports_role_based_wm_aliases() -> None:

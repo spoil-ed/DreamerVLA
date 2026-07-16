@@ -175,7 +175,8 @@ class LIBEROVLAEvaluationRunner(
             )
         self._cotrain_eval_global_expected = int(expected)
         self._cotrain_eval_distributed = bool(
-            self.world_size > 1 and OmegaConf.select(cfg, "eval.distributed", default=False)
+            int(getattr(self, "world_size", 1)) > 1
+            and OmegaConf.select(cfg, "eval.distributed", default=False)
         )
         if self._cotrain_eval_distributed:
             configured_task_ids = OmegaConf.select(cfg, "eval.task_ids", default=None)

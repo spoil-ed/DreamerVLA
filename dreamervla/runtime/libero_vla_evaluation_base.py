@@ -246,8 +246,9 @@ class LIBEROVLAEvaluationBase(BaseRunner):
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         if output_dir is None:
+            configured_output_dir = OmegaConf.select(config, "training.out_dir", default=None)
             output_dir = str(
-                OmegaConf.select(config, "training.out_dir", default=self.default_output_dir)
+                self.default_output_dir if configured_output_dir is None else configured_output_dir
             )
         super().__init__(config, output_dir=output_dir)
 
