@@ -111,8 +111,8 @@ warms up the world model and classifier, then optionally continues online:
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   bash scripts/experiments/cotrain/train.sh \
   --config openvla_libero \
-  --wm_ckpt /path/to/wm_warmup.ckpt \
-  --cls_ckpt /path/to/classifier_warmup.ckpt
+  --wm_ckpt /path/to/world-model-run/checkpoints/latest.ckpt \
+  --cls_ckpt /path/to/classifier-run/checkpoints/latest.ckpt
 ```
 
 Collection is a separate Hydra job:
