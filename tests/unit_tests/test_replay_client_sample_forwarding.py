@@ -61,10 +61,7 @@ class _SeedSpyReplay:
 
     @staticmethod
     def task_stats(task_ids=None):
-        return {
-            str(task_id): {"episodes": 1, "transitions": 36}
-            for task_id in (task_ids or ())
-        }
+        return {str(task_id): {"episodes": 1, "transitions": 36} for task_id in (task_ids or ())}
 
 
 def test_default_path_sends_no_staleness_kwarg():

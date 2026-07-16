@@ -132,7 +132,10 @@ def test_worker_group_env_vars_suppress_noisy_library_startup_logs() -> None:
     assert env["TOKENIZERS_PARALLELISM"] == "false"
     assert env["TRANSFORMERS_VERBOSITY"] == "error"
     assert "ignore::FutureWarning:libero.libero.benchmark" in env["PYTHONWARNINGS"]
-    assert "ignore:enable_nested_tensor is True.*:UserWarning:torch.nn.modules.transformer" in env["PYTHONWARNINGS"]
+    assert (
+        "ignore:enable_nested_tensor is True.*:UserWarning:torch.nn.modules.transformer"
+        in env["PYTHONWARNINGS"]
+    )
 
 
 def test_worker_group_launch_assigns_shared_single_node_rendezvous(monkeypatch) -> None:

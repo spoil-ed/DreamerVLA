@@ -106,9 +106,7 @@ def test_openvla_oft_vla_policy_eval_uses_full_checkpoint_raw_path() -> None:
             return extractor
 
         def __call__(self, _batch):
-            raise AssertionError(
-                "VLA-policy eval must not re-decode fixed-base hidden tokens"
-            )
+            raise AssertionError("VLA-policy eval must not re-decode fixed-base hidden tokens")
 
     policy = _Policy()
     runner = object.__new__(LIBEROVLAEvaluationRunner)
@@ -153,9 +151,7 @@ def test_frozen_hidden_actor_eval_uses_base_oft_extractor() -> None:
     adapter = object()
     calls: list[tuple[object, str]] = []
     runner = object.__new__(LIBEROVLAEvaluationRunner)
-    runner._build_oft_base_eval_adapter = lambda cfg, path: (
-        calls.append((cfg, path)) or adapter
-    )
+    runner._build_oft_base_eval_adapter = lambda cfg, path: calls.append((cfg, path)) or adapter
     cfg = OmegaConf.create({"task": {}})
 
     runner._configure_vla_policy_eval_encoder(
@@ -265,9 +261,7 @@ def test_frozen_hidden_actor_parallel_eval_has_25_isolated_slot_extractors() -> 
     bundle._obs_hidden_source = "hidden_token"
 
     runner = object.__new__(LIBEROVLAEvaluationRunner)
-    runner._vla_policy_eval_policy = SimpleNamespace(
-        requires_external_hidden_extractor=True
-    )
+    runner._vla_policy_eval_policy = SimpleNamespace(requires_external_hidden_extractor=True)
     runner._oft_eval_bundle = bundle
 
     extractors = [runner._make_parallel_oft_slot_extractor() for _ in range(25)]
@@ -277,23 +271,18 @@ def test_frozen_hidden_actor_parallel_eval_has_25_isolated_slot_extractors() -> 
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
     extractors[0]._buffers["agentview_rgb"].append(frame)
     assert len(extractors[0]._buffers["agentview_rgb"]) == 1
-    assert all(
-        len(extractor._buffers["agentview_rgb"]) == 0
-        for extractor in extractors[1:]
-    )
+    assert all(len(extractor._buffers["agentview_rgb"]) == 0 for extractor in extractors[1:])
 
 
-def test_vla_policy_checkpoint_kind_dispatches_without_world_model(
-    tmp_path, monkeypatch
-) -> None:
+def test_vla_policy_checkpoint_kind_dispatches_without_world_model(tmp_path, monkeypatch) -> None:
     checkpoint = tmp_path / "policy.ckpt"
     checkpoint.touch()
     runner = LIBEROVLAEvaluationRunner(
         OmegaConf.create(
-                {
-                    "seed": 7,
-                    "trainer": {"device": "cpu"},
-                    "training": {"out_dir": str(tmp_path / "eval")},
+            {
+                "seed": 7,
+                "trainer": {"device": "cpu"},
+                "training": {"out_dir": str(tmp_path / "eval")},
                 "eval": {
                     "ckpt_path": str(checkpoint),
                     "ckpt_kind": "vla_policy",
@@ -307,9 +296,9 @@ def test_vla_policy_checkpoint_kind_dispatches_without_world_model(
     }
     runner._load_checkpoint_payload = lambda _path: payload
     called = []
-    runner._run_vla_policy_eval = lambda cfg, path, item: called.append(
-        (cfg, path, item)
-    ) or [{"eval_success_rate": 0.5}]
+    runner._run_vla_policy_eval = lambda cfg, path, item: (
+        called.append((cfg, path, item)) or [{"eval_success_rate": 0.5}]
+    )
     monkeypatch.setattr(
         "dreamervla.runners.libero_vla_evaluation_runner.is_hf_checkpoint",
         lambda _path: False,
@@ -329,9 +318,7 @@ def test_cotrain_eval_observer_loads_checkpoint_models_and_fixed_threshold() -> 
     built = [torch.nn.Linear(1, 1), torch.nn.Linear(1, 1)]
     runner._build_from_target_cfg = lambda _cfg: built.pop(0)
     loaded: list[tuple[str, dict]] = []
-    runner._load_module_state = (
-        lambda _module, state, name: loaded.append((name, state))
-    )
+    runner._load_module_state = lambda _module, state, name: loaded.append((name, state))
     cfg = OmegaConf.create(
         {
             "eval": {

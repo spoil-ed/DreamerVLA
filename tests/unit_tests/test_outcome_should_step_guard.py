@@ -6,6 +6,7 @@ and that ``metrics["ppo_step_applied"] == 0.0`` exposes the skip to the
 caller.  Without the guard, Adam decays its momentum/velocity on the
 zero-gradient step and silently drifts the actor in cold-start.
 """
+
 from __future__ import annotations
 
 import torch
@@ -44,7 +45,10 @@ class _AlwaysFailClassifier(torch.nn.Module):
         return {
             "complete": torch.zeros(batch, dtype=torch.bool, device=video.device),
             "finish_step": torch.full(
-                (batch,), 3, dtype=torch.long, device=video.device,
+                (batch,),
+                3,
+                dtype=torch.long,
+                device=video.device,
             ),
         }
 
@@ -77,21 +81,23 @@ class _TinyPolicy(torch.nn.Module):
 
 
 def _base_cfg():
-    return OmegaConf.create({
-        "lumos": {
-            "chunk_size": 2,
-            "episode_max_steps": 4,
-            "classifier_min_steps": 1,
-            "filter_zero_variance_groups": True,
-        },
-        "ppo_rollouts_per_start": 1,
-        "ppo_update_epochs": 1,
-        "kl_coef": 0.0,
-        "actor_bc_to_ref_scale": 0.0,
-        "clip_ratio_low": 0.2,
-        "clip_ratio_high": 0.28,
-        "advantage_eps": 1.0e-6,
-    })
+    return OmegaConf.create(
+        {
+            "lumos": {
+                "chunk_size": 2,
+                "episode_max_steps": 4,
+                "classifier_min_steps": 1,
+                "filter_zero_variance_groups": True,
+            },
+            "ppo_rollouts_per_start": 1,
+            "ppo_update_epochs": 1,
+            "kl_coef": 0.0,
+            "actor_bc_to_ref_scale": 0.0,
+            "clip_ratio_low": 0.2,
+            "clip_ratio_high": 0.28,
+            "advantage_eps": 1.0e-6,
+        }
+    )
 
 
 def _optim_cfg():
@@ -145,10 +151,9 @@ def test_outcome_step_reports_finite_finish_step_when_no_rollouts_complete():
 
     finish = metrics["LUMOS/mean_finish_step"]
     import math
+
     assert math.isfinite(finish), f"mean_finish_step must be finite, got {finish}"
-    assert finish == -1.0, (
-        f"Expected sentinel -1.0 when no rollouts complete, got {finish}"
-    )
+    assert finish == -1.0, f"Expected sentinel -1.0 when no rollouts complete, got {finish}"
     assert metrics["LUMOS/success_rate"] == 0.0
 
 

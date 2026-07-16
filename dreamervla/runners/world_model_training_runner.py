@@ -467,9 +467,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                         diagnostic_parts.append(
                             f"{label}={format(float(metrics[key]), format_spec)}"
                         )
-                diagnostic_suffix = (
-                    " " + " ".join(diagnostic_parts) if diagnostic_parts else ""
-                )
+                diagnostic_suffix = " " + " ".join(diagnostic_parts) if diagnostic_parts else ""
                 self._print_pipeline_event(
                     f"[pipeline][wm-warmup] step={i}/{total_steps} loss={last:.4f}"
                     f"{diagnostic_suffix}{cosine_suffix}"
@@ -1070,9 +1068,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             "metrics": {key: float(value) for key, value in metrics.items()},
             "state_dicts": {
                 "world_model": _cpu_tree(_unwrap(self.world_model).state_dict()),
-                "world_model_optimizer": _cpu_tree(
-                    self.world_model_optimizer.state_dict()
-                ),
+                "world_model_optimizer": _cpu_tree(self.world_model_optimizer.state_dict()),
             },
             "rng_by_rank": self._gather_checkpoint_rng(),
         }
@@ -1179,9 +1175,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         if steps_per_epoch <= 0 or total_steps <= 0:
             raise RuntimeError(f"format v2 {component} warmup geometry must be positive")
         complete = bool(payload["complete"])
-        expected_epoch = (
-            int(total_steps) // int(steps_per_epoch) if complete else epoch
-        )
+        expected_epoch = int(total_steps) // int(steps_per_epoch) if complete else epoch
         if epoch != expected_epoch:
             raise RuntimeError(
                 f"format v2 {component} warmup epoch mismatch: "
@@ -1267,9 +1261,13 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 "complete": bool(payload.get("complete", False)),
             }
             if "classifier" not in payload:
-                raise RuntimeError("legacy classifier warmup checkpoint is missing classifier state")
+                raise RuntimeError(
+                    "legacy classifier warmup checkpoint is missing classifier state"
+                )
             if strict and "classifier_optimizer" not in payload:
-                raise RuntimeError("legacy classifier warmup checkpoint is missing classifier_optimizer")
+                raise RuntimeError(
+                    "legacy classifier warmup checkpoint is missing classifier_optimizer"
+                )
             _unwrap(self.classifier).load_state_dict(payload["classifier"])
             if "classifier_optimizer" in payload:
                 self.classifier_optimizer.load_state_dict(payload["classifier_optimizer"])
@@ -1298,9 +1296,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         )
         if int(progress["epoch"]) <= 0 and int(progress["step"]) > 0:
             progress["epoch"] = (
-                int(progress["step"]) // int(steps_per_epoch)
-                if steps_per_epoch
-                else 0
+                int(progress["step"]) // int(steps_per_epoch) if steps_per_epoch else 0
             )
         self._print_pipeline_event(
             f"[pipeline][wm-warmup] resumed progress step={progress['step']} from {path}"
@@ -1324,9 +1320,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         )
         if int(progress["epoch"]) <= 0 and int(progress["step"]) > 0:
             progress["epoch"] = (
-                int(progress["step"]) // int(steps_per_epoch)
-                if steps_per_epoch
-                else 0
+                int(progress["step"]) // int(steps_per_epoch) if steps_per_epoch else 0
             )
         self._print_pipeline_event(
             f"[pipeline][classifier-warmup] resumed progress step={progress['step']} from {path}"
@@ -1653,10 +1647,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             OmegaConf.select(cfg, "training.warmup_replay_max_steps", default=0) or 0
         )
         warmup_checkpoint_every_epochs = int(
-            OmegaConf.select(
-                cfg, "training.warmup_checkpoint_every_epochs", default=1
-            )
-            or 0
+            OmegaConf.select(cfg, "training.warmup_checkpoint_every_epochs", default=1) or 0
         )
         bs = int(OmegaConf.select(cfg, "dataloader.batch_size", default=4))
         cls_bs = int(OmegaConf.select(cfg, "training.classifier_batch_size", default=16))
@@ -1874,9 +1865,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         warmup_metric_resume_step_set = False
         cls_resume_checkpoint = None
         if resume and need_cls:
-            cls_resume_checkpoint = self._existing_warmup_checkpoint(
-                "classifier_warmup.ckpt"
-            )
+            cls_resume_checkpoint = self._existing_warmup_checkpoint("classifier_warmup.ckpt")
             if cls_resume_checkpoint is None:
                 cls_resume_checkpoint = self._latest_warmup_progress_path("classifier")
 
@@ -1912,9 +1901,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 self._load_wm_warmup_checkpoint(
                     wm_checkpoint,
                     strict=resume,
-                    restore_rng=bool(
-                        resume and need_cls and cls_resume_checkpoint is None
-                    ),
+                    restore_rng=bool(resume and need_cls and cls_resume_checkpoint is None),
                 )
                 self.global_step = max(
                     int(self.global_step),

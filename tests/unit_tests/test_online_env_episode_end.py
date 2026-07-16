@@ -23,9 +23,7 @@ def test_episode_end_marks_max_steps_failure_as_timeout_not_terminal() -> None:
 
 def test_online_env_wrappers_use_shared_episode_end_logic() -> None:
     repo = Path(__file__).resolve().parents[2]
-    libero_env = (repo / "dreamervla/envs/libero/libero_env.py").read_text(
-        encoding="utf-8"
-    )
+    libero_env = (repo / "dreamervla/envs/libero/libero_env.py").read_text(encoding="utf-8")
 
     assert "from dreamervla.utils.episode_end import resolve_episode_end" in libero_env
     assert "DreamerVLAOnlineTrainEnv" in libero_env

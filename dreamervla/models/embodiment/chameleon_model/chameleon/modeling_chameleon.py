@@ -102,10 +102,7 @@ class ChameleonRotaryEmbedding(nn.Module):
         self.base = base
         inv_freq = 1.0 / (
             self.base
-            ** (
-                torch.arange(0, self.dim, 2, dtype=torch.int64).float().to(device)
-                / self.dim
-            )
+            ** (torch.arange(0, self.dim, 2, dtype=torch.int64).float().to(device) / self.dim)
         )
         self.register_buffer("inv_freq", inv_freq, persistent=False)
         # For BC we register cos and sin cached
@@ -122,14 +119,10 @@ class ChameleonRotaryEmbedding(nn.Module):
         # See https://github.com/huggingface/transformers/pull/29285
         device_type = x.device.type
         device_type = (
-            device_type
-            if isinstance(device_type, str) and device_type != "mps"
-            else "cpu"
+            device_type if isinstance(device_type, str) and device_type != "mps" else "cpu"
         )
         with torch.autocast(device_type=device_type, enabled=False):
-            freqs = (
-                inv_freq_expanded.float() @ position_ids_expanded.float()
-            ).transpose(1, 2)
+            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
             emb = torch.cat((freqs, freqs), dim=-1)
             cos = emb.cos()
             sin = emb.sin()
@@ -163,10 +156,7 @@ class ChameleonDynamicNTKScalingRotaryEmbedding(ChameleonRotaryEmbedding):
             ) ** (self.dim / (self.dim - 2))
             inv_freq = 1.0 / (
                 base
-                ** (
-                    torch.arange(0, self.dim, 2, dtype=torch.int64).float().to(x.device)
-                    / self.dim
-                )
+                ** (torch.arange(0, self.dim, 2, dtype=torch.int64).float().to(x.device) / self.dim)
             )
             self.register_buffer(
                 "inv_freq", inv_freq, persistent=False
@@ -219,15 +209,9 @@ class ChameleonMLP(nn.Module):
         self.config = config
         self.hidden_size = config.hidden_size
         self.intermediate_size = config.intermediate_size
-        self.gate_proj = nn.Linear(
-            self.hidden_size, self.intermediate_size, bias=config.mlp_bias
-        )
-        self.up_proj = nn.Linear(
-            self.hidden_size, self.intermediate_size, bias=config.mlp_bias
-        )
-        self.down_proj = nn.Linear(
-            self.intermediate_size, self.hidden_size, bias=config.mlp_bias
-        )
+        self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias)
+        self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias)
+        self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=config.mlp_bias)
         self.act_fn = ACT2FN[config.hidden_act]
 
     # Ignore copy
@@ -244,9 +228,7 @@ class ChameleonLayerNorm(nn.LayerNorm):
     in the last dimension. This module applies gamma/beta manually to fulfill this requirement.
     """
 
-    def __init__(
-        self, hidden_size, model_parallel_size, n_heads_per_mp, *args, **kwargs
-    ):
+    def __init__(self, hidden_size, model_parallel_size, n_heads_per_mp, *args, **kwargs):
         if isinstance(hidden_size, int):
             hidden_size = (hidden_size,)
         super().__init__([model_parallel_size, *hidden_size], *args, **kwargs)
@@ -257,12 +239,10 @@ class ChameleonLayerNorm(nn.LayerNorm):
         return param.repeat_interleave(self.n_heads_per_mp, dim=0)
 
     def forward(self, hidden_states):
-        hidden_states = F.layer_norm(
-            hidden_states, self.normalized_shape, None, None, eps=1e-5
+        hidden_states = F.layer_norm(hidden_states, self.normalized_shape, None, None, eps=1e-5)
+        hidden_states = hidden_states * self.repeat_param(self.weight) + self.repeat_param(
+            self.bias
         )
-        hidden_states = hidden_states * self.repeat_param(
-            self.weight
-        ) + self.repeat_param(self.bias)
         return hidden_states
 
 
@@ -325,9 +305,7 @@ class ChameleonAttention(nn.Module):
             self.num_key_value_heads * self.head_dim,
             bias=config.attention_bias,
         )
-        self.o_proj = nn.Linear(
-            self.hidden_size, self.hidden_size, bias=config.attention_bias
-        )
+        self.o_proj = nn.Linear(self.hidden_size, self.hidden_size, bias=config.attention_bias)
         self.q_norm = ChameleonLayerNorm(
             self.head_dim,
             self.model_parallel_size,
@@ -344,10 +322,7 @@ class ChameleonAttention(nn.Module):
     # TODO(joao): add me back asap :)
     def _init_rope(self):
         rope_scaling = self.config.rope_scaling
-        if (
-            isinstance(rope_scaling, dict)
-            and rope_scaling.get("rope_type") == "default"
-        ):
+        if isinstance(rope_scaling, dict) and rope_scaling.get("rope_type") == "default":
             rope_scaling = None
 
         if rope_scaling is None:
@@ -399,9 +374,9 @@ class ChameleonAttention(nn.Module):
         key_states = key_states.reshape(-1, self.num_key_value_heads, self.head_dim)
         key_states = self.k_norm(key_states)
 
-        query_states = query_states.reshape(
-            bsz, q_len, self.num_heads, self.head_dim
-        ).transpose(1, 2)
+        query_states = query_states.reshape(bsz, q_len, self.num_heads, self.head_dim).transpose(
+            1, 2
+        )
         key_states = key_states.reshape(
             bsz, q_len, self.num_key_value_heads, self.head_dim
         ).transpose(1, 2)
@@ -410,9 +385,7 @@ class ChameleonAttention(nn.Module):
         ).transpose(1, 2)
 
         cos, sin = self.rotary_emb(value_states, position_ids)
-        query_states, key_states = apply_rotary_pos_emb(
-            query_states, key_states, cos, sin
-        )
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; position_ids needed for the static cache
@@ -424,18 +397,16 @@ class ChameleonAttention(nn.Module):
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
 
-        attn_weights = torch.matmul(
-            query_states, key_states.transpose(2, 3)
-        ) / math.sqrt(self.head_dim)
+        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(
+            self.head_dim
+        )
 
         if attention_mask is not None:  # no matter the length, we just slice it
             causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
             attn_weights = attn_weights + causal_mask
 
         # upcast attention to fp32
-        attn_weights = nn.functional.softmax(attn_weights, dim=-1).to(
-            query_states.dtype
-        )
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1).to(query_states.dtype)
         attn_weights = nn.functional.dropout(
             attn_weights, p=self.attention_dropout, training=self.training
         )
@@ -515,20 +486,16 @@ class ChameleonFlashAttention2(ChameleonAttention):
         # Flash attention requires the input to have the shape
         # batch_size x seq_length x head_dim x hidden_dim
         # therefore we just need to keep the original shape
-        query_states = query_states.view(
-            bsz, q_len, self.num_heads, self.head_dim
-        ).transpose(1, 2)
-        key_states = key_states.view(
-            bsz, q_len, self.num_key_value_heads, self.head_dim
-        ).transpose(1, 2)
+        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(
+            1, 2
+        )
         value_states = value_states.view(
             bsz, q_len, self.num_key_value_heads, self.head_dim
         ).transpose(1, 2)
 
         cos, sin = self.rotary_emb(value_states, position_ids)
-        query_states, key_states = apply_rotary_pos_emb(
-            query_states, key_states, cos, sin
-        )
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; position_ids needed for the static cache
@@ -638,9 +605,9 @@ class ChameleonSdpaAttention(ChameleonAttention):
         key_states = key_states.reshape(-1, self.num_key_value_heads, self.head_dim)
         key_states = self.k_norm(key_states)
 
-        query_states = query_states.reshape(
-            bsz, q_len, self.num_heads, self.head_dim
-        ).transpose(1, 2)
+        query_states = query_states.reshape(bsz, q_len, self.num_heads, self.head_dim).transpose(
+            1, 2
+        )
         key_states = key_states.reshape(
             bsz, q_len, self.num_key_value_heads, self.head_dim
         ).transpose(1, 2)
@@ -649,9 +616,7 @@ class ChameleonSdpaAttention(ChameleonAttention):
         ).transpose(1, 2)
 
         cos, sin = self.rotary_emb(value_states, position_ids)
-        query_states, key_states = apply_rotary_pos_emb(
-            query_states, key_states, cos, sin, None
-        )
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, None)
 
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; position_ids needed for the static cache
@@ -717,9 +682,7 @@ class ChameleonDecoderLayer(nn.Module):
         )
 
         self.mlp = ChameleonMLP(config)
-        self.input_layernorm = ChameleonRMSNorm(
-            config.hidden_size, eps=config.rms_norm_eps
-        )
+        self.input_layernorm = ChameleonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = ChameleonRMSNorm(
             config.hidden_size, eps=config.rms_norm_eps
         )
@@ -736,9 +699,7 @@ class ChameleonDecoderLayer(nn.Module):
         use_cache: bool | None = False,
         cache_position: torch.LongTensor | None = None,
         **kwargs,
-    ) -> tuple[
-        torch.FloatTensor, tuple[torch.FloatTensor, torch.FloatTensor] | None
-    ]:
+    ) -> tuple[torch.FloatTensor, tuple[torch.FloatTensor, torch.FloatTensor] | None]:
         """
         Args:
             hidden_states (`torch.FloatTensor`): input to the layer of shape `(batch, seq_len, embed_dim)`
@@ -801,9 +762,7 @@ class ChameleonSwinDecoderLayer(nn.Module):
         )
 
         self.mlp = ChameleonMLP(config)
-        self.input_layernorm = ChameleonRMSNorm(
-            config.hidden_size, eps=config.rms_norm_eps
-        )
+        self.input_layernorm = ChameleonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = ChameleonRMSNorm(
             config.hidden_size, eps=config.rms_norm_eps
         )
@@ -820,9 +779,7 @@ class ChameleonSwinDecoderLayer(nn.Module):
         use_cache: bool | None = False,
         cache_position: torch.LongTensor | None = None,
         **kwargs,
-    ) -> tuple[
-        torch.FloatTensor, tuple[torch.FloatTensor, torch.FloatTensor] | None
-    ]:
+    ) -> tuple[torch.FloatTensor, tuple[torch.FloatTensor, torch.FloatTensor] | None]:
         """
         Args:
             hidden_states (`torch.FloatTensor`):
@@ -911,9 +868,7 @@ class ChameleonVQVAEVectorQuantizer(nn.Module):
         )
 
         min_encoding_indices = torch.argmin(distances, dim=1)
-        hidden_state_quant = self.embedding(min_encoding_indices).view(
-            hidden_state.shape
-        )
+        hidden_state_quant = self.embedding(min_encoding_indices).view(hidden_state.shape)
 
         # compute loss for embedding
         loss = torch.mean(
@@ -932,9 +887,7 @@ class ChameleonVQVAEVectorQuantizer(nn.Module):
 class ChameleonVQVAEEncoderConvDownsample(nn.Module):
     def __init__(self, in_channels):
         super().__init__()
-        self.conv = nn.Conv2d(
-            in_channels, in_channels, kernel_size=3, stride=2, padding=0
-        )
+        self.conv = nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=2, padding=0)
 
     def forward(self, hidden_states):
         # no asymmetric padding in torch conv, must do it ourselves
@@ -959,16 +912,12 @@ class ChameleonVQVAEEncoderResnetBlock(nn.Module):
         self.norm1 = torch.nn.GroupNorm(
             num_groups=32, num_channels=in_channels, eps=1e-6, affine=True
         )
-        self.conv1 = torch.nn.Conv2d(
-            in_channels, out_channels, kernel_size=3, stride=1, padding=1
-        )
+        self.conv1 = torch.nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
         self.norm2 = torch.nn.GroupNorm(
             num_groups=32, num_channels=out_channels, eps=1e-6, affine=True
         )
         self.dropout = torch.nn.Dropout(config.dropout)
-        self.conv2 = torch.nn.Conv2d(
-            out_channels, out_channels, kernel_size=3, stride=1, padding=1
-        )
+        self.conv2 = torch.nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1)
         if self.in_channels != self.out_channels:
             if self.use_conv_shortcut:
                 self.conv_shortcut = torch.nn.Conv2d(
@@ -1007,15 +956,9 @@ class ChameleonVQVAEEncoderAttnBlock(nn.Module):
         self.norm = torch.nn.GroupNorm(
             num_groups=32, num_channels=in_channels, eps=1e-6, affine=True
         )
-        self.q = torch.nn.Conv2d(
-            in_channels, in_channels, kernel_size=1, stride=1, padding=0
-        )
-        self.k = torch.nn.Conv2d(
-            in_channels, in_channels, kernel_size=1, stride=1, padding=0
-        )
-        self.v = torch.nn.Conv2d(
-            in_channels, in_channels, kernel_size=1, stride=1, padding=0
-        )
+        self.q = torch.nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
+        self.k = torch.nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
+        self.v = torch.nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
         self.proj_out = torch.nn.Conv2d(
             in_channels, in_channels, kernel_size=1, stride=1, padding=0
         )
@@ -1029,9 +972,7 @@ class ChameleonVQVAEEncoderAttnBlock(nn.Module):
 
         # compute attention
         batch_size, channels, height, width = query_states.shape
-        query_states = query_states.reshape(
-            batch_size, channels, height * width
-        ).permute(0, 2, 1)
+        query_states = query_states.reshape(batch_size, channels, height * width).permute(0, 2, 1)
         key_states = key_states.reshape(batch_size, channels, height * width)
         attn_weights = torch.bmm(query_states, key_states)
         attn_weights = attn_weights * (int(channels) ** (-0.5))
@@ -1199,9 +1140,7 @@ class ChameleonVQVAE(PreTrainedModel):
         self.encoder = ChameleonVQVAEEncoder(config)
         self.quantize = ChameleonVQVAEVectorQuantizer(config)
         self.quant_conv = torch.nn.Conv2d(config.latent_channels, config.embed_dim, 1)
-        self.post_quant_conv = torch.nn.Conv2d(
-            config.embed_dim, config.latent_channels, 1
-        )
+        self.post_quant_conv = torch.nn.Conv2d(config.embed_dim, config.latent_channels, 1)
         self.eval()  # Chameleon's VQ model is frozen
 
     def encode(self, pixel_values: torch.LongTensor):
@@ -1227,18 +1166,14 @@ class ChameleonImageVocabularyMapping:
 
     @cached_property
     def image_tokens(self):
-        return sorted(
-            [val for name, val in self.vocab_map.items() if name.startswith("IMGIMG")]
-        )
+        return sorted([val for name, val in self.vocab_map.items() if name.startswith("IMGIMG")])
 
     @cached_property
     def bpe2img(self):
         img_tkn_chr_mapping = {chr(ord("A") + i): str(i) for i in range(10)}
 
         def remap(old_name: str) -> str:
-            return "".join(
-                img_tkn_chr_mapping.get(c, c) for c in old_name[len("IMGIMG") : -1]
-            )
+            return "".join(img_tkn_chr_mapping.get(c, c) for c in old_name[len("IMGIMG") : -1])
 
         return {tok: int(remap(self.val2name[tok])) for tok in self.image_tokens}
 
@@ -1255,9 +1190,7 @@ class ChameleonImageVocabularyMapping:
     def img2bpe_mapping_tensor(self, device):
         mapping = self._img2bpe_mapping_cache.get(device)
         if mapping is None:
-            mapping = torch.zeros(
-                max(self.img2bpe.keys()) + 1, dtype=torch.int, device=device
-            )
+            mapping = torch.zeros(max(self.img2bpe.keys()) + 1, dtype=torch.int, device=device)
             for k, v in self.img2bpe.items():
                 mapping[k] = v
             self._img2bpe_mapping_cache[device] = mapping
@@ -1412,20 +1345,13 @@ class ChameleonModel(ChameleonPreTrainedModel):
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
 
-        self.embed_tokens = nn.Embedding(
-            config.vocab_size, config.hidden_size, self.padding_idx
-        )
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
         self.vocabulary_mapping = ChameleonImageVocabularyMapping(config.vocabulary_map)
         decoder_layer = (
-            ChameleonDecoderLayer
-            if not self.config.swin_norm
-            else ChameleonSwinDecoderLayer
+            ChameleonDecoderLayer if not self.config.swin_norm else ChameleonSwinDecoderLayer
         )
         self.layers = nn.ModuleList(
-            [
-                decoder_layer(config, layer_idx)
-                for layer_idx in range(config.num_hidden_layers)
-            ]
+            [decoder_layer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
         self.norm = ChameleonRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.vqmodel = ChameleonVQVAE(config.vq_config)
@@ -1484,9 +1410,7 @@ class ChameleonModel(ChameleonPreTrainedModel):
         cache_position: torch.LongTensor | None = None,
     ) -> tuple | BaseModelOutputWithPast:
         output_attentions = (
-            output_attentions
-            if output_attentions is not None
-            else self.config.output_attentions
+            output_attentions if output_attentions is not None else self.config.output_attentions
         )
         output_hidden_states = (
             output_hidden_states
@@ -1494,9 +1418,7 @@ class ChameleonModel(ChameleonPreTrainedModel):
             else self.config.output_hidden_states
         )
         use_cache = use_cache if use_cache is not None else self.config.use_cache
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if self.gradient_checkpointing and self.training and use_cache:
             logger.warning_once(
@@ -1631,13 +1553,9 @@ class ChameleonModel(ChameleonPreTrainedModel):
                 output_attentions,
             )
 
-        past_seen_tokens = (
-            past_key_values.get_seq_length() if past_key_values is not None else 0
-        )
+        past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
         using_static_cache = isinstance(past_key_values, StaticCache)
-        target_length = (
-            past_key_values.get_max_length() if using_static_cache else None
-        )
+        target_length = past_key_values.get_max_length() if using_static_cache else None
         key = (
             self.config._attn_implementation,
             str(input_tensor.dtype),
@@ -1692,9 +1610,7 @@ class ChameleonModel(ChameleonPreTrainedModel):
         # For SDPA, when possible, we will rely on its `is_causal` argument instead of its `attn_mask` argument, in
         # order to dispatch on Flash Attention 2. This feature is not compatible with static cache, as SDPA will fail
         # to infer the attention mask.
-        past_seen_tokens = (
-            past_key_values.get_seq_length() if past_key_values is not None else 0
-        )
+        past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
         using_static_cache = isinstance(past_key_values, StaticCache)
 
         # When output attentions is True, sdpa implementation's forward method calls the eager implementation's forward
@@ -1739,38 +1655,30 @@ class ChameleonModel(ChameleonPreTrainedModel):
             )
             if sequence_length != 1:
                 causal_mask = torch.triu(causal_mask, diagonal=1)
-            causal_mask *= torch.arange(
-                target_length, device=device
-            ) > cache_position.reshape(-1, 1)
-            causal_mask = causal_mask[None, None, :, :].expand(
-                input_tensor.shape[0], 1, -1, -1
+            causal_mask *= torch.arange(target_length, device=device) > cache_position.reshape(
+                -1, 1
             )
+            causal_mask = causal_mask[None, None, :, :].expand(input_tensor.shape[0], 1, -1, -1)
             # import pdb; pdb.set_trace()
             if attention_mask is not None:
-                causal_mask = (
-                    causal_mask.clone()
-                )  # copy to contiguous memory for in-place edit
+                causal_mask = causal_mask.clone()  # copy to contiguous memory for in-place edit
                 mask_length = attention_mask.shape[-1]
                 # padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, None, :]
 
                 if attention_mask.dim() == 3:
-                    padding_mask = (
-                        causal_mask[:, :, :, :mask_length] + attention_mask[:, None, :]
-                    )
+                    padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, :]
                 elif attention_mask.dim() == 2:
                     padding_mask = (
-                        causal_mask[:, :, :, :mask_length]
-                        + attention_mask[None, None, :, :]
+                        causal_mask[:, :, :, :mask_length] + attention_mask[None, None, :, :]
                     )
                 else:
                     padding_mask = (
-                        causal_mask[:, :, :, :mask_length]
-                        + attention_mask[:, None, None, :]
+                        causal_mask[:, :, :, :mask_length] + attention_mask[:, None, None, :]
                     )
                 padding_mask = padding_mask == 0
-                causal_mask[:, :, :, :mask_length] = causal_mask[
-                    :, :, :, :mask_length
-                ].masked_fill(padding_mask, min_dtype)
+                causal_mask[:, :, :, :mask_length] = causal_mask[:, :, :, :mask_length].masked_fill(
+                    padding_mask, min_dtype
+                )
                 # import pdb; pdb.set_trace()
         if (
             self.config._attn_implementation == "sdpa"
@@ -1781,9 +1689,7 @@ class ChameleonModel(ChameleonPreTrainedModel):
             # Attend to all tokens in fully masked rows in the causal_mask, for example the relevant first rows when
             # using left padding. This is required by F.scaled_dot_product_attention memory-efficient attention path.
             # Details: https://github.com/pytorch/pytorch/issues/110213
-            causal_mask = AttentionMaskConverter._unmask_unattended(
-                causal_mask, min_dtype
-            )
+            causal_mask = AttentionMaskConverter._unmask_unattended(causal_mask, min_dtype)
 
         return causal_mask
 
@@ -1823,9 +1729,7 @@ class ChameleonForConditionalGeneration(ChameleonPreTrainedModel):
         return self.model
 
     @add_start_docstrings_to_model_forward(CHAMELEON_INPUTS_DOCSTRING)
-    @replace_return_docstrings(
-        output_type=CausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC
-    )
+    @replace_return_docstrings(output_type=CausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC)
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -1872,18 +1776,14 @@ class ChameleonForConditionalGeneration(ChameleonPreTrainedModel):
         >>> processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
         ```"""
         output_attentions = (
-            output_attentions
-            if output_attentions is not None
-            else self.config.output_attentions
+            output_attentions if output_attentions is not None else self.config.output_attentions
         )
         output_hidden_states = (
             output_hidden_states
             if output_hidden_states is not None
             else self.config.output_hidden_states
         )
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         outputs = self.model(
@@ -1937,9 +1837,7 @@ class ChameleonForConditionalGeneration(ChameleonPreTrainedModel):
             attentions=outputs.attentions,
         )
 
-    def generate_batch_1(
-        self, input_ids, labels, generation_config, logits_processor, streamer
-    ):
+    def generate_batch_1(self, input_ids, labels, generation_config, logits_processor, streamer):
         generation_result_list = []
         gt_result_list = []
         for b in range(len(input_ids)):
@@ -1964,16 +1862,12 @@ class ChameleonForConditionalGeneration(ChameleonPreTrainedModel):
             gt_result_list.append(gt_result)
         return generation_result_list, gt_result_list
 
-    def generate_batch_2(
-        self, input_ids, labels, generation_config, logits_processor, streamer
-    ):
+    def generate_batch_2(self, input_ids, labels, generation_config, logits_processor, streamer):
         max_tokens = max([len(_) for _ in input_ids])
         max_tokens = min(max_tokens, self.config.max_position_embeddings)
         input_ids = [_[:max_tokens] for _ in input_ids]
 
-        input_ids = [
-            [0] * (max_tokens - len(example)) + example for example in input_ids
-        ]
+        input_ids = [[0] * (max_tokens - len(example)) + example for example in input_ids]
         input_ids = torch.tensor(input_ids, dtype=torch.int64, device=self.device)
 
         labels = [_[:max_tokens] for _ in labels]
@@ -1994,16 +1888,12 @@ class ChameleonForConditionalGeneration(ChameleonPreTrainedModel):
 
         return generation_result_g, gt_list
 
-    def generate_batch_awm(
-        self, input_ids, labels, generation_config, logits_processor, streamer
-    ):
+    def generate_batch_awm(self, input_ids, labels, generation_config, logits_processor, streamer):
         max_tokens = max([len(_) for _ in input_ids])
         max_tokens = min(max_tokens, self.config.max_position_embeddings)
         input_ids = [_[:max_tokens] for _ in input_ids]
 
-        input_ids = [
-            [0] * (max_tokens - len(example)) + example for example in input_ids
-        ]
+        input_ids = [[0] * (max_tokens - len(example)) + example for example in input_ids]
         input_ids = torch.tensor(input_ids, dtype=torch.int64, device=self.device)
 
         labels = [_[:max_tokens] for _ in labels]
@@ -2014,9 +1904,7 @@ class ChameleonForConditionalGeneration(ChameleonPreTrainedModel):
         generation_result = self.generate(
             input_ids_g, pad_token_id=0, generation_config=generation_config
         )
-        generation_result_g = self.post_process_tensor_awm(
-            input_ids_g, generation_result
-        )
+        generation_result_g = self.post_process_tensor_awm(input_ids_g, generation_result)
         return generation_result_g, gt_list
 
     def generate_batch_awm_2(
@@ -2026,9 +1914,7 @@ class ChameleonForConditionalGeneration(ChameleonPreTrainedModel):
         max_tokens = min(max_tokens, self.config.max_position_embeddings)
         input_ids = [_[:max_tokens] for _ in input_ids]
 
-        input_ids = [
-            [0] * (max_tokens - len(example)) + example for example in input_ids
-        ]
+        input_ids = [[0] * (max_tokens - len(example)) + example for example in input_ids]
         input_ids = torch.tensor(input_ids, dtype=torch.int64, device=self.device)
 
         labels = [_[:max_tokens] for _ in labels]
@@ -2039,9 +1925,7 @@ class ChameleonForConditionalGeneration(ChameleonPreTrainedModel):
         generation_result = self.generate(
             input_ids_g, pad_token_id=0, generation_config=generation_config
         )
-        generation_result_g = self.post_process_tensor_awm_2(
-            input_ids_g, generation_result
-        )
+        generation_result_g = self.post_process_tensor_awm_2(input_ids_g, generation_result)
         # print(generation_result_g, gt_list)
         return generation_result_g, gt_list
 
@@ -2052,9 +1936,7 @@ class ChameleonForConditionalGeneration(ChameleonPreTrainedModel):
         max_tokens = min(max_tokens, self.config.max_position_embeddings)
         input_ids = [_[:max_tokens] for _ in input_ids]
 
-        input_ids = [
-            [0] * (max_tokens - len(example)) + example for example in input_ids
-        ]
+        input_ids = [[0] * (max_tokens - len(example)) + example for example in input_ids]
         input_ids = torch.tensor(input_ids, dtype=torch.int64, device=self.device)
 
         labels = [_[:max_tokens] for _ in labels]
@@ -2069,9 +1951,7 @@ class ChameleonForConditionalGeneration(ChameleonPreTrainedModel):
             input_ids_g, pad_token_id=0, generation_config=generation_config
         )
         print(time.time() - start)
-        generation_result_g = self.post_process_tensor_awm_f(
-            input_ids_g, generation_result
-        )
+        generation_result_g = self.post_process_tensor_awm_f(input_ids_g, generation_result)
         # print(generation_result_g, gt_list)
         return generation_result_g, gt_list
 
@@ -2127,11 +2007,7 @@ class ChameleonForConditionalGeneration(ChameleonPreTrainedModel):
     def post_process_tensor_awm(self, input_ids_g, generation_result):
         res = []
         for i in range(input_ids_g.shape[0]):
-            res.append(
-                generation_result[i][
-                    input_ids_g[i].shape[0] : input_ids_g[i].shape[0] + 10
-                ]
-            )
+            res.append(generation_result[i][input_ids_g[i].shape[0] : input_ids_g[i].shape[0] + 10])
         return res
 
     def process_tensor_awm_2(self, input_ids):
@@ -2163,9 +2039,7 @@ class ChameleonForConditionalGeneration(ChameleonPreTrainedModel):
         res = []
         for i in range(input_ids_g.shape[0]):
             res.append(
-                generation_result[i][
-                    input_ids_g[i].shape[0] : input_ids_g[i].shape[0] + 308
-                ]
+                generation_result[i][input_ids_g[i].shape[0] : input_ids_g[i].shape[0] + 308]
             )
         return res
 
@@ -2173,9 +2047,7 @@ class ChameleonForConditionalGeneration(ChameleonPreTrainedModel):
         res = []
         for i in range(input_ids_g.shape[0]):
             res.append(
-                generation_result[i][
-                    input_ids_g[i].shape[0] : input_ids_g[i].shape[0] + 904
-                ]
+                generation_result[i][input_ids_g[i].shape[0] : input_ids_g[i].shape[0] + 904]
             )
         return res
 

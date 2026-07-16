@@ -15,12 +15,8 @@ from dreamervla.algorithms.dreamervla import (
 
 
 def test_twohot_critic_predicts_softmax_bin_expectation():
-    critic = TwohotCritic(
-        hidden_dim=2, num_bins=3, bin_min=-1.0, bin_max=1.0, critic_layers=0
-    )
-    final = next(
-        module for module in critic.backbone if isinstance(module, torch.nn.Linear)
-    )
+    critic = TwohotCritic(hidden_dim=2, num_bins=3, bin_min=-1.0, bin_max=1.0, critic_layers=0)
+    final = next(module for module in critic.backbone if isinstance(module, torch.nn.Linear))
     with torch.no_grad():
         final.weight.zero_()
         final.bias.copy_(torch.tensor([-1.0, 0.0, 1.0]))
@@ -119,12 +115,9 @@ def test_actor_env_scale_helper_can_report_unclipped_and_clipped_drift():
     assert unclipped[0, 1] < -0.9375
     assert unclipped[0, 6] > 1.0
     assert torch.all(
-        clipped
-        <= torch.tensor([[0.9375, 0.9375, 0.9375, 0.34821429, 0.375, 0.375, 1.0]])
+        clipped <= torch.tensor([[0.9375, 0.9375, 0.9375, 0.34821429, 0.375, 0.375, 1.0]])
     )
     assert torch.all(
         clipped
-        >= torch.tensor(
-            [[-0.9375, -0.9375, -0.9375, -0.24214286, -0.375, -0.36428571, -1.0]]
-        )
+        >= torch.tensor([[-0.9375, -0.9375, -0.9375, -0.24214286, -0.375, -0.36428571, -1.0]])
     )

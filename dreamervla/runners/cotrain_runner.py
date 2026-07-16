@@ -258,11 +258,7 @@ class CotrainRunner(BaseRunner):
 
     def _manual_cotrain_progress_dir(self, global_step: int) -> Path:
         del global_step
-        return (
-            self.get_diagnostics_dir()
-            / "manual_cotrain_progress"
-            / "current"
-        )
+        return self.get_diagnostics_dir() / "manual_cotrain_progress" / "current"
 
     def _prepare_manual_cotrain_progress_dir(self, global_step: int) -> Path:
         progress_dir = self._manual_cotrain_progress_dir(global_step)
@@ -722,9 +718,7 @@ class CotrainRunner(BaseRunner):
             )
             stage_start = mark_stage("append_real_replay", stage_start)
             selector = self._initial_condition_selector()
-            eligible = int(
-                replay_group.eligible_initial_condition_count(selector).wait()[0]
-            )
+            eligible = int(replay_group.eligible_initial_condition_count(selector).wait()[0])
             replay_metrics["replay_buffer/eligible_failure_anchors"] = float(eligible)
             if eligible <= 0:
                 return self._finish_no_failure_imagination_step(
@@ -739,9 +733,7 @@ class CotrainRunner(BaseRunner):
                     sync_metrics=sync_metrics,
                     stage_times=stage_times,
                 )
-            refresh_metrics = _merge_metric_lists(
-                [wm_env.refresh_wm_initial_conditions().wait()]
-            )
+            refresh_metrics = _merge_metric_lists([wm_env.refresh_wm_initial_conditions().wait()])
             stage_start = mark_stage("refresh_wm_initial_conditions", stage_start)
         else:
             if max_policy_kl is not None:
@@ -778,18 +770,10 @@ class CotrainRunner(BaseRunner):
                         for key, value in encoder_transaction_metrics.items()
                     }
                 )
-            encoder_sft_metrics["actor/encoder_sft_kl_effective"] = (
-                encoder_kl_effective
-            )
+            encoder_sft_metrics["actor/encoder_sft_kl_effective"] = encoder_kl_effective
             encoder_updates = max(
                 0,
-                int(
-                    float(
-                        encoder_sft_metrics.get(
-                            "actor/encoder_sft_optimizer_steps", 0.0
-                        )
-                    )
-                ),
+                int(float(encoder_sft_metrics.get("actor/encoder_sft_optimizer_steps", 0.0))),
             )
             self._report_phase_completion(
                 "cotrain-vla-real-sft",
@@ -858,17 +842,13 @@ class CotrainRunner(BaseRunner):
 
             state_start = time.perf_counter()
             state_dicts = _first_result(learner.state_dicts().wait())
-            sync_metrics["sync/learner_state_dicts_s"] = float(
-                time.perf_counter() - state_start
-            )
+            sync_metrics["sync/learner_state_dicts_s"] = float(time.perf_counter() - state_start)
             if not isinstance(state_dicts, dict):
                 raise TypeError("LearnerGroup.state_dicts() must return a mapping")
             component_states = {
                 "world_model": dict(state_dicts.get("world_model", {})),
                 "classifier": dict(state_dicts.get("classifier", {})),
-                "classifier_threshold": float(
-                    state_dicts.get("classifier_threshold", 0.5)
-                ),
+                "classifier_threshold": float(state_dicts.get("classifier_threshold", 0.5)),
             }
             shared_component_states = _share_ray_value(
                 component_states,
@@ -881,17 +861,11 @@ class CotrainRunner(BaseRunner):
             sync_metrics.update(_aggregate_sync_metric_lists([load_metrics]))
             stage_start = mark_stage("learner_to_wm_env_sync", stage_start)
 
-            refresh_metrics = _merge_metric_lists(
-                [wm_env.refresh_wm_initial_conditions().wait()]
-            )
+            refresh_metrics = _merge_metric_lists([wm_env.refresh_wm_initial_conditions().wait()])
             stage_start = mark_stage("refresh_wm_initial_conditions", stage_start)
 
-            post_sft_version = self._staged_policy_sync_version(
-                global_step, post_sft=True
-            )
-            sync_metrics.update(
-                self._sync_policy_groups(actor, rollout, version=post_sft_version)
-            )
+            post_sft_version = self._staged_policy_sync_version(global_step, post_sft=True)
+            sync_metrics.update(self._sync_policy_groups(actor, rollout, version=post_sft_version))
             stage_start = mark_stage("sync_post_sft_policy", stage_start)
 
         dynamic_wm_leases = self._wm_rollout_target_trajectories() is not None
@@ -1172,9 +1146,7 @@ class CotrainRunner(BaseRunner):
         actor_sync = actor.sync_model_to_rollout("policy", int(version)).wait()
         rollout_sync = rollout_result.wait()
         release_sync = actor.release_synced_model("policy", int(version)).wait()
-        return _aggregate_sync_metric_lists(
-            [actor_sync, rollout_sync, release_sync]
-        )
+        return _aggregate_sync_metric_lists([actor_sync, rollout_sync, release_sync])
 
     def _report_phase_completion(
         self,
@@ -1671,8 +1643,7 @@ class CotrainRunner(BaseRunner):
         allowed = {"failure_imagined_rl", "staged_full_cotrain"}
         if mode not in allowed:
             raise ValueError(
-                "manual_cotrain.training_mode must be one of "
-                f"{sorted(allowed)}, got {mode!r}"
+                f"manual_cotrain.training_mode must be one of {sorted(allowed)}, got {mode!r}"
             )
         return mode
 
@@ -1773,9 +1744,7 @@ class CotrainRunner(BaseRunner):
         configured_real_workers = (
             min(self._real_env_workers(), self._ngpu()) if self._ngpu() > 0 else 1
         )
-        real_worker_epochs = self._real_rollout_epochs_by_worker(
-            int(configured_real_workers)
-        )
+        real_worker_epochs = self._real_rollout_epochs_by_worker(int(configured_real_workers))
         return (
             sum(real_worker_epochs)
             * self._real_envs_per_worker()
@@ -2641,9 +2610,7 @@ class CotrainRunner(BaseRunner):
         version = int(payload.get("format_version", 1) or 1)
         rng_keys = ("rng", "actor_rng_by_rank", "learner_rng_by_rank")
         if version >= CHECKPOINT_FORMAT_VERSION:
-            missing = [
-                key for key in rng_keys if key not in payload or payload[key] is None
-            ]
+            missing = [key for key in rng_keys if key not in payload or payload[key] is None]
             if missing:
                 raise RuntimeError(
                     f"format v{CHECKPOINT_FORMAT_VERSION} manual cotrain checkpoint "
@@ -2671,9 +2638,7 @@ class CotrainRunner(BaseRunner):
                     resume_step,
                 ).wait()
 
-        if version < CHECKPOINT_FORMAT_VERSION and not any(
-            key in payload for key in rng_keys
-        ):
+        if version < CHECKPOINT_FORMAT_VERSION and not any(key in payload for key in rng_keys):
             _warn_legacy_manual_rng_once()
             return
 

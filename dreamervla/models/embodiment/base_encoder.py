@@ -23,6 +23,4 @@ class BaseEncoder(torch.nn.Module, ABC):
         action_mask: torch.Tensor | None = None,
         meta: list[dict[str, object]] | None = None,
     ) -> EncoderInputBatch:
-        return build_encoder_input_batch(
-            obs, action=action, action_mask=action_mask, meta=meta
-        )
+        return build_encoder_input_batch(obs, action=action, action_mask=action_mask, meta=meta)

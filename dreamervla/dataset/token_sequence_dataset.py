@@ -122,9 +122,7 @@ class TokenSequenceDataset(BaseDataset):
         self.img_bpe_set = set(self.bpe2img)
         inferred_vocab = max(self.bpe2img.values()) + 1
         self.num_image_tokens_vocab = (
-            inferred_vocab
-            if num_image_tokens_vocab is None
-            else int(num_image_tokens_vocab)
+            inferred_vocab if num_image_tokens_vocab is None else int(num_image_tokens_vocab)
         )
         if self.num_image_tokens_vocab < inferred_vocab:
             raise ValueError(
@@ -188,23 +186,16 @@ class TokenSequenceDataset(BaseDataset):
                     f"block {which_block} has {len(image_bpe)} image tokens, "
                     f"expected {self.n_image_tokens_per_block}"
                 )
-            views.append(
-                torch.tensor([self.bpe2img[tok] for tok in image_bpe], dtype=torch.long)
-            )
+            views.append(torch.tensor([self.bpe2img[tok] for tok in image_bpe], dtype=torch.long))
         return torch.stack(views, dim=0)
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         item = self.source[int(index)]
         seq_ids = item.get("wm_obs_input_ids_seq")
         if not isinstance(seq_ids, list):
-            raise KeyError(
-                "Underlying PretokenizeDataset did not return wm_obs_input_ids_seq"
-            )
+            raise KeyError("Underlying PretokenizeDataset did not return wm_obs_input_ids_seq")
         tokens = torch.stack(
-            [
-                self._extract_image_indices([int(x) for x in step_ids])
-                for step_ids in seq_ids
-            ],
+            [self._extract_image_indices([int(x) for x in step_ids]) for step_ids in seq_ids],
             dim=0,
         )
         actions = item["action_seq"].to(dtype=torch.float32)

@@ -137,8 +137,8 @@ def test_forward_matches_dino_shifted_target_and_excludes_action_from_loss() -> 
     non_action = model.model_dim - model.action_condition_dim
     expected_loss = (z_src[..., :non_action] - z_target[..., :non_action]).square().mean()
     expected_visual_mse = (
-        z_src[..., : model.token_dim] - z_target[..., : model.token_dim]
-    ).square().mean()
+        (z_src[..., : model.token_dim] - z_target[..., : model.token_dim]).square().mean()
+    )
 
     assert torch.equal(captured["z_src"], z_src)
     assert torch.allclose(losses["_loss"], expected_loss)
@@ -155,12 +155,8 @@ def test_forward_matches_dino_shifted_target_and_excludes_action_from_loss() -> 
         dim=-1,
     ).mean()
     assert torch.allclose(losses["hidden_cosine_similarity"], expected_cosine)
-    assert torch.allclose(
-        losses["one_step_cosine_similarity"], expected_one_step_cosine
-    )
-    assert torch.allclose(
-        losses["persistence_cosine_similarity"], expected_one_step_cosine
-    )
+    assert torch.allclose(losses["one_step_cosine_similarity"], expected_one_step_cosine)
+    assert torch.allclose(losses["persistence_cosine_similarity"], expected_one_step_cosine)
     assert not losses["hidden_cosine_similarity"].requires_grad
     assert not losses["one_step_cosine_similarity"].requires_grad
     assert not losses["persistence_cosine_similarity"].requires_grad
@@ -175,9 +171,7 @@ def test_rollout_reuses_predicted_tokens_and_overwrites_future_actions() -> None
         model.action_encoder.patch_embed.bias.zero_()
     tokens = torch.zeros(1, 3, 2, 4)
     proprio = torch.zeros(1, 3, 3)
-    actions = torch.tensor(
-        [[[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0], [9.0, 10.0]]]
-    )
+    actions = torch.tensor([[[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0], [9.0, 10.0]]])
     calls: list[torch.Tensor] = []
 
     def increment_predict(self, z: torch.Tensor) -> torch.Tensor:
@@ -222,8 +216,7 @@ def test_predictor_is_numerically_identical_to_local_upstream_dino_wm() -> None:
     source = Path(
         os.environ.get(
             "DINO_WM_REFERENCE_VIT",
-            Path(__file__).resolve().parents[3]
-            / "Related_Work/worldmodel/dino_wm/models/vit.py",
+            Path(__file__).resolve().parents[3] / "Related_Work/worldmodel/dino_wm/models/vit.py",
         )
     )
     if not source.is_file():

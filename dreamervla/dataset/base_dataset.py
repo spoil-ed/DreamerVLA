@@ -53,9 +53,7 @@ class BaseDataset(Dataset[dict[str, Any]], ABC):
         if nested_files:
             if task_suite_name == "all":
                 return nested_files
-            filtered = [
-                path for path in nested_files if path.parent.name == task_suite_name
-            ]
+            filtered = [path for path in nested_files if path.parent.name == task_suite_name]
             if filtered:
                 return filtered
 
@@ -70,9 +68,7 @@ class BaseDataset(Dataset[dict[str, Any]], ABC):
 
     @classmethod
     def list_demo_keys(cls, data_group: h5py.Group) -> list[str]:
-        demo_keys = [
-            key for key in data_group.keys() if cls.extract_demo_index(key) >= 0
-        ]
+        demo_keys = [key for key in data_group.keys() if cls.extract_demo_index(key) >= 0]
         return sorted(demo_keys, key=cls.extract_demo_index)
 
     @staticmethod

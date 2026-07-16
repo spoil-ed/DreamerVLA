@@ -37,8 +37,14 @@ def set_runtime_env(gpu_id: str | int | None = None) -> None:
     os.environ.setdefault("PYOPENGL_PLATFORM", "osmesa")
 
 
-def ensure_openvla_oft_importable(openvla_oft_root: str | Path | None = None, *, chdir: bool = True) -> Path:
-    root = Path(openvla_oft_root).expanduser().resolve() if openvla_oft_root else default_openvla_oft_root()
+def ensure_openvla_oft_importable(
+    openvla_oft_root: str | Path | None = None, *, chdir: bool = True
+) -> Path:
+    root = (
+        Path(openvla_oft_root).expanduser().resolve()
+        if openvla_oft_root
+        else default_openvla_oft_root()
+    )
     if not root.is_dir():
         raise FileNotFoundError(f"OpenVLA-OFT root not found: {root}")
     root_s = str(root)
@@ -53,7 +59,9 @@ def checkpoint_has_component(checkpoint: str | Path, component: str) -> bool:
     return any(Path(checkpoint).expanduser().resolve().glob(f"{component}--*_checkpoint.pt"))
 
 
-def resolve_unnorm_key(model: Any, task_suite_name: str, requested_unnorm_key: str | None = None) -> str:
+def resolve_unnorm_key(
+    model: Any, task_suite_name: str, requested_unnorm_key: str | None = None
+) -> str:
     norm_stats = getattr(model, "norm_stats", None)
     if norm_stats is None:
         raise AttributeError("OpenVLA-OFT model does not expose norm_stats")
@@ -168,8 +176,12 @@ class OpenVLAOFTObsActionPolicy:
             use_wandb=False,
         )
 
-        model, action_head, proprio_projector, noisy_action_projector, processor = initialize_model(cfg)
-        cfg.unnorm_key = resolve_unnorm_key(model, task_suite_name, unnorm_key or getattr(cfg, "unnorm_key", ""))
+        model, action_head, proprio_projector, noisy_action_projector, processor = initialize_model(
+            cfg
+        )
+        cfg.unnorm_key = resolve_unnorm_key(
+            model, task_suite_name, unnorm_key or getattr(cfg, "unnorm_key", "")
+        )
 
         return cls(
             cfg=cfg,

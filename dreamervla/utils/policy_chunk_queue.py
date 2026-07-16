@@ -26,18 +26,16 @@ class PolicyChunkActionQueue:
         deterministic: bool,
     ) -> np.ndarray:
         if not self._pending:
-            action_chunk, _log_prob, _extra = policy({
-                "mode": "sample",
-                "hidden": hidden,
-                "deterministic": bool(deterministic),
-                "return_chunk": True,
-            })
+            action_chunk, _log_prob, _extra = policy(
+                {
+                    "mode": "sample",
+                    "hidden": hidden,
+                    "deterministic": bool(deterministic),
+                    "return_chunk": True,
+                }
+            )
             chunk_np = (
-                action_chunk.reshape(-1, action_chunk.shape[-1])
-                .detach()
-                .cpu()
-                .float()
-                .numpy()
+                action_chunk.reshape(-1, action_chunk.shape[-1]).detach().cpu().float().numpy()
             )
             collect_steps = self.collect_chunk_steps
             if collect_steps <= 0:

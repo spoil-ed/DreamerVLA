@@ -48,9 +48,7 @@ def test_collect_spawn_child_applies_libero_helper_before_env_build(monkeypatch)
         events.append(("build", cfg.get("render_backend")))
         return _Env()
 
-    monkeypatch.setattr(
-        env_worker, "apply_libero_render_regime", fake_apply, raising=False
-    )
+    monkeypatch.setattr(env_worker, "apply_libero_render_regime", fake_apply, raising=False)
     monkeypatch.setattr(env_worker, "_build_env_from_cfg", fake_build)
 
     conn = _Pipe()
@@ -87,9 +85,7 @@ def test_collect_inproc_path_applies_libero_helper_before_env_build(monkeypatch)
         events.append(("build", cfg.get("render_backend")))
         return _Env()
 
-    monkeypatch.setattr(
-        env_worker, "apply_libero_render_regime", fake_apply, raising=False
-    )
+    monkeypatch.setattr(env_worker, "apply_libero_render_regime", fake_apply, raising=False)
     monkeypatch.setattr(env_worker, "_build_env_from_cfg", fake_build)
 
     worker._init_inproc()

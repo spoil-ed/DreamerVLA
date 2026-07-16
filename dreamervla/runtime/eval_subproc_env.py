@@ -147,9 +147,7 @@ def make_libero_env_fn(
     def _env_fn() -> Any:
         from dreamervla.utils.egl_device import apply_libero_render_regime
 
-        apply_libero_render_regime(
-            str(render_backend), int(render_shard_id), list(render_gpu_pool)
-        )
+        apply_libero_render_regime(str(render_backend), int(render_shard_id), list(render_gpu_pool))
         from libero.libero.envs import OffScreenRenderEnv
 
         env = OffScreenRenderEnv(

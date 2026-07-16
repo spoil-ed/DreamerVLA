@@ -40,9 +40,7 @@ def get_model_config_and_input_processor(cfg: DictConfig):
     AutoImageProcessor.register(OpenVLAOFTConfig, PrismaticImageProcessor)
     AutoProcessor.register(OpenVLAOFTConfig, PrismaticProcessorOFT)
 
-    model_config = OpenVLAOFTConfig.from_pretrained(
-        cfg.model_path, center_crop=cfg.center_crop
-    )
+    model_config = OpenVLAOFTConfig.from_pretrained(cfg.model_path, center_crop=cfg.center_crop)
     image_processor = PrismaticImageProcessor.from_pretrained(
         cfg.model_path, trust_remote_code=True
     )

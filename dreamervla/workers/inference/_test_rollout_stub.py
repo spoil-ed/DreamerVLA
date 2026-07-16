@@ -73,14 +73,11 @@ class StubRolloutBundle:
         for prep in preps:
             seed = int(prep["seed"])
             action_chunk = [
-                np.full((self._action_dim,), float(seed) + j, dtype=np.float32)
-                for j in range(8)
+                np.full((self._action_dim,), float(seed) + j, dtype=np.float32) for j in range(8)
             ]
             flat_hidden = np.full((self._hidden_dim,), float(seed), dtype=np.float16)
             lang_emb = (
-                np.full((2,), float(seed) + 0.5, dtype=np.float16)
-                if self._emit_lang
-                else None
+                np.full((2,), float(seed) + 0.5, dtype=np.float16) if self._emit_lang else None
             )
             out.append(StubDecodeOutput(action_chunk, flat_hidden, lang_emb))
         return out

@@ -185,10 +185,7 @@ class WorkerGroupFuncResult:
     def wait(self) -> list[Any]:
         if all(isinstance(ref, ray.ObjectRef) for ref in self.refs):
             return list(ray.get(self.refs))
-        return [
-            ray.get(ref) if isinstance(ref, ray.ObjectRef) else ref
-            for ref in self.refs
-        ]
+        return [ray.get(ref) if isinstance(ref, ray.ObjectRef) else ref for ref in self.refs]
 
     def done(self) -> bool:
         if not self.refs:

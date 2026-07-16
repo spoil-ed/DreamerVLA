@@ -40,21 +40,15 @@ def normalize_vla_encoder_state_for_single_process_eval(payload: dict[str, Any])
 def checkpoint_cfg_from_payload(payload: dict[str, Any]) -> DictConfig:
     cfg = payload.get("cfg")
     if cfg is None:
-        raise RuntimeError(
-            "Dreamer checkpoint has no saved cfg; cannot rebuild Dreamer modules."
-        )
+        raise RuntimeError("Dreamer checkpoint has no saved cfg; cannot rebuild Dreamer modules.")
     if isinstance(cfg, DictConfig):
         return copy.deepcopy(cfg)
     if isinstance(cfg, dict):
         return OmegaConf.create(copy.deepcopy(cfg))
-    raise TypeError(
-        f"Dreamer checkpoint cfg must be DictConfig or dict, got {type(cfg).__name__}"
-    )
+    raise TypeError(f"Dreamer checkpoint cfg must be DictConfig or dict, got {type(cfg).__name__}")
 
 
-def real_relabel_sparse_rewards(
-    success: bool, finish_step: int, max_steps: int
-) -> list[float]:
+def real_relabel_sparse_rewards(success: bool, finish_step: int, max_steps: int) -> list[float]:
     length = max(1, min(int(finish_step), int(max_steps)))
     rewards = [0.0] * length
     if success:
@@ -85,9 +79,7 @@ def array_summary(value: np.ndarray | None) -> dict[str, Any] | None:
 
 
 def action_clip_bounds() -> tuple[np.ndarray, np.ndarray]:
-    min_values = np.array(
-        [-0.9375, -0.9375, -0.9375, -0.24214286, -0.375, -0.36428571, -1.0]
-    )
+    min_values = np.array([-0.9375, -0.9375, -0.9375, -0.24214286, -0.375, -0.36428571, -1.0])
     max_values = np.array([0.9375, 0.9375, 0.9375, 0.34821429, 0.375, 0.375, 1.0])
     return min_values, max_values
 

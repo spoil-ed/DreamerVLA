@@ -32,9 +32,7 @@ class FSDP2Strategy(FSDPStrategyBase):
                 fully_shard,
             )
         except ImportError as exc:  # pragma: no cover - depends on torch build
-            raise RuntimeError(
-                "FSDP2 (fully_shard) requires a newer torch build"
-            ) from exc
+            raise RuntimeError("FSDP2 (fully_shard) requires a newer torch build") from exc
 
         kwargs: dict[str, object] = {}
         if self.param_dtype is not torch.float32:

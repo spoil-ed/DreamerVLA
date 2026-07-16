@@ -33,11 +33,17 @@ def test_scatter_matches_loop_representative():
     finish_step = torch.tensor([0, 3, 2, 4, 99, 4])
     complete = torch.tensor([True, False, True, True, True, False])
     out = _build_reward_tensor(
-        batch=batch, max_steps=max_steps, chunk_size=2,
-        finish_step=finish_step, complete=complete,
+        batch=batch,
+        max_steps=max_steps,
+        chunk_size=2,
+        finish_step=finish_step,
+        complete=complete,
     )
     ref = _loop_oracle(
-        batch=batch, max_steps=max_steps, finish_step=finish_step, complete=complete,
+        batch=batch,
+        max_steps=max_steps,
+        finish_step=finish_step,
+        complete=complete,
     )
     assert torch.equal(out, ref), (out, ref)
     assert out.dtype == torch.float32 and out.shape == (batch, max_steps)
@@ -49,11 +55,17 @@ def test_scatter_matches_loop_negative_finish_clamps():
     finish_step = torch.tensor([-7, 1, 2])
     complete = torch.tensor([True, True, False])
     out = _build_reward_tensor(
-        batch=batch, max_steps=max_steps, chunk_size=1,
-        finish_step=finish_step, complete=complete,
+        batch=batch,
+        max_steps=max_steps,
+        chunk_size=1,
+        finish_step=finish_step,
+        complete=complete,
     )
     ref = _loop_oracle(
-        batch=batch, max_steps=max_steps, finish_step=finish_step, complete=complete,
+        batch=batch,
+        max_steps=max_steps,
+        finish_step=finish_step,
+        complete=complete,
     )
     assert torch.equal(out, ref), (out, ref)
 
@@ -63,15 +75,20 @@ def test_scatter_all_incomplete_is_zero():
     finish_step = torch.tensor([0, 1, 2, 0])
     complete = torch.zeros(batch, dtype=torch.bool)
     out = _build_reward_tensor(
-        batch=batch, max_steps=max_steps, chunk_size=1,
-        finish_step=finish_step, complete=complete,
+        batch=batch,
+        max_steps=max_steps,
+        chunk_size=1,
+        finish_step=finish_step,
+        complete=complete,
     )
     assert torch.equal(out, torch.zeros((batch, max_steps), dtype=torch.float32))
 
 
 def test_scatter_zero_max_steps_early_return():
     out = _build_reward_tensor(
-        batch=3, max_steps=0, chunk_size=1,
+        batch=3,
+        max_steps=0,
+        chunk_size=1,
         finish_step=torch.tensor([0, 0, 0]),
         complete=torch.tensor([True, True, True]),
     )

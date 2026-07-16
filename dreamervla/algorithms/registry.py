@@ -78,9 +78,7 @@ def get_actor_update_route(name: str) -> ActorUpdateRoute:
 def actor_update_names() -> tuple[str, ...]:
     """Return canonical registered actor-update names."""
 
-    return tuple(
-        sorted({route.name for route in _ACTOR_UPDATE_ROUTES.values()})
-    )
+    return tuple(sorted({route.name for route in _ACTOR_UPDATE_ROUTES.values()}))
 
 
 register_actor_update_route(

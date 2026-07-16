@@ -41,8 +41,7 @@ class ChunkEvalTally:
         actions = np.asarray(chunk_actions)
         if actions.ndim < 2:
             raise ValueError(
-                "chunk eval policy_fn must return actions with shape "
-                "[num_envs, chunk_steps, ...]"
+                "chunk eval policy_fn must return actions with shape [num_envs, chunk_steps, ...]"
             )
         self.env_chunk_steps += int(actions.shape[0])
         self.env_action_steps += int(actions.shape[0] * actions.shape[1])
@@ -69,9 +68,7 @@ class ChunkEvalTally:
             }
             for task_id, results in sorted(self.records().items())
         ]
-        return summarize_libero_task_success(
-            records, episodes_per_task=episodes_per_task
-        )
+        return summarize_libero_task_success(records, episodes_per_task=episodes_per_task)
 
 
 def run_rlinf_chunk_eval(
@@ -100,9 +97,7 @@ def run_rlinf_chunk_eval(
             obs_before = obs
             chunk_actions = policy_fn(obs)
             tally.record_chunk_step(chunk_actions)
-            obs_list, rewards, terms, truncs, infos_list = env.chunk_step(
-                chunk_actions
-            )
+            obs_list, rewards, terms, truncs, infos_list = env.chunk_step(chunk_actions)
             obs = obs_list[-1]
             infos = infos_list[-1]
             current_dones = np.logical_or(terms, truncs)[:, -1]
@@ -114,9 +109,7 @@ def run_rlinf_chunk_eval(
             episode_info = None
             if newly_done.any():
                 episode_info = (
-                    infos["final_info"]["episode"]
-                    if "final_info" in infos
-                    else infos["episode"]
+                    infos["final_info"]["episode"] if "final_info" in infos else infos["episode"]
                 )
                 tally.add(episode_info, newly_done)
             if on_chunk is not None:

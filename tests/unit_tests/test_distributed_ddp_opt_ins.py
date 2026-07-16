@@ -66,9 +66,7 @@ def test_wrap_trainable_module_find_unused_parameters_opt_in(monkeypatch):
     _patch_ddp(monkeypatch)
     helper = _make_helper(world_size=2)
 
-    wrapped = helper.wrap_trainable_module(
-        torch.nn.Linear(2, 2), find_unused_parameters=True
-    )
+    wrapped = helper.wrap_trainable_module(torch.nn.Linear(2, 2), find_unused_parameters=True)
 
     assert wrapped.kwargs["find_unused_parameters"] is True
     # the other opt-in stays at its default
@@ -79,9 +77,7 @@ def test_wrap_trainable_module_broadcast_buffers_opt_in(monkeypatch):
     _patch_ddp(monkeypatch)
     helper = _make_helper(world_size=2)
 
-    wrapped = helper.wrap_trainable_module(
-        torch.nn.Linear(2, 2), broadcast_buffers=True
-    )
+    wrapped = helper.wrap_trainable_module(torch.nn.Linear(2, 2), broadcast_buffers=True)
 
     assert wrapped.kwargs["broadcast_buffers"] is True
     assert wrapped.kwargs["find_unused_parameters"] is False
@@ -159,22 +155,14 @@ def test_wrap_world_model_still_uses_hardcoded_defaults(monkeypatch):
 def _patch_init(monkeypatch, captured: dict) -> None:
     monkeypatch.setenv("WORLD_SIZE", "2")
     monkeypatch.setenv("LOCAL_RANK", "0")
-    monkeypatch.setattr(
-        "dreamervla.runtime.distributed.dist.is_available", lambda: True
-    )
-    monkeypatch.setattr(
-        "dreamervla.runtime.distributed.dist.is_initialized", lambda: False
-    )
-    monkeypatch.setattr(
-        "dreamervla.runtime.distributed.torch.cuda.is_available", lambda: False
-    )
+    monkeypatch.setattr("dreamervla.runtime.distributed.dist.is_available", lambda: True)
+    monkeypatch.setattr("dreamervla.runtime.distributed.dist.is_initialized", lambda: False)
+    monkeypatch.setattr("dreamervla.runtime.distributed.torch.cuda.is_available", lambda: False)
 
     def _fake_init(**kwargs):  # noqa: ANN003
         captured.update(kwargs)
 
-    monkeypatch.setattr(
-        "dreamervla.runtime.distributed.dist.init_process_group", _fake_init
-    )
+    monkeypatch.setattr("dreamervla.runtime.distributed.dist.init_process_group", _fake_init)
 
 
 def test_initialize_passes_nccl_timeout_when_set(monkeypatch):

@@ -33,9 +33,7 @@ def test_cotrain_launcher_accepts_atomic_warm_start_pair(
     classifier = tmp_path / "classifier.ckpt"
     wm.touch()
     classifier.touch()
-    launch = build_launch(
-        ["--wm_ckpt", str(wm), "--cls_ckpt", str(classifier)]
-    )
+    launch = build_launch(["--wm_ckpt", str(wm), "--cls_ckpt", str(classifier)])
 
     assert f"init.world_model_state_ckpt={json.dumps(str(wm.resolve()))}" in launch.command
     assert f"init.classifier_state_ckpt={json.dumps(str(classifier.resolve()))}" in launch.command
@@ -64,9 +62,7 @@ def test_cotrain_launcher_matches_classifier_head_to_checkpoint(
         },
         classifier,
     )
-    launch = build_launch(
-        ["--wm_ckpt", str(wm), "--cls_ckpt", str(classifier)]
-    )
+    launch = build_launch(["--wm_ckpt", str(wm), "--cls_ckpt", str(classifier)])
 
     assert launch.cfg.ray_components.classifier.kwargs.output_dim == 2
     assert launch.cfg.learner.train_cfg.classifier_loss_type == "ce"
@@ -108,9 +104,7 @@ def test_cotrain_launcher_accepts_huggingface_component_directories(
     classifier.mkdir()
     (wm / "config.json").write_text("{}", encoding="utf-8")
     (classifier / "config.json").write_text("{}", encoding="utf-8")
-    launch = build_launch(
-        ["--wm_ckpt", str(wm), "--cls_ckpt", str(classifier)]
-    )
+    launch = build_launch(["--wm_ckpt", str(wm), "--cls_ckpt", str(classifier)])
 
     assert f"init.world_model_state_ckpt={json.dumps(str(wm.resolve()))}" in launch.command
     assert f"init.classifier_state_ckpt={json.dumps(str(classifier.resolve()))}" in launch.command

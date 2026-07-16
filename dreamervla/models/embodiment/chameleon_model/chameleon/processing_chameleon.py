@@ -15,7 +15,6 @@
 Processor class for Chameleon.
 """
 
-
 from transformers.feature_extraction_utils import BatchFeature
 from transformers.image_utils import ImageInput
 from transformers.processing_utils import ProcessorMixin
@@ -60,9 +59,7 @@ class ChameleonProcessor(ProcessorMixin):
     ):
         self.image_seq_length = image_seq_length
         self.image_token = image_token
-        self.image_start_token = (
-            "<racm3:break>"  # fixed tokens for start and end, so can hardcode
-        )
+        self.image_start_token = "<racm3:break>"  # fixed tokens for start and end, so can hardcode
         self.image_end_token = "<eoss>"
         super().__init__(image_processor, tokenizer)
 
@@ -124,9 +121,7 @@ class ChameleonProcessor(ProcessorMixin):
         if isinstance(text, str):
             text = [text]
         elif not isinstance(text, list) and not isinstance(text[0], str):
-            raise TypeError(
-                "Invalid input text. Please provide a string, or a list of strings"
-            )
+            raise TypeError("Invalid input text. Please provide a string, or a list of strings")
 
         # Replace the image token with the expanded image token sequence
         prompt_strings = []

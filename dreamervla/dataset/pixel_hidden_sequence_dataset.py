@@ -68,13 +68,9 @@ class PixelHiddenSequenceDataset(PixelSequenceDataset):
         )
         self.hidden_dir = self.resolve_project_path(hidden_dir)
         if not self.hidden_dir.exists():
-            raise FileNotFoundError(
-                f"Hidden sidecar directory does not exist: {self.hidden_dir}"
-            )
+            raise FileNotFoundError(f"Hidden sidecar directory does not exist: {self.hidden_dir}")
         if str(hidden_key) != DEFAULT_HIDDEN_KEY:
-            raise ValueError(
-                f"hidden_key is fixed to {DEFAULT_HIDDEN_KEY!r}, got {hidden_key!r}"
-            )
+            raise ValueError(f"hidden_key is fixed to {DEFAULT_HIDDEN_KEY!r}, got {hidden_key!r}")
         if not bool(require_preprocess_config):
             raise ValueError("canonical hidden-token sidecars always require metadata")
         self.hidden_key = DEFAULT_HIDDEN_KEY
@@ -199,22 +195,16 @@ class PixelHiddenSequenceDataset(PixelSequenceDataset):
             got = self._as_bool(config.get("include_state", False))
             expected = self._as_bool(expected_include_state)
             if got != expected:
-                errors.append(
-                    f"include_state mismatch: sidecar={got!r}, expected={expected!r}"
-                )
+                errors.append(f"include_state mismatch: sidecar={got!r}, expected={expected!r}")
         if expected_rotate_images_180 is not None:
             got = self._as_bool(config.get("rotate_images_180", False))
             expected = self._as_bool(expected_rotate_images_180)
             if got != expected:
-                errors.append(
-                    "rotate_images_180 mismatch: "
-                    f"sidecar={got!r}, expected={expected!r}"
-                )
+                errors.append(f"rotate_images_180 mismatch: sidecar={got!r}, expected={expected!r}")
         if errors:
             joined = "\n  - ".join(errors)
             raise ValueError(
-                f"Hidden sidecar metadata does not match this run: {self.hidden_dir}\n"
-                f"  - {joined}"
+                f"Hidden sidecar metadata does not match this run: {self.hidden_dir}\n  - {joined}"
             )
         return config
 
@@ -237,9 +227,7 @@ class PixelHiddenSequenceDataset(PixelSequenceDataset):
         return None
 
     def _first_sidecar_hidden_dim(self, hidden_key: str) -> int | None:
-        return self._flat_hidden_dim_from_shape(
-            self._first_sidecar_hidden_shape(hidden_key)
-        )
+        return self._flat_hidden_dim_from_shape(self._first_sidecar_hidden_shape(hidden_key))
 
     def _hidden_path_for_source(self, source_path: str | Path) -> Path:
         return self.hidden_dir / Path(source_path).name
@@ -250,9 +238,7 @@ class PixelHiddenSequenceDataset(PixelSequenceDataset):
         handle = self._hidden_file_cache.get(key)
         if handle is None:
             if not hidden_path.is_file():
-                raise FileNotFoundError(
-                    f"Missing hidden sidecar for {source_path}: {hidden_path}"
-                )
+                raise FileNotFoundError(f"Missing hidden sidecar for {source_path}: {hidden_path}")
             handle = h5py.File(hidden_path, mode="r", swmr=True, libver="latest")
             self._hidden_file_cache[key] = handle
         return handle
@@ -268,9 +254,7 @@ class PixelHiddenSequenceDataset(PixelSequenceDataset):
         handle = self._lang_emb_file_cache.get(key)
         if handle is None:
             if not lang_path.is_file():
-                raise FileNotFoundError(
-                    f"Missing language sidecar for {source_path}: {lang_path}"
-                )
+                raise FileNotFoundError(f"Missing language sidecar for {source_path}: {lang_path}")
             handle = h5py.File(lang_path, mode="r", swmr=True, libver="latest")
             self._lang_emb_file_cache[key] = handle
         return handle

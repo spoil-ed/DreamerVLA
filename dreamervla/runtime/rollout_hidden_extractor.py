@@ -33,8 +33,7 @@ def hidden_token_from_projected(
     keys = tuple(image_keys)
     if len(keys) != 1:
         raise ValueError(
-            "OpenVLA-OFT hidden-token mainline requires one image; "
-            f"got image_keys={keys!r}"
+            f"OpenVLA-OFT hidden-token mainline requires one image; got image_keys={keys!r}"
         )
     if int(patches_per_image) != 256:
         raise ValueError(
@@ -43,8 +42,7 @@ def hidden_token_from_projected(
         )
     if projected.ndim != 3 or tuple(projected.shape[1:]) != (256, 4096):
         raise ValueError(
-            "projected vision tokens must have shape [B,256,4096], "
-            f"got {tuple(projected.shape)}"
+            f"projected vision tokens must have shape [B,256,4096], got {tuple(projected.shape)}"
         )
     return projected
 
@@ -118,14 +116,10 @@ class OFTRolloutHiddenExtractor:
         obs_hidden_source: str = "hidden_token",
     ) -> None:
         self._policy = policy
-        self._image_keys: list[str] = (
-            image_keys if image_keys is not None else ["agentview_rgb"]
-        )
+        self._image_keys: list[str] = image_keys if image_keys is not None else ["agentview_rgb"]
         self._history = int(history)
         if len(self._image_keys) != 1 or self._history != 1:
-            raise ValueError(
-                "OpenVLA-OFT hidden-token mainline requires one image and history=1"
-            )
+            raise ValueError("OpenVLA-OFT hidden-token mainline requires one image and history=1")
         if bool(getattr(policy, "use_proprio", False)):
             raise ValueError("OpenVLA-OFT hidden-token mainline does not include proprio")
         self._rotate_images_180 = bool(rotate_images_180)
@@ -250,9 +244,7 @@ class OFTRolloutHiddenExtractor:
 
         model = self._policy.vla
         processor = self._policy.processor
-        prompt = (
-            f"In: What action should the robot take to {task_description.lower()}?\nOut:"
-        )
+        prompt = f"In: What action should the robot take to {task_description.lower()}?\nOut:"
 
         # ── 1. Build image list: [t-h+1..t] × [view_0, view_1, ...] ──────────
         # This is the same interleaving as the offline preprocessor:
@@ -329,6 +321,7 @@ class OFTRolloutHiddenExtractor:
         prep = self.prepare(obs, task_description)
         return self._decoder.predict_batch([prep])[0]
 
+
 # ── batched (step_batch) inference ──────────────────────────────────────────
 # Feeds K prepared observations through ONE VLA forward.  The upstream OFT
 # ``predict_action`` wrapper has two batch==1 assumptions that break for B>1:
@@ -358,9 +351,7 @@ def _left_pad_batch(
     max_len = max(lengths)
     ref = input_ids_list[0]
     out_ids = torch.full((batch, max_len), int(pad_token_id), dtype=ref.dtype, device=ref.device)
-    out_mask = torch.zeros(
-        (batch, max_len), dtype=attention_mask_list[0].dtype, device=ref.device
-    )
+    out_mask = torch.zeros((batch, max_len), dtype=attention_mask_list[0].dtype, device=ref.device)
     for i, (ids, msk, length) in enumerate(
         zip(input_ids_list, attention_mask_list, lengths, strict=True)
     ):
@@ -444,9 +435,7 @@ class OFTBatchedDecoder:
         """The only supported decoder mode is discrete."""
         return True
 
-    def predict_batch(
-        self, preps: list[dict[str, Any]]
-    ) -> list[OFTDecodeOutput]:
+    def predict_batch(self, preps: list[dict[str, Any]]) -> list[OFTDecodeOutput]:
         """One VLA forward over K preps -> per-env tuple-compatible decode output.
 
         Preps MAY have different prompt (``input_ids``) lengths — different tasks: they are
@@ -516,16 +505,15 @@ class OFTBatchedDecoder:
             )
             token_ids = native.full_action_logits.argmax(dim=-1)
             action_classes = self._policy.action_token_ids_to_classes(token_ids)
-            normalized = self._policy.action_classes_to_normalized_actions(
-                action_classes
-            ).reshape(
+            normalized = self._policy.action_classes_to_normalized_actions(action_classes).reshape(
                 input_ids.shape[0], self._num_chunks, self._action_dim
             )
-        actions = model._unnormalize_actions(
-            normalized.detach().cpu().numpy(), self._unnorm_key
-        )
-        return actions, hidden_token, native.language_embedding, token_ids.reshape(
-            input_ids.shape[0], self._num_chunks, self._action_dim
+        actions = model._unnormalize_actions(normalized.detach().cpu().numpy(), self._unnorm_key)
+        return (
+            actions,
+            hidden_token,
+            native.language_embedding,
+            token_ids.reshape(input_ids.shape[0], self._num_chunks, self._action_dim),
         )
 
     def _decode(

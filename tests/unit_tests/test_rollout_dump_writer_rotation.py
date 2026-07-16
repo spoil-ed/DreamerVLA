@@ -33,9 +33,7 @@ def _steps(T: int) -> list[dict]:
                     "gripper_states": np.zeros(2, np.float64),
                     "joint_states": np.zeros(7, np.float64),
                 },
-                "obs_embedding": np.broadcast_to(
-                    np.asarray(t, dtype=np.float16), (256, 4096)
-                ),
+                "obs_embedding": np.broadcast_to(np.asarray(t, dtype=np.float16), (256, 4096)),
             }
         )
     return out
@@ -52,7 +50,10 @@ def _write(
     prefix="r0_shard",
 ):
     with RotatingRolloutDumpWriter(
-        reward, hidden, shard_prefix=prefix, demos_per_shard=demos_per_shard,
+        reward,
+        hidden,
+        shard_prefix=prefix,
+        demos_per_shard=demos_per_shard,
         start_index=start_index,
     ) as w:
         for i in range(n):
@@ -66,9 +67,7 @@ def _write(
             )
 
 
-def test_rotates_every_n_demos_and_restarts_demo_index(
-    tmp_path, hidden_token_preprocess_config
-):
+def test_rotates_every_n_demos_and_restarts_demo_index(tmp_path, hidden_token_preprocess_config):
     reward, hidden = tmp_path / "reward", tmp_path / "hidden"
     _write(
         reward,
@@ -118,9 +117,7 @@ def test_every_shard_is_independently_readable_with_metadata(
                 assert hf["data"][key]["obs_embedding"].shape[1:] == (256, 4096)
 
 
-def test_start_index_offsets_shard_names_for_resume(
-    tmp_path, hidden_token_preprocess_config
-):
+def test_start_index_offsets_shard_names_for_resume(tmp_path, hidden_token_preprocess_config):
     reward, hidden = tmp_path / "reward", tmp_path / "hidden"
     _write(
         reward,

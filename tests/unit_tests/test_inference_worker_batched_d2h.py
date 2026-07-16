@@ -22,10 +22,7 @@ class _StubEncoder:
     """Return a deterministic [N, HIDDEN] embedding (one row per obs)."""
 
     def encode_obs_batch(self, obs_batch: list[dict[str, Any]]) -> torch.Tensor:
-        rows = [
-            torch.full((HIDDEN,), float(obs["seed"]), dtype=torch.float32)
-            for obs in obs_batch
-        ]
+        rows = [torch.full((HIDDEN,), float(obs["seed"]), dtype=torch.float32) for obs in obs_batch]
         return torch.stack(rows, dim=0)
 
 

@@ -3,9 +3,7 @@ def test_inference_worker_can_disable_obs_embedding_sidecar():
 
     worker = InferenceWorker(
         {
-            "encoder": {
-                "target": "dreamervla.workers.inference._test_models:TinyEncoder"
-            },
+            "encoder": {"target": "dreamervla.workers.inference._test_models:TinyEncoder"},
             "world_model": {
                 "target": "dreamervla.workers.actor._test_models:TinyLumosWorldModel",
                 "kwargs": {"hidden_dim": 4, "action_dim": 7},

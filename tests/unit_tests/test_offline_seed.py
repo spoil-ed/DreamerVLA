@@ -31,24 +31,26 @@ def _demo_steps(T, success, *, include_lang=False):
         ee_pos = np.full(3, 1.0 + t, np.float64)
         ee_ori = np.full(3, 10.0 + t, np.float64)
         gripper = np.full(2, 100.0 + t, np.float64)
-        steps.append({
-            "actions": np.full(7, t, np.float64),
-            "rewards": np.float32(0.0),
-            "sparse_rewards": np.uint8(1 if (success and t == T - 1) else 0),
-            "dones": np.uint8(1 if t == T - 1 else 0),
-            "robot_states": np.zeros(9, np.float64),
-            "states": np.zeros(5, np.float64),
-            "obs": {
-                "agentview_rgb": np.zeros((256, 256, 3), np.uint8),
-                "eye_in_hand_rgb": np.zeros((256, 256, 3), np.uint8),
-                "ee_pos": ee_pos, "ee_ori": ee_ori,
-                "ee_states": np.zeros(6, np.float64), "gripper_states": gripper,
-                "joint_states": np.zeros(7, np.float64),
-            },
-            "obs_embedding": np.broadcast_to(
-                np.asarray(t, dtype=np.float16), (256, 4096)
-            ),
-        })
+        steps.append(
+            {
+                "actions": np.full(7, t, np.float64),
+                "rewards": np.float32(0.0),
+                "sparse_rewards": np.uint8(1 if (success and t == T - 1) else 0),
+                "dones": np.uint8(1 if t == T - 1 else 0),
+                "robot_states": np.zeros(9, np.float64),
+                "states": np.zeros(5, np.float64),
+                "obs": {
+                    "agentview_rgb": np.zeros((256, 256, 3), np.uint8),
+                    "eye_in_hand_rgb": np.zeros((256, 256, 3), np.uint8),
+                    "ee_pos": ee_pos,
+                    "ee_ori": ee_ori,
+                    "ee_states": np.zeros(6, np.float64),
+                    "gripper_states": gripper,
+                    "joint_states": np.zeros(7, np.float64),
+                },
+                "obs_embedding": np.broadcast_to(np.asarray(t, dtype=np.float16), (256, 4096)),
+            }
+        )
         if include_lang:
             steps[-1]["lang_emb"] = np.arange(12, dtype=np.float32) + 0.5
     return steps
@@ -77,8 +79,8 @@ def test_seed_replay_reads_all_demos_with_task_id(tmp_path):
     _write_fixture(rdir, hdir)
     replay = OnlineReplay(capacity=10_000, sequence_length=4, task_ids=(2, 5), rank=0)
     n = seed_replay_from_offline(replay, data_dir=rdir, hidden_dir=hdir)
-    assert n == 2                                    # two episodes added
-    assert replay.num_transitions == 12             # 6 + 6
+    assert n == 2  # two episodes added
+    assert replay.num_transitions == 12  # 6 + 6
     assert {record["source"] for record in replay.episodes} == {"coldstart"}
     batch = replay.sample(2)
     assert set(int(t) for t in batch["task_ids"].tolist()) <= {2, 5}
@@ -164,14 +166,36 @@ def test_seed_replay_caps_episodes_per_task(tmp_path):
     # without overflowing. 3 demos for task 2, 1 for task 5; cap=2 -> 2 + 1 = 3 added.
     rdir, hdir = tmp_path / "reward", tmp_path / "hidden"
     with RolloutDumpWriter(rdir, hdir, "r0_shard.hdf5") as w:
-        w.write_demo(index=0, steps=_demo_steps(6, success=True), preprocess_config=_HIDDEN_TOKEN_CONFIG, task_id=2, episode_id=0)
-        w.write_demo(index=1, steps=_demo_steps(6, success=False), preprocess_config=_HIDDEN_TOKEN_CONFIG, task_id=2, episode_id=1)
-        w.write_demo(index=2, steps=_demo_steps(6, success=True), preprocess_config=_HIDDEN_TOKEN_CONFIG, task_id=2, episode_id=2)
-        w.write_demo(index=3, steps=_demo_steps(6, success=False), preprocess_config=_HIDDEN_TOKEN_CONFIG, task_id=5, episode_id=0)
+        w.write_demo(
+            index=0,
+            steps=_demo_steps(6, success=True),
+            preprocess_config=_HIDDEN_TOKEN_CONFIG,
+            task_id=2,
+            episode_id=0,
+        )
+        w.write_demo(
+            index=1,
+            steps=_demo_steps(6, success=False),
+            preprocess_config=_HIDDEN_TOKEN_CONFIG,
+            task_id=2,
+            episode_id=1,
+        )
+        w.write_demo(
+            index=2,
+            steps=_demo_steps(6, success=True),
+            preprocess_config=_HIDDEN_TOKEN_CONFIG,
+            task_id=2,
+            episode_id=2,
+        )
+        w.write_demo(
+            index=3,
+            steps=_demo_steps(6, success=False),
+            preprocess_config=_HIDDEN_TOKEN_CONFIG,
+            task_id=5,
+            episode_id=0,
+        )
     replay = OnlineReplay(capacity=10_000, sequence_length=4, task_ids=(2, 5), rank=0)
-    n = seed_replay_from_offline(
-        replay, data_dir=rdir, hidden_dir=hdir, max_episodes_per_task=2
-    )
+    n = seed_replay_from_offline(replay, data_dir=rdir, hidden_dir=hdir, max_episodes_per_task=2)
     assert n == 3  # task 2 capped at 2, task 5 has 1
 
 
@@ -198,18 +222,23 @@ def test_seeded_replay_is_training_ready(tmp_path):
     )
 
     assert n == 10
-    assert replay.ready_for_training(
-        min_transitions=40,
-        task_ids=tuple(range(10)),
-        min_episodes_per_task=1,
-    ) is True
+    assert (
+        replay.ready_for_training(
+            min_transitions=40,
+            task_ids=tuple(range(10)),
+            min_episodes_per_task=1,
+        )
+        is True
+    )
 
 
 def test_seed_replay_task_id_fallback(tmp_path):
     # Demo without task_id attr -> use provided default.
     rdir, hdir = tmp_path / "reward", tmp_path / "hidden"
     with RolloutDumpWriter(rdir, hdir, "r0_shard.hdf5") as w:
-        w.write_demo(index=0, steps=_demo_steps(6, success=True), preprocess_config=_HIDDEN_TOKEN_CONFIG)   # no task_id
+        w.write_demo(
+            index=0, steps=_demo_steps(6, success=True), preprocess_config=_HIDDEN_TOKEN_CONFIG
+        )  # no task_id
     replay = OnlineReplay(capacity=10_000, sequence_length=4, task_ids=(0,), rank=0)
     n = seed_replay_from_offline(replay, data_dir=rdir, hidden_dir=hdir, default_task_id=0)
     assert n == 1
@@ -220,7 +249,9 @@ def test_seed_replay_task_id_fallback(tmp_path):
 def test_seed_replay_missing_task_id_raises(tmp_path):
     rdir, hdir = tmp_path / "reward", tmp_path / "hidden"
     with RolloutDumpWriter(rdir, hdir, "r0_shard.hdf5") as w:
-        w.write_demo(index=0, steps=_demo_steps(6, success=True), preprocess_config=_HIDDEN_TOKEN_CONFIG)   # no task_id
+        w.write_demo(
+            index=0, steps=_demo_steps(6, success=True), preprocess_config=_HIDDEN_TOKEN_CONFIG
+        )  # no task_id
     replay = OnlineReplay(capacity=10_000, sequence_length=4, task_ids=(0,), rank=0)
     with pytest.raises(ValueError, match="task_id"):
         seed_replay_from_offline(replay, data_dir=rdir, hidden_dir=hdir)  # no default

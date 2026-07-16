@@ -75,9 +75,7 @@ def test_rank_extrema_issue_two_batched_collectives(monkeypatch):
     def _fake_all_reduce(tensor, op=None):  # noqa: ANN001
         calls.append(op)
 
-    monkeypatch.setattr(
-        "dreamervla.runtime.distributed.dist.all_reduce", _fake_all_reduce
-    )
+    monkeypatch.setattr("dreamervla.runtime.distributed.dist.all_reduce", _fake_all_reduce)
 
     helper.reduce_min_max_dict({"a": 1.0, "b": 2.0, "c": 3.0})
 
@@ -99,9 +97,7 @@ def test_issues_exactly_one_all_reduce_for_multi_key_dict(monkeypatch):
         # identity SUM (single rank) so the value path stays meaningful
         return None
 
-    monkeypatch.setattr(
-        "dreamervla.runtime.distributed.dist.all_reduce", _fake_all_reduce
-    )
+    monkeypatch.setattr("dreamervla.runtime.distributed.dist.all_reduce", _fake_all_reduce)
 
     metrics = {"a": 1.0, "b": 2.0, "c": 3.0, "d": 4.0}
     helper.reduce_mean_dict(metrics)

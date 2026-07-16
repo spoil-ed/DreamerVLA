@@ -39,8 +39,7 @@ def _real_relabel_anchor_loss(
     advantage = real_relabel_batch.get("advantage")
     weight = real_relabel_batch.get("weight")
     if not all(
-        isinstance(x, torch.Tensor)
-        for x in (hidden, action, old_log_prob, advantage, weight)
+        isinstance(x, torch.Tensor) for x in (hidden, action, old_log_prob, advantage, weight)
     ):
         return None, dict(_ZERO_METRICS)
     if hidden.numel() == 0:
@@ -57,15 +56,11 @@ def _real_relabel_anchor_loss(
     old_log_prob = old_log_prob.to(device=log_prob.device, dtype=log_prob.dtype)
     weight = weight.to(device=log_prob.device, dtype=log_prob.dtype).clamp_min(0.0)
     ratio = _ppo_ratio(log_prob, old_log_prob, clip_log_ratio=clip_log_ratio)
-    per_item = _ppo_clip_term(
-        ratio, advantage, clip_low, clip_high, clip_ratio_c=clip_ratio_c
-    )
+    per_item = _ppo_clip_term(ratio, advantage, clip_low, clip_high, clip_ratio_c=clip_ratio_c)
     denom = weight.sum().clamp_min(1.0)
     loss = (per_item * weight).sum() / denom
     clipfrac = (
-        ((ratio.detach() < 1.0 - clip_low) | (ratio.detach() > 1.0 + clip_high))
-        .float()
-        .mean()
+        ((ratio.detach() < 1.0 - clip_low) | (ratio.detach() > 1.0 + clip_high)).float().mean()
     )
     metrics = {
         "real_relabel_applied": 1.0,

@@ -93,56 +93,42 @@ class EmbodiedEvalActionMixin:
             action_np = action_np.reshape(-1, action_np.shape[-1])[0]
         return np.asarray(action_np[:7], dtype=np.float32)
 
-    def _policy_raw_to_env_action_for_compare(
-        self, action_raw: np.ndarray
-    ) -> np.ndarray:
+    def _policy_raw_to_env_action_for_compare(self, action_raw: np.ndarray) -> np.ndarray:
         action_raw = np.asarray(action_raw[:7], dtype=np.float32)
         if bool(getattr(self, "_hidden_action_compare_unnorm", True)):
-            return np.asarray(
-                self._unnorm_actions(action_raw.reshape(1, -1))[0], dtype=np.float32
-            )
+            return np.asarray(self._unnorm_actions(action_raw.reshape(1, -1))[0], dtype=np.float32)
         min_values, max_values = self._action_clip_bounds()
-        return np.clip(action_raw, min_values, max_values).astype(
-            np.float32, copy=False
-        )
+        return np.clip(action_raw, min_values, max_values).astype(np.float32, copy=False)
 
     _action_stats = staticmethod(_eh.action_stats)
 
     def _dreamer_policy_raw_to_env_action(self, action_raw: np.ndarray) -> np.ndarray:
         action = np.asarray(action_raw[:7], dtype=np.float32)
         if self._dreamer_should_unnorm_actions():
-            action = np.asarray(
-                self._unnorm_actions(action.reshape(1, -1))[0], dtype=np.float32
-            )
+            action = np.asarray(self._unnorm_actions(action.reshape(1, -1))[0], dtype=np.float32)
         if bool(getattr(self, "_dreamer_clip_actions", True)):
             min_values, max_values = self._action_clip_bounds()
             action = np.clip(action, min_values, max_values)
-        action_postprocess = str(
-            OmegaConf.select(self.cfg, "eval.action_postprocess", default="none")
-        ).strip().lower()
+        action_postprocess = (
+            str(OmegaConf.select(self.cfg, "eval.action_postprocess", default="none"))
+            .strip()
+            .lower()
+        )
         if action_postprocess in {"openvla_oft", "oft"}:
             from dreamervla.runtime.oft_collect import process_action
 
             action = process_action(action)
         elif action_postprocess not in {"", "none", "false"}:
-            raise ValueError(
-                f"unknown eval.action_postprocess: {action_postprocess!r}"
-            )
+            raise ValueError(f"unknown eval.action_postprocess: {action_postprocess!r}")
         return action.astype(np.float32, copy=False)
 
     def _dreamer_should_unnorm_actions(self) -> bool:
-        setting = OmegaConf.select(
-            self.cfg, "eval.dreamer_unnorm_actions", default="auto"
-        )
+        setting = OmegaConf.select(self.cfg, "eval.dreamer_unnorm_actions", default="auto")
         if isinstance(setting, str):
             normalized = setting.lower()
             if normalized in {"auto", ""}:
-                policy_name = (
-                    self.policy.__class__.__name__ if hasattr(self, "policy") else ""
-                )
-                policy_target = str(
-                    OmegaConf.select(self.cfg, "policy._target_", default="")
-                )
+                policy_name = self.policy.__class__.__name__ if hasattr(self, "policy") else ""
+                policy_target = str(OmegaConf.select(self.cfg, "policy._target_", default=""))
                 return "LatentToOpenVLAHiddenStateActor" in {
                     policy_name,
                     policy_target.rsplit(".", 1)[-1],
@@ -154,18 +140,12 @@ class EmbodiedEvalActionMixin:
         return bool(setting)
 
     def _dreamer_latent_action_source(self) -> str:
-        source = OmegaConf.select(
-            self.cfg, "eval.dreamer_latent_action_source", default=None
-        )
+        source = OmegaConf.select(self.cfg, "eval.dreamer_latent_action_source", default=None)
         if source is None:
-            source = OmegaConf.select(
-                self.cfg, "eval.dreamer_rssm_action_source", default="env"
-            )
+            source = OmegaConf.select(self.cfg, "eval.dreamer_rssm_action_source", default="env")
         source = str(source).strip().lower()
         if source not in {"env", "raw"}:
-            raise ValueError(
-                "eval.dreamer_latent_action_source must be one of: env, raw"
-            )
+            raise ValueError("eval.dreamer_latent_action_source must be one of: env, raw")
         return source
 
     def _dreamer_latent_action_from_raw_env(
@@ -182,23 +162,15 @@ class EmbodiedEvalActionMixin:
             return raw_action
         if self._dreamer_should_unnorm_actions():
             low_np, high_np = self._action_clip_bounds()
-            low = torch.as_tensor(
-                low_np, device=raw_action.device, dtype=raw_action.dtype
-            )
-            high = torch.as_tensor(
-                high_np, device=raw_action.device, dtype=raw_action.dtype
-            )
+            low = torch.as_tensor(low_np, device=raw_action.device, dtype=raw_action.dtype)
+            high = torch.as_tensor(high_np, device=raw_action.device, dtype=raw_action.dtype)
             action = (raw_action + 1.0) * 0.5 * (high - low + 1.0e-8) + low
         else:
             action = raw_action
         if bool(getattr(self, "_dreamer_clip_actions", True)):
             low_np, high_np = self._action_clip_bounds()
-            low = torch.as_tensor(
-                low_np, device=raw_action.device, dtype=raw_action.dtype
-            )
-            high = torch.as_tensor(
-                high_np, device=raw_action.device, dtype=raw_action.dtype
-            )
+            low = torch.as_tensor(low_np, device=raw_action.device, dtype=raw_action.dtype)
+            high = torch.as_tensor(high_np, device=raw_action.device, dtype=raw_action.dtype)
             action = torch.maximum(torch.minimum(action, high), low)
         return action
 
@@ -230,16 +202,12 @@ class EmbodiedEvalActionMixin:
             for row in raw_actions
         ]
         latent_actions = [
-            self._dreamer_latent_action_from_raw_env(raw, env).astype(
-                np.float32, copy=False
-            )
+            self._dreamer_latent_action_from_raw_env(raw, env).astype(np.float32, copy=False)
             for raw, env in zip(raw_actions, env_actions, strict=True)
         ]
         if bool(OmegaConf.select(self.cfg, "eval.log_action_stats", default=False)):
             count = int(getattr(self, "_dreamer_eval_action_log_count", 0))
-            limit = int(
-                OmegaConf.select(self.cfg, "eval.log_action_stats_limit", default=8)
-            )
+            limit = int(OmegaConf.select(self.cfg, "eval.log_action_stats_limit", default=8))
             if count < limit and env_actions:
                 print(
                     "  [Eval][tdmpc-mpc-action] "
@@ -288,9 +256,7 @@ class EmbodiedEvalActionMixin:
             )
             live_action_raw = self._policy_first_action_raw_from_hidden(live_hidden)
             if recon_action_raw is None:
-                recon_action_raw = self._policy_first_action_raw_from_hidden(
-                    recon_hidden
-                )
+                recon_action_raw = self._policy_first_action_raw_from_hidden(recon_hidden)
 
         recon_action_raw = np.asarray(recon_action_raw[:7], dtype=np.float32)
         live_action_env = self._policy_raw_to_env_action_for_compare(live_action_raw)
@@ -310,30 +276,20 @@ class EmbodiedEvalActionMixin:
             "recon_action_raw": recon_action_raw.tolist(),
             "live_action_env": live_action_env.tolist(),
             "recon_action_env": recon_action_env.tolist(),
-            **self._action_stats(
-                "recon_vs_live_raw_action", recon_action_raw, live_action_raw
-            ),
-            **self._action_stats(
-                "recon_vs_live_env_action", recon_action_env, live_action_env
-            ),
+            **self._action_stats("recon_vs_live_raw_action", recon_action_raw, live_action_raw),
+            **self._action_stats("recon_vs_live_env_action", recon_action_env, live_action_env),
         }
         if executed_action is not None:
             executed = np.asarray(executed_action[:7], dtype=np.float32)
             record["executed_action"] = executed.tolist()
             record.update(
-                self._action_stats(
-                    "executed_vs_live_env_action", executed, live_action_env
-                )
+                self._action_stats("executed_vs_live_env_action", executed, live_action_env)
             )
             record.update(
-                self._action_stats(
-                    "executed_vs_recon_env_action", executed, recon_action_env
-                )
+                self._action_stats("executed_vs_recon_env_action", executed, recon_action_env)
             )
             record.update(
-                self._action_stats(
-                    "executed_vs_recon_raw_action", executed, recon_action_raw
-                )
+                self._action_stats("executed_vs_recon_raw_action", executed, recon_action_raw)
             )
 
         sums = getattr(self, "_hidden_action_compare_sums", {})

@@ -206,9 +206,7 @@ def test_validate_task_conditioning_rejects_missing_capability() -> None:
         supports_task_conditioning = False
 
     try:
-        validate_task_conditioning_cfg(
-            cfg, world_model=NoSupport(), classifier=NoSupport()
-        )
+        validate_task_conditioning_cfg(cfg, world_model=NoSupport(), classifier=NoSupport())
     except ValueError as exc:
         assert "lack task-conditioning support" in str(exc)
     else:
@@ -225,6 +223,4 @@ def test_validate_task_conditioning_accepts_default_off() -> None:
     class NoSupport:
         supports_task_conditioning = False
 
-    validate_task_conditioning_cfg(
-        cfg, world_model=NoSupport(), classifier=NoSupport()
-    )
+    validate_task_conditioning_cfg(cfg, world_model=NoSupport(), classifier=NoSupport())

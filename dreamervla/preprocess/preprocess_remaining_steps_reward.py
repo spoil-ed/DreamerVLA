@@ -62,9 +62,7 @@ def _compression(name: str | None) -> str | None:
     return normalized
 
 
-def _metainfo_success(
-    metainfo: dict[str, Any], source_path: Path, demo_key: str
-) -> bool | None:
+def _metainfo_success(metainfo: dict[str, Any], source_path: Path, demo_key: str) -> bool | None:
     if not metainfo:
         return None
     task_key = _task_key_from_file(source_path)
@@ -188,9 +186,7 @@ def _copy_file_with_remaining_rewards(
             reward_dset.attrs["failure_value"] = float(args.failure_value)
             reward_dset.attrs["success"] = bool(info["success"])
             reward_dset.attrs["success_index"] = int(info["success_index"])
-            reward_dset.attrs["source_positive_rewards"] = int(
-                info["source_positive_rewards"]
-            )
+            reward_dset.attrs["source_positive_rewards"] = int(info["source_positive_rewards"])
             demo.attrs["reward_scheme"] = SCHEME_NAME
             demo.attrs["reward_success"] = bool(info["success"])
             demo.attrs["reward_success_index"] = int(info["success_index"])
@@ -272,12 +268,8 @@ def main() -> None:
         "successes": sum(int(r["successes"]) for r in records),
         "failures": sum(int(r["failures"]) for r in records),
         "frames": sum(int(r["frames"]) for r in records),
-        "reward_min": min(
-            float(r["reward_min"]) for r in records if r["reward_min"] is not None
-        ),
-        "reward_max": max(
-            float(r["reward_max"]) for r in records if r["reward_max"] is not None
-        ),
+        "reward_min": min(float(r["reward_min"]) for r in records if r["reward_min"] is not None),
+        "reward_max": max(float(r["reward_max"]) for r in records if r["reward_max"] is not None),
         "reward_mean": (
             sum(float(r["reward_mean"]) * int(r["frames"]) for r in records)
             / max(sum(int(r["frames"]) for r in records), 1)

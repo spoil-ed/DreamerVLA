@@ -146,18 +146,16 @@ def test_hidden_token_sidecar_dims_follow_loaded_backbone_geometry() -> None:
 
 
 def test_oft_preprocess_uses_lumos_prismatic_constants() -> None:
-    source = _project_path(
-        "dreamervla/preprocess/preprocess_oft_hidden_token.py"
-    ).read_text(encoding="utf-8")
+    source = _project_path("dreamervla/preprocess/preprocess_oft_hidden_token.py").read_text(
+        encoding="utf-8"
+    )
 
     assert "openvla_oft.constants" not in source
     assert "prismatic.vla.constants" in source
 
 
 def test_oft_preprocess_script_checks_env_and_repairs_partial_sidecars() -> None:
-    source = _project_path("scripts/preprocess/10_oft_hidden_token.sh").read_text(
-        encoding="utf-8"
-    )
+    source = _project_path("scripts/preprocess/10_oft_hidden_token.sh").read_text(encoding="utf-8")
 
     assert "ensure_openvla_oft_on_path" in source
     assert "prismatic.vla.constants" in source
@@ -326,9 +324,7 @@ def test_fresh_reward_and_hidden_preprocessing_is_training_ready(tmp_path: Path)
         world_size=1,
         token_count=256,
     )
-    (hidden_dir / "preprocess_config.json").write_text(
-        json.dumps(metadata), encoding="utf-8"
-    )
+    (hidden_dir / "preprocess_config.json").write_text(json.dumps(metadata), encoding="utf-8")
 
     normalized = validate_hidden_token_sidecar_dir(
         hidden_dir,

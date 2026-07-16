@@ -198,10 +198,7 @@ class RolloutDumpWorker(Worker):
             # per_trajectory_shard_name so numbering matches the globally
             # assigned work list.
             return per_trajectory_shard_name("traj", task_id, episode_id)
-        return (
-            f"{base}_{step_token}_t{int(task_id):02d}_"
-            f"ep{int(episode_id):06d}_{outcome}.hdf5"
-        )
+        return f"{base}_{step_token}_t{int(task_id):02d}_ep{int(episode_id):06d}_{outcome}.hdf5"
 
     def _record_manifest_entry(
         self,

@@ -23,6 +23,4 @@ def test_data_root_prefers_dvla_data_root(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setenv("DVLA_DATA_ROOT", "/asset/root")
 
     assert data_root() == Path("/asset/root")
-    assert data_path("checkpoints", "model") == Path(
-        "/asset/root/checkpoints/model"
-    )
+    assert data_path("checkpoints", "model") == Path("/asset/root/checkpoints/model")

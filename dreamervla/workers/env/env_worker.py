@@ -105,11 +105,7 @@ def _stamp_step_metadata(
         return transition
     metadata = dict(transition.get("episode_metadata") or {})
     metadata.update(
-        {
-            str(key): value
-            for key, value in dict(step_metadata).items()
-            if value is not None
-        }
+        {str(key): value for key, value in dict(step_metadata).items() if value is not None}
     )
     transition["episode_metadata"] = metadata
     return transition
@@ -207,9 +203,7 @@ def _env_subprocess_main(  # noqa: ANN001
                             transition["state"], dtype=np.float32
                         ).reshape(-1)
                     if obs_embedding is not None:
-                        transition["obs_embedding"] = np.asarray(
-                            obs_embedding, dtype=np.float32
-                        )
+                        transition["obs_embedding"] = np.asarray(obs_embedding, dtype=np.float32)
                     if lang_emb is not None:
                         transition["lang_emb"] = np.asarray(lang_emb, dtype=np.float32)
                 _stamp_step_metadata(transition, step_metadata)
@@ -287,9 +281,7 @@ class EnvWorker(Worker):
         self._procs: list[Any | None] = [None for _ in range(self.num_envs)]
         self._conns: list[Any | None] = [None for _ in range(self.num_envs)]
         self._obs_by_slot: list[dict[str, Any] | None] = [None for _ in range(self.num_envs)]
-        self._episodes_by_slot: list[list[dict[str, Any]]] = [
-            [] for _ in range(self.num_envs)
-        ]
+        self._episodes_by_slot: list[list[dict[str, Any]]] = [[] for _ in range(self.num_envs)]
         self._episode_ids_by_slot: list[int] = [0 for _ in range(self.num_envs)]
         self._task_ids_by_slot: list[int] = [self.task_id for _ in range(self.num_envs)]
         self._egl_respawns_by_slot: list[int] = [0 for _ in range(self.num_envs)]
@@ -666,9 +658,9 @@ class EnvWorker(Worker):
         elif hasattr(env, "make_transition"):
             transition = env.make_transition(obs, action, reward, terminated, truncated, info)
             if "proprio" not in transition and "state" in transition:
-                transition["proprio"] = np.asarray(
-                    transition["state"], dtype=np.float32
-                ).reshape(-1)
+                transition["proprio"] = np.asarray(transition["state"], dtype=np.float32).reshape(
+                    -1
+                )
             if obs_embedding is not None:
                 transition["obs_embedding"] = np.asarray(obs_embedding, dtype=np.float32)
             if lang_emb is not None:
@@ -769,9 +761,7 @@ class EnvWorker(Worker):
             "is_first": bool(obs.get("is_first", False)) if isinstance(obs, dict) else False,
             "info": dict(info or {}),
             "obs_embedding": (
-                None
-                if obs_embedding is None
-                else np.asarray(obs_embedding, dtype=np.float32)
+                None if obs_embedding is None else np.asarray(obs_embedding, dtype=np.float32)
             ),
         }
         if lang_emb is not None:

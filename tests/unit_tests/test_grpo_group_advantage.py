@@ -4,6 +4,7 @@ Pins the contract that ``_group_advantage`` raises on misaligned batches
 (rather than silently falling back to global normalization) and that the
 documented escape hatch ``group_size=1`` still produces a global z-score.
 """
+
 from __future__ import annotations
 
 import pytest

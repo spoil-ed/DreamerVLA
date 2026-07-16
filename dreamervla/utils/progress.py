@@ -57,11 +57,7 @@ class ProgressReporter:
         if not self.enabled:
             return
         now = self._clock()
-        if (
-            force
-            or self._last_print_t is None
-            or (now - self._last_print_t) >= self.min_interval_s
-        ):
+        if force or self._last_print_t is None or (now - self._last_print_t) >= self.min_interval_s:
             self._emit(now)
 
     def close(self) -> None:
@@ -138,8 +134,13 @@ class AggregateProgress:
         # Only rank 0 prints; the reporter starts on this rank's own total and is
         # retargeted to the global total once siblings report in.
         self._reporter = ProgressReporter(
-            total, desc, enabled=(self.rank == 0), unit=unit,
-            min_interval_s=min_interval_s, clock=clock, sink=sink,
+            total,
+            desc,
+            enabled=(self.rank == 0),
+            unit=unit,
+            min_interval_s=min_interval_s,
+            clock=clock,
+            sink=sink,
         )
 
     def _file(self, rank: int) -> Path:

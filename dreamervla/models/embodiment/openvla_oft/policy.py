@@ -70,6 +70,4 @@ class BasePolicy(ABC):
             self.cuda_graph_manager = None
 
     def is_cuda_graph_enabled(self) -> bool:
-        return (
-            hasattr(self, "cuda_graph_manager") and self.cuda_graph_manager is not None
-        )
+        return hasattr(self, "cuda_graph_manager") and self.cuda_graph_manager is not None

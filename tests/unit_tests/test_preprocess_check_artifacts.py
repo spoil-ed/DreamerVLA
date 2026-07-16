@@ -184,11 +184,7 @@ def test_validate_hdf5_dir_rejects_extra_required_dataset_alias(tmp_path) -> Non
     sidecar = tmp_path / "hidden"
     _write_hidden_token_sidecar(sidecar / "a.hdf5")
     (sidecar / "preprocess_config.json").write_text(
-        json.dumps(
-            _canonical_config(
-                required_demo_datasets=["obs_embedding", "policy_slots"]
-            )
-        ),
+        json.dumps(_canonical_config(required_demo_datasets=["obs_embedding", "policy_slots"])),
         encoding="utf-8",
     )
 

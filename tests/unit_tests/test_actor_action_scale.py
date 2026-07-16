@@ -117,9 +117,7 @@ def test_lumos_imagination_feeds_world_model_env_scale_actions():
         obs={"obs_embedding": torch.zeros(1, 1, 1)},
         device=torch.device("cpu"),
         algorithm_cfg=cfg,
-        optim_cfg=OmegaConf.create(
-            {"grad_clip_norm": 10.0, "zero_grad_set_to_none": True}
-        ),
+        optim_cfg=OmegaConf.create({"grad_clip_norm": 10.0, "zero_grad_set_to_none": True}),
         ref_policy=None,
     )
 

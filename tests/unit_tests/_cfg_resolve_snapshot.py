@@ -25,11 +25,7 @@ from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
 CONFIG_DIR = str(
-    next(
-        p / "configs"
-        for p in Path(__file__).resolve().parents
-        if (p / "configs").is_dir()
-    )
+    next(p / "configs" for p in Path(__file__).resolve().parents if (p / "configs").is_dir())
 )
 
 

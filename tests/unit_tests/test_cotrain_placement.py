@@ -28,9 +28,7 @@ def test_gpu_placement_matches_manual_notes_for_five_gpus() -> None:
     assert [spec.role for spec in plan.env_specs[1:]] == ["wm_env"] * 4
     assert plan.learner_spec.gpu_ids == [0]
     assert [spec.gpu_ids for spec in plan.rollout_specs] == [[0], [1], [2], [3], [4]]
-    assert [spec.gpu_ids for spec in plan.actor_specs] == [
-        [0], [1], [2], [3], [4]
-    ]
+    assert [spec.gpu_ids for spec in plan.actor_specs] == [[0], [1], [2], [3], [4]]
 
 
 def test_one_gpu_placement_keeps_actor_spec_on_gpu_zero() -> None:
@@ -53,9 +51,7 @@ def test_frozen_policy_placement_uses_all_eight_gpus_without_real_or_learner() -
     assert plan.real_env_ranks == []
     assert plan.wm_env_ranks == list(range(8))
     assert [spec.gpu_ids for spec in plan.env_specs] == [[gpu] for gpu in range(8)]
-    assert [spec.gpu_ids for spec in plan.rollout_specs] == [
-        [gpu] for gpu in range(8)
-    ]
+    assert [spec.gpu_ids for spec in plan.rollout_specs] == [[gpu] for gpu in range(8)]
     assert [spec.gpu_ids for spec in plan.actor_specs] == [[gpu] for gpu in range(8)]
     assert plan.learner_spec is None
 

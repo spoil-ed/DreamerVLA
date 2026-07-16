@@ -78,16 +78,10 @@ def collect_torch_cuda_memory() -> dict[str, float]:
         device = torch.cuda.current_device()
         scale = 1024.0 * 1024.0
         return {
-            "cuda/memory_allocated_mb": float(
-                torch.cuda.memory_allocated(device) / scale
-            ),
+            "cuda/memory_allocated_mb": float(torch.cuda.memory_allocated(device) / scale),
             "cuda/memory_reserved_mb": float(torch.cuda.memory_reserved(device) / scale),
-            "cuda/memory_peak_allocated_mb": float(
-                torch.cuda.max_memory_allocated(device) / scale
-            ),
-            "cuda/memory_peak_reserved_mb": float(
-                torch.cuda.max_memory_reserved(device) / scale
-            ),
+            "cuda/memory_peak_allocated_mb": float(torch.cuda.max_memory_allocated(device) / scale),
+            "cuda/memory_peak_reserved_mb": float(torch.cuda.max_memory_reserved(device) / scale),
         }
     except (RuntimeError, AssertionError):
         return {}
@@ -113,7 +107,4 @@ def _namespace_metrics(metrics: dict[str, float], prefix: str) -> dict[str, floa
     if not prefix:
         return dict(metrics)
     normalized = prefix.rstrip("/")
-    return {
-        f"{normalized}/{key.replace('/', '_')}": float(value)
-        for key, value in metrics.items()
-    }
+    return {f"{normalized}/{key.replace('/', '_')}": float(value) for key, value in metrics.items()}

@@ -304,7 +304,11 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                 raise RuntimeError("format v2 classifier checkpoint is missing model state")
             if "optim" not in state_dicts:
                 raise RuntimeError("format v2 classifier checkpoint is missing optim state")
-            if not isinstance(pickles, dict) or "global_step" not in pickles or "epoch" not in pickles:
+            if (
+                not isinstance(pickles, dict)
+                or "global_step" not in pickles
+                or "epoch" not in pickles
+            ):
                 raise RuntimeError(
                     "format v2 classifier checkpoint is missing global_step/epoch progress"
                 )
@@ -840,11 +844,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                 checkpoint_started_at = time.perf_counter()
                 self.save_checkpoint(tag="latest")
                 self.log_metrics(
-                    {
-                        "time/classifier_checkpoint_s": (
-                            time.perf_counter() - checkpoint_started_at
-                        )
-                    },
+                    {"time/classifier_checkpoint_s": (time.perf_counter() - checkpoint_started_at)},
                     step=int(self.global_step),
                 )
 

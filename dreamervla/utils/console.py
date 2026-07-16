@@ -199,9 +199,7 @@ def _metric_table_categories(metrics: dict) -> dict[str, dict[str, object]]:
         elif metric_name.startswith("critic/"):
             categories["Training/Critic"][metric_name] = value
         elif metric_name.startswith("replay_buffer/"):
-            categories["Replay Buffer"][
-                metric_name.replace("replay_buffer/", "", 1)
-            ] = value
+            categories["Replay Buffer"][metric_name.replace("replay_buffer/", "", 1)] = value
         else:
             categories["Training/Other"][metric_name] = value
     return categories

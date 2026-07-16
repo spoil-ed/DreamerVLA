@@ -141,7 +141,11 @@ def test_per_child_egl_device_regime_is_rlinf_faithful():
 
 def test_subset_step_only_addressed_envs():
     vec = OnlineEglVecEnv(
-        num_envs=3, cfg_kwargs={}, egl_device_pool=[0], factory=_fake_env_factory, start_timeout_s=120.0
+        num_envs=3,
+        cfg_kwargs={},
+        egl_device_pool=[0],
+        factory=_fake_env_factory,
+        start_timeout_s=120.0,
     )
     try:
         vec.reset(task_ids=[0, 0, 0], episode_ids=[0, 0, 0])

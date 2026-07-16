@@ -180,9 +180,7 @@ def test_chunk_step_aggregates_termination_to_last_column():
 
 
 def test_chunk_step_truncation_triggers_auto_reset():
-    env, vec = _make_env(
-        num_envs=2, auto_reset=True, ignore_terminations=True, max_episode_steps=2
-    )
+    env, vec = _make_env(num_envs=2, auto_reset=True, ignore_terminations=True, max_episode_steps=2)
     env.reset()
     first_ids = env.reset_state_ids.copy()
     vec.terminate_at[0] = vec._steps[0] + 1  # env 0 succeeds on 1st substep

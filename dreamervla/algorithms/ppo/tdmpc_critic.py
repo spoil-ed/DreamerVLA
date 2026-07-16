@@ -34,9 +34,7 @@ def _sequence_field(
             if tensor.ndim == 1:
                 tensor = tensor[:, None]
             if tensor.ndim != 2:
-                raise ValueError(
-                    f"obs.{key} must be [B,T] or [B,T,1], got {tuple(value.shape)}"
-                )
+                raise ValueError(f"obs.{key} must be [B,T] or [B,T,1], got {tuple(value.shape)}")
             return tensor.to(device=device, dtype=dtype)
     return None
 
@@ -82,9 +80,7 @@ def _tdmpc_critic_hidden(
         return feat
     if action is None:
         raise ValueError("TD-MPC state-action critic requires an action tensor.")
-    action_feat = _tdmpc_prepare_action(action, action_dim).to(
-        device=feat.device, dtype=feat.dtype
-    )
+    action_feat = _tdmpc_prepare_action(action, action_dim).to(device=feat.device, dtype=feat.dtype)
     if feat.ndim == 2:
         if action_feat.shape[0] != feat.shape[0]:
             raise ValueError(
@@ -103,9 +99,7 @@ def _tdmpc_critic_hidden(
                 f"critic feature shape {tuple(feat.shape[:2])}"
             )
         return torch.cat([feat, action_feat], dim=-1)
-    raise ValueError(
-        f"TD-MPC critic feature must be [B,D] or [B,T,D], got {tuple(feat.shape)}"
-    )
+    raise ValueError(f"TD-MPC critic feature must be [B,D] or [B,T,D], got {tuple(feat.shape)}")
 
 
 __all__ = [

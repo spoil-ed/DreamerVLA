@@ -60,18 +60,12 @@ class EmbodiedEvalExportMixin:
             groups.setdefault(str(row.get("prompt_key", "")), []).append(row)
         group_rows = []
         for prompt_key, rows in sorted(groups.items()):
-            acc = (
-                float(np.mean([float(row.get("acc", 0.0)) for row in rows]))
-                if rows
-                else 0.0
-            )
+            acc = float(np.mean([float(row.get("acc", 0.0)) for row in rows])) if rows else 0.0
             group_rows.append(
                 {
                     "prompt_key": prompt_key,
                     "num_samples": len(rows),
-                    "successes": int(
-                        sum(int(bool(row.get("complete", False))) for row in rows)
-                    ),
+                    "successes": int(sum(int(bool(row.get("complete", False))) for row in rows)),
                     "acc_mean": acc,
                     "keep_by_accuracy_band": bool(0.01 <= acc <= 0.99),
                 }
@@ -163,24 +157,16 @@ class EmbodiedEvalExportMixin:
         if latent is not None:
             for attr in ("deter", "stoch", "logits", "mean", "std", "h"):
                 if hasattr(latent, attr):
-                    optional_arrays[f"latent_{attr}"] = self._to_numpy_array(
-                        getattr(latent, attr)
-                    )
+                    optional_arrays[f"latent_{attr}"] = self._to_numpy_array(getattr(latent, attr))
         for key, value in optional_arrays.items():
             if value is not None:
                 arrays[key] = np.asarray(value, dtype=np.float32)
 
-        array_path = os.path.join(
-            self._policy_trace_dir, f"step_{index:06d}_{source}.npz"
-        )
+        array_path = os.path.join(self._policy_trace_dir, f"step_{index:06d}_{source}.npz")
         np.savez_compressed(array_path, **arrays)
         context = dict(getattr(self, "_libero_current_eval_context", {}) or {})
-        raw_chunk = arrays["action_chunk_raw"].reshape(
-            -1, arrays["action_chunk_raw"].shape[-1]
-        )
-        env_chunk = arrays["action_chunk_env"].reshape(
-            -1, arrays["action_chunk_env"].shape[-1]
-        )
+        raw_chunk = arrays["action_chunk_raw"].reshape(-1, arrays["action_chunk_raw"].shape[-1])
+        env_chunk = arrays["action_chunk_env"].reshape(-1, arrays["action_chunk_env"].shape[-1])
         record = {
             "index": index,
             "source": str(source),
@@ -189,9 +175,7 @@ class EmbodiedEvalExportMixin:
             "state": arrays["state"].tolist(),
             "first_action_raw": raw_chunk[0].tolist(),
             "first_action_env": env_chunk[0].tolist(),
-            "summaries": {
-                key: self._array_summary(value) for key, value in arrays.items()
-            },
+            "summaries": {key: self._array_summary(value) for key, value in arrays.items()},
         }
         if self.distributed.is_main_process:
             with open(self._policy_trace_path, "a") as f:

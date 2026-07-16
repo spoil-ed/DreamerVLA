@@ -20,8 +20,7 @@ TOKEN_DIM = 4096
 EXPECTED_TOKEN_SHAPE = (TOKEN_COUNT, TOKEN_DIM)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ONE_TRAJ_DISCRETE_CKPT = (
-    PROJECT_ROOT
-    / "data/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1"
+    PROJECT_ROOT / "data/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1"
 )
 _SKIP_GPU = "needs CUDA GPU and DVLA_REAL_MODEL_UNIT=1"
 
@@ -144,9 +143,9 @@ def test_hidden_token_accepts_only_canonical_projected_shape() -> None:
 
 
 def test_rollout_hidden_extractor_docs_use_role_based_wm_wording() -> None:
-    source = (
-        PROJECT_ROOT / "dreamervla" / "runtime" / "rollout_hidden_extractor.py"
-    ).read_text(encoding="utf-8")
+    source = (PROJECT_ROOT / "dreamervla" / "runtime" / "rollout_hidden_extractor.py").read_text(
+        encoding="utf-8"
+    )
     assert ("DINO" + "-WM") not in source
     assert ("dino" + "_wm") not in source.lower()
     assert ("dino" + "wm") not in source.lower()
@@ -161,9 +160,7 @@ def test_left_pad_batch_pads_left_and_repositions_bos() -> None:
     short_mask = torch.ones(1, 3, dtype=torch.long)
     long_mask = torch.ones(1, 5, dtype=torch.long)
 
-    ids, mask = _left_pad_batch(
-        [short, long], [short_mask, long_mask], pad, bos
-    )
+    ids, mask = _left_pad_batch([short, long], [short_mask, long_mask], pad, bos)
 
     assert ids.tolist() == [[bos, pad, pad, 10, 11], [bos, 20, 21, 22, 23]]
     assert mask.tolist() == [[1, 0, 0, 1, 1], [1, 1, 1, 1, 1]]
@@ -277,9 +274,7 @@ def test_batched_forward_discrete_headless(oft_discrete_policy) -> None:
     assert hidden_a.dtype == torch.float16
     assert np.asarray(chunk_a[0]).shape == (7,)
 
-    batch_one = batched_forward(
-        oft_discrete_policy, [prepared(obs_a)], "libero_goal_no_noops"
-    )
+    batch_one = batched_forward(oft_discrete_policy, [prepared(obs_a)], "libero_goal_no_noops")
     torch.testing.assert_close(batch_one[0][1], hidden_a, rtol=0, atol=0)
     np.testing.assert_allclose(batch_one[0][0][0], chunk_a[0], rtol=0, atol=0)
 

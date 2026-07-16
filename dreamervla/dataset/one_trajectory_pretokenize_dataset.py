@@ -75,9 +75,7 @@ class OneTrajectoryPretokenizeActionChunkDataset(PretokenizeActionChunkDataset):
             selected_trajectory_keys=self.selected_trajectory_keys,
         )
 
-    def _record_frame_info_from_manifest(
-        self, record_index: int
-    ) -> tuple[str, str, int] | None:
+    def _record_frame_info_from_manifest(self, record_index: int) -> tuple[str, str, int] | None:
         if record_index < 0 or record_index >= len(self.records):
             return None
         record = self.records[record_index]
@@ -108,9 +106,7 @@ class OneTrajectoryPretokenizeActionChunkDataset(PretokenizeActionChunkDataset):
         image_path = self._select_current_third_view(payload.get("image", []))
         return self._parse_image_path(image_path)
 
-    def _record_trajectory_info_from_manifest(
-        self, record_index: int
-    ) -> tuple[str, str] | None:
+    def _record_trajectory_info_from_manifest(self, record_index: int) -> tuple[str, str] | None:
         parsed = self._record_frame_info_from_manifest(record_index)
         if parsed is None:
             return None
@@ -167,9 +163,7 @@ class OneTrajectoryPretokenizeActionChunkDataset(PretokenizeActionChunkDataset):
             for start in sorted(frame_map):
                 wanted = range(start, start + self.action_horizon)
                 if all(frame in frame_set for frame in wanted):
-                    self._chunk_windows.append(
-                        tuple(frame_map[frame] for frame in wanted)
-                    )
+                    self._chunk_windows.append(tuple(frame_map[frame] for frame in wanted))
 
         if self.strict and trajectories_by_task and not self._chunk_windows:
             raise ValueError(
@@ -178,9 +172,7 @@ class OneTrajectoryPretokenizeActionChunkDataset(PretokenizeActionChunkDataset):
             )
         self.selected_trajectory_keys = tuple(selected)
 
-    def _window_trajectory_info(
-        self, record_indices: tuple[int, ...]
-    ) -> tuple[str, str] | None:
+    def _window_trajectory_info(self, record_indices: tuple[int, ...]) -> tuple[str, str] | None:
         if not record_indices:
             return None
         record_index = int(record_indices[0])

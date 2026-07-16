@@ -10,9 +10,7 @@ def _cfg() -> dict:
     return {
         "device": "cpu",
         "action_dim": 7,
-        "decoder": {
-            "target": "dreamervla.workers.inference._test_rollout_stub:StubRolloutBundle"
-        },
+        "decoder": {"target": "dreamervla.workers.inference._test_rollout_stub:StubRolloutBundle"},
     }
 
 
@@ -111,8 +109,8 @@ def test_forward_batch_applies_gripper_postprocess() -> None:
     w.init()
     out = w.forward_batch([{"seed": 20}, {"seed": 0}], [0, 1])
     assert float(out["actions"][0][-1]) == -1.0  # g=20 -> sign(39)*-1 = -1
-    assert float(out["actions"][1][-1]) == 1.0   # g=0  -> sign(-1)*-1 = +1
-    assert float(out["actions"][0][0]) == 20.0   # non-gripper dim untouched
+    assert float(out["actions"][1][-1]) == 1.0  # g=0  -> sign(-1)*-1 = +1
+    assert float(out["actions"][0][0]) == 20.0  # non-gripper dim untouched
 
 
 def test_forward_batch_executes_action_chunk_open_loop() -> None:

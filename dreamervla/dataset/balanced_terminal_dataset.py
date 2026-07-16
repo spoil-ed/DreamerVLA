@@ -102,16 +102,12 @@ class BalancedTerminalDataset(PixelHiddenSequenceDataset):
         end = start + self.sequence_length
         is_positive = bool(end == entry.episode_length)
         if "sparse_rewards" in demo:
-            sparse_rewards = np.asarray(
-                demo["sparse_rewards"][start:end], dtype=np.float32
-            )
+            sparse_rewards = np.asarray(demo["sparse_rewards"][start:end], dtype=np.float32)
         else:
             sparse_rewards = np.asarray(demo["rewards"][start:end], dtype=np.float32)
         if self.reward_mode == "per_window_dense":
             # LUMOS-style: every step in a positive window labeled 1; negative window all 0
-            rewards = np.full(
-                (self.sequence_length,), float(is_positive), dtype=np.float32
-            )
+            rewards = np.full((self.sequence_length,), float(is_positive), dtype=np.float32)
         elif self.reward_mode == "from_hdf5":
             # Pass-through HDF5 rewards (shaped per-step, e.g. progress-delta).
             # Falls back to sparse_rewards when no separate rewards field exists.

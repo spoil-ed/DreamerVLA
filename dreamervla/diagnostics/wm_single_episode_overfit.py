@@ -74,8 +74,7 @@ def parse_args() -> argparse.Namespace:
         "--wm-ckpt",
         type=Path,
         default=data_path(
-            "outputs/world_model_probe/current_actions_reward0_20260708_01/"
-            "wm_probe_step1200.ckpt"
+            "outputs/world_model_probe/current_actions_reward0_20260708_01/wm_probe_step1200.ckpt"
         ),
         help="World-model checkpoint with a top-level world_model state dict.",
     )
@@ -418,9 +417,7 @@ def _run_probe(
             "current_actions": actions_t.index_select(0, frame_idx.reshape(-1)).reshape(
                 len(batch_starts), seq_len, actions_t.shape[-1]
             ),
-            "actions": torch.zeros(
-                len(batch_starts), seq_len, actions_t.shape[-1], device=device
-            ),
+            "actions": torch.zeros(len(batch_starts), seq_len, actions_t.shape[-1], device=device),
             "proprio": proprio_t.index_select(0, frame_idx.reshape(-1)).reshape(
                 len(batch_starts), seq_len, proprio_t.shape[-1]
             ),
@@ -430,19 +427,18 @@ def _run_probe(
             "lang_emb": lang_t[None].expand(len(batch_starts), -1),
         }
 
-    def classifier_score_window(
-        latents_flat: torch.Tensor, prop: torch.Tensor, end: int
-    ) -> float:
+    def classifier_score_window(latents_flat: torch.Tensor, prop: torch.Tensor, end: int) -> float:
         start = max(0, end - 7)
         window = latents_flat[start : end + 1]
         pwin = prop[start : end + 1]
         if window.shape[0] < 8:
-            window = torch.cat(
-                [window[:1].expand(8 - window.shape[0], -1), window], dim=0
-            )
+            window = torch.cat([window[:1].expand(8 - window.shape[0], -1), window], dim=0)
             pwin = torch.cat([pwin[:1].expand(8 - pwin.shape[0], -1), pwin], dim=0)
-        with torch.inference_mode(), torch.amp.autocast(
-            device_type=device.type, dtype=torch.bfloat16, enabled=device.type == "cuda"
+        with (
+            torch.inference_mode(),
+            torch.amp.autocast(
+                device_type=device.type, dtype=torch.bfloat16, enabled=device.type == "cuda"
+            ),
         ):
             score = torch.sigmoid(
                 classifier(window[None], proprio=pwin[None], lang_emb=lang_t[None]).reshape(-1)
@@ -460,13 +456,16 @@ def _run_probe(
             action_chunk = torch.zeros(1, chunk, actions_t.shape[-1], device=device)
         elif action_mode == "random":
             gen = torch.Generator(device=device).manual_seed(1000 + s)
-            action_chunk = torch.empty(
-                1, chunk, actions_t.shape[-1], device=device
-            ).uniform_(-1, 1, generator=gen)
+            action_chunk = torch.empty(1, chunk, actions_t.shape[-1], device=device).uniform_(
+                -1, 1, generator=gen
+            )
         else:
             raise ValueError(action_mode)
-        with torch.inference_mode(), torch.amp.autocast(
-            device_type=device.type, dtype=torch.bfloat16, enabled=device.type == "cuda"
+        with (
+            torch.inference_mode(),
+            torch.amp.autocast(
+                device_type=device.type, dtype=torch.bfloat16, enabled=device.type == "cuda"
+            ),
         ):
             out = wm.predict_next_chunk(
                 {"history": hist, "hidden": hist[:, -1], "lang": lang_t[None], "proprio": prop0},
@@ -477,14 +476,11 @@ def _run_probe(
         all_lat = torch.cat([hidden_t[s : s + history].reshape(history, -1).float(), visual])
         all_prop = torch.cat([proprio_t[s : s + history].float(), pred_prop])
         scores = [
-            classifier_score_window(all_lat, all_prop, i)
-            for i in range(history, history + chunk)
+            classifier_score_window(all_lat, all_prop, i) for i in range(history, history + chunk)
         ]
         target = hidden_t[s + history : s + history + chunk].reshape(chunk, -1).float()
         mse = float((visual - target).pow(2).mean().cpu())
-        cos = float(
-            torch.nn.functional.cosine_similarity(visual, target, dim=-1).mean().cpu()
-        )
+        cos = float(torch.nn.functional.cosine_similarity(visual, target, dim=-1).mean().cpu())
         wm.train()
         return scores, mse, cos
 
@@ -493,8 +489,11 @@ def _run_probe(
         losses: list[float] = []
         hidden_mse: list[float] = []
         hidden_cos: list[float] = []
-        with torch.inference_mode(), torch.amp.autocast(
-            device_type=device.type, dtype=torch.bfloat16, enabled=device.type == "cuda"
+        with (
+            torch.inference_mode(),
+            torch.amp.autocast(
+                device_type=device.type, dtype=torch.bfloat16, enabled=device.type == "cuda"
+            ),
         ):
             for i in range(0, len(eval_starts), 4):
                 batch = make_batch(starts[eval_starts[i : i + 4]])
@@ -550,9 +549,7 @@ def _run_probe(
 
     for step in range(1, args.steps + 1):
         offset = ((step - 1) * args.batch_size) % len(starts)
-        batch_starts = np.take(
-            starts, np.arange(offset, offset + args.batch_size) % len(starts)
-        )
+        batch_starts = np.take(starts, np.arange(offset, offset + args.batch_size) % len(starts))
         batch = make_batch(batch_starts)
         optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast(
@@ -639,9 +636,7 @@ def _action_sensitivity(
                 ),
                 "true_score_max": float(record.get(f"s{start}_true_max", float("nan"))),
                 "zero_score_max": float(record.get(f"s{start}_zero_max", float("nan"))),
-                "random_score_max": float(
-                    record.get(f"s{start}_random_max", float("nan"))
-                ),
+                "random_score_max": float(record.get(f"s{start}_random_max", float("nan"))),
             }
         )
         gaps.append(advantage)
@@ -776,9 +771,7 @@ def _render_summary_markdown(summary: dict[str, Any]) -> str:
         lines.append(
             "| {start:.0f} | {true_mse:.8g} | {zero_mse:.8g} | {random_mse:.8g} | "
             "{true_advantage_mse_vs_best_alt:.8g} | {max_abs_mse_delta_vs_true:.8g} | "
-            "{true_score_max:.8g} | {zero_score_max:.8g} | {random_score_max:.8g} |".format(
-                **row
-            )
+            "{true_score_max:.8g} | {zero_score_max:.8g} | {random_score_max:.8g} |".format(**row)
         )
     lines.extend(
         [

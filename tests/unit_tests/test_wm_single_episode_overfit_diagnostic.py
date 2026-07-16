@@ -25,8 +25,7 @@ def test_default_artifact_paths_follow_dvla_data_root(
         "cotrain/.hydra/config.yaml"
     )
     assert args.wm_ckpt == data_root / (
-        "outputs/world_model_probe/current_actions_reward0_20260708_01/"
-        "wm_probe_step1200.ckpt"
+        "outputs/world_model_probe/current_actions_reward0_20260708_01/wm_probe_step1200.ckpt"
     )
     assert args.classifier_ckpt == data_root / (
         "outputs/coldstart_warmup_cotrain/"

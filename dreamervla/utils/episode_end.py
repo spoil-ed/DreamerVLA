@@ -15,9 +15,7 @@ class EpisodeEnd:
         return bool(self.terminated or self.truncated)
 
 
-def resolve_episode_end(
-    *, success: bool, elapsed_steps: int, max_steps: int
-) -> EpisodeEnd:
+def resolve_episode_end(*, success: bool, elapsed_steps: int, max_steps: int) -> EpisodeEnd:
     """Return terminal/timeout flags using Dreamer-style episode semantics."""
     terminated = bool(success)
     truncated = bool(not terminated and int(elapsed_steps) >= int(max_steps))

@@ -17,7 +17,9 @@ from transformers import PretrainedConfig, PreTrainedModel
 class HFModuleConfig(PretrainedConfig):
     model_type = "dreamervla_module"
 
-    def __init__(self, target: str = "", init_args: dict[str, Any] | None = None, **kwargs: Any) -> None:
+    def __init__(
+        self, target: str = "", init_args: dict[str, Any] | None = None, **kwargs: Any
+    ) -> None:
         self.target = target
         self.init_args = init_args or {}
         super().__init__(**kwargs)
@@ -36,7 +38,9 @@ class HFModuleWrapper(PreTrainedModel):
         self.wrapped_module = module
         self.post_init()
 
-    def forward(self, *args: Any, **kwargs: Any) -> Any:  # pragma: no cover - not used for save/load
+    def forward(
+        self, *args: Any, **kwargs: Any
+    ) -> Any:  # pragma: no cover - not used for save/load
         return self.wrapped_module(*args, **kwargs)
 
 

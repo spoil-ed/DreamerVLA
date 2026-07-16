@@ -68,9 +68,7 @@ def build_oft_collect_config(cfg: DictConfig) -> dict[str, Any]:
         render_devices = OmegaConf.to_container(render_devices, resolve=True)
     collect_cfg: dict[str, Any] = {
         "model_path": str(oft.ckpt_path),
-        "policy_mode": str(
-            OmegaConf.select(cfg, "collect.policy_mode", default="discrete")
-        ),
+        "policy_mode": str(OmegaConf.select(cfg, "collect.policy_mode", default="discrete")),
         "unnorm_key": str(oft.dataset_statistics_key),
         "task_suite_name": str(cfg.task.suite),
         "task_ids": task_ids,
@@ -78,9 +76,7 @@ def build_oft_collect_config(cfg: DictConfig) -> dict[str, Any]:
         "num_tasks": OmegaConf.select(cfg, "collect.num_tasks", default=None),
         "episode_horizon": int(cfg.collect.episode_horizon),
         "envs_per_gpu": int(cfg.collect.envs_per_gpu),
-        "demos_per_shard": int(
-            OmegaConf.select(cfg, "collect.demos_per_shard", default=0)
-        ),
+        "demos_per_shard": int(OmegaConf.select(cfg, "collect.demos_per_shard", default=0)),
         "memory_fraction": float(cfg.collect.memory_fraction),
         "render_backend": str(
             OmegaConf.select(
@@ -100,20 +96,15 @@ def build_oft_collect_config(cfg: DictConfig) -> dict[str, Any]:
         "expected_obs_hidden_source": str(latent.expected_obs_hidden_source),
         "expected_prompt_style": str(latent.expected_prompt_style),
         "expected_rotate_images_180": bool(latent.expected_rotate_images_180),
-        "time_horizon": int(
-            OmegaConf.select(latent, "time_horizon", default=latent.chunk_size)
-        ),
+        "time_horizon": int(OmegaConf.select(latent, "time_horizon", default=latent.chunk_size)),
         "token_dim": int(latent.token_dim),
         "action_dim": int(cfg.task.action_dim),
         "chunk_size": int(latent.chunk_size),
         "resolution": int(cfg.task.image_resolution),
         "gpu_id": int(OmegaConf.select(cfg, "collect.gpu_id", default=0)),
-        "min_free_gpu_gb": float(
-            OmegaConf.select(cfg, "collect.min_free_gpu_gb", default=18.0)
-        ),
+        "min_free_gpu_gb": float(OmegaConf.select(cfg, "collect.min_free_gpu_gb", default=18.0)),
         "progress_dir": str(
-            Path(str(OmegaConf.select(cfg, "training.out_dir", default=".")))
-            / ".progress"
+            Path(str(OmegaConf.select(cfg, "training.out_dir", default="."))) / ".progress"
         ),
     }
     optional_ints = {
@@ -175,9 +166,7 @@ def _ensure_collect_render_device_pool(
     first_infer_gpu = int(collect_cfg.get("gpu_id", 0))
     num_infer = max(1, int(collect_cfg.get("num_inference_workers", 1)))
     inference_gpus = {
-        gpu
-        for gpu in range(first_infer_gpu, first_infer_gpu + num_infer)
-        if 0 <= gpu < num_gpus
+        gpu for gpu in range(first_infer_gpu, first_infer_gpu + num_infer) if 0 <= gpu < num_gpus
     }
     render_devices = [gpu for gpu in range(num_gpus) if gpu not in inference_gpus]
     if not render_devices:
@@ -240,9 +229,13 @@ class _RayRolloutCollection(BaseRunner):
             if hidden_dir_value is not None
             else data_path("collected_rollouts", "ray_synthetic", "hidden")
         )
-        shard_name = str(self._select_first(("dump.shard_name", "shard_name"), "ray_shard_000.hdf5"))
+        shard_name = str(
+            self._select_first(("dump.shard_name", "shard_name"), "ray_shard_000.hdf5")
+        )
         preprocess_config = self._cfg_from("dump.preprocess_config", _default_preprocess_config())
-        data_attrs = self._cfg_from("dump.data_attrs", {"task_suite_name": "synthetic", "env_name": "ray"})
+        data_attrs = self._cfg_from(
+            "dump.data_attrs", {"task_suite_name": "synthetic", "env_name": "ray"}
+        )
 
         dump_group = WorkerGroup(
             RolloutDumpWorker,
@@ -477,14 +470,10 @@ class _RayRolloutCollection(BaseRunner):
         target_episodes = int(
             groups.get(
                 "target_episodes",
-                self._int_from(
-                    ("rollout.target_episodes", "target_episodes"), num_envs
-                ),
+                self._int_from(("rollout.target_episodes", "target_episodes"), num_envs),
             )
         )
-        episode_horizon = self._int_from(
-            ("collect.episode_horizon", "episode_horizon"), 300
-        )
+        episode_horizon = self._int_from(("collect.episode_horizon", "episode_horizon"), 300)
         max_steps = self._int_from(
             ("rollout.max_steps", "rollout_steps"), target_episodes * episode_horizon
         )
@@ -568,14 +557,10 @@ class _RayRolloutCollection(BaseRunner):
                     env_task_ids[int(env_id)] = next_task
                     if reserved is not None:
                         set_task_calls.append(
-                            envs.execute_on(int(env_id)).set_task(
-                                int(next_task), int(reserved[1])
-                            )
+                            envs.execute_on(int(env_id)).set_task(int(next_task), int(reserved[1]))
                         )
                 wait_results(set_task_calls)
-                env_ids = [
-                    idx for idx, task_id in enumerate(env_task_ids) if task_id is not None
-                ]
+                env_ids = [idx for idx, task_id in enumerate(env_task_ids) if task_id is not None]
             steps += 1
 
         episodes = int(wait_result(dump.size())[0])
@@ -620,7 +605,7 @@ class _RayRolloutCollection(BaseRunner):
                 "multi-GPU inference (collect.num_inference_workers>1) is supported on the "
                 "default rollout loop only; set rollout.overlap=false (or "
                 "collect.num_inference_workers=1) for the overlap path."
-        )
+            )
         scheduled = "env_task_ids" in groups
         env_task_ids = list(groups.get("env_task_ids", [None] * num_envs))
         pending_work = list(groups.get("pending_work", []))
@@ -635,9 +620,7 @@ class _RayRolloutCollection(BaseRunner):
                 self._int_from(("rollout.target_episodes", "target_episodes"), num_envs),
             )
         )
-        episode_horizon = self._int_from(
-            ("collect.episode_horizon", "episode_horizon"), 300
-        )
+        episode_horizon = self._int_from(("collect.episode_horizon", "episode_horizon"), 300)
         max_steps = self._int_from(
             ("rollout.max_steps", "rollout_steps"), target_episodes * episode_horizon
         )
@@ -727,8 +710,7 @@ class _RayRolloutCollection(BaseRunner):
         else:
             initial_obs = envs.current_obs().wait()
         ready_obs.extend(
-            (int(env_id), obs)
-            for env_id, obs in zip(env_ids, initial_obs, strict=True)
+            (int(env_id), obs) for env_id, obs in zip(env_ids, initial_obs, strict=True)
         )
         launch_infer()
 
@@ -967,8 +949,6 @@ def _build_oft_dump_step(
     )
     if init_state_index is not None:
         step["init_state_index"] = int(init_state_index)
-    step["task_description"] = str(
-        info.get("task_description", obs.get("task_description", ""))
-    )
+    step["task_description"] = str(info.get("task_description", obs.get("task_description", "")))
     step["success"] = success
     return step

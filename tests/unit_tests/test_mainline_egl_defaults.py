@@ -30,9 +30,7 @@ def test_collection_and_cotrain_default_to_osmesa() -> None:
 
 def test_cotrain_base_config_default_documents_osmesa() -> None:
     cfg = OmegaConf.load(
-        Path(_config_dir())
-        / "dreamervla"
-        / "openvla_onetraj_libero_cotrain_base.yaml"
+        Path(_config_dir()) / "dreamervla" / "openvla_onetraj_libero_cotrain_base.yaml"
     )
 
     assert cfg.render_backend == "osmesa"

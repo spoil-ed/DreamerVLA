@@ -134,9 +134,7 @@ def _prepare_images_for_vla(images: list[np.ndarray], cfg: Any) -> list[Image.Im
             or image.shape[-1] != 3
             or image.dtype != np.uint8
         ):
-            raise ValueError(
-                "OpenVLA-OFT images must be uint8 arrays with shape (H, W, 3)"
-            )
+            raise ValueError("OpenVLA-OFT images must be uint8 arrays with shape (H, W, 3)")
         pil_image = Image.fromarray(image).convert("RGB")
         if pil_image.size != (224, 224):
             pil_image = pil_image.resize((224, 224), Image.Resampling.LANCZOS)
@@ -164,9 +162,7 @@ def resolve_oft_policy_mode(checkpoint: str | Path, policy_mode: str = "discrete
     has_action_head = bool(sorted(checkpoint.glob("action_head--*.pt")))
     if has_action_head:
         raise ValueError("L1/action-query checkpoints are closed")
-    has_proprio_projector = bool(
-        sorted(checkpoint.glob("proprio_projector--*.pt"))
-    )
+    has_proprio_projector = bool(sorted(checkpoint.glob("proprio_projector--*.pt")))
     if has_proprio_projector:
         raise ValueError("OpenVLA-OFT hidden-token mainline does not include proprio")
     return "discrete"
@@ -181,8 +177,7 @@ def _action_head_type_for_mode(mode: str) -> str:
 def _resolve_num_images_in_input(args: SimpleNamespace) -> int:
     if int(args.history) != 1:
         raise ValueError(
-            "OpenVLA-OFT hidden-token mainline requires history=1, "
-            f"got {int(args.history)}"
+            f"OpenVLA-OFT hidden-token mainline requires history=1, got {int(args.history)}"
         )
     if list(args.image_keys) != ["agentview_rgb"]:
         raise ValueError(
@@ -192,8 +187,7 @@ def _resolve_num_images_in_input(args: SimpleNamespace) -> int:
     count = 1 if args.num_images_in_input is None else int(args.num_images_in_input)
     if count != 1:
         raise ValueError(
-            "OpenVLA-OFT hidden-token mainline requires num_images_in_input=1, "
-            f"got {count}"
+            f"OpenVLA-OFT hidden-token mainline requires num_images_in_input=1, got {count}"
         )
     return count
 
@@ -219,7 +213,7 @@ def _load_oft_components(args: SimpleNamespace, device: torch.device) -> dict[st
             vision_backbone=_FakeVisionBackbone(
                 num_patches=int(args.fake_num_patches),
                 num_images_in_input=_resolve_num_images_in_input(args),
-            )
+            ),
         )
         cfg = SimpleNamespace(
             pretrained_checkpoint=str(_project_path(args.oft_ckpt)),
@@ -289,8 +283,7 @@ def _hidden_token_sidecar_dims(
     keys = tuple(image_keys)
     if keys != ("agentview_rgb",):
         raise ValueError(
-            "OpenVLA-OFT hidden-token mainline requires one agentview image, "
-            f"got {keys!r}"
+            f"OpenVLA-OFT hidden-token mainline requires one agentview image, got {keys!r}"
         )
     resolved_token_dim = _loaded_token_dim(vla)
     if per_image_patches <= 0 or int(token_dim) <= 0:
@@ -382,25 +375,19 @@ def _predict_hidden_token_chunk(
             for key in image_keys
         ]
         images = prepare_images_for_vla(images, cfg)
-        primary_inputs = processor(model_prompt, images[0]).to(
-            device, dtype=torch.bfloat16
-        )
+        primary_inputs = processor(model_prompt, images[0]).to(device, dtype=torch.bfloat16)
         input_ids.append(primary_inputs["input_ids"])
         attention_masks.append(primary_inputs["attention_mask"])
         primary_pixels.append(primary_inputs["pixel_values"])
         for view_idx, image in enumerate(images[1:]):
             while len(extra_pixels_by_view) <= view_idx:
                 extra_pixels_by_view.append([])
-            extra_inputs = processor(model_prompt, image).to(
-                device, dtype=torch.bfloat16
-            )
+            extra_inputs = processor(model_prompt, image).to(device, dtype=torch.bfloat16)
             extra_pixels_by_view[view_idx].append(extra_inputs["pixel_values"])
 
     pixel_values = torch.cat(primary_pixels, dim=0)
     if extra_pixels_by_view:
-        extra_batches = [
-            torch.cat(view_pixels, dim=0) for view_pixels in extra_pixels_by_view
-        ]
+        extra_batches = [torch.cat(view_pixels, dim=0) for view_pixels in extra_pixels_by_view]
         pixel_values = torch.cat([pixel_values, *extra_batches], dim=1)
 
     with torch.inference_mode():
@@ -432,9 +419,7 @@ def _predict_hidden_token_chunk(
             input_embeddings.shape[0], -1, input_embeddings.shape[2]
         )
         lang_emb = language_embeddings.mean(dim=1).float()
-        projected = vla._process_vision_features(
-            pixel_values, language_embeddings, False
-        )
+        projected = vla._process_vision_features(pixel_values, language_embeddings, False)
         current_tokens = projected[:, -token_count:, :]
 
     if current_tokens.ndim != 3 or tuple(current_tokens.shape[1:]) != (
@@ -466,9 +451,7 @@ def _write_attrs(
     handle.attrs["hidden_key"] = str(args.hidden_key)
     handle.attrs["hidden_dim"] = int(token_count * token_dim)
     handle.attrs["obs_hidden_source"] = OBS_HIDDEN_SOURCE
-    handle.attrs["obs_embedding_shape"] = np.asarray(
-        [token_count, token_dim], dtype=np.int64
-    )
+    handle.attrs["obs_embedding_shape"] = np.asarray([token_count, token_dim], dtype=np.int64)
     handle.attrs["hidden_storage_format"] = "tokenized"
     handle.attrs["token_count"] = int(token_count)
     handle.attrs["token_dim"] = token_dim
@@ -497,9 +480,7 @@ def _write_source_hidden_token(
 ) -> dict[str, int]:
     """Atomically write one hidden-token HDF5 sidecar for one reward shard."""
 
-    tmp_path = out_hidden_token_path.with_name(
-        f"{out_hidden_token_path.name}.rank{rank}.tmp"
-    )
+    tmp_path = out_hidden_token_path.with_name(f"{out_hidden_token_path.name}.rank{rank}.tmp")
     if tmp_path.exists():
         tmp_path.unlink()
     image_keys = tuple(args.image_keys)
@@ -528,9 +509,7 @@ def _write_source_hidden_token(
         demo_keys = _list_demo_keys(source_data)
         if args.max_demos_per_file is not None:
             demo_keys = demo_keys[: int(args.max_demos_per_file)]
-        pbar = ProgressReporter(
-            len(demo_keys), f"rank{rank} {source_path.name}", unit="demo"
-        )
+        pbar = ProgressReporter(len(demo_keys), f"rank{rank} {source_path.name}", unit="demo")
         for demo_key in demo_keys:
             demo = source_data[demo_key]
             obs_group = demo["obs"]
@@ -633,10 +612,7 @@ def parse_args() -> SimpleNamespace:
 def main() -> None:
     args = parse_args()
     if str(args.obs_hidden_source) != OBS_HIDDEN_SOURCE:
-        raise SystemExit(
-            "OpenVLA-OFT preprocessing only supports "
-            "obs_hidden_source=hidden_token"
-        )
+        raise SystemExit("OpenVLA-OFT preprocessing only supports obs_hidden_source=hidden_token")
     if bool(args.fake_oft_components):
         args.resolved_policy_mode = "discrete"
     else:
@@ -650,10 +626,7 @@ def main() -> None:
         )
     args.include_state = False
     if int(args.history) != 1 or int(_resolve_num_images_in_input(args)) != 1:
-        raise SystemExit(
-            "OpenVLA-OFT preprocessing requires history=1 and "
-            "num_images_in_input=1"
-        )
+        raise SystemExit("OpenVLA-OFT preprocessing requires history=1 and num_images_in_input=1")
     if int(args.patches_per_image) <= 0 or int(args.token_dim) <= 0:
         raise SystemExit("OpenVLA-OFT patches_per_image and token_dim must be positive")
 
@@ -671,8 +644,7 @@ def main() -> None:
         return [out_hidden_token_dir / source_path.name]
 
     required = {
-        out_hidden_token_dir / source_path.name: required_demo_datasets()
-        for source_path in files
+        out_hidden_token_dir / source_path.name: required_demo_datasets() for source_path in files
     }
     task_plan = plan_hdf5_preprocess_tasks(
         files,

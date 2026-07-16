@@ -64,9 +64,7 @@ def test_parse_accelerator_range_rejects_duplicates() -> None:
 
 
 def test_flexible_placement_maps_explicit_gpu_groups() -> None:
-    placements = FlexiblePlacementStrategy([[2], [0, 1]]).get_placement(
-        _cluster(num_gpus=4)
-    )
+    placements = FlexiblePlacementStrategy([[2], [0, 1]]).get_placement(_cluster(num_gpus=4))
 
     assert [p.rank for p in placements] == [0, 1]
     assert [p.visible_accelerators for p in placements] == [["0", "1"], ["2"]]
@@ -75,9 +73,7 @@ def test_flexible_placement_maps_explicit_gpu_groups() -> None:
 
 
 def test_flexible_placement_accepts_range_strings() -> None:
-    placements = FlexiblePlacementStrategy(["1-2", "3"]).get_placement(
-        _cluster(num_gpus=4)
-    )
+    placements = FlexiblePlacementStrategy(["1-2", "3"]).get_placement(_cluster(num_gpus=4))
 
     assert [p.visible_accelerators for p in placements] == [["1", "2"], ["3"]]
 

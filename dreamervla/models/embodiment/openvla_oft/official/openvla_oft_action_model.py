@@ -90,9 +90,7 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
 
         if config.add_value_head:
             self.hidden_size = self.config.text_config.hidden_size
-            output_dim = (
-                1 if self.config.value_type == "chunk_level" else self.num_action_chunks
-            )
+            output_dim = 1 if self.config.value_type == "chunk_level" else self.num_action_chunks
             self.value_head = ValueHead(
                 input_dim=self.hidden_size,
                 hidden_sizes=(512, 128),
@@ -116,9 +114,7 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
         if self.proprio_projector is None:
             raise ValueError("Model was not initialized with use_proprio=True")
 
-        checkpoint_path = find_checkpoint_file(
-            checkpoint_path_or_repo_id, "proprio_projector"
-        )
+        checkpoint_path = find_checkpoint_file(checkpoint_path_or_repo_id, "proprio_projector")
         state_dict = load_component_state_dict(checkpoint_path)
         self.proprio_projector.load_state_dict(state_dict)
 
@@ -156,9 +152,7 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
                 input_ids = torch.cat(
                     (
                         input_ids,
-                        torch.unsqueeze(torch.Tensor([29871]).long(), dim=0).to(
-                            input_ids.device
-                        ),
+                        torch.unsqueeze(torch.Tensor([29871]).long(), dim=0).to(input_ids.device),
                     ),
                     dim=1,
                 )
@@ -187,9 +181,7 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
         precision = next(self.parameters()).dtype
 
         batchdata["input_ids"] = [x.transpose(0, 1) for x in batchdata["input_ids"]]
-        batchdata["attention_mask"] = [
-            x.transpose(0, 1) for x in batchdata["attention_mask"]
-        ]
+        batchdata["attention_mask"] = [x.transpose(0, 1) for x in batchdata["attention_mask"]]
         batchdata["input_ids"] = (
             pad_sequence(
                 batchdata["input_ids"],
@@ -209,13 +201,9 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
         assert torch.all(padding_mask == batchdata["attention_mask"].ne(0))
         padding_mask = ~padding_mask
         padding_mask = padding_mask.int()
-        sorted_indices = torch.argsort(
-            padding_mask, dim=1, descending=True, stable=True
-        )
+        sorted_indices = torch.argsort(padding_mask, dim=1, descending=True, stable=True)
         batchdata["input_ids"] = torch.gather(batchdata["input_ids"], 1, sorted_indices)
-        batchdata["attention_mask"] = torch.gather(
-            batchdata["attention_mask"], 1, sorted_indices
-        )
+        batchdata["attention_mask"] = torch.gather(batchdata["attention_mask"], 1, sorted_indices)
 
         batchdata["pixel_values"] = (
             torch.cat(batchdata["pixel_values"], dim=0).to(device).to(precision)
@@ -274,9 +262,7 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
             entropy: Computed entropy (optional), shape [B, action_dim * num_action_chunks]
         """
 
-        logprobs = compute_logprobs_from_logits(
-            logits=action_logits, target=action_tokens
-        )
+        logprobs = compute_logprobs_from_logits(logits=action_logits, target=action_tokens)
 
         result = {"logprobs": logprobs}
 
@@ -340,9 +326,7 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
         )
 
         # Extract hidden states for action tokens
-        last_hidden_states = language_model_output.hidden_states[
-            -1
-        ]  # (B, seq_len, hidden_size)
+        last_hidden_states = language_model_output.hidden_states[-1]  # (B, seq_len, hidden_size)
 
         # Prepare seq_indices for extracting action tokens (both logits and hidden states)
         batch_size = language_model_output.logits.shape[0]
@@ -385,9 +369,7 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
             probs_flat = probs.reshape(-1, probs.shape[-1])
             reponse_ids = torch.multinomial(probs_flat, num_samples=1, replacement=True)
 
-            reponse_ids = reponse_ids.view(
-                action_logits.shape[0], action_logits.shape[1]
-            )
+            reponse_ids = reponse_ids.view(action_logits.shape[0], action_logits.shape[1])
             action_tokens = reponse_ids
 
         final_reponse_ids = reponse_ids + (self.vocab_size - self.config.n_action_bins)
@@ -426,9 +408,7 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
         do_sample = kwargs.pop("do_sample")
 
         if env_obs is not None:
-            input_ids, attention_mask, pixel_values, proprio = self.prepare_inputs(
-                env_obs
-            )
+            input_ids, attention_mask, pixel_values, proprio = self.prepare_inputs(env_obs)
 
         forward_inputs = {
             "input_ids": input_ids,
@@ -446,20 +426,15 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
         labels[:] = IGNORE_INDEX
 
         # Get number of tokens in prompt (excluding the start token)
-        num_prompt_tokens = (
-            input_ids.ne(self.processor.tokenizer.pad_token_id).sum(dim=1) - 1
-        )
+        num_prompt_tokens = input_ids.ne(self.processor.tokenizer.pad_token_id).sum(dim=1) - 1
 
         multimodal_embeddings, multimodal_attention_mask, multimodal_position_ids = (
-            self._build_embedding(
-                input_ids, attention_mask, pixel_values, labels, proprio
-            )
+            self._build_embedding(input_ids, attention_mask, pixel_values, labels, proprio)
         )
 
         # Calculate number of patches (including proprio token and/or diffusion timestep embedding if present)
         num_patches = (
-            self.vision_backbone.get_num_patches()
-            * self.vision_backbone.get_num_images_in_input()
+            self.vision_backbone.get_num_patches() * self.vision_backbone.get_num_images_in_input()
         )
         use_proprio = self.proprio_projector is not None and proprio is not None
         if use_proprio:
@@ -510,9 +485,7 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
 
         return chunk_actions, result
 
-    def _build_embedding(
-        self, input_ids, attention_mask, pixel_values, labels, proprio=None
-    ):
+    def _build_embedding(self, input_ids, attention_mask, pixel_values, labels, proprio=None):
         # Prepare inputs by adding necessary tokens
         input_ids, attention_mask = self._prepare_input_for_action_prediction(
             input_ids, attention_mask
@@ -525,9 +498,7 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
 
         assert torch.all(padding_mask == attention_mask.ne(0))
         padding_mask = padding_mask.int()
-        sorted_indices = torch.argsort(
-            padding_mask, dim=1, descending=True, stable=True
-        )
+        sorted_indices = torch.argsort(padding_mask, dim=1, descending=True, stable=True)
         input_ids = torch.gather(input_ids, 1, sorted_indices)
         attention_mask = torch.gather(attention_mask, 1, sorted_indices)
         labels = torch.gather(labels, 1, sorted_indices)
@@ -562,14 +533,12 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
         input_embeddings = input_embeddings * ~all_actions_mask
 
         # Build multimodal embeddings and attention mask
-        multimodal_embeddings, multimodal_attention_mask = (
-            self._build_multimodal_attention(
-                input_embeddings, projected_patch_embeddings, attention_mask
-            )
+        multimodal_embeddings, multimodal_attention_mask = self._build_multimodal_attention(
+            input_embeddings, projected_patch_embeddings, attention_mask
         )
-        multimodal_position_ids = (
-            multimodal_attention_mask.long().cumsum(-1) - 1
-        ).masked_fill(multimodal_attention_mask == 0, 1)
+        multimodal_position_ids = (multimodal_attention_mask.long().cumsum(-1) - 1).masked_fill(
+            multimodal_attention_mask == 0, 1
+        )
         return multimodal_embeddings, multimodal_attention_mask, multimodal_position_ids
 
     def forward(self, forward_type=ForwardType.DEFAULT, **kwargs):
@@ -604,9 +573,7 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
         labels[:] = IGNORE_INDEX
 
         # num_prompt_tokens = input_ids.shape[-1] - 1
-        num_prompt_tokens = (
-            input_ids.ne(self.processor.tokenizer.pad_token_id).sum(dim=1) - 1
-        )
+        num_prompt_tokens = input_ids.ne(self.processor.tokenizer.pad_token_id).sum(dim=1) - 1
 
         # last token is space ` `
         assert torch.all(input_ids[:, -1] == 29871)
@@ -615,15 +582,12 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
         attention_mask = attention_mask.to(torch.long)
 
         multimodal_embeddings, multimodal_attention_mask, multimodal_position_ids = (
-            self._build_embedding(
-                input_ids, attention_mask, pixel_values, labels, proprio
-            )
+            self._build_embedding(input_ids, attention_mask, pixel_values, labels, proprio)
         )
 
         # Calculate number of patches (including proprio token and/or diffusion timestep embedding if present)
         num_patches = (
-            self.vision_backbone.get_num_patches()
-            * self.vision_backbone.get_num_images_in_input()
+            self.vision_backbone.get_num_patches() * self.vision_backbone.get_num_images_in_input()
         )
         use_proprio = self.proprio_projector is not None and proprio is not None
         if use_proprio:

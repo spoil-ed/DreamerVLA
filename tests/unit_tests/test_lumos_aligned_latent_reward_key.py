@@ -14,26 +14,30 @@ from dreamervla.dataset.wm_replay_classifier_dataset import _find_demo_pairs
 def _steps(T, success):
     out = []
     for t in range(T):
-        out.append({
-            "actions": np.zeros(7, np.float64),
-            "rewards": np.float32(0.0),                                   # collector: always 0
-            "sparse_rewards": np.uint8(1 if (success and t == T - 1) else 0),
-            "dones": np.uint8(1 if t == T - 1 else 0),
-            "robot_states": np.zeros(9, np.float64),
-            "states": np.zeros(5, np.float64),
-            "obs": {"agentview_rgb": np.zeros((256, 256, 3), np.uint8),
+        out.append(
+            {
+                "actions": np.zeros(7, np.float64),
+                "rewards": np.float32(0.0),  # collector: always 0
+                "sparse_rewards": np.uint8(1 if (success and t == T - 1) else 0),
+                "dones": np.uint8(1 if t == T - 1 else 0),
+                "robot_states": np.zeros(9, np.float64),
+                "states": np.zeros(5, np.float64),
+                "obs": {
+                    "agentview_rgb": np.zeros((256, 256, 3), np.uint8),
                     "eye_in_hand_rgb": np.zeros((256, 256, 3), np.uint8),
-                    "ee_pos": np.zeros(3, np.float64), "ee_ori": np.zeros(3, np.float64),
-                    "ee_states": np.zeros(6, np.float64), "gripper_states": np.zeros(2, np.float64),
-                    "joint_states": np.zeros(7, np.float64)},
-            "obs_embedding": np.zeros((256, 4096), np.float16),
-        })
+                    "ee_pos": np.zeros(3, np.float64),
+                    "ee_ori": np.zeros(3, np.float64),
+                    "ee_states": np.zeros(6, np.float64),
+                    "gripper_states": np.zeros(2, np.float64),
+                    "joint_states": np.zeros(7, np.float64),
+                },
+                "obs_embedding": np.zeros((256, 4096), np.float16),
+            }
+        )
     return out
 
 
-def test_load_demo_uses_sparse_rewards_for_complete(
-    tmp_path, hidden_token_preprocess_config
-):
+def test_load_demo_uses_sparse_rewards_for_complete(tmp_path, hidden_token_preprocess_config):
     with RolloutDumpWriter(tmp_path / "r", tmp_path / "h", "s.hdf5") as w:
         w.write_demo(
             index=0,
@@ -47,7 +51,7 @@ def test_load_demo_uses_sparse_rewards_for_complete(
         )
     raw, hid = tmp_path / "r" / "s.hdf5", tmp_path / "h" / "s.hdf5"
     # demo_key is the full HDF5 path ("data/demo_i"); _load_demo does fr[demo_key].
-    assert _load_demo(raw, hid, "data/demo_0").complete is True   # sparse_rewards terminal 1
+    assert _load_demo(raw, hid, "data/demo_0").complete is True  # sparse_rewards terminal 1
     assert _load_demo(raw, hid, "data/demo_1").complete is False  # no sparse reward
 
 
@@ -102,9 +106,7 @@ def test_lumos_aligned_dataset_returns_proprio_and_language_sidecar(
         )
     raw_dir, hid_dir = tmp_path / "r", tmp_path / "h"
     with h5py.File(hid_dir / "s.hdf5", "a") as handle:
-        handle["data/demo_0"].create_dataset(
-            "lang_emb", data=np.arange(5, dtype=np.float32)
-        )
+        handle["data/demo_0"].create_dataset("lang_emb", data=np.arange(5, dtype=np.float32))
 
     dataset = LumosAlignedLatentTrainDataset(
         raw_dir,
@@ -139,9 +141,7 @@ def test_lumos_aligned_dataset_can_read_language_from_source_hidden(
         )
     raw_dir, hid_dir = tmp_path / "r", tmp_path / "h"
     with h5py.File(hid_dir / "s.hdf5", "a") as handle:
-        handle["data/demo_0"].create_dataset(
-            "lang_emb", data=np.arange(5, dtype=np.float32)
-        )
+        handle["data/demo_0"].create_dataset("lang_emb", data=np.arange(5, dtype=np.float32))
 
     dataset = LumosAlignedLatentTrainDataset(
         raw_dir,

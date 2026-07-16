@@ -28,13 +28,9 @@ def summarize_libero_task_success(
         metrics[f"eval_task_{task_id}_successes"] = float(successes)
 
     macro_success_rate = (
-        float(sum(rate for _, rate in task_rates) / len(task_rates))
-        if task_rates
-        else 0.0
+        float(sum(rate for _, rate in task_rates) / len(task_rates)) if task_rates else 0.0
     )
-    episode_weighted_rate = (
-        float(total_successes / total_episodes) if total_episodes > 0 else 0.0
-    )
+    episode_weighted_rate = float(total_successes / total_episodes) if total_episodes > 0 else 0.0
     metrics.update(
         {
             "eval_success_rate": macro_success_rate,

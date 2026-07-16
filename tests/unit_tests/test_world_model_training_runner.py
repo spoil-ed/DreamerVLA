@@ -809,9 +809,7 @@ def test_offline_warmup_wm_profiles_configured_initial_steps(monkeypatch):
     assert "time/wm_warmup_forward_ms" in time_metrics
     assert "time/wm_warmup_total_ms" in time_metrics
 
-    runner._offline_warmup_wm(
-        Replay(), steps=3, start_step=2, batch_size=2, optim_cfg=None
-    )
+    runner._offline_warmup_wm(Replay(), steps=3, start_step=2, batch_size=2, optim_cfg=None)
     assert profile_keys_by_step[-1] == set()
 
 
@@ -1576,9 +1574,7 @@ def test_run_fails_fast_when_collected_dump_missing(tmp_path, monkeypatch):
     assert "build" not in calls  # never reached the model load
 
 
-def test_wm_only_resume_sets_restored_wm_metric_axis_before_logging(
-    tmp_path, monkeypatch
-):
+def test_wm_only_resume_sets_restored_wm_metric_axis_before_logging(tmp_path, monkeypatch):
     calls: list[str] = []
     runner = _make_orchestration_runner(
         tmp_path,
@@ -1612,9 +1608,7 @@ def test_wm_only_resume_sets_restored_wm_metric_axis_before_logging(
     assert resume_setter_calls == [1]
 
 
-def test_classifier_resume_offsets_metric_axis_by_total_wm_steps(
-    tmp_path, monkeypatch
-):
+def test_classifier_resume_offsets_metric_axis_by_total_wm_steps(tmp_path, monkeypatch):
     import dreamervla.runners.world_model_training_runner as mod
 
     calls: list[str] = []
@@ -1872,9 +1866,7 @@ def test_wm_warmup_resume_restores_next_epoch_and_requires_optimizer(tmp_path):
     with pytest.raises(RuntimeError, match="world_model_optimizer"):
         runner._load_wm_warmup_checkpoint(path, strict=True)
 
-    payload["state_dicts"]["world_model_optimizer"] = (
-        runner.world_model_optimizer.state_dict()
-    )
+    payload["state_dicts"]["world_model_optimizer"] = runner.world_model_optimizer.state_dict()
     payload["complete"] = True
     payload["warmup_epoch"] = 99
     torch.save(payload, path)
@@ -1899,9 +1891,7 @@ def test_strict_warmup_resume_rejects_hf_only_without_torch_progress(tmp_path):
     (tmp_path / "checkpoints" / "wm_warmup_hf").mkdir(parents=True)
 
     with pytest.raises(RuntimeError, match="no WM warmup checkpoint"):
-        runner._load_latest_wm_warmup_progress(
-            steps_per_epoch=5, total_steps=10
-        )
+        runner._load_latest_wm_warmup_progress(steps_per_epoch=5, total_steps=10)
 
 
 def test_classifier_warmup_checkpoint_atomically_overwrites_canonical_path(tmp_path):
@@ -1976,9 +1966,7 @@ def test_legacy_warmup_progress_remains_readable(tmp_path):
         legacy,
     )
 
-    restored = runner._load_latest_wm_warmup_progress(
-        steps_per_epoch=5, total_steps=20
-    )
+    restored = runner._load_latest_wm_warmup_progress(steps_per_epoch=5, total_steps=20)
     assert restored == {"epoch": 1, "step": 7, "complete": False}
 
 
@@ -2027,9 +2015,7 @@ def test_warmup_topk_checkpoint_keeps_best_metric_values(tmp_path):
         steps_per_epoch=1,
         total_steps=10,
     )
-    resumed_names = list(
-        (tmp_path / "checkpoints" / "warmup_topk" / "classifier").glob("*.ckpt")
-    )
+    resumed_names = list((tmp_path / "checkpoints" / "warmup_topk" / "classifier").glob("*.ckpt"))
     assert len(resumed_names) == 2
     assert any("f1=0.950000" in path.name for path in resumed_names)
 

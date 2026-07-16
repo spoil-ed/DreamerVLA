@@ -112,7 +112,9 @@ def test_inference_worker_handles_dict_latent_state() -> None:
             cluster, NodePlacementStrategy(1)
         )
 
-        first = group.forward_batch([_obs(0, 0, is_first=True), _obs(1, 10, is_first=True)], [0, 1]).wait()[0]
+        first = group.forward_batch(
+            [_obs(0, 0, is_first=True), _obs(1, 10, is_first=True)], [0, 1]
+        ).wait()[0]
         second = group.forward_batch([_obs(0, 1), _obs(1, 11)], [0, 1]).wait()[0]
         group.reset_states([0]).wait()
         reset = group.forward_batch([_obs(0, 0, is_first=True)], [0]).wait()[0]

@@ -300,7 +300,9 @@ def run_eval(cfg: Mapping[str, Any]) -> int:
     task_ids = args.task_ids if args.task_ids is not None else valid_task_ids
     invalid = [task_id for task_id in task_ids if task_id not in valid_task_ids]
     if invalid:
-        raise ValueError(f"Invalid task ids for {cfg.task_suite_name}: {invalid}; valid={valid_task_ids}")
+        raise ValueError(
+            f"Invalid task ids for {cfg.task_suite_name}: {invalid}; valid={valid_task_ids}"
+        )
 
     eval_mod.log_message(
         f"Using OpenVLA-OFT obs-action policy; task_ids={task_ids}; unnorm_key={cfg.unnorm_key}",

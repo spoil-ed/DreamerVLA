@@ -341,16 +341,13 @@ class LearnerWorker(Worker):
             optimizer_name = str(cfg.get("name", "adam")).strip().lower()
             if optimizer_name not in {"adam", "adamw"}:
                 raise ValueError(
-                    f"learner optimizer {name!r} must be adam or adamw; "
-                    f"got {optimizer_name!r}"
+                    f"learner optimizer {name!r} must be adam or adamw; got {optimizer_name!r}"
                 )
             lr = float(
                 cfg.get("lr", self.train_cfg.get(f"{name}_lr", self.train_cfg.get("lr", 1e-3)))
             )
             weight_decay = float(cfg.get("weight_decay", 0.0))
-            optimizer_cls = (
-                torch.optim.AdamW if optimizer_name == "adamw" else torch.optim.Adam
-            )
+            optimizer_cls = torch.optim.AdamW if optimizer_name == "adamw" else torch.optim.Adam
             optimizer_kwargs: dict[str, Any] = {
                 "lr": lr,
                 "weight_decay": weight_decay,
@@ -1158,10 +1155,7 @@ def _resolve_parameter_dtype(train_cfg: dict[str, Any]) -> torch.dtype:
     raw = train_cfg.get("param_precision", "fp32")
     dtype = precision_dtype(str(raw))
     if dtype not in {torch.float32, torch.bfloat16}:
-        raise ValueError(
-            "learner.train_cfg.param_precision must be fp32 or bf16; "
-            f"got {raw!r}"
-        )
+        raise ValueError(f"learner.train_cfg.param_precision must be fp32 or bf16; got {raw!r}")
     return dtype
 
 

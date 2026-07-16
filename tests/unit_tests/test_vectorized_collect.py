@@ -104,7 +104,9 @@ class FakeExtractor:
 
     def prepare(self, obs, task_description):
         # Different tasks -> different prompt length, so mixed-task batches are exercised.
-        tid = int(task_description.replace("task", "")) if task_description.startswith("task") else 0
+        tid = (
+            int(task_description.replace("task", "")) if task_description.startswith("task") else 0
+        )
         seq = self.base_len + tid
         return {
             "input_ids": torch.zeros(1, seq, dtype=torch.long),
@@ -192,8 +194,14 @@ def test_preprocess_config_and_data_attrs_written_once_on_first_demo():
     w = FakeWriter()
 
     collect_vectorized(
-        vec, exts, fake_infer, w, work_list, episode_horizon=5,
-        preprocess_config={"k": "v"}, data_attrs={"a": "b"},
+        vec,
+        exts,
+        fake_infer,
+        w,
+        work_list,
+        episode_horizon=5,
+        preprocess_config={"k": "v"},
+        data_attrs={"a": "b"},
     )
     assert w.config_writes == 1, "preprocess_config must be written exactly once"
     assert w.attr_writes == 1, "data_attrs must be written exactly once"
@@ -326,7 +334,12 @@ def test_rotating_writer_slices_demos_through_vectorized_loop(
         reward, hidden, shard_prefix="shard", demos_per_shard=2, start_index=0
     )
     n = collect_vectorized(
-        vec, exts, fake_infer, writer, work_list, episode_horizon=5,
+        vec,
+        exts,
+        fake_infer,
+        writer,
+        work_list,
+        episode_horizon=5,
         preprocess_config=hidden_token_preprocess_config,
         data_attrs={"task_suite_name": "libero_goal", "env_name": "x"},
     )

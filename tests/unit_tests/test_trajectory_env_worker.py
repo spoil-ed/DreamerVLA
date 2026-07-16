@@ -497,7 +497,9 @@ def test_real_env_worker_pins_osmesa_for_inproc_non_egl_backend(monkeypatch) -> 
         worker.close()
 
 
-def test_real_env_worker_postprocesses_openvla_oft_env_action_without_overwriting_policy_action() -> None:
+def test_real_env_worker_postprocesses_openvla_oft_env_action_without_overwriting_policy_action() -> (
+    None
+):
     replay = _MemoryReplay()
     worker = RealEnvWorker(
         env_cfg=_no_sidecar_oft_env_cfg(),
@@ -792,9 +794,7 @@ def test_observation_batch_msg_preserves_bfloat16_tensor_payload() -> None:
 def test_same_storage_observation_rows_reuse_batched_tensor_view() -> None:
     source = torch.arange(12, dtype=torch.bfloat16).reshape(2, 2, 3)
 
-    batched = trajectory_env_worker._batch_same_shape_obs_values(
-        [source[0], source[1]]
-    )
+    batched = trajectory_env_worker._batch_same_shape_obs_values([source[0], source[1]])
 
     assert isinstance(batched, torch.Tensor)
     assert batched.untyped_storage().data_ptr() == source.untyped_storage().data_ptr()
@@ -818,10 +818,12 @@ def test_real_env_interact_routes_observations_and_replay_without_actor_trajecto
     )
     channels = {
         "env": _MemoryChannel(),
-        "rollout": _MemoryChannel([
-            _rollout_batch(_rollout_result()),
-            _rollout_batch(_rollout_result()),
-        ]),
+        "rollout": _MemoryChannel(
+            [
+                _rollout_batch(_rollout_result()),
+                _rollout_batch(_rollout_result()),
+            ]
+        ),
         "actor": _MemoryChannel(),
     }
     monkeypatch.setattr(
@@ -865,13 +867,11 @@ def test_real_env_interact_routes_observations_and_replay_without_actor_trajecto
         assert any("[env rank=0 role=real_env] reset start" in line for line in traces)
         assert any("[env rank=0 role=real_env] reset done" in line for line in traces)
         assert any(
-            "[env rank=0 role=real_env] send action request batch_size=1 key=0"
-            in line
+            "[env rank=0 role=real_env] send action request batch_size=1 key=0" in line
             for line in traces
         )
         assert any(
-            "[env rank=0 role=real_env] recv action response batch_size=1 key=0"
-            in line
+            "[env rank=0 role=real_env] recv action response batch_size=1 key=0" in line
             for line in traces
         )
         assert any(
@@ -974,10 +974,12 @@ def test_real_env_interact_can_emit_actor_trajectory_when_configured(
     )
     channels = {
         "env": _MemoryChannel(),
-        "rollout": _MemoryChannel([
-            _rollout_batch(_rollout_result()),
-            _rollout_batch(_rollout_result()),
-        ]),
+        "rollout": _MemoryChannel(
+            [
+                _rollout_batch(_rollout_result()),
+                _rollout_batch(_rollout_result()),
+            ]
+        ),
         "actor": _MemoryChannel(),
     }
     monkeypatch.setattr(
@@ -1010,10 +1012,12 @@ def test_prefetch_bootstrap_lets_interact_skip_inline_reset(monkeypatch) -> None
     )
     channels = {
         "env": _MemoryChannel(),
-        "rollout": _MemoryChannel([
-            _rollout_batch(_rollout_result()),
-            _rollout_batch(_rollout_result()),
-        ]),
+        "rollout": _MemoryChannel(
+            [
+                _rollout_batch(_rollout_result()),
+                _rollout_batch(_rollout_result()),
+            ]
+        ),
         "actor": _MemoryChannel(),
     }
     monkeypatch.setattr(
@@ -1057,10 +1061,12 @@ def test_interact_buffers_chunks_until_complete_trajectory(monkeypatch) -> None:
     )
     channels = {
         "env": _MemoryChannel(),
-        "rollout": _MemoryChannel([
-            _rollout_batch(_rollout_result()),
-            _rollout_batch(_rollout_result()),
-        ]),
+        "rollout": _MemoryChannel(
+            [
+                _rollout_batch(_rollout_result()),
+                _rollout_batch(_rollout_result()),
+            ]
+        ),
         "actor": _MemoryChannel(),
     }
     monkeypatch.setattr(
@@ -1099,10 +1105,12 @@ def test_interact_writes_manual_cotrain_progress_file(monkeypatch, tmp_path) -> 
     worker.configure_progress(str(tmp_path), min_interval_s=0.0)
     channels = {
         "env": _MemoryChannel(),
-        "rollout": _MemoryChannel([
-            _rollout_batch(_rollout_result()),
-            _rollout_batch(_rollout_result()),
-        ]),
+        "rollout": _MemoryChannel(
+            [
+                _rollout_batch(_rollout_result()),
+                _rollout_batch(_rollout_result()),
+            ]
+        ),
         "actor": _MemoryChannel(),
     }
     monkeypatch.setattr(
@@ -1194,10 +1202,12 @@ def test_wm_interact_progress_file_includes_classifier_success_counters(
     worker.configure_progress(str(tmp_path), min_interval_s=0.0)
     channels = {
         "env": _MemoryChannel(),
-        "rollout": _MemoryChannel([
-            _rollout_batch(_rollout_result()),
-            _rollout_batch(_rollout_result()),
-        ]),
+        "rollout": _MemoryChannel(
+            [
+                _rollout_batch(_rollout_result()),
+                _rollout_batch(_rollout_result()),
+            ]
+        ),
         "actor": _MemoryChannel(),
     }
     monkeypatch.setattr(
@@ -1775,10 +1785,12 @@ def test_interact_flushes_partial_episode_at_rollout_epoch_boundary(
     )
     channels = {
         "env": _MemoryChannel(),
-        "rollout": _MemoryChannel([
-            _rollout_batch(one_step),
-            _rollout_batch(one_step),
-        ]),
+        "rollout": _MemoryChannel(
+            [
+                _rollout_batch(one_step),
+                _rollout_batch(one_step),
+            ]
+        ),
         "actor": _MemoryChannel(),
     }
     monkeypatch.setattr(
@@ -1900,9 +1912,7 @@ def test_get_rollout_result_batch_injects_bf16_tensor_hidden() -> None:
     try:
         worker.init()
         worker.bootstrap_obs()
-        worker._obs_by_slot[0]["obs_embedding"] = torch.full(
-            (4,), 2.0, dtype=torch.bfloat16
-        )
+        worker._obs_by_slot[0]["obs_embedding"] = torch.full((4,), 2.0, dtype=torch.bfloat16)
         batch = RolloutResultBatchMsg(
             env_rank=0,
             results=[],
@@ -1955,9 +1965,7 @@ def test_worker_batched_trajectory_keeps_bf16_hidden_payload() -> None:
             action_dim=3,
         )
 
-    shard = worker._build_worker_trajectory_shard_from_slot_chunks(
-        [[chunk(0)], [chunk(1)]]
-    )
+    shard = worker._build_worker_trajectory_shard_from_slot_chunks([[chunk(0)], [chunk(1)]])
 
     assert shard.forward_inputs["hidden"].shape == (1, 2, 2, 3)
     assert shard.forward_inputs["hidden"].dtype == torch.bfloat16
@@ -2056,8 +2064,7 @@ def _build_split_slot_worker(
     for env in worker.envs:
         env.close()
     worker.envs = [
-        _SplitCounterSlot(slot_id=i, horizon=h, call_log=call_log)
-        for i, h in enumerate(horizons)
+        _SplitCounterSlot(slot_id=i, horizon=h, call_log=call_log) for i, h in enumerate(horizons)
     ]
     worker._batched_env = False
     worker.bootstrap_obs()
@@ -2104,13 +2111,10 @@ def test_step_slots_parallel_matches_serial_reference() -> None:
     ser_log: list[tuple[str, int]] = []
     serial = _build_split_slot_worker(horizons, ser_log)
     try:
-        accums = parallel._step_slots_parallel(
-            [_rollout_result_for_slot(i) for i in range(4)]
-        )
+        accums = parallel._step_slots_parallel([_rollout_result_for_slot(i) for i in range(4)])
         parallel_shards = {i: parallel._finalize_accum(accums[i]) for i in range(4)}
         serial_shards = {
-            i: serial.apply_rollout_result(_rollout_result_for_slot(i))
-            for i in range(4)
+            i: serial.apply_rollout_result(_rollout_result_for_slot(i)) for i in range(4)
         }
 
         for i in range(4):
@@ -2130,9 +2134,7 @@ def test_step_slots_parallel_drops_terminated_slots() -> None:
     call_log: list[tuple[str, int]] = []
     worker = _build_split_slot_worker([1, 5, 5, 5], call_log)
     try:
-        accums = worker._step_slots_parallel(
-            [_rollout_result_for_slot(i) for i in range(4)]
-        )
+        accums = worker._step_slots_parallel([_rollout_result_for_slot(i) for i in range(4)])
 
         slot0_ops = [op for op in call_log if op[1] == 0]
         assert slot0_ops == [("send", 0), ("recv", 0)]

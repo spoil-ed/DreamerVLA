@@ -41,9 +41,7 @@ def test_build_dump_step_matches_writer_schema() -> None:
     assert np.array_equal(step["lang_emb"], np.arange(6, dtype=np.float32))
     assert int(step["dones"]) == 1 and int(step["sparse_rewards"]) == 1
     assert step["robot_states"].shape == (9,)
-    np.testing.assert_array_equal(
-        step["proprio"], np.arange(1.0, 9.0, dtype=np.float32)
-    )
+    np.testing.assert_array_equal(step["proprio"], np.arange(1.0, 9.0, dtype=np.float32))
     for key in ("agentview_rgb", "eye_in_hand_rgb", "ee_pos", "joint_states"):
         assert key in step["obs"]
 

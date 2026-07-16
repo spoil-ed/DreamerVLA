@@ -16,17 +16,11 @@ from omegaconf import OmegaConf
 class EmbodiedEvalImageTokenMixin:
     def _attach_image_token_mapping(self) -> None:
         wm = getattr(self, "_unwrapped_world_model", None) or self.world_model
-        if (
-            wm is None
-            or not getattr(wm, "spatial_codec", False)
-            or self.encoder is None
-        ):
+        if wm is None or not getattr(wm, "spatial_codec", False) or self.encoder is None:
             return
         lm_head = self.encoder.backbone.lm_head
         vocab_mapping = self.encoder.backbone.model.vocabulary_mapping
-        image_token_bpe_ids = torch.tensor(
-            sorted(vocab_mapping.bpe2img.keys()), dtype=torch.long
-        )
+        image_token_bpe_ids = torch.tensor(sorted(vocab_mapping.bpe2img.keys()), dtype=torch.long)
         full_vocab_size = int(lm_head.weight.shape[0])
         wm_io_mode = str(getattr(wm, "io_mode", "hidden"))
         wm.attach_lm_head(
@@ -39,41 +33,26 @@ class EmbodiedEvalImageTokenMixin:
             print(f"  [Eval] attached {tag} for image-token mapping.")
 
     def _wm_io_mode(self) -> str:
-        wm = getattr(self, "_unwrapped_world_model", None) or getattr(
-            self, "world_model", None
-        )
+        wm = getattr(self, "_unwrapped_world_model", None) or getattr(self, "world_model", None)
         if wm is None:
             return "hidden"
         explicit = getattr(wm, "io_mode", None)
         if explicit is not None:
             return str(explicit)
         encoder = getattr(wm, "encoder", None)
-        if (
-            encoder is not None
-            and encoder.__class__.__name__ == "DreamerV3TokenEncoder"
-        ):
+        if encoder is not None and encoder.__class__.__name__ == "DreamerV3TokenEncoder":
             return "token"
         return "hidden"
 
     def _wm_expects_image_vocab_tokens(self) -> bool:
-        wm = getattr(self, "_unwrapped_world_model", None) or getattr(
-            self, "world_model", None
-        )
+        wm = getattr(self, "_unwrapped_world_model", None) or getattr(self, "world_model", None)
         encoder = getattr(wm, "encoder", None)
-        return (
-            encoder is not None
-            and encoder.__class__.__name__ == "DreamerV3TokenEncoder"
-        )
+        return encoder is not None and encoder.__class__.__name__ == "DreamerV3TokenEncoder"
 
     def _wm_expects_pixel_images(self) -> bool:
-        wm = getattr(self, "_unwrapped_world_model", None) or getattr(
-            self, "world_model", None
-        )
+        wm = getattr(self, "_unwrapped_world_model", None) or getattr(self, "world_model", None)
         encoder = getattr(wm, "encoder", None)
-        return (
-            encoder is not None
-            and encoder.__class__.__name__ == "DreamerV3PixelEncoder"
-        )
+        return encoder is not None and encoder.__class__.__name__ == "DreamerV3PixelEncoder"
 
     def _get_image_bpe_set(self) -> set[int]:
         cached = getattr(self, "_image_bpe_set_cache", None)
@@ -88,19 +67,13 @@ class EmbodiedEvalImageTokenMixin:
 
         wm = getattr(self, "_unwrapped_world_model", None) or self.world_model
         wm_encoder = getattr(wm, "encoder", None)
-        n_img_tok = int(
-            getattr(wm, "n_image_tokens", getattr(wm_encoder, "n_image_tokens", 256))
-        )
+        n_img_tok = int(getattr(wm, "n_image_tokens", getattr(wm_encoder, "n_image_tokens", 256)))
         which_blocks_cfg = OmegaConf.select(
             self.cfg, "eval.dreamer_which_image_blocks", default=None
         )
         if which_blocks_cfg is None:
             which_blocks = [
-                int(
-                    OmegaConf.select(
-                        self.cfg, "eval.dreamer_which_image_block", default=-2
-                    )
-                )
+                int(OmegaConf.select(self.cfg, "eval.dreamer_which_image_block", default=-2))
             ]
         else:
             which_blocks = [int(item) for item in which_blocks_cfg]
@@ -112,9 +85,7 @@ class EmbodiedEvalImageTokenMixin:
         for idx, seq in enumerate(input_ids_list):
             blocks = extract_image_blocks(list(seq))
             if not blocks:
-                raise ValueError(
-                    f"rollout sample {idx}: no image block found in tokens"
-                )
+                raise ValueError(f"rollout sample {idx}: no image block found in tokens")
             tok_ids: list[int] = []
             for which_block in which_blocks:
                 bidx = which_block if which_block >= 0 else len(blocks) + which_block

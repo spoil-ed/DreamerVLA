@@ -20,14 +20,10 @@ class GradientUpdateTimer:
         self.device = torch.device(device)
         self.enabled = bool(enabled)
         self._use_cuda_events = bool(
-            self.enabled
-            and self.device.type == "cuda"
-            and torch.cuda.is_available()
+            self.enabled and self.device.type == "cuda" and torch.cuda.is_available()
         )
         self._wall_timings: dict[str, float] = {}
-        self._cuda_events: dict[
-            str, tuple[torch.cuda.Event, torch.cuda.Event]
-        ] = {}
+        self._cuda_events: dict[str, tuple[torch.cuda.Event, torch.cuda.Event]] = {}
         self._device_synchronized = False
 
     @contextmanager

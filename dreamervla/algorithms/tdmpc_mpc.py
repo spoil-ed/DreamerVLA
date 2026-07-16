@@ -226,9 +226,7 @@ class TDMPCMPCPlanner:
                 ):
                     terminal_action = extra["mean"]
                 terminal_action = action_transform(
-                    terminal_action[:, : int(self.cfg.action_dim)]
-                    .float()
-                    .clamp(-1.0, 1.0)
+                    terminal_action[:, : int(self.cfg.action_dim)].float().clamp(-1.0, 1.0)
                 )
             critic_feat = _critic_hidden(
                 world_model,
@@ -307,10 +305,9 @@ class TDMPCMPCPlanner:
             score = torch.exp(float(cfg.temperature) * (elite_values - max_value))
             score = score / score.sum().clamp_min(1.0e-9)
             mean = (score.view(1, num_elites, 1) * elite_actions).sum(dim=1)
-            var = (
-                score.view(1, num_elites, 1)
-                * (elite_actions - mean.unsqueeze(1)).square()
-            ).sum(dim=1)
+            var = (score.view(1, num_elites, 1) * (elite_actions - mean.unsqueeze(1)).square()).sum(
+                dim=1
+            )
             std = var.sqrt().clamp(float(cfg.min_std), float(cfg.max_std))
 
         best_idx = torch.argmax(elite_values)

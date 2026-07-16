@@ -263,9 +263,7 @@ def _world_model_classifier_input(world_model: nn.Module, latent: Any) -> torch.
     return _world_model_actor_input(world_model, latent)
 
 
-def _world_model_classifier_video(
-    world_model: nn.Module, hidden_seq: torch.Tensor
-) -> torch.Tensor:
+def _world_model_classifier_video(world_model: nn.Module, hidden_seq: torch.Tensor) -> torch.Tensor:
     """Map imagined WM-internal states to the external latent seen by classifier."""
     if hidden_seq.ndim < 3:
         raise ValueError(
@@ -327,11 +325,7 @@ def _imagine_and_score_slice(
     )
 
     for _ in range(num_chunks):
-        actor_feat = (
-            _world_model_actor_input(chunk_world_model, current)
-            .detach()
-            .to(feat_dtype)
-        )
+        actor_feat = _world_model_actor_input(chunk_world_model, current).detach().to(feat_dtype)
         with torch.no_grad():
             # Stochastic full action chunk — the PPO action unit for VLA/LUMOS:
             # one policy decision emits K env actions.
@@ -355,9 +349,7 @@ def _imagine_and_score_slice(
         actions.append(action_chunk.detach())
         sampled_token_ids = _sample_extra.get("action_token_ids")
         action_token_ids.append(
-            sampled_token_ids.detach()
-            if isinstance(sampled_token_ids, torch.Tensor)
-            else None
+            sampled_token_ids.detach() if isinstance(sampled_token_ids, torch.Tensor) else None
         )
         old_log_probs.append(old_lp.detach())
 
@@ -376,20 +368,15 @@ def _imagine_and_score_slice(
             ref_kls.append((old_lp.detach() - ref_lp).detach())
 
         with torch.no_grad():
-            wm_action_chunk = _actor_action_for_world_model(
-                action_chunk.detach(), algorithm_cfg
-            )
-            next_seq = _predict_next_chunk_mb(
-                chunk_world_model, current, wm_action_chunk, imag_mb
-            )
+            wm_action_chunk = _actor_action_for_world_model(action_chunk.detach(), algorithm_cfg)
+            next_seq = _predict_next_chunk_mb(chunk_world_model, current, wm_action_chunk, imag_mb)
             hidden_seq = _world_model_classifier_video(
                 chunk_world_model, next_seq["hidden_seq"]
             )  # [b, K, ...] all K classifier-visible frames
             proprio_seq = next_seq.get("proprio_seq")
-            if (
-                bool(getattr(classifier_module, "supports_proprio_conditioning", False))
-                and not isinstance(proprio_seq, torch.Tensor)
-            ):
+            if bool(
+                getattr(classifier_module, "supports_proprio_conditioning", False)
+            ) and not isinstance(proprio_seq, torch.Tensor):
                 raise ValueError(
                     "classifier requires proprio conditioning, but world model "
                     "predict_next_chunk did not return raw proprio_seq"
@@ -405,9 +392,7 @@ def _imagine_and_score_slice(
                 elif chunk_pool == "mean":
                     pooled = hidden_seq.mean(dim=1)
                     pooled_proprio = (
-                        proprio_seq.mean(dim=1)
-                        if isinstance(proprio_seq, torch.Tensor)
-                        else None
+                        proprio_seq.mean(dim=1) if isinstance(proprio_seq, torch.Tensor) else None
                     )
                 else:  # "last"
                     pooled = hidden_seq[:, -1]
@@ -498,9 +483,7 @@ def _imagine_and_score_slice(
     # a chunk classifier finish_step is in chunks; convert at the boundary. Unfired
     # entries already encode "T_scan - 1" → the last env-step of the last chunk.
     finish_step = finish_native * K + finish_offset if chunk_granular else finish_native
-    score_step = (
-        score_step_native * K + finish_offset if chunk_granular else score_step_native
-    )
+    score_step = score_step_native * K + finish_offset if chunk_granular else score_step_native
 
     return ImaginedRollout(
         actor_feats=actor_feats,
@@ -564,15 +547,11 @@ def dino_lumos_step(
     # is in chunk units (~num_chunks/15: e.g. 60/15=4 for libero_goal at K=5,
     # 37/15=2 for K=8). For an action-granularity classifier the YAML MUST
     # set ``algorithm.lumos.classifier_min_steps`` explicitly in env-step units.
-    classifier_min_steps = int(
-        lumos_cfg.get("classifier_min_steps", max(1, num_chunks // 15))
-    )
+    classifier_min_steps = int(lumos_cfg.get("classifier_min_steps", max(1, num_chunks // 15)))
     # Drop GRPO groups with no variance in returns (all-success or all-fail in
     # the same prompt's rollouts). Their normalized advantage is 0 anyway, so
     # this is purely a compute optimization; matches LUMOS ray_trainer filter().
-    filter_zero_variance_groups = bool(
-        lumos_cfg.get("filter_zero_variance_groups", True)
-    )
+    filter_zero_variance_groups = bool(lumos_cfg.get("filter_zero_variance_groups", True))
 
     compat_group_size = int(algorithm_cfg.get("ppo_rollouts_per_start", 4))
     group_size_min = int(lumos_cfg.get("ppo_rollouts_per_start_min", compat_group_size))
@@ -597,9 +576,7 @@ def dino_lumos_step(
     use_ref = ref_policy is not None
 
     chunk_world_model.eval()
-    classifier_module = (
-        classifier.module if hasattr(classifier, "module") else classifier
-    )
+    classifier_module = classifier.module if hasattr(classifier, "module") else classifier
     classifier_module.eval()
     policy.train()
     if ref_policy is not None:
@@ -621,9 +598,7 @@ def dino_lumos_step(
     wm_module = getattr(chunk_world_model, "module", chunk_world_model)
     num_hist = int(getattr(wm_module, "num_hist", 1))
     with torch.no_grad():
-        latent_seq = _detach_latent(
-            _world_model_observe_sequence(chunk_world_model, obs)
-        )
+        latent_seq = _detach_latent(_world_model_observe_sequence(chunk_world_model, obs))
         seq_len = _latent_time_dim(latent_seq)
         T_hist = min(imag_last if imag_last > 0 else seq_len, seq_len)
         current = _repeat_latent(
@@ -644,9 +619,7 @@ def dino_lumos_step(
     B_eff = n_starts * group_size
     mb_starts_cfg = int(lumos_cfg.get("update_micro_batch_starts", 0))
     mb_starts = n_starts if mb_starts_cfg <= 0 else min(max(1, mb_starts_cfg), n_starts)
-    slice_bounds = [
-        (s, min(s + mb_starts, n_starts)) for s in range(0, n_starts, mb_starts)
-    ]
+    slice_bounds = [(s, min(s + mb_starts, n_starts)) for s in range(0, n_starts, mb_starts)]
     # Inner micro-batch for the classifier sweep (``eval_micro_batch``) — composes
     # with the slice and is the only bound for the full-batch fallback.
     eval_micro_batch = int(lumos_cfg.get("eval_micro_batch", 64) or B_eff)
@@ -683,9 +656,7 @@ def dino_lumos_step(
             lumos_cfg.get("classifier_chunk_pool", None)
             or getattr(classifier_cfg, "chunk_pool", "last")
         )
-        finish_offset = (
-            K - 1 if chunk_pool == "last" else (0 if chunk_pool == "first" else K // 2)
-        )
+        finish_offset = K - 1 if chunk_pool == "last" else (0 if chunk_pool == "first" else K // 2)
     else:
         chunk_pool = None
         finish_offset = 0
@@ -717,9 +688,7 @@ def dino_lumos_step(
                     chunk_world_model=chunk_world_model,
                     classifier_module=classifier_module,
                     classifier_threshold=classifier_threshold,
-                    current=_slice_latent(
-                        current, s_lo * group_size, s_hi * group_size
-                    ),
+                    current=_slice_latent(current, s_lo * group_size, s_hi * group_size),
                     device=device,
                     chunk_size=K,
                     num_chunks=num_chunks,
@@ -744,17 +713,11 @@ def dino_lumos_step(
     complete = torch.cat([d.complete for d in slices], dim=0)
     finish_step = torch.cat([d.finish_step for d in slices], dim=0)
     score = torch.cat(
-        [
-            d.score if d.score is not None else d.complete.float()
-            for d in slices
-        ],
+        [d.score if d.score is not None else d.complete.float() for d in slices],
         dim=0,
     )
     score_step = torch.cat(
-        [
-            d.score_step if d.score_step is not None else d.finish_step
-            for d in slices
-        ],
+        [d.score_step if d.score_step is not None else d.finish_step for d in slices],
         dim=0,
     )
 
@@ -777,12 +740,8 @@ def dino_lumos_step(
     # ``finish_step // K`` (included). For failed episodes (complete=0,
     # finish_step = T_max-1) every chunk is valid (uniform mask).
     valid_chunk_count = build_valid_chunk_count(finish_step, K, num_chunks).to(device)
-    chunk_indices_t = torch.arange(num_chunks, device=device).unsqueeze(
-        1
-    )  # [num_chunks, 1]
-    chunk_mask = (
-        chunk_indices_t < valid_chunk_count.unsqueeze(0)
-    ).float()  # [num_chunks, B_eff]
+    chunk_indices_t = torch.arange(num_chunks, device=device).unsqueeze(1)  # [num_chunks, 1]
+    chunk_mask = (chunk_indices_t < valid_chunk_count.unsqueeze(0)).float()  # [num_chunks, B_eff]
 
     # ─── KL subtracted from reward (LUMOS style) ────────────────────────────
     # LUMOS compute_rewards: token_score - kl * kl_ratio, BEFORE GRPO advantage.
@@ -791,10 +750,7 @@ def dino_lumos_step(
         # Stack ref_kls per chunk across the slices into the [num_chunks, B_eff]
         # global layout (each slice holds num_chunks tensors of shape [mb]).
         ref_kl_stack = torch.stack(
-            [
-                torch.cat([d.ref_kls[c] for d in slices], dim=0)
-                for c in range(num_chunks)
-            ],
+            [torch.cat([d.ref_kls[c] for d in slices], dim=0) for c in range(num_chunks)],
             dim=0,
         )  # [num_chunks, B_eff]
         kl_per_rollout = (ref_kl_stack * chunk_mask).sum(dim=0)  # [B_eff]
@@ -823,9 +779,7 @@ def dino_lumos_step(
             eps=adv_eps,
         )
     else:
-        advantages = _group_advantage(
-            returns_adjusted, group_size=group_size, eps=adv_eps
-        )
+        advantages = _group_advantage(returns_adjusted, group_size=group_size, eps=adv_eps)
         adaptive_rollout_mask = torch.ones_like(returns_adjusted)
         adaptive_group_has_variance = torch.ones(
             (0,), dtype=torch.bool, device=returns_adjusted.device
@@ -938,21 +892,15 @@ def dino_lumos_step(
                 # all chunk graphs. kl_coef is folded into advantages above.
                 # masked_mean_ratio passes the GLOBAL B_eff so the per-slice terms
                 # sum to the full-batch mean — each rollout weighted equally.
-                ppo_term = masked_mean_ratio_chunk_term(
-                    ppo_clip, mask_c, ppo_count_slice, B_eff
-                )
-                ent_term = masked_mean_ratio_chunk_term(
-                    entropy_t, mask_c, ppo_count_slice, B_eff
-                )
+                ppo_term = masked_mean_ratio_chunk_term(ppo_clip, mask_c, ppo_count_slice, B_eff)
+                ent_term = masked_mean_ratio_chunk_term(entropy_t, mask_c, ppo_count_slice, B_eff)
                 loss_c = ppo_term - entropy_coef * ent_term
                 total_entropy_sum += float((entropy_t.detach() * mask_c).sum().item())
 
                 if epoch_idx == update_epochs - 1:
                     valid = mask_c > 0
                     if valid.any():
-                        last_epoch_ratio_records.append(
-                            ratio.detach()[valid].reshape(-1)
-                        )
+                        last_epoch_ratio_records.append(ratio.detach()[valid].reshape(-1))
 
                 if actor_bc_ref_scale > 0.0:
                     _, _, extra = policy(
@@ -977,9 +925,7 @@ def dino_lumos_step(
                                 )
                             ref_action_chunk = ref_extra.get("action_chunk")
                         else:
-                            ref_action_chunk = _policy_reference_action_chunk(
-                                policy, actor_feat
-                            )
+                            ref_action_chunk = _policy_reference_action_chunk(policy, actor_feat)
                         if isinstance(ref_action_chunk, torch.Tensor):
                             # BC anchor is masked by the FINISH-only mask
                             # (``bc_chunk_mask``), not the post-variance-filter
@@ -1008,9 +954,7 @@ def dino_lumos_step(
                 epoch_actor_loss += float(loss_c.detach().item())
         if should_step:
             grad_norm = float(
-                torch.nn.utils.clip_grad_norm_(
-                    policy.parameters(), max_norm=grad_clip
-                ).item()
+                torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=grad_clip).item()
             )
             actor_optimizer.step()
         else:
@@ -1029,10 +973,7 @@ def dino_lumos_step(
         ppo_ratio_min = float(ratio_flat.min().item())
         ppo_ratio_max = float(ratio_flat.max().item())
         ppo_clipfrac = float(
-            ((ratio_flat < 1.0 - clip_low) | (ratio_flat > 1.0 + clip_high))
-            .float()
-            .mean()
-            .item()
+            ((ratio_flat < 1.0 - clip_low) | (ratio_flat > 1.0 + clip_high)).float().mean().item()
         )
     else:
         ppo_ratio_mean = 1.0
@@ -1060,9 +1001,7 @@ def dino_lumos_step(
     # sentinel and should be ignored.
     complete_bool = complete.detach().bool()
     if complete_bool.any():
-        mean_finish_step_complete = float(
-            finish_step.detach().float()[complete_bool].mean().item()
-        )
+        mean_finish_step_complete = float(finish_step.detach().float()[complete_bool].mean().item())
     else:
         mean_finish_step_complete = -1.0
     # avg_entropy metric: mean entropy per valid (chunk, rollout) pair across all
@@ -1079,9 +1018,7 @@ def dino_lumos_step(
         groups_returns = returns_adjusted.detach().reshape(-1, group_size)  # [G, K]
         groups_complete = complete.detach().bool().reshape(-1, group_size)
         groups_finish_step = finish_step.detach().long().reshape(-1, group_size)
-        group_success_rates: list[float] = (
-            groups_complete.float().mean(dim=-1).cpu().tolist()
-        )
+        group_success_rates: list[float] = groups_complete.float().mean(dim=-1).cpu().tolist()
         group_success_counts: list[int] = groups_complete.sum(dim=-1).cpu().tolist()
         group_rollout_successes: list[list[bool]] = groups_complete.cpu().tolist()
         group_finish_steps: list[list[int]] = groups_finish_step.cpu().tolist()
@@ -1092,9 +1029,7 @@ def dino_lumos_step(
         num_mixed = num_groups - num_all_success - num_all_fail
         num_zero_variance = int(num_groups - int(adaptive_group_has_variance.sum().item()))
         group_var_keep_frac = float(adaptive_group_has_variance.float().mean().item())
-        effective_group_size_mean = float(
-            adaptive_effective_counts.float().mean().item()
-        )
+        effective_group_size_mean = float(adaptive_effective_counts.float().mean().item())
     else:
         group_success_rates = []
         group_success_counts = []
@@ -1169,9 +1104,7 @@ def dino_lumos_step(
         "LUMOS/T_max": float(T_max),
         "LUMOS/start_points_per_window": float(T_hist),
         "LUMOS/classifier_min_steps": float(classifier_min_steps),
-        "LUMOS/valid_chunk_frac": float(
-            chunk_mask.sum().item() / max(1, num_chunks * B_eff)
-        ),
+        "LUMOS/valid_chunk_frac": float(chunk_mask.sum().item() / max(1, num_chunks * B_eff)),
         "LUMOS/group_var_keep_frac": group_var_keep_frac,
         # ── per-group breakdown for ppo_groups.jsonl log ─────────────────
         "LUMOS/group_size": float(group_size),

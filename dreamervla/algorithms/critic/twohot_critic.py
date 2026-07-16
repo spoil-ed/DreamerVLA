@@ -99,9 +99,7 @@ class TwohotCritic(nn.Module):
     def logits(self, hidden: Tensor) -> Tensor:
         # Match param dtype (FSDP MixedPrecision casts gathered Linear weights
         # to bf16 inside forward).
-        first_linear = next(
-            module for module in self.backbone if isinstance(module, nn.Linear)
-        )
+        first_linear = next(module for module in self.backbone if isinstance(module, nn.Linear))
         weight_dtype = first_linear.weight.dtype
         hidden = hidden.to(dtype=weight_dtype)
         return self.backbone(hidden)
@@ -160,9 +158,7 @@ class ReturnPercentileTracker:
     normalised returns as (return - P5) / S.
     """
 
-    def __init__(
-        self, decay: float = 0.99, low: float = 0.05, high: float = 0.95
-    ) -> None:
+    def __init__(self, decay: float = 0.99, low: float = 0.05, high: float = 0.95) -> None:
         self.decay = float(decay)
         self.low = float(low)
         self.high = float(high)

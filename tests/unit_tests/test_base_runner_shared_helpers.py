@@ -112,9 +112,7 @@ class _FakeDistributed:
     def __init__(self) -> None:
         self.sampler_calls: list[tuple[bool, bool]] = []
 
-    def maybe_make_sampler(
-        self, dataset: Dataset[Any], *, shuffle: bool, drop_last: bool
-    ) -> None:
+    def maybe_make_sampler(self, dataset: Dataset[Any], *, shuffle: bool, drop_last: bool) -> None:
         self.sampler_calls.append((shuffle, drop_last))
         return None
 

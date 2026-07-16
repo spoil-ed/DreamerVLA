@@ -23,10 +23,7 @@ def precision_dtype(precision: str) -> torch.dtype:
         "fp16": torch.float16,
     }
     if normalized not in aliases:
-        raise ValueError(
-            "precision must be one of fp32, bf16, or fp16; "
-            f"got {precision!r}"
-        )
+        raise ValueError(f"precision must be one of fp32, bf16, or fp16; got {precision!r}")
     return aliases[normalized]
 
 
@@ -54,9 +51,7 @@ def freeze_module(module: nn.Module) -> None:
         parameter.requires_grad = False
 
 
-def move_mapping_to_device(
-    values: Mapping[str, Any], device: torch.device
-) -> dict[str, Any]:
+def move_mapping_to_device(values: Mapping[str, Any], device: torch.device) -> dict[str, Any]:
     # Tensor move
     moved = {}
     for key, value in values.items():

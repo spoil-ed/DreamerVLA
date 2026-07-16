@@ -20,10 +20,7 @@ def is_noop_action(
     if prev_action is None:
         return bool(np.linalg.norm(action[:-1]) < float(threshold))
     prev_action = np.asarray(prev_action)
-    return bool(
-        np.linalg.norm(action[:-1]) < float(threshold)
-        and action[-1] == prev_action[-1]
-    )
+    return bool(np.linalg.norm(action[:-1]) < float(threshold) and action[-1] == prev_action[-1])
 
 
 def compute_noop_mask(actions: np.ndarray, *, threshold: float = 1e-4) -> np.ndarray:
@@ -157,9 +154,7 @@ def filter_marked_hdf5_file(
                         episode_length=episode_length,
                     )
                     filtered_noop_mask = noop_mask[keep]
-                    demo_out.create_dataset(
-                        "noop_mask", data=filtered_noop_mask.astype(np.bool_)
-                    )
+                    demo_out.create_dataset("noop_mask", data=filtered_noop_mask.astype(np.bool_))
                     demo_out.create_dataset(
                         "source_indices", data=source_indices[keep].astype(np.int64)
                     )

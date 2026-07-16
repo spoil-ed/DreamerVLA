@@ -61,9 +61,7 @@ class InferenceWorker(Worker):
 
     def init(self) -> None:
         self.encoder = _build_from_cfg(self.model_cfg["encoder"])
-        self.world_model = _build_from_cfg(self.model_cfg["world_model"]).to(
-            self.torch_device
-        )
+        self.world_model = _build_from_cfg(self.model_cfg["world_model"]).to(self.torch_device)
         self.policy = _build_from_cfg(self.model_cfg["policy"]).to(self.torch_device)
         self._load_initial_weights()
         for module in (self.encoder, self.world_model, self.policy):
@@ -97,10 +95,7 @@ class InferenceWorker(Worker):
             env_id = int(env_id_raw)
             item = self.state[env_id]
             hidden_i = obs_embedding[idx : idx + 1]
-            is_first = (
-                bool(obs_batch[idx].get("is_first", False))
-                or item["latent"] is None
-            )
+            is_first = bool(obs_batch[idx].get("is_first", False)) or item["latent"] is None
             if is_first:
                 latent = world_model({"mode": "encode_latent", "hidden": hidden_i})
             else:
@@ -270,14 +265,11 @@ def _encode_batch(encoder: Any, obs_batch: list[dict[str, Any]]) -> torch.Tensor
     if hasattr(encoder, "encode"):
         encoded_rows = [encoder.encode(obs) for obs in obs_batch]
         encoded_tensors = [
-            torch.from_numpy(row) if isinstance(row, np.ndarray) else row
-            for row in encoded_rows
+            torch.from_numpy(row) if isinstance(row, np.ndarray) else row for row in encoded_rows
         ]
         return torch.stack(
             [
-                _single_encoded_row(
-                    row if isinstance(row, torch.Tensor) else torch.as_tensor(row)
-                )
+                _single_encoded_row(row if isinstance(row, torch.Tensor) else torch.as_tensor(row))
                 for row in encoded_tensors
             ],
             dim=0,
@@ -339,6 +331,8 @@ def _cpu_state_dict(module: torch.nn.Module) -> dict[str, torch.Tensor]:
 
 def _to_device_state(state_dict: dict[str, Any], device: torch.device) -> dict[str, torch.Tensor]:
     return {
-        key: (value.detach() if isinstance(value, torch.Tensor) else torch.as_tensor(value)).to(device)
+        key: (value.detach() if isinstance(value, torch.Tensor) else torch.as_tensor(value)).to(
+            device
+        )
         for key, value in state_dict.items()
     }

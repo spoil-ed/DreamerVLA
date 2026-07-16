@@ -156,6 +156,6 @@ def test_cache_refreshes_on_task_change() -> None:
     )
     assert proc.tokenizer.calls == 2, "different task must re-tokenize"
 
-    assert ids_a.shape != ids_b.shape or not torch.equal(
-        ids_a.cpu(), ids_b.cpu()
-    ), "different task must produce different input_ids"
+    assert ids_a.shape != ids_b.shape or not torch.equal(ids_a.cpu(), ids_b.cpu()), (
+        "different task must produce different input_ids"
+    )

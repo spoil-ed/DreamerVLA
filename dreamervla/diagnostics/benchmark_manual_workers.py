@@ -196,7 +196,9 @@ class SyntheticBatchWMEnv:
             )
         return obs, rewards, terms, truncs, infos
 
-    def step_slot(self, slot_id: int, action: Any) -> tuple[dict[str, Any], float, bool, bool, dict[str, Any]]:
+    def step_slot(
+        self, slot_id: int, action: Any
+    ) -> tuple[dict[str, Any], float, bool, bool, dict[str, Any]]:
         obs, rewards, terms, truncs, infos = self.step_batch([action], env_ids=[int(slot_id)])
         return obs[0], rewards[0], terms[0], truncs[0], infos[0]
 
@@ -281,9 +283,7 @@ class SyntheticBatchWMEnv:
             "classifier_forward_calls": 0.0,
             "wm_forward_time_s": float(self.forward_time_s),
             "batch_size_sum": batch_size_sum,
-            "batch_size_avg": float(
-                batch_size_sum / max(1, len(self.batch_calls))
-            ),
+            "batch_size_avg": float(batch_size_sum / max(1, len(self.batch_calls))),
             "batch_size_min": float(min(batch_sizes, default=0.0)),
             "batch_size_max": float(max(batch_sizes, default=0.0)),
         }
@@ -347,9 +347,7 @@ class GpuSampler:
             metrics[f"gpu/{index}/util_max"] = int(max(utils, default=0))
             metrics[f"gpu/{index}/util_nonzero_samples"] = int(sum(v > 0 for v in utils))
             metrics[f"gpu/{index}/util_zero_run_max_samples"] = int(zero_run)
-            metrics[f"gpu/{index}/util_zero_run_max_s"] = float(
-                zero_run * self.interval_s
-            )
+            metrics[f"gpu/{index}/util_zero_run_max_s"] = float(zero_run * self.interval_s)
             metrics[f"gpu/{index}/memory_used_mb_max"] = int(max(mems, default=0))
         return metrics
 
@@ -518,9 +516,7 @@ def run_wm_env_interact_benchmark(
     init_s = time.perf_counter() - start
     original_connect = trajectory_env_worker.Channel.connect
     try:
-        trajectory_env_worker.Channel.connect = staticmethod(
-            lambda name: channels[str(name)]
-        )
+        trajectory_env_worker.Channel.connect = staticmethod(lambda name: channels[str(name)])
         with GpuSampler(interval_s=gpu_sample_interval_s) as sampler:
             loop_start = time.perf_counter()
             interact_metrics = worker.interact("env", "rollout", "actor")
@@ -842,11 +838,17 @@ def _compose_cfg(args: argparse.Namespace, overrides: list[str]) -> DictConfig:
 
 def _resolve_dims(args: argparse.Namespace, cfg: DictConfig | None) -> dict[str, int]:
     return {
-        "chunk_size": int(_select(cfg, "task.openvla_oft.hidden_token.chunk_size", args.chunk_size)),
+        "chunk_size": int(
+            _select(cfg, "task.openvla_oft.hidden_token.chunk_size", args.chunk_size)
+        ),
         "action_dim": int(_select(cfg, "task.action_dim", args.action_dim)),
-        "latent_dim": int(_select(cfg, "task.openvla_oft.hidden_token.wm_obs_dim", args.latent_dim)),
+        "latent_dim": int(
+            _select(cfg, "task.openvla_oft.hidden_token.wm_obs_dim", args.latent_dim)
+        ),
         "lang_dim": int(_select(cfg, "task.openvla_oft.hidden_token.lang_dim", args.lang_dim)),
-        "proprio_dim": int(_select(cfg, "task.openvla_oft.hidden_token.proprio_dim", args.proprio_dim)),
+        "proprio_dim": int(
+            _select(cfg, "task.openvla_oft.hidden_token.proprio_dim", args.proprio_dim)
+        ),
     }
 
 
@@ -886,7 +888,9 @@ def _rollout_cfg(
     dims: Mapping[str, int],
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
     if cfg is not None:
-        policy_cfg = OmegaConf.to_container(OmegaConf.select(cfg, "rollout.policy_cfg"), resolve=True)
+        policy_cfg = OmegaConf.to_container(
+            OmegaConf.select(cfg, "rollout.policy_cfg"), resolve=True
+        )
         train_cfg = OmegaConf.to_container(OmegaConf.select(cfg, "rollout.train_cfg"), resolve=True)
         encoder_cfg = None
         if not args.no_rollout_encoder:
@@ -897,7 +901,11 @@ def _rollout_cfg(
             raise TypeError("rollout.policy_cfg and rollout.train_cfg must be mappings")
         train_cfg = dict(train_cfg)
         train_cfg["device"] = str(args.device)
-        return dict(policy_cfg), train_cfg, dict(encoder_cfg) if isinstance(encoder_cfg, Mapping) else None
+        return (
+            dict(policy_cfg),
+            train_cfg,
+            dict(encoder_cfg) if isinstance(encoder_cfg, Mapping) else None,
+        )
     return (
         {
             "target": "dreamervla.workers.actor._test_models:TinyLumosPolicy",

@@ -14,7 +14,9 @@ def test_model_registry_builds_registered_model_type() -> None:
 
     register_model("unit_test_model", builder, replace=True)
 
-    model = get_model(OmegaConf.create({"model_type": "unit_test_model", "hidden_dim": 4}), torch_dtype="bf16")
+    model = get_model(
+        OmegaConf.create({"model_type": "unit_test_model", "hidden_dim": 4}), torch_dtype="bf16"
+    )
 
     assert model == {"hidden_dim": 4, "dtype": "bf16"}
     assert calls == [(4, "bf16")]

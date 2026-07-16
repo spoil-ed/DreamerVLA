@@ -14,14 +14,14 @@ from pathlib import Path
 import numpy as np
 
 # ── test parameters ────────────────────────────────────────────────────────────
-T = 10          # episode length; must satisfy T >= sequence_length + 1 for negatives
-SEQ_LEN = 4    # sequence_length; positive window at start=(T-SEQ_LEN), negative at 0..(T-SEQ_LEN-1)
+T = 10  # episode length; must satisfy T >= sequence_length + 1 for negatives
+SEQ_LEN = 4  # sequence_length; positive window at start=(T-SEQ_LEN), negative at 0..(T-SEQ_LEN-1)
 IMAGE_H = 256
 IMAGE_W = 256
 ACTION_DIM = 7
 HIDDEN_TOKEN_SHAPE = (256, 4096)
 HIDDEN_TOKEN_DIM = 256 * 4096
-STATE_DIM = 79        # libero_goal S
+STATE_DIM = 79  # libero_goal S
 
 PREPROCESS_CONFIG = {
     "action_dim": 7,
@@ -70,9 +70,7 @@ def _make_step(t: int, is_terminal: bool, episode_seed: int = 0) -> dict:
             "gripper_states": rng.standard_normal(2),
             "joint_states": rng.standard_normal(7),
         },
-        "obs_embedding": np.broadcast_to(
-            np.asarray(t, dtype=np.float16), HIDDEN_TOKEN_SHAPE
-        ),
+        "obs_embedding": np.broadcast_to(np.asarray(t, dtype=np.float16), HIDDEN_TOKEN_SHAPE),
     }
 
 
@@ -101,9 +99,13 @@ def test_round_trip_balanced_terminal_dataset(tmp_path: Path) -> None:
     )
 
     # demo_0: success — terminal at last step → positive window at start=(T-SEQ_LEN)
-    writer.write_demo(index=0, steps=_make_episode(success=True), preprocess_config=PREPROCESS_CONFIG)
+    writer.write_demo(
+        index=0, steps=_make_episode(success=True), preprocess_config=PREPROCESS_CONFIG
+    )
     # demo_1: failure — all sparse_rewards=0 → only negative windows
-    writer.write_demo(index=1, steps=_make_episode(success=False), preprocess_config=PREPROCESS_CONFIG)
+    writer.write_demo(
+        index=1, steps=_make_episode(success=False), preprocess_config=PREPROCESS_CONFIG
+    )
     writer.close()
 
     # Verify files exist
@@ -197,23 +199,31 @@ def test_writer_dtypes(tmp_path: Path) -> None:
     shard_name = "shard_000.hdf5"
 
     writer = RolloutDumpWriter(reward_dir=reward_dir, hidden_dir=hidden_dir, shard_name=shard_name)
-    writer.write_demo(index=0, steps=_make_episode(success=True), preprocess_config=PREPROCESS_CONFIG)
+    writer.write_demo(
+        index=0, steps=_make_episode(success=True), preprocess_config=PREPROCESS_CONFIG
+    )
     writer.close()
 
     with h5py.File(reward_dir / shard_name, "r") as f:
         demo = f["data"]["demo_0"]
-        assert demo["actions"].dtype == np.float64,   f"actions dtype: {demo['actions'].dtype}"
-        assert demo["dones"].dtype == np.uint8,       f"dones dtype: {demo['dones'].dtype}"
-        assert demo["rewards"].dtype == np.float32,   f"rewards dtype: {demo['rewards'].dtype}"
-        assert demo["sparse_rewards"].dtype == np.uint8, f"sparse_rewards dtype: {demo['sparse_rewards'].dtype}"
-        assert demo["robot_states"].dtype == np.float64, f"robot_states dtype: {demo['robot_states'].dtype}"
-        assert demo["states"].dtype == np.float64,    f"states dtype: {demo['states'].dtype}"
+        assert demo["actions"].dtype == np.float64, f"actions dtype: {demo['actions'].dtype}"
+        assert demo["dones"].dtype == np.uint8, f"dones dtype: {demo['dones'].dtype}"
+        assert demo["rewards"].dtype == np.float32, f"rewards dtype: {demo['rewards'].dtype}"
+        assert demo["sparse_rewards"].dtype == np.uint8, (
+            f"sparse_rewards dtype: {demo['sparse_rewards'].dtype}"
+        )
+        assert demo["robot_states"].dtype == np.float64, (
+            f"robot_states dtype: {demo['robot_states'].dtype}"
+        )
+        assert demo["states"].dtype == np.float64, f"states dtype: {demo['states'].dtype}"
         assert demo["obs"]["agentview_rgb"].dtype == np.uint8
         assert demo["obs"]["eye_in_hand_rgb"].dtype == np.uint8
 
     with h5py.File(hidden_dir / shard_name, "r") as f:
         demo = f["data"]["demo_0"]
-        assert demo["obs_embedding"].dtype == np.float16, f"obs_embedding dtype: {demo['obs_embedding'].dtype}"
+        assert demo["obs_embedding"].dtype == np.float16, (
+            f"obs_embedding dtype: {demo['obs_embedding'].dtype}"
+        )
 
 
 def test_writer_shapes(tmp_path: Path) -> None:
@@ -227,7 +237,9 @@ def test_writer_shapes(tmp_path: Path) -> None:
     shard_name = "shard_000.hdf5"
 
     writer = RolloutDumpWriter(reward_dir=reward_dir, hidden_dir=hidden_dir, shard_name=shard_name)
-    writer.write_demo(index=0, steps=_make_episode(success=True), preprocess_config=PREPROCESS_CONFIG)
+    writer.write_demo(
+        index=0, steps=_make_episode(success=True), preprocess_config=PREPROCESS_CONFIG
+    )
     writer.close()
 
     with h5py.File(reward_dir / shard_name, "r") as f:

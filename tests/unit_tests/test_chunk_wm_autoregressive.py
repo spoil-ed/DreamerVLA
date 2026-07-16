@@ -65,9 +65,7 @@ def test_chunk_wm_layer_normalizes_only_raw_vision_tokens() -> None:
         token_normalization="layer_norm",
         token_norm_eps=1.0e-6,
     )
-    raw = torch.arange(1, 1 + 1 * 3 * 2 * 4, dtype=torch.float32).reshape(
-        1, 3, 2, 4
-    )
+    raw = torch.arange(1, 1 + 1 * 3 * 2 * 4, dtype=torch.float32).reshape(1, 3, 2, 4)
 
     normalized = wm._normalize_raw_vision_tokens(raw)
 
@@ -297,9 +295,7 @@ def test_official_wm_objective_has_a_static_parameter_and_buffer_graph() -> None
         time_steps = wm.num_hist + wm.chunk_rollout_chunks * wm.chunk_size
         batch = {
             "mode": "chunk_loss",
-            "obs_embedding": torch.randn(
-                2, time_steps, wm.token_count, wm.token_dim
-            ),
+            "obs_embedding": torch.randn(2, time_steps, wm.token_count, wm.token_dim),
             "actions": torch.randn(2, time_steps, wm.action_dim),
             "current_actions": torch.randn(2, time_steps, wm.action_dim),
         }
@@ -322,10 +318,7 @@ def test_official_wm_objective_has_a_static_parameter_and_buffer_graph() -> None
         "reward_head.2.bias",
     )
     assert unused_by_batch == [expected_unused, expected_unused]
-    assert all(
-        torch.equal(before[name], value)
-        for name, value in wm.named_buffers()
-    )
+    assert all(torch.equal(before[name], value) for name, value in wm.named_buffers())
 
 
 def test_chunk_wm_requires_wm_concat_model_dim() -> None:

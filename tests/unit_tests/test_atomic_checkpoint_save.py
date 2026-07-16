@@ -61,9 +61,7 @@ def test_save_checkpoint_writes_atomically_no_leftover_tmp(tmp_path: Path) -> No
     assert pickle.loads(payload["pickles"]["marker"]) == "saved"
 
 
-def test_latest_plus_topk_serializes_payload_once(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_latest_plus_topk_serializes_payload_once(tmp_path: Path, monkeypatch) -> None:
     runner = _make_runner(tmp_path)
     latest = tmp_path / "checkpoints" / "latest.ckpt"
     topk = tmp_path / "checkpoints" / "topk-0001.ckpt"
@@ -96,7 +94,5 @@ def test_latest_and_topk_round_trip_to_identical_state(tmp_path: Path) -> None:
     topk_payload = torch.load(topk, weights_only=False)
 
     for payload in (latest_payload, topk_payload):
-        assert torch.equal(
-            payload["state_dicts"]["module"]["custom"], torch.tensor([7.0])
-        )
+        assert torch.equal(payload["state_dicts"]["module"]["custom"], torch.tensor([7.0]))
         assert pickle.loads(payload["pickles"]["marker"]) == "saved"

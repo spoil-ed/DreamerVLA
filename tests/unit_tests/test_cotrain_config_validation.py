@@ -25,11 +25,7 @@ def _cfg(**manual_overrides):
             "logger": {"logger_backends": []},
             "cluster": {"num_nodes": 1},
             "manual_cotrain": manual,
-            "actor": {
-                "train_cfg": {
-                    "fsdp": {"strategy": "none", "precision": "fp32"}
-                }
-            },
+            "actor": {"train_cfg": {"fsdp": {"strategy": "none", "precision": "fp32"}}},
             "learner": {"train_cfg": {}},
         }
     )
@@ -66,10 +62,7 @@ def test_manual_cotrain_warns_when_baseline_rollout_budget_is_overridden(
 
     with pytest.warns(
         UserWarning,
-        match=(
-            f"manual_cotrain.{field} overrides the mainline baseline "
-            f"{baseline}"
-        ),
+        match=(f"manual_cotrain.{field} overrides the mainline baseline {baseline}"),
     ):
         validate_cfg(cfg)
 
@@ -358,9 +351,7 @@ def test_manual_cotrain_accepts_rollout_covering_replay_sequence() -> None:
 def test_manual_cotrain_rejects_rollout_shorter_than_classifier_window() -> None:
     cfg = _cfg(max_steps_per_rollout_epoch=16, num_action_chunks=8)
     cfg.replay = {"cfg": {"sequence_length": 12}}
-    cfg.learner.model_cfg = {
-        "classifier": {"kwargs": {"window": 8, "chunk_size": 8}}
-    }
+    cfg.learner.model_cfg = {"classifier": {"kwargs": {"window": 8, "chunk_size": 8}}}
 
     with pytest.raises(ValueError, match="classifier window"):
         validate_cfg(cfg)
@@ -369,8 +360,6 @@ def test_manual_cotrain_rejects_rollout_shorter_than_classifier_window() -> None
 def test_manual_cotrain_accepts_rollout_covering_classifier_window() -> None:
     cfg = _cfg(max_steps_per_rollout_epoch=64, num_action_chunks=8)
     cfg.replay = {"cfg": {"sequence_length": 12}}
-    cfg.learner.model_cfg = {
-        "classifier": {"kwargs": {"window": 8, "chunk_size": 8}}
-    }
+    cfg.learner.model_cfg = {"classifier": {"kwargs": {"window": 8, "chunk_size": 8}}}
 
     validate_cfg(cfg)

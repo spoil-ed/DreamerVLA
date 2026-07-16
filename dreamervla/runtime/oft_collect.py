@@ -58,9 +58,7 @@ def pop_open_loop_action(
         chunk = list(action_chunk)
         n = len(chunk) if action_steps is None else int(action_steps)
         if len(chunk) < n:
-            raise ValueError(
-                f"policy returned {len(chunk)} actions, need action_steps={n}"
-            )
+            raise ValueError(f"policy returned {len(chunk)} actions, need action_steps={n}")
         action_queue.extend(chunk[:n])
     return process_action(action_queue.pop(0))
 
@@ -113,8 +111,7 @@ def vla_hidden_token_spec(vla: Any, image_keys: list[str]) -> dict[str, int]:
     keys = list(image_keys)
     if keys != ["agentview_rgb"]:
         raise ValueError(
-            "OpenVLA-OFT hidden-token mainline requires image_keys=['agentview_rgb'], "
-            f"got {keys!r}"
+            f"OpenVLA-OFT hidden-token mainline requires image_keys=['agentview_rgb'], got {keys!r}"
         )
     if patches_per_image <= 0 or token_dim <= 0 or num_images_in_input <= 0:
         raise ValueError(
@@ -310,8 +307,7 @@ def resolve_num_images_in_input(collect_cfg: Any) -> int:
     count = int(val) if val is not None else 1
     if count != 1:
         raise ValueError(
-            "OpenVLA-OFT hidden-token mainline requires num_images_in_input=1, "
-            f"got {count}"
+            f"OpenVLA-OFT hidden-token mainline requires num_images_in_input=1, got {count}"
         )
     return count
 
@@ -326,8 +322,7 @@ def select_vla_image_keys(
     keys = list(image_keys)
     if int(history) != 1:
         raise ValueError(
-            "OpenVLA-OFT hidden-token mainline requires expected_history=1, "
-            f"got {int(history)}"
+            f"OpenVLA-OFT hidden-token mainline requires expected_history=1, got {int(history)}"
         )
     if int(num_images_in_input) != 1:
         raise ValueError(

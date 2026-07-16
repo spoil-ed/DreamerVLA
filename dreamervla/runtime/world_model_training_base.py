@@ -61,20 +61,14 @@ def save_viz_strip(path: pathlib.Path, panels: list[tuple[str, Any]], cell_size:
     from PIL import Image, ImageDraw
 
     header = 22
-    canvas = Image.new(
-        "RGB", (cell_size * len(panels), cell_size + header), color=(32, 32, 32)
-    )
+    canvas = Image.new("RGB", (cell_size * len(panels), cell_size + header), color=(32, 32, 32))
     draw = ImageDraw.Draw(canvas)
     for index, (label, image) in enumerate(panels):
         x0 = index * cell_size
         if image is not None:
-            canvas.paste(
-                image.convert("RGB").resize((cell_size, cell_size)), (x0, header)
-            )
+            canvas.paste(image.convert("RGB").resize((cell_size, cell_size)), (x0, header))
         else:
-            draw.rectangle(
-                [x0, header, x0 + cell_size, header + cell_size], fill=(70, 20, 20)
-            )
+            draw.rectangle([x0, header, x0 + cell_size, header + cell_size], fill=(70, 20, 20))
             draw.text(
                 (x0 + 8, header + cell_size // 2),
                 "(missing)",
@@ -106,25 +100,17 @@ class WorldModelTrainingBase(BaseRunner):
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         if output_dir is None:
             output_dir = str(
-                OmegaConf.select(
-                    config, "training.out_dir", default=self.default_output_dir
-                )
+                OmegaConf.select(config, "training.out_dir", default=self.default_output_dir)
             )
         super().__init__(config, output_dir=output_dir)
 
         self.distributed = NopretokenizeSFTDistributedHelper.initialize(
-            strategy=str(
-                OmegaConf.select(config, "training.distributed_strategy", default="ddp")
-            ),
+            strategy=str(OmegaConf.select(config, "training.distributed_strategy", default="ddp")),
             fsdp_mixed_precision=str(
-                OmegaConf.select(
-                    config, "training.fsdp_mixed_precision", default="bf16"
-                )
+                OmegaConf.select(config, "training.fsdp_mixed_precision", default="bf16")
             ),
             enable_activation_checkpointing=bool(
-                OmegaConf.select(
-                    config, "training.enable_activation_checkpointing", default=True
-                )
+                OmegaConf.select(config, "training.enable_activation_checkpointing", default=True)
             ),
         )
         self.rank = self.distributed.rank
@@ -165,18 +151,14 @@ class WorldModelTrainingBase(BaseRunner):
     # Embedding helpers
     # ──────────────────────────────────────────────────────────────────────
 
-    def _encode_hidden_from_tokenized(
-        self, input_ids_list: list[list[int]]
-    ) -> torch.Tensor:
+    def _encode_hidden_from_tokenized(self, input_ids_list: list[list[int]]) -> torch.Tensor:
         """Run the frozen encoder on a list of token sequences → pooled float32 tensor."""
         if self.encoder is None:
             raise ValueError(
                 "Encoder must be initialised before calling _encode_hidden_from_tokenized."
             )
         if not input_ids_list:
-            hidden_dim = int(
-                OmegaConf.select(self.cfg, "world_model.hidden_dim", default=1)
-            )
+            hidden_dim = int(OmegaConf.select(self.cfg, "world_model.hidden_dim", default=1))
             return torch.zeros((0, hidden_dim), device=self.device, dtype=torch.float32)
 
         labels_list = [[-100] * len(seq) for seq in input_ids_list]
@@ -196,9 +178,7 @@ class WorldModelTrainingBase(BaseRunner):
             if length > 0:
                 attention_mask[idx, :length] = True
         weights = attention_mask.to(hidden_states.dtype).unsqueeze(-1)
-        pooled = (hidden_states * weights).sum(dim=1) / weights.sum(dim=1).clamp_min(
-            1.0
-        )
+        pooled = (hidden_states * weights).sum(dim=1) / weights.sum(dim=1).clamp_min(1.0)
         return pooled.float().detach()
 
     # ──────────────────────────────────────────────────────────────────────
@@ -216,41 +196,28 @@ class WorldModelTrainingBase(BaseRunner):
             return self._extract_image_bpe_ids(input_ids_list)
         return self._encode_hidden_from_tokenized(input_ids_list)
 
-    def _obs_embedding_sequence_for_wm(
-        self, input_ids_seq: list[list[list[int]]]
-    ) -> torch.Tensor:
+    def _obs_embedding_sequence_for_wm(self, input_ids_seq: list[list[list[int]]]) -> torch.Tensor:
         """Encode a nested [B][T][token] observation sequence for Dreamer starts."""
         if not input_ids_seq:
-            hidden_dim = int(
-                OmegaConf.select(self.cfg, "world_model.hidden_dim", default=1)
-            )
-            return torch.zeros(
-                (0, 0, hidden_dim), device=self.device, dtype=torch.float32
-            )
+            hidden_dim = int(OmegaConf.select(self.cfg, "world_model.hidden_dim", default=1))
+            return torch.zeros((0, 0, hidden_dim), device=self.device, dtype=torch.float32)
         batch_size = len(input_ids_seq)
         seq_len = len(input_ids_seq[0])
         if seq_len == 0:
-            hidden_dim = int(
-                OmegaConf.select(self.cfg, "world_model.hidden_dim", default=1)
-            )
-            return torch.zeros(
-                (batch_size, 0, hidden_dim), device=self.device, dtype=torch.float32
-            )
+            hidden_dim = int(OmegaConf.select(self.cfg, "world_model.hidden_dim", default=1))
+            return torch.zeros((batch_size, 0, hidden_dim), device=self.device, dtype=torch.float32)
         flat: list[list[int]] = []
         for row in input_ids_seq:
             if len(row) != seq_len:
-                raise ValueError(
-                    "All wm_obs_input_ids_seq rows must have the same length."
-                )
+                raise ValueError("All wm_obs_input_ids_seq rows must have the same length.")
             flat.extend([list(step) for step in row])
         encoded = self._obs_embedding_for_wm(flat)
         return encoded.reshape(batch_size, seq_len, *encoded.shape[1:])
 
     def _build_wm_pretrain_batch(self, batch: dict[str, Any]) -> dict[str, Any] | None:
         """Assemble the WM pretrain batch for retained DreamerV3-style routes."""
-        if (
-            isinstance(batch.get("obs_embedding"), torch.Tensor)
-            and isinstance(batch.get("actions"), torch.Tensor)
+        if isinstance(batch.get("obs_embedding"), torch.Tensor) and isinstance(
+            batch.get("actions"), torch.Tensor
         ):
             return {
                 key: value
@@ -322,12 +289,8 @@ class WorldModelTrainingBase(BaseRunner):
                 return None
             actions = action_seq.to(self.device)
             bsz, steps = hidden_seq.shape[:2]
-            obs_flat = hidden_seq[:, :-1].reshape(
-                bsz * (steps - 1), *hidden_seq.shape[2:]
-            )
-            next_flat = hidden_seq[:, 1:].reshape(
-                bsz * (steps - 1), *hidden_seq.shape[2:]
-            )
+            obs_flat = hidden_seq[:, :-1].reshape(bsz * (steps - 1), *hidden_seq.shape[2:])
+            next_flat = hidden_seq[:, 1:].reshape(bsz * (steps - 1), *hidden_seq.shape[2:])
             action_flat = actions[:, 1:].reshape(bsz * (steps - 1), *actions.shape[2:])
             wm_batch = {
                 "obs_embedding": obs_flat,
@@ -336,14 +299,10 @@ class WorldModelTrainingBase(BaseRunner):
             }
             reward_seq = batch.get("reward_seq")
             if isinstance(reward_seq, torch.Tensor):
-                wm_batch["reward"] = reward_seq.to(self.device)[:, 1:].reshape(
-                    bsz * (steps - 1)
-                )
+                wm_batch["reward"] = reward_seq.to(self.device)[:, 1:].reshape(bsz * (steps - 1))
             done_seq = batch.get("done_seq")
             if isinstance(done_seq, torch.Tensor):
-                wm_batch["done"] = done_seq.to(self.device)[:, 1:].reshape(
-                    bsz * (steps - 1)
-                )
+                wm_batch["done"] = done_seq.to(self.device)[:, 1:].reshape(bsz * (steps - 1))
             return wm_batch
 
         obs_ids = batch.get("wm_obs_input_ids")
@@ -394,9 +353,7 @@ class WorldModelTrainingBase(BaseRunner):
                     **(
                         {
                             "actor_input_ids": batch["actor_input_ids"].to(self.device),
-                            "actor_attention_mask": batch["actor_attention_mask"].to(
-                                self.device
-                            ),
+                            "actor_attention_mask": batch["actor_attention_mask"].to(self.device),
                         }
                         if isinstance(batch.get("actor_input_ids"), torch.Tensor)
                         and isinstance(batch.get("actor_attention_mask"), torch.Tensor)
@@ -474,12 +431,8 @@ class WorldModelTrainingBase(BaseRunner):
         }
 
     def _load_real_relabel_steps(self, cfg: DictConfig) -> list[dict[str, Any]]:
-        relabel_cfg = OmegaConf.select(
-            cfg, "algorithm.real_rollout_relabel", default=None
-        )
-        if relabel_cfg is None or not bool(
-            OmegaConf.select(relabel_cfg, "enabled", default=False)
-        ):
+        relabel_cfg = OmegaConf.select(cfg, "algorithm.real_rollout_relabel", default=None)
+        if relabel_cfg is None or not bool(OmegaConf.select(relabel_cfg, "enabled", default=False)):
             return []
         raw_paths = OmegaConf.select(relabel_cfg, "paths", default=None)
         if raw_paths is None:
@@ -492,31 +445,19 @@ class WorldModelTrainingBase(BaseRunner):
             )
 
         baseline = float(OmegaConf.select(relabel_cfg, "outcome_baseline", default=0.5))
-        positive_weight = float(
-            OmegaConf.select(relabel_cfg, "positive_weight", default=1.0)
-        )
-        negative_weight = float(
-            OmegaConf.select(relabel_cfg, "negative_weight", default=1.0)
-        )
+        positive_weight = float(OmegaConf.select(relabel_cfg, "positive_weight", default=1.0))
+        negative_weight = float(OmegaConf.select(relabel_cfg, "negative_weight", default=1.0))
         terminal_only = (
-            str(
-                OmegaConf.select(relabel_cfg, "reward_placement", default="terminal")
-            ).lower()
+            str(OmegaConf.select(relabel_cfg, "reward_placement", default="terminal")).lower()
             == "terminal"
         )
         max_steps_per_traj = int(
             OmegaConf.select(relabel_cfg, "max_steps_per_trajectory", default=0)
         )
-        lower = float(
-            OmegaConf.select(relabel_cfg, "accuracy_lower_bound", default=0.01)
-        )
-        upper = float(
-            OmegaConf.select(relabel_cfg, "accuracy_upper_bound", default=0.99)
-        )
+        lower = float(OmegaConf.select(relabel_cfg, "accuracy_lower_bound", default=0.01))
+        upper = float(OmegaConf.select(relabel_cfg, "accuracy_upper_bound", default=0.99))
         keep_all_failures = bool(
-            OmegaConf.select(
-                relabel_cfg, "keep_all_failures_as_negatives", default=True
-            )
+            OmegaConf.select(relabel_cfg, "keep_all_failures_as_negatives", default=True)
         )
 
         records: list[dict[str, Any]] = []
@@ -534,9 +475,7 @@ class WorldModelTrainingBase(BaseRunner):
             groups.setdefault(str(row.get("prompt_key", "")), []).append(row)
         kept_prompt_keys: set[str] = set()
         for prompt_key, rows in groups.items():
-            acc = sum(float(bool(row.get("complete", False))) for row in rows) / max(
-                len(rows), 1
-            )
+            acc = sum(float(bool(row.get("complete", False))) for row in rows) / max(len(rows), 1)
             if lower <= acc <= upper or (keep_all_failures and acc <= 0.0):
                 kept_prompt_keys.add(prompt_key)
 
@@ -612,22 +551,17 @@ class WorldModelTrainingBase(BaseRunner):
         steps = getattr(self, "_real_relabel_steps", [])
         if not steps:
             return None
-        relabel_cfg = OmegaConf.select(
-            algorithm_cfg, "real_rollout_relabel", default=None
-        )
+        relabel_cfg = OmegaConf.select(algorithm_cfg, "real_rollout_relabel", default=None)
         if (
             relabel_cfg is None
             or float(OmegaConf.select(relabel_cfg, "loss_scale", default=0.0)) <= 0.0
         ):
             return None
-        batch_size = max(
-            1, int(OmegaConf.select(relabel_cfg, "batch_size", default=64))
-        )
+        batch_size = max(1, int(OmegaConf.select(relabel_cfg, "batch_size", default=64)))
         replace = len(steps) < batch_size
         if replace:
             chosen = [
-                steps[self._real_relabel_rng.randrange(len(steps))]
-                for _ in range(batch_size)
+                steps[self._real_relabel_rng.randrange(len(steps))] for _ in range(batch_size)
             ]
         else:
             chosen = self._real_relabel_rng.sample(steps, batch_size)
@@ -664,9 +598,7 @@ class WorldModelTrainingBase(BaseRunner):
         if not self.distributed.is_main_process:
             return
         viz_cfg = OmegaConf.select(self.cfg, "viz", default=None)
-        if viz_cfg is None or not bool(
-            OmegaConf.select(viz_cfg, "enabled", default=False)
-        ):
+        if viz_cfg is None or not bool(OmegaConf.select(viz_cfg, "enabled", default=False)):
             return
         cfg_path = OmegaConf.select(
             viz_cfg,
@@ -697,18 +629,12 @@ class WorldModelTrainingBase(BaseRunner):
 
             viz_device_cfg = OmegaConf.select(viz_cfg, "device", default=None)
             viz_device = (
-                self.device
-                if viz_device_cfg is None
-                else torch.device(str(viz_device_cfg))
+                self.device if viz_device_cfg is None else torch.device(str(viz_device_cfg))
             )
-            self.vq_model = load_vq_model(
-                cfg_path=cfg_path, ckpt_path=ckpt_path, device=viz_device
-            )
+            self.vq_model = load_vq_model(cfg_path=cfg_path, ckpt_path=ckpt_path, device=viz_device)
             print(f"[dreamer-vla][viz] VQGAN ready on {viz_device}")
         except Exception as exc:
-            print(
-                f"[dreamer-vla][viz] failed to build VQGAN visualizer, disabling: {exc}"
-            )
+            print(f"[dreamer-vla][viz] failed to build VQGAN visualizer, disabling: {exc}")
             self.vq_model = None
 
     @torch.no_grad()
@@ -736,9 +662,9 @@ class WorldModelTrainingBase(BaseRunner):
         every = int(OmegaConf.select(viz_cfg, "every_n_steps", default=500))
         if every <= 0 or self.global_step % every != 0:
             return
-        wm = getattr(
-            self, "_unwrapped_world_model", None
-        ) or self.distributed.unwrap_module(self.world_model)
+        wm = getattr(self, "_unwrapped_world_model", None) or self.distributed.unwrap_module(
+            self.world_model
+        )
         if (
             wm is None
             or not hasattr(wm, "encoder")
@@ -750,15 +676,9 @@ class WorldModelTrainingBase(BaseRunner):
         tokens = batch.get("tokens")
         actions = batch.get("actions")
         is_first = batch.get("is_first")
-        if not isinstance(tokens, torch.Tensor) or not isinstance(
-            actions, torch.Tensor
-        ):
+        if not isinstance(tokens, torch.Tensor) or not isinstance(actions, torch.Tensor):
             return
-        if (
-            not isinstance(is_first, torch.Tensor)
-            or tokens.ndim != 4
-            or tokens.shape[1] < 2
-        ):
+        if not isinstance(is_first, torch.Tensor) or tokens.ndim != 4 or tokens.shape[1] < 2:
             return
 
         tokens = tokens.to(self.device, non_blocking=True).long()
@@ -778,9 +698,7 @@ class WorldModelTrainingBase(BaseRunner):
             prior_deter1 = wm.rssm._core(deter0, stoch0, action1)
             prior_logits1 = wm.rssm._prior(prior_deter1)
             prior_idx1 = prior_logits1.argmax(dim=-1)
-            prior_stoch1 = F.one_hot(prior_idx1, wm.rssm.classes).to(
-                dtype=prior_logits1.dtype
-            )
+            prior_stoch1 = F.one_hot(prior_idx1, wm.rssm.classes).to(dtype=prior_logits1.dtype)
             prior_dec_logits = wm.decoder(prior_deter1[:, None], prior_stoch1[:, None])
             prior_pred = prior_dec_logits.argmax(dim=-1)[:, 0]
         finally:
@@ -790,13 +708,9 @@ class WorldModelTrainingBase(BaseRunner):
         b, _t, num_views, tokens_per_view = tokens.shape
         h, w = tuple(int(x) for x in wm.encoder.spatial_grid)
         if h * w != tokens_per_view:
-            print(
-                f"[dreamer-vla][viz] skip: h*w={h * w} != tokens_per_view={tokens_per_view}"
-            )
+            print(f"[dreamer-vla][viz] skip: h*w={h * w} != tokens_per_view={tokens_per_view}")
             return
-        view_labels = list(
-            OmegaConf.select(viz_cfg, "view_labels", default=["third", "wrist"])
-        )
+        view_labels = list(OmegaConf.select(viz_cfg, "view_labels", default=["third", "wrist"]))
         if len(view_labels) != num_views:
             view_labels = [f"view{idx}" for idx in range(num_views)]
 
@@ -811,27 +725,19 @@ class WorldModelTrainingBase(BaseRunner):
                     [
                         (
                             f"{label} cur",
-                            self._decode_token_view(
-                                tokens[sample_idx, 0, view_idx], h, w
-                            ),
+                            self._decode_token_view(tokens[sample_idx, 0, view_idx], h, w),
                         ),
                         (
                             f"{label} recon",
-                            self._decode_token_view(
-                                post_pred[sample_idx, 0, view_idx], h, w
-                            ),
+                            self._decode_token_view(post_pred[sample_idx, 0, view_idx], h, w),
                         ),
                         (
                             f"{label} next",
-                            self._decode_token_view(
-                                tokens[sample_idx, 1, view_idx], h, w
-                            ),
+                            self._decode_token_view(tokens[sample_idx, 1, view_idx], h, w),
                         ),
                         (
                             f"{label} prior",
-                            self._decode_token_view(
-                                prior_pred[sample_idx, view_idx], h, w
-                            ),
+                            self._decode_token_view(prior_pred[sample_idx, view_idx], h, w),
                         ),
                     ]
                 )
@@ -886,8 +792,7 @@ class WorldModelTrainingBase(BaseRunner):
             tok_ids = [int(tok) for tok in block_ids if int(tok) in img_bpe]
             if len(tok_ids) != n_img_tok:
                 raise ValueError(
-                    f"sample {idx}: block has {len(tok_ids)} image tokens, "
-                    f"expected {n_img_tok}"
+                    f"sample {idx}: block has {len(tok_ids)} image tokens, expected {n_img_tok}"
                 )
             rows.append(tok_ids)
         return torch.tensor(rows, dtype=torch.long, device=self.device)
@@ -945,9 +850,7 @@ class WorldModelTrainingBase(BaseRunner):
         if sd is None:
             sd = payload.get("model")
         if sd is None:
-            raise RuntimeError(
-                f"{path} has no state_dicts.world_model or model state dict"
-            )
+            raise RuntimeError(f"{path} has no state_dicts.world_model or model state dict")
         target_dtype = next(self.world_model.parameters()).dtype
         sd = {
             k: (v.to(dtype=target_dtype) if torch.is_floating_point(v) else v)
@@ -955,9 +858,7 @@ class WorldModelTrainingBase(BaseRunner):
         }
         model_sd = self.world_model.state_dict()
         reset_reward_head = bool(
-            OmegaConf.select(
-                self.cfg, "init.reset_world_model_reward_head", default=False
-            )
+            OmegaConf.select(self.cfg, "init.reset_world_model_reward_head", default=False)
         )
         remapped: dict[str, torch.Tensor] = {}
         skipped_reward_head = 0
@@ -967,9 +868,7 @@ class WorldModelTrainingBase(BaseRunner):
             if reset_reward_head and key.startswith("reward_head."):
                 skipped_reward_head += 1
                 continue
-            if key.startswith("reward_head.net.") and not key.startswith(
-                "reward_head.net.net."
-            ):
+            if key.startswith("reward_head.net.") and not key.startswith("reward_head.net.net."):
                 candidate = key.replace("reward_head.net.", "reward_head.net.net.", 1)
                 if candidate in model_sd:
                     key = candidate
@@ -996,9 +895,7 @@ class WorldModelTrainingBase(BaseRunner):
                 print(f"[init] skipped shape-mismatched tensors: {len(mismatched)}")
                 print(f"[init] shape mismatches (first 5): {mismatched[:5]}")
             if skipped_reward_head:
-                print(
-                    f"[init] reset reward_head; skipped {skipped_reward_head} checkpoint tensors"
-                )
+                print(f"[init] reset reward_head; skipped {skipped_reward_head} checkpoint tensors")
             if missing:
                 print(f"[init] missing (first 5): {missing[:5]}")
             if unexpected:
@@ -1025,36 +922,22 @@ class WorldModelTrainingBase(BaseRunner):
 
         load_plan = {
             "world_model": bool(
-                OmegaConf.select(
-                    self.cfg, "init.load_dreamervla_world_model", default=True
-                )
+                OmegaConf.select(self.cfg, "init.load_dreamervla_world_model", default=True)
             ),
-            "critic": bool(
-                OmegaConf.select(self.cfg, "init.load_dreamervla_critic", default=True)
-            ),
+            "critic": bool(OmegaConf.select(self.cfg, "init.load_dreamervla_critic", default=True)),
             "target_critic": bool(
-                OmegaConf.select(
-                    self.cfg, "init.load_dreamervla_target_critic", default=True
-                )
+                OmegaConf.select(self.cfg, "init.load_dreamervla_target_critic", default=True)
             ),
             "policy": bool(
                 OmegaConf.select(self.cfg, "init.load_dreamervla_policy", default=False)
             ),
             "return_tracker": bool(
-                OmegaConf.select(
-                    self.cfg, "init.load_dreamervla_return_tracker", default=True
-                )
+                OmegaConf.select(self.cfg, "init.load_dreamervla_return_tracker", default=True)
             ),
         }
-        strict = bool(
-            OmegaConf.select(self.cfg, "init.load_dreamervla_strict", default=False)
-        )
+        strict = bool(OmegaConf.select(self.cfg, "init.load_dreamervla_strict", default=False))
         for key, enabled in load_plan.items():
-            if (
-                not enabled
-                or key not in state_dicts
-                or getattr(self, key, None) is None
-            ):
+            if not enabled or key not in state_dicts or getattr(self, key, None) is None:
                 continue
             if key == "return_tracker":
                 self.return_tracker.load_state_dict(state_dicts[key])
@@ -1084,20 +967,14 @@ class WorldModelTrainingBase(BaseRunner):
             filtered: dict[str, Any] = {}
             mismatched: list[tuple[str, tuple[int, ...], tuple[int, ...]]] = []
             for raw_key, value in state_dict.items():
-                load_key = (
-                    raw_key.removeprefix("module.")
-                    if isinstance(raw_key, str)
-                    else raw_key
-                )
+                load_key = raw_key.removeprefix("module.") if isinstance(raw_key, str) else raw_key
                 if (
                     key == "world_model"
                     and isinstance(load_key, str)
                     and load_key.startswith("reward_head.net.")
                     and not load_key.startswith("reward_head.net.net.")
                 ):
-                    candidate = load_key.replace(
-                        "reward_head.net.", "reward_head.net.net.", 1
-                    )
+                    candidate = load_key.replace("reward_head.net.", "reward_head.net.net.", 1)
                     if candidate in target_sd or f"module.{candidate}" in target_sd:
                         load_key = candidate
                 candidate_keys = [load_key]
@@ -1107,11 +984,7 @@ class WorldModelTrainingBase(BaseRunner):
                     else:
                         candidate_keys.append(load_key.removeprefix("module."))
                 target_key = next(
-                    (
-                        candidate
-                        for candidate in candidate_keys
-                        if candidate in target_sd
-                    ),
+                    (candidate for candidate in candidate_keys if candidate in target_sd),
                     load_key,
                 )
                 if target_key in target_sd and isinstance(value, torch.Tensor):
@@ -1134,9 +1007,7 @@ class WorldModelTrainingBase(BaseRunner):
                 f"missing={len(missing)} unexpected={len(unexpected)} strict={strict}"
             )
             if mismatched:
-                print(
-                    f"[init] {key} skipped shape-mismatched tensors: {len(mismatched)}"
-                )
+                print(f"[init] {key} skipped shape-mismatched tensors: {len(mismatched)}")
                 print(f"[init] {key} shape mismatches (first 5): {mismatched[:5]}")
             if missing:
                 print(f"[init] {key} missing (first 5): {missing[:5]}")
@@ -1189,9 +1060,7 @@ class WorldModelTrainingBase(BaseRunner):
             and self.policy_optimizer is not None
             and self.policy is not None
         ):
-            return self.distributed.optimizer_state_dict(
-                self.policy, self.policy_optimizer
-            )
+            return self.distributed.optimizer_state_dict(self.policy, self.policy_optimizer)
         if key == "critic" and self.critic is not None:
             with self.distributed.model_state_dict_context(self.critic):
                 return self.critic.state_dict()
@@ -1200,9 +1069,7 @@ class WorldModelTrainingBase(BaseRunner):
             and self.critic_optimizer is not None
             and self.critic is not None
         ):
-            return self.distributed.optimizer_state_dict(
-                self.critic, self.critic_optimizer
-            )
+            return self.distributed.optimizer_state_dict(self.critic, self.critic_optimizer)
         if key == "target_critic" and self.target_critic is not None:
             with self.distributed.model_state_dict_context(self.target_critic):
                 return self.target_critic.state_dict()
@@ -1277,9 +1144,7 @@ class WorldModelTrainingBase(BaseRunner):
     # ──────────────────────────────────────────────────────────────────────
 
     @torch.no_grad()
-    def evaluate_val_loss(
-        self, val_dataloader: DataLoader, split_name: str
-    ) -> dict[str, float]:
+    def evaluate_val_loss(self, val_dataloader: DataLoader, split_name: str) -> dict[str, float]:
         if self.world_model is None:
             return {}
         self.world_model.eval()
@@ -1310,18 +1175,14 @@ class WorldModelTrainingBase(BaseRunner):
             return {}
         count = max(self.distributed.reduce_sum(len(val_losses)), 1.0)
         metrics = {
-            f"val_{split_name}_wm_loss": self.distributed.reduce_sum(sum(val_losses))
-            / count,
+            f"val_{split_name}_wm_loss": self.distributed.reduce_sum(sum(val_losses)) / count,
             f"val_{split_name}_wm_transition_loss": self.distributed.reduce_sum(
                 sum(val_transition_losses)
             )
             / count,
         }
         if self.distributed.is_main_process:
-            print(
-                f"  [Val {split_name}] "
-                + " ".join(f"{k}={v:.4f}" for k, v in metrics.items())
-            )
+            print(f"  [Val {split_name}] " + " ".join(f"{k}={v:.4f}" for k, v in metrics.items()))
         return metrics
 
     def run(self) -> list[dict[str, float | str | int]]:  # noqa: C901
@@ -1347,14 +1208,10 @@ class WorldModelTrainingBase(BaseRunner):
             self.encoder = None
         else:
             encoder_cfg = self._build_frozen_encoder_cfg(cfg)
-            encoder_init_ckpt = OmegaConf.select(
-                cfg, "init.encoder_state_ckpt", default=None
-            )
+            encoder_init_ckpt = OmegaConf.select(cfg, "init.encoder_state_ckpt", default=None)
             if encoder_init_ckpt and is_hf_checkpoint(encoder_init_ckpt):
                 with open_dict(encoder_cfg):
-                    encoder_cfg.model_path = str(
-                        resolve_hf_checkpoint_dir(encoder_init_ckpt)
-                    )
+                    encoder_cfg.model_path = str(resolve_hf_checkpoint_dir(encoder_init_ckpt))
             self.encoder = hydra.utils.instantiate(encoder_cfg).to(self.device)
             freeze_module(self.encoder)
             if encoder_init_ckpt:
@@ -1373,27 +1230,22 @@ class WorldModelTrainingBase(BaseRunner):
         # token-mode WM needs num_image_tokens_vocab; auto-fill from encoder
         # when not pinned in the cfg.
         if (
-            str(OmegaConf.select(world_model_cfg, "io_mode", default="hidden"))
-            == "token"
+            str(OmegaConf.select(world_model_cfg, "io_mode", default="hidden")) == "token"
             and OmegaConf.select(world_model_cfg, "num_image_tokens_vocab") is None
         ):
             vocab_mapping = self.encoder.backbone.model.vocabulary_mapping
             instantiate_kwargs["num_image_tokens_vocab"] = len(vocab_mapping.bpe2img)
-        self.world_model = hydra.utils.instantiate(
-            world_model_cfg, **instantiate_kwargs
-        ).to(self.device)
-
-        fsdp_precision = str(
-            OmegaConf.select(cfg, "training.fsdp_mixed_precision", default="bf16")
+        self.world_model = hydra.utils.instantiate(world_model_cfg, **instantiate_kwargs).to(
+            self.device
         )
+
+        fsdp_precision = str(OmegaConf.select(cfg, "training.fsdp_mixed_precision", default="bf16"))
         _dtype_map = {
             "bf16": torch.bfloat16,
             "fp16": torch.float16,
             "fp32": torch.float32,
         }
-        self.world_model = self.world_model.to(
-            dtype=_dtype_map.get(fsdp_precision, torch.bfloat16)
-        )
+        self.world_model = self.world_model.to(dtype=_dtype_map.get(fsdp_precision, torch.bfloat16))
 
         # Pre-FSDP wiring: attach image-token vocab mapping (required for token
         # mode forward), then load init ckpt while the module is still
@@ -1401,9 +1253,7 @@ class WorldModelTrainingBase(BaseRunner):
         # that need to read attributes like io_mode and n_image_tokens.
         self._unwrapped_world_model = self.world_model
         self._attach_image_token_mapping()
-        wm_init_ckpt = OmegaConf.select(
-            cfg, "init.world_model_state_ckpt", default=None
-        )
+        wm_init_ckpt = OmegaConf.select(cfg, "init.world_model_state_ckpt", default=None)
         if wm_init_ckpt:
             self._load_world_model_init_ckpt(str(wm_init_ckpt))
 
@@ -1422,9 +1272,7 @@ class WorldModelTrainingBase(BaseRunner):
         require_encoder_ckpt = bool(
             OmegaConf.select(cfg, "init.require_encoder_state_ckpt", default=False)
         )
-        encoder_state_ckpt = OmegaConf.select(
-            cfg, "init.encoder_state_ckpt", default=None
-        )
+        encoder_state_ckpt = OmegaConf.select(cfg, "init.encoder_state_ckpt", default=None)
         if (
             require_encoder_ckpt
             and "VLAActionHeadActor" in policy_target
@@ -1439,11 +1287,7 @@ class WorldModelTrainingBase(BaseRunner):
         algorithm_cfg_for_ref = OmegaConf.select(cfg, "algorithm", default={})
         use_ref_policy = (
             float(OmegaConf.select(algorithm_cfg_for_ref, "kl_coef", default=0.0)) > 0.0
-            or float(
-                OmegaConf.select(
-                    algorithm_cfg_for_ref, "actor_bc_to_ref_scale", default=0.0
-                )
-            )
+            or float(OmegaConf.select(algorithm_cfg_for_ref, "actor_bc_to_ref_scale", default=0.0))
             > 0.0
         )
         if use_ref_policy:
@@ -1468,9 +1312,7 @@ class WorldModelTrainingBase(BaseRunner):
             OmegaConf.select(cfg, "algorithm.tdmpc_ac.value_mode", default="state")
         ).lower()
         if tdmpc_value_mode in {"state_action", "q", "q_za", "q(z,a)"}:
-            critic_cfg = OmegaConf.create(
-                OmegaConf.to_container(critic_cfg, resolve=True)
-            )
+            critic_cfg = OmegaConf.create(OmegaConf.to_container(critic_cfg, resolve=True))
             critic_action_dim = int(
                 OmegaConf.select(
                     cfg,
@@ -1489,9 +1331,7 @@ class WorldModelTrainingBase(BaseRunner):
         self.target_critic.load_state_dict(self.critic.state_dict())
         # Critic / target_critic stay in float32 — feature dtype normalised
         # at call site (imagine_actor_critic_step).
-        freeze_module(
-            self.target_critic
-        )  # updated by Polyak averaging, never by optimiser
+        freeze_module(self.target_critic)  # updated by Polyak averaging, never by optimiser
         self.critic = self.distributed.wrap_trainable_module(self.critic)
         # target_critic must be FSDP-wrapped with the SAME flattening as
         # critic, otherwise soft_update sees one side as 1-D shards and the
@@ -1514,19 +1354,12 @@ class WorldModelTrainingBase(BaseRunner):
             OmegaConf.select(cfg, "algorithm.update_type", default="dreamer")
         ).lower()
         self.actor_update_route = (
-            None
-            if actor_update_kind == "dreamer"
-            else get_actor_update_route(actor_update_kind)
+            None if actor_update_kind == "dreamer" else get_actor_update_route(actor_update_kind)
         )
-        if (
-            self.actor_update_route is not None
-            and self.actor_update_route.requires_classifier
-        ):
+        if self.actor_update_route is not None and self.actor_update_route.requires_classifier:
             from dreamervla.algorithms.critic import build_classifier
 
-            classifier_ckpt_path = OmegaConf.select(
-                cfg, "init.classifier_state_ckpt", default=None
-            )
+            classifier_ckpt_path = OmegaConf.select(cfg, "init.classifier_state_ckpt", default=None)
             if not classifier_ckpt_path:
                 raise ValueError(
                     f"update_type={actor_update_kind} requires init.classifier_state_ckpt — "
@@ -1561,21 +1394,13 @@ class WorldModelTrainingBase(BaseRunner):
 
         # ── return percentile tracker ──────────────────────────────────
         self.return_tracker = ReturnPercentileTracker(
-            decay=float(
-                OmegaConf.select(cfg, "algorithm.return_tracker.decay", default=0.99)
-            ),
-            low=float(
-                OmegaConf.select(cfg, "algorithm.return_tracker.low", default=0.05)
-            ),
-            high=float(
-                OmegaConf.select(cfg, "algorithm.return_tracker.high", default=0.95)
-            ),
+            decay=float(OmegaConf.select(cfg, "algorithm.return_tracker.decay", default=0.99)),
+            low=float(OmegaConf.select(cfg, "algorithm.return_tracker.low", default=0.05)),
+            high=float(OmegaConf.select(cfg, "algorithm.return_tracker.high", default=0.95)),
         )
         self._maybe_build_viz()
 
-        dreamervla_init_ckpt = OmegaConf.select(
-            cfg, "init.dreamervla_state_ckpt", default=None
-        )
+        dreamervla_init_ckpt = OmegaConf.select(cfg, "init.dreamervla_state_ckpt", default=None)
         if dreamervla_init_ckpt:
             self._load_dreamervla_init_ckpt(str(dreamervla_init_ckpt))
 
@@ -1586,9 +1411,7 @@ class WorldModelTrainingBase(BaseRunner):
             self.world_model_ema = EMAHelper(
                 self.world_model,
                 decay=float(OmegaConf.select(cfg, "ema.decay", default=0.9999)),
-                update_after_step=int(
-                    OmegaConf.select(cfg, "ema.update_after_step", default=0)
-                ),
+                update_after_step=int(OmegaConf.select(cfg, "ema.update_after_step", default=0)),
             )
 
         self.resume(cfg)
@@ -1608,12 +1431,8 @@ class WorldModelTrainingBase(BaseRunner):
                 self.epoch += 1
                 self.global_step += 1
 
-        lr_scheduler_name = str(
-            OmegaConf.select(cfg, "training.lr_scheduler", default="constant")
-        )
-        lr_warmup_steps = int(
-            OmegaConf.select(cfg, "training.lr_warmup_steps", default=0)
-        )
+        lr_scheduler_name = str(OmegaConf.select(cfg, "training.lr_scheduler", default="constant"))
+        lr_warmup_steps = int(OmegaConf.select(cfg, "training.lr_warmup_steps", default=0))
         num_epochs_cfg = OmegaConf.select(cfg, "training.num_epochs", default=20)
         num_epochs = 20 if num_epochs_cfg is None else int(num_epochs_cfg)
         total_training_steps = (len(train_dataloader) * num_epochs) // int(
@@ -1641,12 +1460,8 @@ class WorldModelTrainingBase(BaseRunner):
             last_epoch=self.global_step - 1,
         )
 
-        run_wm_phase = bool(
-            OmegaConf.select(cfg, "training.run_wm_phase", default=True)
-        )
-        run_ac_phase = bool(
-            OmegaConf.select(cfg, "training.run_actor_critic_phase", default=True)
-        )
+        run_wm_phase = bool(OmegaConf.select(cfg, "training.run_wm_phase", default=True))
+        run_ac_phase = bool(OmegaConf.select(cfg, "training.run_actor_critic_phase", default=True))
         algorithm_cfg = OmegaConf.select(cfg, "algorithm")
         if algorithm_cfg is None:
             raise ValueError("`algorithm` config section is required.")
@@ -1711,15 +1526,11 @@ class WorldModelTrainingBase(BaseRunner):
                                     self.world_model_ema.step(self.world_model)
                                 epoch_wm_losses.append(wm_metrics["loss"])
                                 local_metrics["train_wm_loss"] = wm_metrics["loss"]
-                                local_metrics["train_wm_transition_loss"] = (
-                                    wm_metrics["transition_loss"]
-                                )
-                                local_metrics["train_wm_reward_loss"] = wm_metrics[
-                                    "reward_loss"
+                                local_metrics["train_wm_transition_loss"] = wm_metrics[
+                                    "transition_loss"
                                 ]
-                                local_metrics["train_wm_grad_norm"] = wm_metrics[
-                                    "grad_norm"
-                                ]
+                                local_metrics["train_wm_reward_loss"] = wm_metrics["reward_loss"]
+                                local_metrics["train_wm_grad_norm"] = wm_metrics["grad_norm"]
                                 for name, value in wm_metrics.items():
                                     if name not in {
                                         "loss",
@@ -1728,9 +1539,7 @@ class WorldModelTrainingBase(BaseRunner):
                                         "grad_norm",
                                     }:
                                         local_metrics[f"train_wm_{name}"] = value
-                                local_metrics["wm_lr"] = float(
-                                    wm_lr_scheduler.get_last_lr()[0]
-                                )
+                                local_metrics["wm_lr"] = float(wm_lr_scheduler.get_last_lr()[0])
                                 step_had_update = True
 
                         # Phase 2 — DreamerV3 actor-critic imagination
@@ -1755,9 +1564,7 @@ class WorldModelTrainingBase(BaseRunner):
                                     )
                                 else:
                                     if actor_update_route is None:
-                                        raise RuntimeError(
-                                            "Actor update route was not resolved."
-                                        )
+                                        raise RuntimeError("Actor update route was not resolved.")
                                     actor_kwargs = {
                                         "policy": self.policy,
                                         actor_update_route.world_model_arg: self.world_model,
@@ -1777,9 +1584,7 @@ class WorldModelTrainingBase(BaseRunner):
                                         )
                                     if actor_update_route.uses_real_relabel:
                                         actor_kwargs["real_relabel_batch"] = (
-                                            self._sample_real_relabel_batch(
-                                                algorithm_cfg
-                                            )
+                                            self._sample_real_relabel_batch(algorithm_cfg)
                                         )
                                     if actor_update_route.uses_critic:
                                         actor_kwargs.update(
@@ -1789,24 +1594,16 @@ class WorldModelTrainingBase(BaseRunner):
                                                 "critic_optimizer": self.critic_optimizer,
                                             }
                                         )
-                                    ac_metrics = actor_update_route.step_fn(
-                                        **actor_kwargs
-                                    )
+                                    ac_metrics = actor_update_route.step_fn(**actor_kwargs)
                                 epoch_actor_losses.append(ac_metrics["actor_loss"])
-                                epoch_critic_losses.append(
-                                    ac_metrics["critic_loss"]
-                                )
+                                epoch_critic_losses.append(ac_metrics["critic_loss"])
                                 epoch_returns.append(ac_metrics["returns_mean"])
                                 epoch_rewards.append(ac_metrics["reward_mean"])
                                 epoch_scales.append(ac_metrics["return_scale"])
                                 local_metrics.update(
                                     {
-                                        "train_actor_loss": ac_metrics[
-                                            "actor_loss"
-                                        ],
-                                        "train_actor_bc_loss": ac_metrics.get(
-                                            "actor_bc_loss", 0.0
-                                        ),
+                                        "train_actor_loss": ac_metrics["actor_loss"],
+                                        "train_actor_bc_loss": ac_metrics.get("actor_bc_loss", 0.0),
                                         "train_actor_bc_scale": ac_metrics.get(
                                             "actor_bc_scale", 0.0
                                         ),
@@ -1822,15 +1619,9 @@ class WorldModelTrainingBase(BaseRunner):
                                         "train_actor_vla_drift_env_mae": ac_metrics.get(
                                             "actor_vla_drift_env_mae", 0.0
                                         ),
-                                        "train_critic_loss": ac_metrics[
-                                            "critic_loss"
-                                        ],
-                                        "train_returns_mean": ac_metrics[
-                                            "returns_mean"
-                                        ],
-                                        "train_returns_std": ac_metrics[
-                                            "returns_std"
-                                        ],
+                                        "train_critic_loss": ac_metrics["critic_loss"],
+                                        "train_returns_mean": ac_metrics["returns_mean"],
+                                        "train_returns_std": ac_metrics["returns_std"],
                                         "train_raw_returns_mean": ac_metrics.get(
                                             "raw_returns_mean",
                                             ac_metrics["returns_mean"],
@@ -1842,12 +1633,8 @@ class WorldModelTrainingBase(BaseRunner):
                                         "train_advantage_mean": ac_metrics.get(
                                             "advantage_mean", 0.0
                                         ),
-                                        "train_advantage_std": ac_metrics.get(
-                                            "advantage_std", 0.0
-                                        ),
-                                        "train_advantage_mag": ac_metrics.get(
-                                            "advantage_mag", 0.0
-                                        ),
+                                        "train_advantage_std": ac_metrics.get("advantage_std", 0.0),
+                                        "train_advantage_mag": ac_metrics.get("advantage_mag", 0.0),
                                         "train_return_norm_enabled": ac_metrics.get(
                                             "return_norm_enabled", 0.0
                                         ),
@@ -1872,12 +1659,8 @@ class WorldModelTrainingBase(BaseRunner):
                                         "train_ret_normed_rate": ac_metrics.get(
                                             "ret_normed_rate", 0.0
                                         ),
-                                        "train_return_scale": ac_metrics[
-                                            "return_scale"
-                                        ],
-                                        "train_reward_mean": ac_metrics[
-                                            "reward_mean"
-                                        ],
+                                        "train_return_scale": ac_metrics["return_scale"],
+                                        "train_reward_mean": ac_metrics["reward_mean"],
                                         "train_success_return_shaping_scale": ac_metrics.get(
                                             "success_return_shaping_scale", 0.0
                                         ),
@@ -1890,18 +1673,12 @@ class WorldModelTrainingBase(BaseRunner):
                                         "train_success_return_delta_std": ac_metrics.get(
                                             "success_return_delta_std", 0.0
                                         ),
-                                        "train_continue_mean": ac_metrics.get(
-                                            "continue_mean", 1.0
-                                        ),
-                                        "train_value_mean": ac_metrics[
-                                            "value_mean"
-                                        ],
+                                        "train_continue_mean": ac_metrics.get("continue_mean", 1.0),
+                                        "train_value_mean": ac_metrics["value_mean"],
                                         "train_critic_target_mean": ac_metrics.get(
                                             "critic_target_mean", 0.0
                                         ),
-                                        "train_repval_loss": ac_metrics.get(
-                                            "repval_loss", 0.0
-                                        ),
+                                        "train_repval_loss": ac_metrics.get("repval_loss", 0.0),
                                         "train_repval_applied": ac_metrics.get(
                                             "repval_applied", 0.0
                                         ),
@@ -1911,27 +1688,17 @@ class WorldModelTrainingBase(BaseRunner):
                                         "train_imagine_weight_mean": ac_metrics.get(
                                             "imagine_weight_mean", 1.0
                                         ),
-                                        "train_actor_grad_norm": ac_metrics[
-                                            "actor_grad_norm"
-                                        ],
-                                        "train_critic_grad_norm": ac_metrics[
-                                            "critic_grad_norm"
-                                        ],
+                                        "train_actor_grad_norm": ac_metrics["actor_grad_norm"],
+                                        "train_critic_grad_norm": ac_metrics["critic_grad_norm"],
                                         "train_ppo_update_epochs": ac_metrics.get(
                                             "ppo_update_epochs", 1.0
                                         ),
                                         "train_ppo_ratio_mean": ac_metrics.get(
                                             "ppo_ratio_mean", 1.0
                                         ),
-                                        "train_ppo_ratio_min": ac_metrics.get(
-                                            "ppo_ratio_min", 1.0
-                                        ),
-                                        "train_ppo_ratio_max": ac_metrics.get(
-                                            "ppo_ratio_max", 1.0
-                                        ),
-                                        "train_ppo_clipfrac": ac_metrics.get(
-                                            "ppo_clipfrac", 0.0
-                                        ),
+                                        "train_ppo_ratio_min": ac_metrics.get("ppo_ratio_min", 1.0),
+                                        "train_ppo_ratio_max": ac_metrics.get("ppo_ratio_max", 1.0),
+                                        "train_ppo_clipfrac": ac_metrics.get("ppo_clipfrac", 0.0),
                                         "train_real_relabel_applied": ac_metrics.get(
                                             "real_relabel_applied", 0.0
                                         ),
@@ -1978,9 +1745,7 @@ class WorldModelTrainingBase(BaseRunner):
                             "epoch": self.epoch,
                         }
 
-                        self.console_progress(
-                            self.global_step, progress_total, "train"
-                        )
+                        self.console_progress(self.global_step, progress_total, "train")
 
                         self._maybe_save_token_viz(batch)
 
@@ -2003,16 +1768,12 @@ class WorldModelTrainingBase(BaseRunner):
                         continue
 
                     if epoch_wm_losses:
-                        wm_n = max(
-                            self.distributed.reduce_sum(len(epoch_wm_losses)), 1.0
-                        )
+                        wm_n = max(self.distributed.reduce_sum(len(epoch_wm_losses)), 1.0)
                         step_log["epoch_wm_loss"] = (
                             self.distributed.reduce_sum(sum(epoch_wm_losses)) / wm_n
                         )
                     if epoch_actor_losses:
-                        ac_n = max(
-                            self.distributed.reduce_sum(len(epoch_actor_losses)), 1.0
-                        )
+                        ac_n = max(self.distributed.reduce_sum(len(epoch_actor_losses)), 1.0)
                         step_log["epoch_actor_loss"] = (
                             self.distributed.reduce_sum(sum(epoch_actor_losses)) / ac_n
                         )
@@ -2047,28 +1808,19 @@ class WorldModelTrainingBase(BaseRunner):
                         if k in _epoch_train_keys
                     }
                     if _train_console_metrics:
-                        self.console_metrics(
-                            f"train · epoch {self.epoch}", _train_console_metrics
-                        )
+                        self.console_metrics(f"train · epoch {self.epoch}", _train_console_metrics)
 
-                    eval_every = int(
-                        OmegaConf.select(cfg, "eval.eval_every", default=1)
-                    )
+                    eval_every = int(OmegaConf.select(cfg, "eval.eval_every", default=1))
                     _eval_console_metrics: dict[str, float] = {}
                     if val_dataloaders and (self.epoch % eval_every) == 0:
                         for split_name, val_dl in val_dataloaders.items():
                             _val_metrics = self.evaluate_val_loss(val_dl, split_name)
                             step_log.update(_val_metrics)
                             _eval_console_metrics.update(
-                                {
-                                    self._normalize_metric_name(k): v
-                                    for k, v in _val_metrics.items()
-                                }
+                                {self._normalize_metric_name(k): v for k, v in _val_metrics.items()}
                             )
                     if _eval_console_metrics:
-                        self.console_metrics(
-                            f"eval · epoch {self.epoch}", _eval_console_metrics
-                        )
+                        self.console_metrics(f"eval · epoch {self.epoch}", _eval_console_metrics)
 
                     train_json_logger.log(step_log)
                     self.log_metrics(step_log, step=self.global_step)
@@ -2077,15 +1829,11 @@ class WorldModelTrainingBase(BaseRunner):
                     if (self.epoch % cfg.training.checkpoint_every) == 0:
                         if cfg.checkpoint.save_last_ckpt:
                             self.save_checkpoint()
-                        metric_dict = {
-                            k.replace("/", "_"): v for k, v in step_log.items()
-                        }
+                        metric_dict = {k.replace("/", "_"): v for k, v in step_log.items()}
                         topk_ckpt_path = None
                         if self.distributed.is_main_process:
                             topk_ckpt_path = topk_manager.get_ckpt_path(metric_dict)
-                        topk_ckpt_path = self.distributed.broadcast_object(
-                            topk_ckpt_path
-                        )
+                        topk_ckpt_path = self.distributed.broadcast_object(topk_ckpt_path)
                         if topk_ckpt_path is not None:
                             self.save_checkpoint(path=topk_ckpt_path)
 

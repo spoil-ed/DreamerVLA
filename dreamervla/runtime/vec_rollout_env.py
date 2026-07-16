@@ -65,9 +65,7 @@ def default_env_factory(cfg_kwargs: dict[str, Any]) -> Any:
     if target:
         import hydra
 
-        return _enter_if_supported(
-            hydra.utils.instantiate({"_target_": str(target), **cfg})
-        )
+        return _enter_if_supported(hydra.utils.instantiate({"_target_": str(target), **cfg}))
 
     from dreamervla.envs.libero.libero_env import (
         DreamerVLAOnlineTrainEnv,
@@ -125,7 +123,10 @@ def _worker(
             elif cmd == "step":
                 _obs, reward, terminated, truncated, info = env.step(payload)
                 conn.send(
-                    ("ok", (float(reward), bool(terminated), bool(truncated), info, env.full_record()))
+                    (
+                        "ok",
+                        (float(reward), bool(terminated), bool(truncated), info, env.full_record()),
+                    )
                 )
             elif cmd == "task_description":
                 conn.send(("ok", env.task_description))

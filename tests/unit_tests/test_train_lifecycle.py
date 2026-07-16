@@ -95,9 +95,7 @@ class _FailingLocalTeardownRunner(BaseRunner):
 def test_base_runner_setup_failure_cleanup_always_cleans_distributed_group(
     tmp_path,
 ) -> None:
-    runner = _FailingLocalTeardownRunner(
-        OmegaConf.create({"training": {"out_dir": str(tmp_path)}})
-    )
+    runner = _FailingLocalTeardownRunner(OmegaConf.create({"training": {"out_dir": str(tmp_path)}}))
     distributed = _CleanupTrackingDistributed()
     runner.distributed = distributed
 

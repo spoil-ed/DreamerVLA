@@ -54,10 +54,14 @@ class TinyLumosPolicy(nn.Module):
         if not isinstance(batch, dict):
             return self.linear(batch.float())
         hidden = batch["hidden"].float()
-        mean = self.linear(hidden).unsqueeze(1).expand(
-            -1,
-            self.chunk_size,
-            -1,
+        mean = (
+            self.linear(hidden)
+            .unsqueeze(1)
+            .expand(
+                -1,
+                self.chunk_size,
+                -1,
+            )
         )
         mode = str(batch.get("mode", "sample"))
         if mode == "sample":
@@ -89,9 +93,7 @@ class TinyStagedVLAPolicy(nn.Module):
         nn.init.constant_(self.actor.weight, 0.1)
 
     def encoder_parameter_names(self) -> tuple[str, ...]:
-        return tuple(
-            name for name, _ in self.named_parameters() if name.startswith("encoder.")
-        )
+        return tuple(name for name, _ in self.named_parameters() if name.startswith("encoder."))
 
     def prepare_raw_batch(self, transitions: list[dict]) -> dict[str, torch.Tensor]:
         values = [float(torch.as_tensor(item["image"]).float().mean()) for item in transitions]
@@ -116,10 +118,14 @@ class TinyStagedVLAPolicy(nn.Module):
             if int(labels.shape[1]) != 1:
                 raise ValueError("TinyStagedVLAPolicy expects one action token")
             loss = F.cross_entropy(logits.reshape(-1, logits.shape[-1]), labels.reshape(-1))
-            extras["action_label_logprobs"] = torch.log_softmax(
-                logits,
-                dim=-1,
-            ).gather(-1, labels.unsqueeze(-1)).squeeze(-1)
+            extras["action_label_logprobs"] = (
+                torch.log_softmax(
+                    logits,
+                    dim=-1,
+                )
+                .gather(-1, labels.unsqueeze(-1))
+                .squeeze(-1)
+            )
             extras["action_logits"] = logits
             return loss, torch.zeros((), device=hidden.device), extras
         hidden = batch["hidden"].float()
@@ -288,7 +294,6 @@ class TinySuccessClassifier(nn.Module):
         fallback = torch.full_like(first, int(video.shape[1]) - 1)
         finish_step = torch.where(has_success, first, fallback)
         return {"complete": has_success, "finish_step": finish_step}
-
 
 
 class TinyWorldModelPhaseUpdater:

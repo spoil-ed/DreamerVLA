@@ -255,9 +255,7 @@ class ChameleonImageReconstructor:
 
     def from_vq(self, vq_ids: torch.Tensor) -> list[Image.Image]:
         """vq_ids: [B, h_lat*w_lat] or [B, h_lat, w_lat]"""
-        pixels = vq_tokens_to_pixels(
-            vq_ids, self.vq_model, self.h_latent, self.w_latent
-        )
+        pixels = vq_tokens_to_pixels(vq_ids, self.vq_model, self.h_latent, self.w_latent)
         return pixels_to_pil(pixels)
 
     def from_bpe(self, bpe_ids: torch.Tensor) -> list[Image.Image]:

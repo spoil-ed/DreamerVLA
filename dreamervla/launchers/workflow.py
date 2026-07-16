@@ -43,7 +43,11 @@ def _parse_hydra_like_args(argv: Sequence[str]) -> tuple[str, list[str]]:
 
 
 def _plain(value: Any) -> Any:
-    return OmegaConf.to_container(value, resolve=True) if isinstance(value, (DictConfig, ListConfig)) else value
+    return (
+        OmegaConf.to_container(value, resolve=True)
+        if isinstance(value, (DictConfig, ListConfig))
+        else value
+    )
 
 
 def _as_list(value: Any) -> list[Any]:
@@ -78,8 +82,7 @@ def _step_selected(step: Mapping[str, Any], only: Sequence[str]) -> bool:
         Path(script).stem,
     }
     return any(
-        selected in names or any(name.startswith(selected) for name in names)
-        for selected in only
+        selected in names or any(name.startswith(selected) for name in names) for selected in only
     )
 
 
@@ -123,7 +126,9 @@ def _run_one_step(
     state_dir = Path(str(cfg.get("state_dir", "")))
     marker = None
     if bool(step.get("marker", False)) and state_dir:
-        marker = (PROJECT_ROOT / state_dir if not state_dir.is_absolute() else state_dir) / f"{step_id}.done"
+        marker = (
+            PROJECT_ROOT / state_dir if not state_dir.is_absolute() else state_dir
+        ) / f"{step_id}.done"
         if marker.exists() and not bool(cfg.get("force", False)):
             print(f"[workflow:{cfg.get('name')}] skip {step_id} marker={marker}")
             return

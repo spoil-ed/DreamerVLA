@@ -39,8 +39,13 @@ def test_rank0_renders_global_total_in_the_line(tmp_path):
     AggregateProgress(8, "collect", rank=1, world_size=2, progress_dir=pd).set(3)
     lines: list[str] = []
     r0 = AggregateProgress(
-        8, "collect", rank=0, world_size=2, progress_dir=pd,
-        sink=lines.append, min_interval_s=0.0,
+        8,
+        "collect",
+        rank=0,
+        world_size=2,
+        progress_dir=pd,
+        sink=lines.append,
+        min_interval_s=0.0,
     )
     r0.set(2)
     assert lines, "rank 0 must render"
@@ -52,8 +57,13 @@ def test_nonzero_rank_is_silent(tmp_path):
     pd = tmp_path / ".progress"
     lines: list[str] = []
     r1 = AggregateProgress(
-        5, "collect", rank=1, world_size=2, progress_dir=pd,
-        sink=lines.append, min_interval_s=0.0,
+        5,
+        "collect",
+        rank=1,
+        world_size=2,
+        progress_dir=pd,
+        sink=lines.append,
+        min_interval_s=0.0,
     )
     r1.set(2)
     r1.close()

@@ -64,9 +64,7 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
 
         if add_value_head:
             self.hidden_size = self.config.hidden_size
-            output_dim = (
-                1 if self.config.value_type == "chunk_level" else self.num_action_chunks
-            )
+            output_dim = 1 if self.config.value_type == "chunk_level" else self.num_action_chunks
             self.value_head = ValueHead(
                 input_dim=self.hidden_size,
                 hidden_sizes=(512, 128),
@@ -86,8 +84,7 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
         attention_mask = attention_mask[:, :-1]
 
         n_patch_tokens = (
-            self.vision_backbone.get_num_patches()
-            * self.vision_backbone.get_num_images_in_input()
+            self.vision_backbone.get_num_patches() * self.vision_backbone.get_num_images_in_input()
         )
 
         # llm label & mask & embedding
@@ -110,10 +107,8 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
         projected_patch_embeddings = projected_patch_embeddings.reshape(
             input_embeddings.shape[0], -1, *projected_patch_embeddings.shape[2:]
         )
-        multimodal_embeddings, multimodal_attention_mask = (
-            self._build_multimodal_attention(
-                input_embeddings, projected_patch_embeddings, attention_mask
-            )
+        multimodal_embeddings, multimodal_attention_mask = self._build_multimodal_attention(
+            input_embeddings, projected_patch_embeddings, attention_mask
         )
         assert (
             multimodal_embeddings.shape[1]
@@ -169,17 +164,13 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
         action_norm_stats = self.get_action_stats(unnorm_key)
 
         if ACTION_PROPRIO_NORMALIZATION_TYPE == NormalizationType.BOUNDS:
-            mask = action_norm_stats.get(
-                "mask", np.ones_like(action_norm_stats["min"], dtype=bool)
-            )
+            mask = action_norm_stats.get("mask", np.ones_like(action_norm_stats["min"], dtype=bool))
             action_high, action_low = (
                 np.array(action_norm_stats["max"]),
                 np.array(action_norm_stats["min"]),
             )
         elif ACTION_PROPRIO_NORMALIZATION_TYPE == NormalizationType.BOUNDS_Q99:
-            mask = action_norm_stats.get(
-                "mask", np.ones_like(action_norm_stats["q01"], dtype=bool)
-            )
+            mask = action_norm_stats.get("mask", np.ones_like(action_norm_stats["q01"], dtype=bool))
             action_high, action_low = (
                 np.array(action_norm_stats["q99"]),
                 np.array(action_norm_stats["q01"]),
@@ -195,8 +186,7 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
 
         actions = np.where(
             mask,
-            0.5 * (normalized_actions + 1) * (action_high - action_low + 1e-8)
-            + action_low,
+            0.5 * (normalized_actions + 1) * (action_high - action_low + 1e-8) + action_low,
             normalized_actions,
         )
 
@@ -234,9 +224,7 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
                 wrist_imgs = env_obs["wrist_images"].permute(
                     0, 1, 4, 2, 3
                 )  # [B, N_IMG, H, W, C] -> [B, N_IMG, C, H, W]
-                all_images.extend(
-                    [wrist_imgs[:, i] for i in range(wrist_imgs.shape[1])]
-                )
+                all_images.extend([wrist_imgs[:, i] for i in range(wrist_imgs.shape[1])])
 
             max_length = self.max_prompt_length
             device = next(self.parameters()).device
@@ -274,9 +262,7 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
                 )
 
             input_ids = inputs["input_ids"].to(device=device, dtype=torch.long)
-            attention_mask = inputs["attention_mask"].to(
-                device=device, dtype=torch.bool
-            )
+            attention_mask = inputs["attention_mask"].to(device=device, dtype=torch.bool)
             pixel_values = inputs["pixel_values"].to(device=device, dtype=precision)
 
             B, N, C, H, W = pixel_values.shape
@@ -298,8 +284,7 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
         n_prompt_tokens = input_ids.shape[-1] - 1
         # Calculate number of patches (including proprio token and/or diffusion timestep embedding if present)
         n_patches = (
-            self.vision_backbone.get_num_patches()
-            * self.vision_backbone.get_num_images_in_input()
+            self.vision_backbone.get_num_patches() * self.vision_backbone.get_num_images_in_input()
         )
 
         # llm inputs
@@ -352,9 +337,7 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
 
         if do_sample:
             processed_logits_tensor = logits_tensor / kwargs["temperature"]
-            top_k = min(
-                kwargs["top_k"], processed_logits_tensor.size(-1)
-            )  # Safety check
+            top_k = min(kwargs["top_k"], processed_logits_tensor.size(-1))  # Safety check
             if top_k > 0:
                 logits_warper = TopKLogitsWarper(
                     top_k
@@ -364,9 +347,7 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
                 processed_logits_tensor, dim=-1
             )  # [B, act, vocab_size + 64]
 
-            probs_tensor = torch.exp(
-                processed_logprob_tensor
-            )  # [B, act, vocab_size + 64]
+            probs_tensor = torch.exp(processed_logprob_tensor)  # [B, act, vocab_size + 64]
             probs_flat = probs_tensor.view(
                 -1, processed_logprob_tensor.shape[-1]
             )  # [B * act, vocab_size + 64]
@@ -383,9 +364,9 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
 
         # assert torch.all(idxs >= 0) and torch.all(idxs < self.config.n_action_bins)
         # generated_ids = idxs + (self.vocab_size - self.config.n_action_bins)
-        assert torch.all(
-            idxs >= self.vocab_size - self.config.n_action_bins
-        ) and torch.all(idxs < self.vocab_size)
+        assert torch.all(idxs >= self.vocab_size - self.config.n_action_bins) and torch.all(
+            idxs < self.vocab_size
+        )
 
         chunk_action_tokens = idxs.reshape(-1, self.action_dim)
         predicted_action_token_ids = chunk_action_tokens.cpu().numpy()
@@ -442,9 +423,7 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
         return data
 
     def setup_config_and_processor(self, model_config, input_processor):
-        self.vocab_size = (
-            model_config.text_config.vocab_size - model_config.pad_to_multiple_of
-        )
+        self.vocab_size = model_config.text_config.vocab_size - model_config.pad_to_multiple_of
         self.bins = np.linspace(-1, 1, model_config.n_action_bins)
         self.bin_centers = (self.bins[:-1] + self.bins[1:]) / 2.0
         action_norm_stats = self._get_action_stats()
@@ -493,9 +472,7 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
             input_ids, attention_mask
         )
         assert torch.all(input_ids[:, -1] == STOP_INDEX)  # [B, L + act + 1, D]
-        assert torch.all(
-            input_ids[:, -self.action_dim * self.num_action_chunks - 2] == 29871
-        )
+        assert torch.all(input_ids[:, -self.action_dim * self.num_action_chunks - 2] == 29871)
         assert torch.all(
             attention_mask[:, -2 - self.action_dim * self.num_action_chunks :] == 1
         )  # [B, L + act + 1]
@@ -532,9 +509,7 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
             ]  # [B, action-dim, vocab-size]
 
             processed_logits_tensor = logits / kwargs["temperature"]
-            top_k = min(
-                kwargs["top_k"], processed_logits_tensor.size(-1)
-            )  # Safety check
+            top_k = min(kwargs["top_k"], processed_logits_tensor.size(-1))  # Safety check
             if top_k > 0:
                 logits_warper = TopKLogitsWarper(
                     top_k
@@ -542,14 +517,10 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
                 processed_logits_tensor = logits_warper(None, processed_logits_tensor)
 
             action_logits = processed_logits_tensor
-            action_logits[
-                ..., : self.vocab_size - self.config.n_action_bins
-            ] = -torch.inf
+            action_logits[..., : self.vocab_size - self.config.n_action_bins] = -torch.inf
             action_logits[..., self.vocab_size :] = -torch.inf
 
-            logprobs = compute_logprobs_from_logits(
-                logits=action_logits, target=action_tokens
-            )
+            logprobs = compute_logprobs_from_logits(logits=action_logits, target=action_tokens)
 
             entropy = None
             if compute_entropy:

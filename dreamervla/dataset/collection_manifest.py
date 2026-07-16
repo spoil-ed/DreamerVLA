@@ -42,9 +42,7 @@ ONLINE_ROLLOUT_EPISODES_DIR = "episodes"
 EPISODE_INDEX_NAME = "episode_index.jsonl"
 
 
-def count_collected_episodes(
-    reward_dir: str | Path, hidden_dir: str | Path | None = None
-) -> int:
+def count_collected_episodes(reward_dir: str | Path, hidden_dir: str | Path | None = None) -> int:
     """Total episodes already on disk, summed across reward shards.
 
     A shard that cannot be opened (partial/corrupt, e.g. an interrupted run) is
@@ -52,7 +50,9 @@ def count_collected_episodes(
     resume top-up will re-collect those episodes.
     """
     if hidden_dir is not None:
-        return sum(len(ids) for ids in complete_episode_ids_per_task(reward_dir, hidden_dir).values())
+        return sum(
+            len(ids) for ids in complete_episode_ids_per_task(reward_dir, hidden_dir).values()
+        )
 
     import h5py
 
@@ -168,8 +168,7 @@ def missing_episode_work_list(
         (int(task_id), episode_id)
         for task_id in task_ids
         for episode_id in range(target)
-        if episode_id
-        not in complete_episode_ids_by_task.get(int(task_id), set())
+        if episode_id not in complete_episode_ids_by_task.get(int(task_id), set())
     ]
 
 
@@ -212,9 +211,7 @@ def _complete_hidden_demo(demo: Any, length: int) -> bool:
     return int(demo["obs_embedding"].shape[0]) >= int(length)
 
 
-def quarantine_corrupt_shards(
-    reward_dir: str | Path, hidden_dir: str | Path
-) -> list[str]:
+def quarantine_corrupt_shards(reward_dir: str | Path, hidden_dir: str | Path) -> list[str]:
     """Phase-1 integrity check: move truncated/unreadable shards out of the way.
 
     A crashed collect can leave a half-written shard (e.g. a 96-byte truncated HDF5).
@@ -253,9 +250,7 @@ def quarantine_corrupt_shards(
     return quarantined
 
 
-def quarantine_incomplete_shards(
-    reward_dir: str | Path, hidden_dir: str | Path
-) -> list[str]:
+def quarantine_incomplete_shards(reward_dir: str | Path, hidden_dir: str | Path) -> list[str]:
     """Move unreadable or unpaired reward shards to ``.incomplete/``.
 
     This handles shard-level incompleteness such as a missing hidden sidecar.
@@ -337,9 +332,7 @@ def format_collection_report(summary: dict[str, Any], *, root: str | Path) -> st
     elif summary["complete"]:
         lines.append(f"  collected: {total} / {target} target  (complete)")
     else:
-        lines.append(
-            f"  collected: {total} / {target} target  (need {summary['remaining']} more)"
-        )
+        lines.append(f"  collected: {total} / {target} target  (need {summary['remaining']} more)")
     per_task = summary["per_task"]
     if per_task:
         parts = " ".join(f"task{tid}={n}" for tid, n in per_task.items())
@@ -528,14 +521,10 @@ def load_online_rollout_episodes(
                 episode: list[dict[str, Any]] = []
                 for index in range(length):
                     sparse_reward = (
-                        float(rdemo["sparse_rewards"][index])
-                        if "sparse_rewards" in rdemo
-                        else 0.0
+                        float(rdemo["sparse_rewards"][index]) if "sparse_rewards" in rdemo else 0.0
                     )
                     dense_reward = (
-                        float(rdemo["rewards"][index])
-                        if "rewards" in rdemo
-                        else sparse_reward
+                        float(rdemo["rewards"][index]) if "rewards" in rdemo else sparse_reward
                     )
                     done = bool(rdemo["dones"][index]) if "dones" in rdemo else index == length - 1
                     action = np.asarray(rdemo["actions"][index], dtype=np.float32)
@@ -677,9 +666,7 @@ def resume_plan(*, target_total: int, num_tasks: int, collected: int) -> dict[st
     """
     remaining = max(0, int(target_total) - int(collected))
     complete = remaining <= 0
-    episodes_per_task = (
-        math.ceil(remaining / num_tasks) if num_tasks > 0 and remaining > 0 else 0
-    )
+    episodes_per_task = math.ceil(remaining / num_tasks) if num_tasks > 0 and remaining > 0 else 0
     return {
         "target": int(target_total),
         "collected": int(collected),

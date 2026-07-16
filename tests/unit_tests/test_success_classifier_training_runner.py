@@ -307,9 +307,7 @@ def test_classifier_resume_keeps_jsonl(tmp_path: Path) -> None:
 
 def test_classifier_final_save_writes_warmup_and_latest(tmp_path: Path) -> None:
     runner = object.__new__(SuccessClassifierTrainingRunner)
-    runner.cfg = OmegaConf.create(
-        {"training": {"topk_k": 0}, "classifier": {"latent_dim": 2}}
-    )
+    runner.cfg = OmegaConf.create({"training": {"topk_k": 0}, "classifier": {"latent_dim": 2}})
     runner.config = runner.cfg
     runner._output_dir = str(tmp_path)
     runner.model = torch.nn.Linear(2, 1)
@@ -389,12 +387,12 @@ def test_classifier_latest_checkpoint_is_saved_only_after_epoch_boundary(
     loader_epochs: list[int] = []
     runner.set_dataloader_epoch = lambda _loader, epoch: loader_epochs.append(int(epoch))
     saves: list[tuple[str, int, int]] = []
-    runner.save_checkpoint = lambda *, tag: saves.append(
-        (str(tag), int(runner.epoch), int(runner.global_step))
-    ) or ""
-    runner._save_final_checkpoint = lambda: saves.append(
-        ("classifier_warmup", int(runner.epoch), int(runner.global_step))
-    ) or ""
+    runner.save_checkpoint = lambda *, tag: (
+        saves.append((str(tag), int(runner.epoch), int(runner.global_step))) or ""
+    )
+    runner._save_final_checkpoint = lambda: (
+        saves.append(("classifier_warmup", int(runner.epoch), int(runner.global_step))) or ""
+    )
 
     runner.run()
 

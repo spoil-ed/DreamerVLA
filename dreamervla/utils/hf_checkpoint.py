@@ -38,18 +38,14 @@ def resolve_hf_checkpoint_dir(path: str | Path) -> Path:
         parent = candidate.parent
         if _is_hf_dir(parent):
             return parent
-        raise FileNotFoundError(
-            f"Unable to locate a Hugging Face checkpoint under: {candidate}"
-        )
+        raise FileNotFoundError(f"Unable to locate a Hugging Face checkpoint under: {candidate}")
     if _is_hf_dir(candidate):
         return candidate
     if candidate.is_dir():
         for subdir in sorted(item for item in candidate.iterdir() if item.is_dir()):
             if _is_hf_dir(subdir):
                 return subdir.resolve()
-    raise FileNotFoundError(
-        f"Unable to locate a Hugging Face checkpoint under: {candidate}"
-    )
+    raise FileNotFoundError(f"Unable to locate a Hugging Face checkpoint under: {candidate}")
 
 
 def is_hf_checkpoint(path: str | Path | None) -> bool:
@@ -97,16 +93,12 @@ def _check_format_version(payload: Any, path: str | Path) -> None:
         )
 
 
-def load_hf_prefixed_tensors(
-    model_dir: str | Path, prefix: str
-) -> dict[str, torch.Tensor]:
+def load_hf_prefixed_tensors(model_dir: str | Path, prefix: str) -> dict[str, torch.Tensor]:
     """Load tensors under ``prefix`` from HF safetensors or pytorch bin shards."""
     model_dir = resolve_hf_checkpoint_dir(model_dir)
     tensors: dict[str, torch.Tensor] = {}
 
-    safetensor_files = _indexed_weight_files(
-        model_dir, "model.safetensors.index.json", prefix
-    )
+    safetensor_files = _indexed_weight_files(model_dir, "model.safetensors.index.json", prefix)
     if safetensor_files is None:
         safetensor_files = sorted(model_dir.glob("*.safetensors"))
     if safetensor_files:
@@ -127,24 +119,20 @@ def load_hf_prefixed_tensors(
         if not isinstance(state, dict):
             continue
         for key, value in state.items():
-            if (
-                isinstance(key, str)
-                and key.startswith(prefix)
-                and isinstance(value, torch.Tensor)
-            ):
+            if isinstance(key, str) and key.startswith(prefix) and isinstance(value, torch.Tensor):
                 tensors[key[len(prefix) :]] = value.to(dtype=torch.float32)
     return tensors
 
 
 def _is_hf_dir(path: Path) -> bool:
-    return path.is_dir() and (path / "config.json").is_file() and any(
-        (path / name).exists() for name in HF_WEIGHT_NAMES
+    return (
+        path.is_dir()
+        and (path / "config.json").is_file()
+        and any((path / name).exists() for name in HF_WEIGHT_NAMES)
     )
 
 
-def _indexed_weight_files(
-    model_dir: Path, index_name: str, prefix: str
-) -> list[Path] | None:
+def _indexed_weight_files(model_dir: Path, index_name: str, prefix: str) -> list[Path] | None:
     index_path = model_dir / index_name
     if not index_path.is_file():
         return None

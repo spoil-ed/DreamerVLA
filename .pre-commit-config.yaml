@@ -5,6 +5,8 @@ repos:
       - id: ruff
         args: ["--preview", "--fix"]
       - id: ruff-format
+        # This file is vendored from LIBERO; lint it, but preserve upstream layout.
+        exclude: ^dreamervla/envs/libero/venv\.py$
 
   - repo: https://github.com/commit-check/commit-check
     rev: "v0.10.2"

@@ -64,9 +64,7 @@ from torch.utils.data import IterableDataset
 from dreamervla.preprocess.sidecar_schema import validate_hidden_token_sidecar_dir
 
 
-def _find_demo_pairs(
-    raw_dir: str | Path, hidden_dir: str | Path
-) -> list[tuple[Path, Path, str]]:
+def _find_demo_pairs(raw_dir: str | Path, hidden_dir: str | Path) -> list[tuple[Path, Path, str]]:
     """Return exact raw/hidden pairs; mismatches are hard data errors.
 
     Returns a list of (raw_path, hidden_path, demo_key) where ``demo_key`` is
@@ -103,9 +101,7 @@ def _find_demo_pairs(
                 raw_demo = rr[f"data/{key}"]
                 hidden_demo = hh[f"data/{key}"]
                 if "actions" not in raw_demo or "obs_embedding" not in hidden_demo:
-                    raise ValueError(
-                        f"{raw_p.name}:data/{key} requires actions and obs_embedding"
-                    )
+                    raise ValueError(f"{raw_p.name}:data/{key} requires actions and obs_embedding")
                 raw_length = int(raw_demo["actions"].shape[0])
                 hidden_length = int(hidden_demo["obs_embedding"].shape[0])
                 if raw_length <= 0 or hidden_length <= 0 or raw_length != hidden_length:
@@ -162,9 +158,7 @@ class WMReplayClassifierDataset(IterableDataset):
         if mode not in {"train", "val"}:
             raise ValueError(f"mode must be train/val, got {mode}")
         if neg_method not in {"swap", "noise", "random"}:
-            raise ValueError(
-                f"neg_method must be one of swap/noise/random, got {neg_method}"
-            )
+            raise ValueError(f"neg_method must be one of swap/noise/random, got {neg_method}")
         self.K = int(K)
         self.W = int(W)
         self.num_hist = int(num_hist)
@@ -196,10 +190,7 @@ class WMReplayClassifierDataset(IterableDataset):
 
         # Chunk WM must be moved to device by the caller; we just hold the ref.
         self.chunk_wm = chunk_wm
-        if (
-            hasattr(self.chunk_wm, "chunk_size")
-            and int(self.chunk_wm.chunk_size) != self.K
-        ):
+        if hasattr(self.chunk_wm, "chunk_size") and int(self.chunk_wm.chunk_size) != self.K:
             raise ValueError(
                 f"chunk_wm.chunk_size={self.chunk_wm.chunk_size} != dataset K={self.K}"
             )
@@ -208,9 +199,7 @@ class WMReplayClassifierDataset(IterableDataset):
         if max_demos is not None:
             self.pairs = self.pairs[: int(max_demos)]
         if not self.pairs:
-            raise RuntimeError(
-                f"no demo pairs found under raw={raw_dir}, hidden={hidden_dir}"
-            )
+            raise RuntimeError(f"no demo pairs found under raw={raw_dir}, hidden={hidden_dir}")
 
         self.failure_pairs: list[tuple[Path, Path, str]] = []
         if failure_raw_dir is not None and failure_hidden_dir is not None:
@@ -230,9 +219,7 @@ class WMReplayClassifierDataset(IterableDataset):
         # meta["finish_step"] semantics rather than the full imagined length.
         self._pos_trajs: list[np.ndarray] | None = None  # imagined from success demos
         self._pos_meta: list[tuple[bool, int]] = []
-        self._neg_trajs: list[np.ndarray] | None = (
-            None  # swap-perturbed neg per success demo
-        )
+        self._neg_trajs: list[np.ndarray] | None = None  # swap-perturbed neg per success demo
         self._neg_meta: list[tuple[bool, int]] = []
         self._failure_trajs: list[np.ndarray] | None = (
             None  # imagined from failure demos (real failures)
@@ -289,21 +276,15 @@ class WMReplayClassifierDataset(IterableDataset):
     ) -> np.ndarray:
         T = int(actions.shape[0])
         if self.neg_method == "noise":
-            return actions + rng.normal(0.0, self.noise_std, size=actions.shape).astype(
-                np.float32
-            )
+            return actions + rng.normal(0.0, self.noise_std, size=actions.shape).astype(np.float32)
         if self.neg_method == "random":
             low = actions.min(axis=0, keepdims=True)
             high = actions.max(axis=0, keepdims=True)
-            return rng.uniform(low=low, high=high, size=actions.shape).astype(
-                np.float32
-            )
+            return rng.uniform(low=low, high=high, size=actions.shape).astype(np.float32)
         # swap: random other demo, swap from random fraction onward
         if len(self.pairs) <= 1:
             # degenerate: fall back to noise
-            return actions + rng.normal(0.0, self.noise_std, size=actions.shape).astype(
-                np.float32
-            )
+            return actions + rng.normal(0.0, self.noise_std, size=actions.shape).astype(np.float32)
         other_idx = int(rng.integers(0, len(self.pairs)))
         attempts = 0
         while other_idx == idx_self and attempts < 8:
@@ -488,24 +469,16 @@ class WMReplayClassifierDataset(IterableDataset):
         """
         out: list[tuple[np.ndarray, bool, int]] = []
         if self._pos_trajs is not None:
-            for traj, (complete, fs) in zip(
-                self._pos_trajs, self._pos_meta, strict=True
-            ):
+            for traj, (complete, fs) in zip(self._pos_trajs, self._pos_meta, strict=True):
                 out.append((traj, bool(complete), int(fs)))
         if self._neg_trajs is not None:
-            for traj, (complete, fs) in zip(
-                self._neg_trajs, self._neg_meta, strict=True
-            ):
+            for traj, (complete, fs) in zip(self._neg_trajs, self._neg_meta, strict=True):
                 out.append((traj, bool(complete), int(fs)))
         if self._failure_trajs is not None:
-            for traj, (complete, fs) in zip(
-                self._failure_trajs, self._failure_meta, strict=True
-            ):
+            for traj, (complete, fs) in zip(self._failure_trajs, self._failure_meta, strict=True):
                 out.append((traj, bool(complete), int(fs)))
         if self._rollout_trajs is not None:
-            for traj, (complete, fs) in zip(
-                self._rollout_trajs, self._rollout_meta, strict=True
-            ):
+            for traj, (complete, fs) in zip(self._rollout_trajs, self._rollout_meta, strict=True):
                 out.append((traj, bool(complete), int(fs)))
         return out
 
@@ -523,9 +496,7 @@ class WMReplayClassifierDataset(IterableDataset):
             indices = list(range(len(all_trajs)))[wid::nw]
 
         if self.mode == "train":
-            rng = random.Random(
-                (self.seed + (worker_info.id if worker_info else 0)) * 9973
-            )
+            rng = random.Random((self.seed + (worker_info.id if worker_info else 0)) * 9973)
             rng.shuffle(indices)
             for it in self._train_yield(all_trajs, indices, rng):
                 yield it

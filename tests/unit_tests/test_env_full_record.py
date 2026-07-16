@@ -12,6 +12,7 @@ import pytest
 _LIBERO_AVAILABLE = False
 try:
     import libero  # noqa: F401
+
     _LIBERO_AVAILABLE = True
 except ImportError:
     pass
@@ -36,7 +37,9 @@ def test_full_record_exposes_libero_schema_fields():
     rec = env.full_record()
 
     assert rec["agentview_rgb"].shape == (256, 256, 3) and rec["agentview_rgb"].dtype == np.uint8
-    assert rec["eye_in_hand_rgb"].shape == (256, 256, 3) and rec["eye_in_hand_rgb"].dtype == np.uint8
+    assert (
+        rec["eye_in_hand_rgb"].shape == (256, 256, 3) and rec["eye_in_hand_rgb"].dtype == np.uint8
+    )
     assert rec["ee_pos"].shape == (3,) and rec["ee_ori"].shape == (3,)
     assert rec["ee_states"].shape == (6,) and rec["gripper_states"].shape == (2,)
     assert rec["joint_states"].shape == (7,) and rec["robot_states"].shape == (9,)

@@ -37,8 +37,6 @@ def pad_tensor_to_length(tensors, max_seq_len, pad_token_id, left_pad=False):
     if tensors.shape[-1] >= max_seq_len:
         return tensors
     pad_tuple = (
-        (max_seq_len - tensors.shape[-1], 0)
-        if left_pad
-        else (0, max_seq_len - tensors.shape[-1])
+        (max_seq_len - tensors.shape[-1], 0) if left_pad else (0, max_seq_len - tensors.shape[-1])
     )
     return F.pad(tensors, pad_tuple, "constant", pad_token_id)

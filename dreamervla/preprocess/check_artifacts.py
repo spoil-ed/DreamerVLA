@@ -121,8 +121,7 @@ def validate_hdf5_dir(
             if extra:
                 detail.append(f"extra={extra[:5]}")
             raise RuntimeError(
-                f"HDF5 file set mismatch for {path} vs {reference}: "
-                + ", ".join(detail)
+                f"HDF5 file set mismatch for {path} vs {reference}: " + ", ".join(detail)
             )
     elif match_reference_demos or match_reference_lengths:
         raise RuntimeError(
@@ -160,8 +159,7 @@ def validate_hdf5_dir(
                         if extra_demos:
                             detail.append(f"extra_demos={extra_demos[:5]}")
                         raise RuntimeError(
-                            f"HDF5 demo set mismatch for {file_path}: "
-                            + ", ".join(detail)
+                            f"HDF5 demo set mismatch for {file_path}: " + ", ".join(detail)
                         )
                     if match_reference_lengths:
                         with h5py.File(reference_path, "r") as reference_handle:
@@ -171,9 +169,7 @@ def validate_hdf5_dir(
                 if required_demo_datasets:
                     for demo_key in data_group.keys():
                         demo = data_group[demo_key]
-                        missing = [
-                            key for key in required_demo_datasets if key not in demo
-                        ]
+                        missing = [key for key in required_demo_datasets if key not in demo]
                         if missing:
                             raise RuntimeError(
                                 f"missing datasets {missing} in {file_path}:{demo_key}"

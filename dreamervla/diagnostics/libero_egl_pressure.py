@@ -207,9 +207,9 @@ def _run_with_ray(args: argparse.Namespace) -> list[dict[str, Any]]:
 
     remote_worker = ray.remote(num_gpus=0)(run_pressure_worker)
     refs = [
-        remote_worker.options(
-            runtime_env=ray_runtime_env_for_worker(args, shard_id=rank)
-        ).remote(pressure_config_from_args(args, shard_id=rank))
+        remote_worker.options(runtime_env=ray_runtime_env_for_worker(args, shard_id=rank)).remote(
+            pressure_config_from_args(args, shard_id=rank)
+        )
         for rank in range(int(args.num_workers))
     ]
     return list(ray.get(refs))

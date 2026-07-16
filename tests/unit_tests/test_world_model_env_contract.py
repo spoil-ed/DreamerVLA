@@ -37,16 +37,12 @@ def test_world_model_env_protocol_runtime_checkable():
 def test_latent_world_model_env_builds_flat_hydra_configs_for_inference():
     env = LatentWorldModelEnv(
         world_model={
-            "_target_": (
-                "dreamervla.workers.actor._test_models.TinyLumosWorldModel"
-            ),
+            "_target_": ("dreamervla.workers.actor._test_models.TinyLumosWorldModel"),
             "hidden_dim": 2,
             "action_dim": 1,
         },
         classifier={
-            "_target_": (
-                "dreamervla.workers.actor._test_models.TinySuccessClassifier"
-            ),
+            "_target_": ("dreamervla.workers.actor._test_models.TinySuccessClassifier"),
             "hidden_dim": 2,
         },
         latent_dim=2,
@@ -111,9 +107,7 @@ def test_latent_world_model_env_preserves_token_grid_at_model_boundaries():
             self.window_shapes: list[tuple[int, ...]] = []
 
         def forward(self, latent_window, **_sidecars):
-            self.window_shapes.append(
-                tuple(int(dim) for dim in latent_window.shape)
-            )
+            self.window_shapes.append(tuple(int(dim) for dim in latent_window.shape))
             return torch.zeros(latent_window.shape[0], 1)
 
     world_model = _TokenGridWorldModel()
@@ -158,9 +152,7 @@ def test_latent_world_model_env_preserves_token_grid_for_chunk_rollout():
             self.window_shapes: list[tuple[int, ...]] = []
 
         def forward(self, latent_window, **_sidecars):
-            self.window_shapes.append(
-                tuple(int(dim) for dim in latent_window.shape)
-            )
+            self.window_shapes.append(tuple(int(dim) for dim in latent_window.shape))
             return torch.zeros(latent_window.shape[0], 1)
 
     world_model = _TokenGridChunkWorldModel()

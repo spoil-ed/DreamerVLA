@@ -123,10 +123,16 @@ class NoSidecarTrainEnv(CounterEnv):
         self.step_i += 1
         done = self.step_i >= self.horizon
         reward = 1.0 if done else 0.0
-        return self._obs(is_first=False), reward, done, False, {
-            "success": done,
-            "wm_action": action_arr.astype(np.float32, copy=False),
-        }
+        return (
+            self._obs(is_first=False),
+            reward,
+            done,
+            False,
+            {
+                "success": done,
+                "wm_action": action_arr.astype(np.float32, copy=False),
+            },
+        )
 
     def make_transition(
         self,
@@ -209,9 +215,7 @@ class BatchedCounterEnv:
         self.task_ids[slot_id] = int(task_id)
         self.episode_ids[slot_id] = int(episode_id)
         self.step_i[slot_id] = 0
-        return self._obs(slot_id, is_first=True), {
-            "episode_id": self.episode_ids[slot_id]
-        }
+        return self._obs(slot_id, is_first=True), {"episode_id": self.episode_ids[slot_id]}
 
     def reset_batch(
         self,
@@ -225,9 +229,7 @@ class BatchedCounterEnv:
                 task_id=int(task_id),
                 episode_id=int(episode_id),
             )
-            for slot_id, (task_id, episode_id) in enumerate(
-                zip(task_ids, episode_ids, strict=True)
-            )
+            for slot_id, (task_id, episode_id) in enumerate(zip(task_ids, episode_ids, strict=True))
         ]
         return [obs for obs, _info in outputs], [info for _obs, info in outputs]
 

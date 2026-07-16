@@ -49,9 +49,7 @@ def test_learner_world_model_uses_configured_fp32_adamw_state(
             },
         }
     )
-    learner = LearnerWorker(
-        _wm_classifier_only_model_cfg(), {}, train_cfg, replay=None
-    )
+    learner = LearnerWorker(_wm_classifier_only_model_cfg(), {}, train_cfg, replay=None)
 
     learner.init()
 

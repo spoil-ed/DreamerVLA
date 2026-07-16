@@ -9,15 +9,28 @@ def _runner(cfg, *, main=True):
     obj = types.SimpleNamespace()
     obj.cfg = cfg
     obj.is_main_process = main
-    for name in ("console_banner", "console_record_success", "console_metrics",
-                 "console_metric_table", "_console_state_get", "console_success_rate"):
+    for name in (
+        "console_banner",
+        "console_record_success",
+        "console_metrics",
+        "console_metric_table",
+        "_console_state_get",
+        "console_success_rate",
+    ):
         setattr(obj, name, types.MethodType(getattr(BaseRunner, name), obj))
     return obj
 
 
 def test_group_metric_rows_groups_by_namespace_and_skips_meta():
-    rows = _group_metric_rows({"train/wm_loss": 0.182, "train/actor_loss": 0.226,
-                               "rollout/success_rate": 0.55, "global_step": 5, "phase": "cotrain"})
+    rows = _group_metric_rows(
+        {
+            "train/wm_loss": 0.182,
+            "train/actor_loss": 0.226,
+            "rollout/success_rate": 0.55,
+            "global_step": 5,
+            "phase": "cotrain",
+        }
+    )
     joined = "\n".join(rows)
     assert any(r.startswith("train") for r in rows)
     assert "wm_loss=0.182" in joined and "actor_loss=0.226" in joined
@@ -38,7 +51,9 @@ def test_console_metrics_throttle_and_vla_row(capsys):
     r = _runner(cfg)
     for s in (True, False, True, False):
         r.console_record_success(s)
-    r.console_metrics("cotrain · step 1", {"train/wm_loss": 0.18})  # counter=1, log_every=2 -> no print
+    r.console_metrics(
+        "cotrain · step 1", {"train/wm_loss": 0.18}
+    )  # counter=1, log_every=2 -> no print
     assert capsys.readouterr().out == ""
     r.console_metrics("cotrain · step 2", {"train/wm_loss": 0.18})  # counter=2 -> print
     out = capsys.readouterr().out
@@ -49,7 +64,9 @@ def test_console_metrics_throttle_and_vla_row(capsys):
 def test_console_metrics_force_bypasses_throttle(capsys):
     cfg = OmegaConf.create({"console": {"banner_width": 65, "log_every": 5, "success_window": 4}})
     r = _runner(cfg)
-    r.console_metrics("step 1", {"train/loss": 0.5}, force=True)  # call #1, log_every=5 -> should print
+    r.console_metrics(
+        "step 1", {"train/loss": 0.5}, force=True
+    )  # call #1, log_every=5 -> should print
     out = capsys.readouterr().out
     assert out.strip() != "", "force=True must print regardless of throttle"
     r.console_metrics("step 2", {"train/loss": 0.4})  # call #2, not a multiple of 5 -> no print

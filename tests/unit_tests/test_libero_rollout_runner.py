@@ -3,6 +3,7 @@ from dreamervla.runtime.libero_rollout import run_vectorized_rollout
 
 class _FakeVecEnv:
     """K slots; each episode ends after `ep_len` steps; success = (task_id + episode_id) even."""
+
     def __init__(self, num_envs, ep_len=2):
         self.num_envs = num_envs
         self.ep_len = ep_len
@@ -36,8 +37,11 @@ class _FakeVecEnv:
 
 
 class _StubExtractor:
-    def reset(self): pass
-    def prepare(self, obs, desc): return obs
+    def reset(self):
+        pass
+
+    def prepare(self, obs, desc):
+        return obs
 
 
 def _stub_infer(preps):
@@ -50,8 +54,12 @@ def test_core_runs_every_work_item_once():
     seen = []
     work = [(t, e) for t in range(4) for e in range(3)]  # 12 items
     run_vectorized_rollout(
-        vec, [_StubExtractor() for _ in range(3)], _stub_infer, work,
-        episode_horizon=10, on_episode=lambda t, e, steps, ok: seen.append((t, e, ok)),
+        vec,
+        [_StubExtractor() for _ in range(3)],
+        _stub_infer,
+        work,
+        episode_horizon=10,
+        on_episode=lambda t, e, steps, ok: seen.append((t, e, ok)),
     )
     assert sorted((t, e) for t, e, _ in seen) == sorted(work)
     assert {(t, e): ok for t, e, ok in seen} == {  # success = (t+e) even

@@ -92,10 +92,7 @@ def test_dino_token_wm_requires_shifted_one_step_sequence_length() -> None:
     cfg = OmegaConf.create(
         {
             "world_model": {
-                "_target_": (
-                    "dreamervla.models.embodiment.world_model."
-                    "DinoTokenWorldModel"
-                ),
+                "_target_": ("dreamervla.models.embodiment.world_model.DinoTokenWorldModel"),
                 "num_hist": 3,
                 "num_pred": 1,
             },
@@ -111,10 +108,7 @@ def test_dino_token_wm_accepts_four_frame_training_window() -> None:
     cfg = OmegaConf.create(
         {
             "world_model": {
-                "_target_": (
-                    "dreamervla.models.embodiment.world_model."
-                    "DinoTokenWorldModel"
-                ),
+                "_target_": ("dreamervla.models.embodiment.world_model.DinoTokenWorldModel"),
                 "num_hist": 3,
                 "num_pred": 1,
             },
@@ -132,10 +126,7 @@ def test_dino_token_runner_rejects_dataset_model_frameskip_mismatch() -> None:
             "training": {"global_batch_size": 32},
             "optim": {"param_precision": "fp32", "precision": "fp32"},
             "world_model": {
-                "_target_": (
-                    "dreamervla.models.embodiment.world_model."
-                    "DinoTokenWorldModel"
-                ),
+                "_target_": ("dreamervla.models.embodiment.world_model.DinoTokenWorldModel"),
                 "action_dim": 35,
                 "num_hist": 3,
                 "num_pred": 1,
@@ -160,10 +151,7 @@ def test_dino_token_runner_rejects_non_fp32_training() -> None:
             "training": {"global_batch_size": 32},
             "optim": {"precision": "bf16"},
             "world_model": {
-                "_target_": (
-                    "dreamervla.models.embodiment.world_model."
-                    "DinoTokenWorldModel"
-                ),
+                "_target_": ("dreamervla.models.embodiment.world_model.DinoTokenWorldModel"),
                 "action_dim": 35,
                 "num_hist": 3,
                 "num_pred": 1,
@@ -361,13 +349,7 @@ def test_validate_cfg_rejects_removed_oft_component_fields_even_when_null(
 def test_validate_cfg_accepts_dynamic_oft_hidden_geometry_from_task_metadata() -> None:
     composed = _compose_mainline()
     task = OmegaConf.create(
-        {
-            "task": {
-                "openvla_oft": OmegaConf.to_container(
-                    composed.task.openvla_oft, resolve=True
-                )
-            }
-        }
+        {"task": {"openvla_oft": OmegaConf.to_container(composed.task.openvla_oft, resolve=True)}}
     )
     hidden = task.task.openvla_oft.hidden_token
     hidden.patches_per_image = 128
@@ -381,13 +363,7 @@ def test_validate_cfg_accepts_dynamic_oft_hidden_geometry_from_task_metadata() -
 def test_validate_cfg_rejects_inconsistent_oft_hidden_geometry() -> None:
     composed = _compose_mainline()
     cfg = OmegaConf.create(
-        {
-            "task": {
-                "openvla_oft": OmegaConf.to_container(
-                    composed.task.openvla_oft, resolve=True
-                )
-            }
-        }
+        {"task": {"openvla_oft": OmegaConf.to_container(composed.task.openvla_oft, resolve=True)}}
     )
     cfg.task.openvla_oft.hidden_token.patches_per_image = 128
 
@@ -511,9 +487,9 @@ def test_validate_cfg_rejects_invalid_chunk_world_model_concat_dim() -> None:
 
 
 def test_config_validation_messages_use_role_based_wm_wording() -> None:
-    config_source = (
-        Path(__file__).resolve().parents[2] / "dreamervla" / "config.py"
-    ).read_text(encoding="utf-8")
+    config_source = (Path(__file__).resolve().parents[2] / "dreamervla" / "config.py").read_text(
+        encoding="utf-8"
+    )
     assert f"{_REMOVED_DASHED_WM_LABEL} concat conditioning" not in config_source
 
 
@@ -555,7 +531,8 @@ def test_openvla_coldstart_task_comment_documents_hidden_token_source() -> None:
         / "openvla_onetraj_coldstart_libero.yaml"
     )
     comment_text = "\n".join(
-        line for line in config_path.read_text(encoding="utf-8").splitlines()
+        line
+        for line in config_path.read_text(encoding="utf-8").splitlines()
         if line.lstrip().startswith("#")
     )
 

@@ -6,6 +6,7 @@ Each demo (data/demo_<i>) in every reward shard is paired with its
 obs_embedding sidecar and converted to the per-step transition dicts that
 ``OnlineReplay.add_episode`` consumes.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -101,9 +102,9 @@ def _demo_to_transitions(
     *,
     lang_emb: np.ndarray | None = None,
 ) -> list[dict[str, Any]]:
-    actions = np.asarray(demo["actions"][...], dtype=np.float32)        # (T, 7)
+    actions = np.asarray(demo["actions"][...], dtype=np.float32)  # (T, 7)
     sparse = np.asarray(demo["sparse_rewards"][...], dtype=np.float32)  # (T,)
-    dones = np.asarray(demo["dones"][...], dtype=np.float32)            # (T,)
+    dones = np.asarray(demo["dones"][...], dtype=np.float32)  # (T,)
     images = np.asarray(demo["obs"]["agentview_rgb"][...], dtype=np.uint8)
     success_hits = np.flatnonzero(sparse > 0.5)
     attr_success = bool(demo.attrs.get("episode_success", bool(success_hits.size)))
@@ -126,11 +127,11 @@ def _demo_to_transitions(
             "image": images[t],
             "obs_embedding": np.asarray(emb[t]),
             "proprio": _demo_proprio_at(demo, t),
-            "reward": reward,                      # sparse reward = collector signal
+            "reward": reward,  # sparse reward = collector signal
             "done": float(dones[t]),
             "is_last": float(dones[t]),
-            "is_terminal": float(step_success),    # terminal-success marker
-            "wm_action": actions[t],               # collector stores env-scale wm_action
+            "is_terminal": float(step_success),  # terminal-success marker
+            "wm_action": actions[t],  # collector stores env-scale wm_action
             "task_id": int(task_id),
             "success": step_success,
         }
@@ -188,9 +189,7 @@ def seed_replay_from_offline(
     per_task: dict[int, int] = {}
     n_added = 0
     for shard in shards:
-        with h5py.File(data_dir / shard, "r") as rf, h5py.File(
-            hidden_dir / shard, "r"
-        ) as hf:
+        with h5py.File(data_dir / shard, "r") as rf, h5py.File(hidden_dir / shard, "r") as hf:
             for demo_key in rf["data"]:
                 demo = rf["data"][demo_key]
                 task_id = task_ids[(shard, str(demo_key))]

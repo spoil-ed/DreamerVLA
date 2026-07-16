@@ -38,9 +38,7 @@ class PackedPlacementStrategy(PlacementStrategy):
 
     def __init__(self, start_gpu: int, end_gpu: int, num_gpus_per_worker: int = 1) -> None:
         if num_gpus_per_worker < 1:
-            raise ValueError(
-                f"num_gpus_per_worker must be >= 1, got {num_gpus_per_worker}"
-            )
+            raise ValueError(f"num_gpus_per_worker must be >= 1, got {num_gpus_per_worker}")
         if start_gpu < 0 or end_gpu < start_gpu:
             raise ValueError(f"invalid GPU range [{start_gpu}, {end_gpu}]")
         span = end_gpu - start_gpu + 1
@@ -293,7 +291,7 @@ def _parse_rank_config(value: str, num_gpus: int | None, label: str) -> list[int
 
 
 def _rank_map_to_process_resources(
-    rank_map: dict[tuple[int, ...], list[int]]
+    rank_map: dict[tuple[int, ...], list[int]],
 ) -> dict[int, list[int]]:
     process_resources: dict[int, list[int]] = {}
     for resource_ranks, process_ranks in rank_map.items():

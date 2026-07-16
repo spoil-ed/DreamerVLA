@@ -30,14 +30,14 @@ def test_metric_box_renders_header_and_rows():
         width=65,
     )
     lines = box.splitlines()
-    assert lines[0].startswith("╭") and lines[0].endswith("╮")   # top corners
+    assert lines[0].startswith("╭") and lines[0].endswith("╮")  # top corners
     assert lines[-1].startswith("╰") and lines[-1].endswith("╯")  # bottom corners
     assert all(len(ln) == 65 for ln in lines)
     assert any("succ@50" in ln for ln in lines)
 
 
 def test_count_trainable_counts_only_grad_params():
-    m = torch.nn.Linear(4, 3)            # 4*3 + 3 = 15 params
+    m = torch.nn.Linear(4, 3)  # 4*3 + 3 = 15 params
     assert console.count_trainable(m) == 15
     for p in m.parameters():
         p.requires_grad_(False)
@@ -48,7 +48,7 @@ def test_count_trainable_counts_only_grad_params():
 def test_success_tracker_window_best_and_delta():
     t = SuccessTracker(window=4)
     assert t.rate() == 0.0 and len(t) == 0
-    for s in (True, False, True, False):   # 2/4 = 0.5 over window
+    for s in (True, False, True, False):  # 2/4 = 0.5 over window
         t.update(s)
     assert t.rate() == 0.5
     assert t.best == 0.5
@@ -78,9 +78,7 @@ def test_cotrain_box_strings_are_wellformed_for_a_synthetic_step():
 
 
 def test_format_progress_line_with_total():
-    s = format_progress_line(
-        "pretokenize", 12800, 50000, elapsed_s=201.0, eta_s=585.0, rate=63.7
-    )
+    s = format_progress_line("pretokenize", 12800, 50000, elapsed_s=201.0, eta_s=585.0, rate=63.7)
     bar = "█" * 5 + "░" * 15  # 12800/50000 -> round(20*0.256)=5 filled
     assert s == f"pretokenize [{bar}] 12800/50000 (26%) · 03:21<09:45 · 63.7 it/s"
 
@@ -110,9 +108,7 @@ def test_format_progress_line_bar_fill_scales_with_progress():
 
 
 def test_format_progress_line_open_ended():
-    s = format_progress_line(
-        "collect", 812, None, elapsed_s=201.0, eta_s=None, rate=4.0, unit="ep"
-    )
+    s = format_progress_line("collect", 812, None, elapsed_s=201.0, eta_s=None, rate=4.0, unit="ep")
     assert s == "collect 812 · 03:21 · 4.0 ep/s"
 
 

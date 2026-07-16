@@ -109,10 +109,7 @@ def test_runner_builds_bundle_cfg_from_central_config(tmp_path) -> None:
         == cfg["task"]["openvla_oft"]["hidden_token"]["chunk_size"]
     )
     assert plan["inference"]["decoder"]["kwargs"]["history"] == 1
-    assert (
-        plan["inference"]["decoder"]["kwargs"]["obs_hidden_source"]
-        == "hidden_token"
-    )
+    assert plan["inference"]["decoder"]["kwargs"]["obs_hidden_source"] == "hidden_token"
     assert plan["inference"]["decoder"]["kwargs"]["image_keys"] == ["agentview_rgb"]
     env_kwargs = plan["env"]["kwargs"]
     assert env_kwargs["history_length"] == 1
@@ -121,10 +118,7 @@ def test_runner_builds_bundle_cfg_from_central_config(tmp_path) -> None:
     assert env_kwargs["validate_canonical"] is False
     assert plan["dump"]["preprocess_config"]["hidden_key"] == "obs_embedding"
     assert plan["dump"]["preprocess_config"]["action_head_type"] == "oft_discrete_token"
-    assert (
-        plan["dump"]["preprocess_config"]["obs_hidden_source"]
-        == "hidden_token"
-    )
+    assert plan["dump"]["preprocess_config"]["obs_hidden_source"] == "hidden_token"
     assert plan["dump"]["preprocess_config"]["num_images_in_input"] == 1
 
 
@@ -251,12 +245,8 @@ def test_collect_egl_render_pool_preserves_explicit_pool() -> None:
 def test_ray_task_ids_expand_all_without_legacy_scheduler() -> None:
     from dreamervla.runtime.rollout_collection_ray import _resolve_ray_task_ids
 
-    assert _resolve_ray_task_ids(
-        "all", num_tasks=None, suite="libero_goal"
-    ) == list(range(10))
-    assert _resolve_ray_task_ids(
-        [4, 1], num_tasks=None, suite="libero_goal"
-    ) == [4, 1]
+    assert _resolve_ray_task_ids("all", num_tasks=None, suite="libero_goal") == list(range(10))
+    assert _resolve_ray_task_ids([4, 1], num_tasks=None, suite="libero_goal") == [4, 1]
 
 
 def test_ray_dump_step_records_episode_id() -> None:
@@ -269,15 +259,24 @@ def test_ray_dump_step_records_episode_id() -> None:
             return {
                 "agentview_rgb": np.zeros((256, 256, 3), "uint8"),
                 "eye_in_hand_rgb": np.zeros((256, 256, 3), "uint8"),
-                "ee_pos": np.zeros(3), "ee_ori": np.zeros(3), "ee_states": np.zeros(6),
-                "gripper_states": np.zeros(2), "joint_states": np.zeros(7),
-                "robot_states": np.zeros(9), "states": np.zeros(45),
+                "ee_pos": np.zeros(3),
+                "ee_ori": np.zeros(3),
+                "ee_states": np.zeros(6),
+                "gripper_states": np.zeros(2),
+                "joint_states": np.zeros(7),
+                "robot_states": np.zeros(9),
+                "states": np.zeros(45),
             }
 
     import numpy as np
 
     step = _build_oft_dump_step(
-        _Env(), {}, np.ones(7), 0.0, True, False,
+        _Env(),
+        {},
+        np.ones(7),
+        0.0,
+        True,
+        False,
         {"task_id": 1, "episode_id": 4, "init_state_index": 4, "success": True},
         np.zeros(8, "float16"),
     )

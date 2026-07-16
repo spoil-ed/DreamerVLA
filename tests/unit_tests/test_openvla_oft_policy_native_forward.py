@@ -186,9 +186,7 @@ def test_policy_constructor_installs_checkpoint_dataset_statistics(
     monkeypatch.setattr(
         transformers.AutoProcessor,
         "from_pretrained",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            tokenizer=SimpleNamespace(vocab_size=32_000)
-        ),
+        lambda *_args, **_kwargs: SimpleNamespace(tokenizer=SimpleNamespace(vocab_size=32_000)),
     )
     monkeypatch.setattr(
         transformers.AutoModelForVision2Seq,

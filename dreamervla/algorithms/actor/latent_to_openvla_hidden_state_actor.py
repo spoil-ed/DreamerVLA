@@ -53,8 +53,7 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
             )
         if hidden_dim is not None:
             raise TypeError(
-                "flat hidden_dim observations are removed; pass tokenized "
-                "hidden_token [B,256,4096]"
+                "flat hidden_dim observations are removed; pass tokenized hidden_token [B,256,4096]"
             )
         super().__init__()
         self.source_token_count = int(source_token_count or 256)
@@ -70,8 +69,7 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
         self.time_horizon = int(time_horizon)
         if self.hidden_state_dim != 4096:
             raise ValueError(
-                "OpenVLA decoder hidden_state_dim is fixed to 4096, got "
-                f"{self.hidden_state_dim}"
+                f"OpenVLA decoder hidden_state_dim is fixed to 4096, got {self.hidden_state_dim}"
             )
         if self.action_dim != 7 or self.time_horizon != 8:
             raise ValueError(
@@ -89,9 +87,7 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
                 "LatentToOpenVLAHiddenStateActor requires head_type='oft_discrete_token'."
             )
         if self.adapter_type not in {"identity", "mlp", "residual_mlp"}:
-            raise ValueError(
-                "adapter_type must be one of {'identity', 'mlp', 'residual_mlp'}"
-            )
+            raise ValueError("adapter_type must be one of {'identity', 'mlp', 'residual_mlp'}")
         if self.action_token_bins < 2:
             raise ValueError("action_token_bins must be >= 2")
         if self.bridge_hidden_dim % int(num_bridge_heads) != 0:
@@ -104,9 +100,7 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
         self.hidden_dim = None
 
         lm_head_state = (
-            self._load_lm_head_state_dict(str(init_lm_head_ckpt))
-            if init_lm_head_ckpt
-            else {}
+            self._load_lm_head_state_dict(str(init_lm_head_ckpt)) if init_lm_head_ckpt else {}
         )
         weight = lm_head_state.get("weight")
         action_weight = None
@@ -189,8 +183,7 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
                 {"weight": action_weight}, strict=False
             )
             logger.info(
-                "Loaded OpenVLA action-token LM-head rows from %s; "
-                "missing=%d unexpected=%d",
+                "Loaded OpenVLA action-token LM-head rows from %s; missing=%d unexpected=%d",
                 init_lm_head_ckpt,
                 len(missing),
                 len(unexpected),
@@ -215,9 +208,7 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
         self.register_buffer("_bins", bins, persistent=False)
         self.register_buffer("_bin_centers", centers, persistent=False)
         self.register_buffer("_action_token_ids", valid_token_ids, persistent=False)
-        self.register_buffer(
-            "_action_values_by_class", centers[center_indices], persistent=False
-        )
+        self.register_buffer("_action_values_by_class", centers[center_indices], persistent=False)
 
     def _load_lm_head_state_dict(self, ckpt_path: str) -> dict[str, torch.Tensor]:
         prefixes = (
@@ -364,8 +355,7 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
             logprob_type = str(batch.get("logprob_type", "sequence")).lower()
             if logprob_type not in {"sequence", "token_level"}:
                 raise ValueError(
-                    "logprob_type must be 'sequence' or 'token_level', got "
-                    f"{logprob_type!r}"
+                    f"logprob_type must be 'sequence' or 'token_level', got {logprob_type!r}"
                 )
             classes = greedy_classes if deterministic else dist.sample()
             token_ids = self._classes_to_token_ids(classes)
@@ -404,8 +394,7 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
             logprob_type = str(batch.get("logprob_type", "sequence")).lower()
             if logprob_type not in {"sequence", "token_level"}:
                 raise ValueError(
-                    "logprob_type must be 'sequence' or 'token_level', got "
-                    f"{logprob_type!r}"
+                    f"logprob_type must be 'sequence' or 'token_level', got {logprob_type!r}"
                 )
             action_token_ids = batch.get("action_token_ids")
             if action_token_ids is not None:
@@ -423,9 +412,7 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
                 elif classes.ndim == 2:
                     classes = classes.reshape(classes.shape[0], -1)
                 else:
-                    raise ValueError(
-                        f"action must be [B,A] or [B,T,A], got {tuple(action.shape)}"
-                    )
+                    raise ValueError(f"action must be [B,A] or [B,T,A], got {tuple(action.shape)}")
 
             token_log_prob = dist.log_prob(classes)
             token_entropy = dist.entropy()

@@ -127,11 +127,13 @@ def _hidden_token_contract_errors(config: Mapping[str, Any]) -> list[str]:
         )
     shape = config.get("obs_embedding_shape")
     expected_shape = (
-        [token_count, token_dim]
-        if token_count is not None and token_dim is not None
-        else None
+        [token_count, token_dim] if token_count is not None and token_dim is not None else None
     )
-    if expected_shape is None or not isinstance(shape, (list, tuple)) or list(shape) != expected_shape:
+    if (
+        expected_shape is None
+        or not isinstance(shape, (list, tuple))
+        or list(shape) != expected_shape
+    ):
         errors.append(f"obs_embedding_shape={shape!r}, expected {expected_shape!r}")
     present_removed = [key for key in REMOVED_SIDECAR_FIELDS if key in config]
     if present_removed:

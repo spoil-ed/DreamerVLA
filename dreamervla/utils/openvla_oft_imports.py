@@ -5,9 +5,7 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-EMBODIMENT_OPENVLA_OFT_ROOT = (
-    PROJECT_ROOT / "dreamervla" / "models" / "embodiment" / "openvla_oft"
-)
+EMBODIMENT_OPENVLA_OFT_ROOT = PROJECT_ROOT / "dreamervla" / "models" / "embodiment" / "openvla_oft"
 VENDORED_OPENVLA_OFT_ROOT = PROJECT_ROOT / "third_party" / "openvla-oft"
 
 

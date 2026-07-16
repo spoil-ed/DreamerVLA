@@ -25,11 +25,7 @@ class _MixedModule(nn.Module):
 
 def _reference_shadow(model: nn.Module, decay: float, n_steps: int) -> dict[str, torch.Tensor]:
     """EMA shadows via the explicit per-parameter mul_/add_ loop (today's math)."""
-    shadow = {
-        name: p.detach().clone()
-        for name, p in model.named_parameters()
-        if p.requires_grad
-    }
+    shadow = {name: p.detach().clone() for name, p in model.named_parameters() if p.requires_grad}
     for step in range(n_steps):
         _mutate(model, step)
         for name, p in model.named_parameters():

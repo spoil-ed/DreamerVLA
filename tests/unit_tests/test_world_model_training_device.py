@@ -141,7 +141,7 @@ def test_wm_only_build_skips_policy_critic_and_classifier() -> None:
                     "name": "adamw",
                     "lr": 1.0e-4,
                     "weight_decay": 0.0,
-                }
+                },
             },
             "init": {"world_model_state_ckpt": None},
         }

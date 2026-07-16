@@ -320,9 +320,7 @@ def _run_step(classifier: torch.nn.Module, *, reward_model: str = "sparse_outcom
         obs={"obs_embedding": torch.zeros(1, 1, 1)},
         device=torch.device("cpu"),
         algorithm_cfg=_cfg(reward_model=reward_model),
-        optim_cfg=OmegaConf.create(
-            {"grad_clip_norm": 10.0, "zero_grad_set_to_none": True}
-        ),
+        optim_cfg=OmegaConf.create({"grad_clip_norm": 10.0, "zero_grad_set_to_none": True}),
         ref_policy=None,
     )
     return policy, metrics
@@ -384,9 +382,7 @@ def test_lumos_imagination_preserves_episode_language_across_chunks():
         },
         device=torch.device("cpu"),
         algorithm_cfg=_cfg(),
-        optim_cfg=OmegaConf.create(
-            {"grad_clip_norm": 10.0, "zero_grad_set_to_none": True}
-        ),
+        optim_cfg=OmegaConf.create({"grad_clip_norm": 10.0, "zero_grad_set_to_none": True}),
         ref_policy=None,
     )
 
@@ -407,9 +403,7 @@ def test_lumos_classifier_video_uses_external_latent_width():
         obs={"obs_embedding": torch.zeros(1, 2, 5)},
         device=torch.device("cpu"),
         algorithm_cfg=_cfg(),
-        optim_cfg=OmegaConf.create(
-            {"grad_clip_norm": 10.0, "zero_grad_set_to_none": True}
-        ),
+        optim_cfg=OmegaConf.create({"grad_clip_norm": 10.0, "zero_grad_set_to_none": True}),
         ref_policy=None,
     )
 
@@ -434,9 +428,7 @@ def test_lumos_classifier_receives_token_grid_raw_proprio_and_language():
         },
         device=torch.device("cpu"),
         algorithm_cfg=_cfg(),
-        optim_cfg=OmegaConf.create(
-            {"grad_clip_norm": 10.0, "zero_grad_set_to_none": True}
-        ),
+        optim_cfg=OmegaConf.create({"grad_clip_norm": 10.0, "zero_grad_set_to_none": True}),
         ref_policy=None,
     )
 
@@ -462,9 +454,7 @@ def test_lumos_rollout_bounds_use_configured_max_group_size_with_adaptive_prefix
         obs={"obs_embedding": torch.zeros(1, 1, 1)},
         device=torch.device("cpu"),
         algorithm_cfg=cfg,
-        optim_cfg=OmegaConf.create(
-            {"grad_clip_norm": 10.0, "zero_grad_set_to_none": True}
-        ),
+        optim_cfg=OmegaConf.create({"grad_clip_norm": 10.0, "zero_grad_set_to_none": True}),
         ref_policy=None,
     )
 
@@ -492,9 +482,7 @@ def test_zero_classifier_variance_skips_even_when_ref_kl_varies():
         obs={"obs_embedding": torch.zeros(1, 1, 1)},
         device=torch.device("cpu"),
         algorithm_cfg=cfg,
-        optim_cfg=OmegaConf.create(
-            {"grad_clip_norm": 10.0, "zero_grad_set_to_none": True}
-        ),
+        optim_cfg=OmegaConf.create({"grad_clip_norm": 10.0, "zero_grad_set_to_none": True}),
         ref_policy=_ActionScoringRefPolicy(),
     )
 
@@ -518,9 +506,7 @@ def test_group_var_keep_frac_reports_signal_health_when_filter_disabled():
         obs={"obs_embedding": torch.zeros(1, 1, 1)},
         device=torch.device("cpu"),
         algorithm_cfg=cfg,
-        optim_cfg=OmegaConf.create(
-            {"grad_clip_norm": 10.0, "zero_grad_set_to_none": True}
-        ),
+        optim_cfg=OmegaConf.create({"grad_clip_norm": 10.0, "zero_grad_set_to_none": True}),
         ref_policy=None,
     )
 

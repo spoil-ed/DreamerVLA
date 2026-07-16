@@ -85,9 +85,7 @@ def test_dino_dataset_matches_upstream_frameskip_and_action_concat(tmp_path: Pat
     )
 
     sample_index = next(
-        index
-        for index, (_pair_index, start, _end) in enumerate(dataset.slices)
-        if start == 1
+        index for index, (_pair_index, start, _end) in enumerate(dataset.slices) if start == 1
     )
     sample = dataset[sample_index]
 
@@ -145,19 +143,22 @@ def test_dino_dataset_uses_upstream_trajectory_split_and_fixed_slice_permutation
     assert train.trajectory_indices == order[:9]
     assert valid.trajectory_indices == order[9:]
     assert set(train.trajectory_indices).isdisjoint(valid.trajectory_indices)
-    assert train.slices == DinoTokenTrajectoryDataset(
-        raw_dir=raw_dir,
-        hidden_dir=hidden_dir,
-        split="train",
-        num_hist=1,
-        num_pred=1,
-        frameskip=2,
-        train_fraction=0.9,
-        split_seed=42,
-        slice_seed=7,
-        normalize_action=False,
-        normalize_proprio=False,
-    ).slices
+    assert (
+        train.slices
+        == DinoTokenTrajectoryDataset(
+            raw_dir=raw_dir,
+            hidden_dir=hidden_dir,
+            split="train",
+            num_hist=1,
+            num_pred=1,
+            frameskip=2,
+            train_fraction=0.9,
+            split_seed=42,
+            slice_seed=7,
+            normalize_action=False,
+            normalize_proprio=False,
+        ).slices
+    )
 
 
 def test_dino_dataset_normalizes_action_and_proprio_before_slicing(
@@ -222,9 +223,7 @@ def test_dino_dataset_selects_fixed_evaluation_windows_per_trajectory(
     selected = [dataset.slices[index] for index in indices]
 
     assert len(selected) == 3
-    assert {pair_index for pair_index, _start, _end in selected} == {
-        dataset.trajectory_indices[0]
-    }
+    assert {pair_index for pair_index, _start, _end in selected} == {dataset.trajectory_indices[0]}
     assert [start for _pair_index, start, _end in selected] == [0, 3, 6]
 
 

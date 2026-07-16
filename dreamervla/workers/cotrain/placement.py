@@ -57,9 +57,7 @@ def build_manual_cotrain_placement(
         raise ValueError(f"ngpu must be >= 0, got {ngpu!r}")
     real_workers = int(real_env_workers)
     if real_workers < 0:
-        raise ValueError(
-            f"real_env_workers must be nonnegative, got {real_env_workers!r}"
-        )
+        raise ValueError(f"real_env_workers must be nonnegative, got {real_env_workers!r}")
 
     if count == 0:
         if component_gpu_groups:

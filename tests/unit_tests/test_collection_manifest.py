@@ -164,19 +164,9 @@ def test_online_rollout_manifest_prunes_to_recent_global_steps(tmp_path):
     assert [int(item["global_step"]) for item in entries] == [121, 122]
     assert online_rollout_episode_counts(root, task_ids=(7,)) == {7: 4}
     assert not (
-        root
-        / "episodes"
-        / "task_07"
-        / "global_step000120_success_True"
-        / "ep_000001.h5"
+        root / "episodes" / "task_07" / "global_step000120_success_True" / "ep_000001.h5"
     ).exists()
-    expected = (
-        root
-        / "episodes"
-        / "task_07"
-        / "global_step000122_success_True"
-        / "ep_000003.h5"
-    )
+    expected = root / "episodes" / "task_07" / "global_step000122_success_True" / "ep_000003.h5"
     assert expected.is_file()
     assert set(entries[-1]) == {
         "global_step",

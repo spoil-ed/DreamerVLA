@@ -104,9 +104,7 @@ class DinoTokenTrajectoryDataset(Dataset[dict[str, torch.Tensor]]):
         train_count = int(self.train_fraction * len(order))
         train_indices = [int(index) for index in order[:train_count]]
         valid_indices = [int(index) for index in order[train_count:]]
-        self.trajectory_indices = (
-            train_indices if self.split == "train" else valid_indices
-        )
+        self.trajectory_indices = train_indices if self.split == "train" else valid_indices
 
         rng = np.random.RandomState(self.slice_seed)
         train_slices = self._build_slices(train_indices)
@@ -134,10 +132,7 @@ class DinoTokenTrajectoryDataset(Dataset[dict[str, torch.Tensor]]):
         slices: list[tuple[int, int, int]] = []
         for pair_index in indices:
             length = int(self._lengths[pair_index])
-            slices.extend(
-                (pair_index, start, start + span)
-                for start in range(length - span + 1)
-            )
+            slices.extend((pair_index, start, start + span) for start in range(length - span + 1))
         return slices
 
     @staticmethod
@@ -158,11 +153,7 @@ class DinoTokenTrajectoryDataset(Dataset[dict[str, torch.Tensor]]):
         for raw_path, _hidden_path, demo_key in self._pairs:
             with h5py.File(raw_path, "r") as handle:
                 demo = handle[demo_key]
-                actions.append(
-                    torch.from_numpy(
-                        np.asarray(demo["actions"][...], dtype=np.float32)
-                    )
-                )
+                actions.append(torch.from_numpy(np.asarray(demo["actions"][...], dtype=np.float32)))
                 proprios.append(torch.from_numpy(_demo_proprio(demo)))
         all_actions = torch.cat(actions, dim=0)
         all_proprios = torch.cat(proprios, dim=0)
@@ -266,18 +257,13 @@ class DinoTokenTrajectoryDataset(Dataset[dict[str, torch.Tensor]]):
         with h5py.File(raw_path, "r") as raw, h5py.File(hidden_path, "r") as hidden:
             raw_demo = raw[demo_key]
             hidden_demo = hidden[demo_key]
-            tokens = np.asarray(
-                hidden_demo["obs_embedding"][start:end:self.frameskip]
-            )
-            actions = torch.from_numpy(
-                np.asarray(raw_demo["actions"][start:end], dtype=np.float32)
-            )
-            proprio = torch.from_numpy(_demo_proprio(raw_demo)[start:end:self.frameskip])
+            tokens = np.asarray(hidden_demo["obs_embedding"][start : end : self.frameskip])
+            actions = torch.from_numpy(np.asarray(raw_demo["actions"][start:end], dtype=np.float32))
+            proprio = torch.from_numpy(_demo_proprio(raw_demo)[start : end : self.frameskip])
 
         if int(tokens.shape[0]) != self.num_frames:
             raise RuntimeError(
-                f"DINO token slice produced {tokens.shape[0]} frames; "
-                f"expected {self.num_frames}"
+                f"DINO token slice produced {tokens.shape[0]} frames; expected {self.num_frames}"
             )
         actions = (actions - self.action_mean) / self.action_std
         actions = actions.reshape(self.num_frames, self.action_dim)

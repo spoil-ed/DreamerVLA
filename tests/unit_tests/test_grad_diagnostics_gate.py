@@ -82,9 +82,7 @@ def _make_components():
     torch.manual_seed(0)
     world_model = _StubWorldModel()
     policy = _StubPolicy()
-    critic = TwohotCritic(
-        hidden_dim=D_LAT, num_bins=5, bin_min=-5.0, bin_max=5.0, critic_layers=0
-    )
+    critic = TwohotCritic(hidden_dim=D_LAT, num_bins=5, bin_min=-5.0, bin_max=5.0, critic_layers=0)
     target_critic = TwohotCritic(
         hidden_dim=D_LAT, num_bins=5, bin_min=-5.0, bin_max=5.0, critic_layers=0
     )
@@ -158,9 +156,7 @@ def test_diagnostics_off_skips_extra_backward_and_named_grad_norm(monkeypatch):
 
     monkeypatch.setattr(dvla, "_named_grad_norm", _counting_named)
 
-    metrics = _run_step(
-        world_model, policy, critic, target_critic, grad_diagnostics=False, seed=1
-    )
+    metrics = _run_step(world_model, policy, critic, target_critic, grad_diagnostics=False, seed=1)
 
     assert grad_calls["n"] == 0, "diagnostics OFF must not run extra autograd.grad"
     assert named_calls["n"] == 0, "diagnostics OFF must not call _named_grad_norm"
@@ -221,9 +217,7 @@ def test_diagnostics_on_runs_extra_backward(monkeypatch):
 
     monkeypatch.setattr(torch.autograd, "grad", _counting_grad)
 
-    metrics = _run_step(
-        world_model, policy, critic, target_critic, grad_diagnostics=True, seed=1
-    )
+    metrics = _run_step(world_model, policy, critic, target_critic, grad_diagnostics=True, seed=1)
 
     # PG and entropy components are present (actent != 0) → at least 2 extra grads.
     assert grad_calls["n"] >= 1, "diagnostics ON must run the extra autograd.grad"

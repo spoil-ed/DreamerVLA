@@ -50,10 +50,7 @@ class DTypeTensorCompressor:
         self,
         packed: dict[str, PackedTensor],
     ) -> dict[str, torch.Tensor]:
-        return {
-            key: item.tensor.to(dtype=item.original_dtype)
-            for key, item in packed.items()
-        }
+        return {key: item.tensor.to(dtype=item.original_dtype) for key, item in packed.items()}
 
 
 class CompressedWeightSyncer(WeightSyncer):

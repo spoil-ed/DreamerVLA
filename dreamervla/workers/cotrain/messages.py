@@ -199,11 +199,7 @@ def pack_rollout_result_batch(
         ),
         prev_values=(
             _batch_result_values(
-                [
-                    result.prev_values
-                    for result in results
-                    if result.prev_values is not None
-                ],
+                [result.prev_values for result in results if result.prev_values is not None],
             )
             if has_prev_values
             else None
@@ -242,9 +238,7 @@ def rollout_result_batch_to_messages(
         raise ValueError("batched rollout result must include actions and prev_logprobs")
     actions = as_tensor(msg.actions).detach().cpu()
     prev_logprobs = as_tensor(msg.prev_logprobs).detach().cpu()
-    prev_values = (
-        None if msg.prev_values is None else as_tensor(msg.prev_values).detach().cpu()
-    )
+    prev_values = None if msg.prev_values is None else as_tensor(msg.prev_values).detach().cpu()
     if int(actions.shape[0]) != batch_size:
         raise ValueError("batched rollout actions batch size mismatch")
     if int(prev_logprobs.shape[0]) != batch_size:
@@ -344,9 +338,7 @@ def _cat_step_batch(
         shape = tuple(tensor.shape[:1]) + tuple(tensor.shape[2:])
         if shape != expected:
             shapes = [tuple(int(dim) for dim in item.shape) for item in tensors]
-            raise ValueError(
-                f"{name} tensors must share non-batch dimensions; got {shapes}"
-            )
+            raise ValueError(f"{name} tensors must share non-batch dimensions; got {shapes}")
     if len(normalized) == 1:
         return normalized[0]
     return torch.cat(normalized, dim=1)
@@ -366,9 +358,7 @@ def _validate_step_batch_dim(
         raise ValueError("all trajectory shards must have the same step dimension")
     value_batch_size = int(tensor.shape[1])
     if batch_size is not None and value_batch_size != batch_size:
-        raise ValueError(
-            "all tensors in a trajectory shard must share the same batch dimension"
-        )
+        raise ValueError("all tensors in a trajectory shard must share the same batch dimension")
     return value_batch_size
 
 
@@ -377,29 +367,17 @@ def _validate_shard_shape(shard: TrajectoryShard) -> tuple[int, int]:
     batch_size = _validate_step_batch_dim("actions", shard.actions, steps)
     _validate_step_batch_dim("rewards", shard.rewards, steps, batch_size=batch_size)
     _validate_step_batch_dim("dones", shard.dones, steps, batch_size=batch_size)
-    _validate_step_batch_dim(
-        "prev_logprobs", shard.prev_logprobs, steps, batch_size=batch_size
-    )
+    _validate_step_batch_dim("prev_logprobs", shard.prev_logprobs, steps, batch_size=batch_size)
     if shard.prev_values is not None:
-        _validate_step_batch_dim(
-            "prev_values", shard.prev_values, steps, batch_size=batch_size
-        )
+        _validate_step_batch_dim("prev_values", shard.prev_values, steps, batch_size=batch_size)
     for key, value in shard.forward_inputs.items():
-        _validate_step_batch_dim(
-            f"forward_inputs[{key!r}]", value, steps, batch_size=batch_size
-        )
+        _validate_step_batch_dim(f"forward_inputs[{key!r}]", value, steps, batch_size=batch_size)
     for key, value in shard.versions.items():
-        _validate_step_batch_dim(
-            f"versions[{key!r}]", value, steps, batch_size=batch_size
-        )
+        _validate_step_batch_dim(f"versions[{key!r}]", value, steps, batch_size=batch_size)
     if shard.loss_mask is not None:
-        _validate_step_batch_dim(
-            "loss_mask", shard.loss_mask, steps, batch_size=batch_size
-        )
+        _validate_step_batch_dim("loss_mask", shard.loss_mask, steps, batch_size=batch_size)
     if len(shard.episode_ids) != batch_size:
-        raise ValueError(
-            "episode_ids length must match trajectory shard batch dimension"
-        )
+        raise ValueError("episode_ids length must match trajectory shard batch dimension")
     return steps, batch_size
 
 
@@ -495,10 +473,7 @@ def collate_trajectory_shards(shards: list[TrajectoryShard]) -> TrajectoryBatch:
         prev_values=prev_values,
         forward_inputs={
             key: _cat_step_batch(
-                [
-                    _pad_step_batch(shard.forward_inputs[key], max_steps)
-                    for shard in shards
-                ],
+                [_pad_step_batch(shard.forward_inputs[key], max_steps) for shard in shards],
                 name=f"forward_inputs[{key!r}]",
             )
             for key in sorted(forward_keys)

@@ -42,9 +42,7 @@ class _Replay:
         batch_size = int(batch_size)
         labels = self.labels[:batch_size]
         return {
-            "windows": torch.arange(batch_size * 2, dtype=torch.float32).reshape(
-                batch_size, 2, 1
-            ),
+            "windows": torch.arange(batch_size * 2, dtype=torch.float32).reshape(batch_size, 2, 1),
             "labels": labels,
         }
 

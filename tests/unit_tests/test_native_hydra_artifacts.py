@@ -17,11 +17,7 @@ def test_native_hydra_writes_its_metadata_under_training_out_dir(
     command = [
         sys.executable,
         "-c",
-        (
-            "import dreamervla.train as train; "
-            "train.run = lambda cfg: None; "
-            "train.main()"
-        ),
+        ("import dreamervla.train as train; train.run = lambda cfg: None; train.main()"),
         f"training.out_dir={run_root}",
         "hydra.job.chdir=false",
     ]
@@ -65,11 +61,7 @@ def test_cotrain_smoke_command_composes_fixture_through_native_hydra(
     no_op_command = [
         sys.executable,
         "-c",
-        (
-            "import dreamervla.train as train; "
-            "train.run = lambda cfg: None; "
-            "train.main()"
-        ),
+        ("import dreamervla.train as train; train.run = lambda cfg: None; train.main()"),
         *command[3:],
     ]
     result = subprocess.run(

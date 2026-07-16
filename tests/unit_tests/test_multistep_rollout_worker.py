@@ -147,13 +147,17 @@ class _NativeFullPolicy(torch.nn.Module):
         action = torch.zeros(batch_size, 2, 3)
         log_prob = torch.zeros(batch_size, 1)
         token_ids = torch.arange(6).reshape(1, 2, 3).expand(batch_size, -1, -1)
-        return action, log_prob, {
-            "hidden": hidden,
-            "lang_emb": torch.ones(batch_size, 4),
-            "action_token_ids": token_ids,
-            "input_ids": batch["input_ids"],
-            "attention_mask": batch["attention_mask"],
-        }
+        return (
+            action,
+            log_prob,
+            {
+                "hidden": hidden,
+                "lang_emb": torch.ones(batch_size, 4),
+                "action_token_ids": token_ids,
+                "input_ids": batch["input_ids"],
+                "attention_mask": batch["attention_mask"],
+            },
+        )
 
 
 def _real_obs(step: int = 0, *, is_first: bool = False, seed: int = 5) -> ObservationMsg:
@@ -592,9 +596,7 @@ def test_rollout_worker_uses_configured_bfloat16_policy_dtype() -> None:
     worker.init()
 
     assert worker.policy_dtype == torch.bfloat16
-    assert {parameter.dtype for parameter in worker._policy().parameters()} == {
-        torch.bfloat16
-    }
+    assert {parameter.dtype for parameter in worker._policy().parameters()} == {torch.bfloat16}
 
 
 def test_rollout_worker_offload_state_tracks_device_lifecycle() -> None:
@@ -839,14 +841,8 @@ def test_generate_reads_rank_keyed_observation_batches_when_num_slots_is_set(mon
         first, second = rollout_result_batch_to_messages(batch)
         assert first.step == 0
         assert second.step == 10
-        assert any(
-            "[rollout rank=0] recv action request batch_size=2" in line
-            for line in traces
-        )
-        assert any(
-            "[rollout rank=0] send action response batch_size=2" in line
-            for line in traces
-        )
+        assert any("[rollout rank=0] recv action request batch_size=2" in line for line in traces)
+        assert any("[rollout rank=0] send action response batch_size=2" in line for line in traces)
         assert any("[rollout rank=0] recv StopMsg key=0" in line for line in traces)
         assert any("[rollout rank=0] generate exit generated=2" in line for line in traces)
     finally:

@@ -24,7 +24,12 @@ class _DetWM(torch.nn.Module):
             latent = batch["latent"]
             hidden = latent["hidden"] if isinstance(latent, dict) else latent
             chunk = hidden.unsqueeze(1).repeat(1, batch["actions"].shape[1], 1)
-            return {"hidden_seq": chunk, "history": hidden, "actions": batch["actions"], "hidden": hidden}
+            return {
+                "hidden_seq": chunk,
+                "history": hidden,
+                "actions": batch["actions"],
+                "hidden": hidden,
+            }
         raise ValueError(mode)
 
 
@@ -68,7 +73,11 @@ class _DetPolicy(torch.nn.Module):
             parity = torch.arange(b, device=hidden.device) % 2
             offset = (parity - 0.5).reshape(b, 1, 1) * 0.1  # even -> -0.05, odd -> +0.05
             action_chunk = mean_chunk + offset
-            return action_chunk, torch.zeros(b, device=hidden.device), {"action_chunk": action_chunk}
+            return (
+                action_chunk,
+                torch.zeros(b, device=hidden.device),
+                {"action_chunk": action_chunk},
+            )
         if batch["mode"] == "evaluate":
             action = batch["action"]
             target = mean_chunk if action.ndim == 3 else mean_chunk[:, 0, :]
@@ -78,17 +87,26 @@ class _DetPolicy(torch.nn.Module):
 
 
 def _cfg(micro_batch_starts, update_epochs=1):
-    return OmegaConf.create({
-        "lumos": {
-            "chunk_size": 2, "episode_max_steps": 4, "classifier_min_steps": 1,
-            "classifier_granularity": "action", "filter_zero_variance_groups": False,
-            "update_micro_batch_starts": micro_batch_starts,
-        },
-        "ppo_rollouts_per_start": 2, "ppo_update_epochs": update_epochs,
-        "kl_coef": 0.0, "actor_bc_to_ref_scale": 0.0,
-        "clip_ratio_low": 0.2, "clip_ratio_high": 0.28, "advantage_eps": 1.0e-6,
-        "imag_last": 2,
-    })
+    return OmegaConf.create(
+        {
+            "lumos": {
+                "chunk_size": 2,
+                "episode_max_steps": 4,
+                "classifier_min_steps": 1,
+                "classifier_granularity": "action",
+                "filter_zero_variance_groups": False,
+                "update_micro_batch_starts": micro_batch_starts,
+            },
+            "ppo_rollouts_per_start": 2,
+            "ppo_update_epochs": update_epochs,
+            "kl_coef": 0.0,
+            "actor_bc_to_ref_scale": 0.0,
+            "clip_ratio_low": 0.2,
+            "clip_ratio_high": 0.28,
+            "advantage_eps": 1.0e-6,
+            "imag_last": 2,
+        }
+    )
 
 
 def _run_update(micro_batch_starts, update_epochs=1, lr=0.0):
@@ -102,8 +120,13 @@ def _run_update(micro_batch_starts, update_epochs=1, lr=0.0):
     opt = torch.optim.SGD(policy.parameters(), lr=lr)
     obs = {"obs_embedding": torch.arange(4 * 4 * 1, dtype=torch.float32).reshape(4, 4, 1)}
     dino_lumos_step(
-        policy=policy, chunk_world_model=_DetWM(), classifier=_ParityClassifier(),
-        classifier_threshold=0.5, actor_optimizer=opt, obs=obs, device=torch.device("cpu"),
+        policy=policy,
+        chunk_world_model=_DetWM(),
+        classifier=_ParityClassifier(),
+        classifier_threshold=0.5,
+        actor_optimizer=opt,
+        obs=obs,
+        device=torch.device("cpu"),
         algorithm_cfg=_cfg(micro_batch_starts, update_epochs),
         optim_cfg=OmegaConf.create({"grad_clip_norm": 1e9, "zero_grad_set_to_none": True}),
         ref_policy=None,
@@ -125,7 +148,7 @@ def test_predict_next_chunk_mb_matches_full_batch():
 
 
 def test_microbatch_matches_full_batch_gradient():
-    g_full, _ = _run_update(micro_batch_starts=0)   # 0 / unset -> one slice (whole batch)
+    g_full, _ = _run_update(micro_batch_starts=0)  # 0 / unset -> one slice (whole batch)
     g_micro, _ = _run_update(micro_batch_starts=1)  # 1 start (=group_size rollouts) per slice
     # Guard against the fixture regressing to a vacuous (identically-zero) gate.
     assert g_full.abs().item() > 1e-6, f"fixture must produce a non-zero gradient, got {g_full}"

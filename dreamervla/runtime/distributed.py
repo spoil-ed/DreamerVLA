@@ -77,14 +77,10 @@ class NopretokenizeSFTDistributedHelper:
                     init_kwargs["timeout"] = timedelta(seconds=int(nccl_timeout_seconds))
                 dist.init_process_group(**init_kwargs)
 
-        rank = (
-            int(dist.get_rank()) if dist.is_available() and dist.is_initialized() else 0
-        )
+        rank = int(dist.get_rank()) if dist.is_available() and dist.is_initialized() else 0
         local_rank = int(os.environ.get("LOCAL_RANK", "0"))
         world_size = (
-            int(dist.get_world_size())
-            if dist.is_available() and dist.is_initialized()
-            else 1
+            int(dist.get_world_size()) if dist.is_available() and dist.is_initialized() else 1
         )
         return cls(
             rank=rank,
@@ -116,11 +112,7 @@ class NopretokenizeSFTDistributedHelper:
         if configured_device == "auto":
             if self.is_distributed and torch.cuda.is_available():
                 return torch.device(f"cuda:{self.local_rank}")
-            return (
-                smallest_cuda_device
-                if smallest_cuda_device is not None
-                else torch.device("cpu")
-            )
+            return smallest_cuda_device if smallest_cuda_device is not None else torch.device("cpu")
         if (
             configured_device.startswith("cuda")
             and self.is_distributed
@@ -191,39 +183,29 @@ class NopretokenizeSFTDistributedHelper:
     def unwrap_module(self, module: torch.nn.Module) -> torch.nn.Module:
         return unwrap_module(module)
 
-    def clip_grad_norm_tensor(
-        self, module: torch.nn.Module, max_norm: float
-    ) -> torch.Tensor:
+    def clip_grad_norm_tensor(self, module: torch.nn.Module, max_norm: float) -> torch.Tensor:
         """Clip gradients without forcing a device-to-host synchronization."""
 
         if isinstance(module, FSDP):
             grad_norm = module.clip_grad_norm_(float(max_norm))
         else:
-            grad_norm = torch.nn.utils.clip_grad_norm_(
-                module.parameters(), float(max_norm)
-            )
+            grad_norm = torch.nn.utils.clip_grad_norm_(module.parameters(), float(max_norm))
         if isinstance(grad_norm, torch.Tensor):
             return grad_norm
         return torch.tensor(float(grad_norm), device=self._reduce_device())
 
     def clip_grad_norm(self, module: torch.nn.Module, max_norm: float) -> float:
         grad_norm = self.clip_grad_norm_tensor(module, max_norm)
-        return float(
-            grad_norm.item() if isinstance(grad_norm, torch.Tensor) else grad_norm
-        )
+        return float(grad_norm.item() if isinstance(grad_norm, torch.Tensor) else grad_norm)
 
     def logger_context(self, path: str) -> JsonLogger | _NullJsonLogger:
         return JsonLogger(path) if self.is_main_process else _NullJsonLogger()
 
     def reduce_mean(self, value: float | int | torch.Tensor) -> float:
         if isinstance(value, torch.Tensor):
-            tensor = value.detach().to(
-                device=self._reduce_device(), dtype=torch.float32
-            )
+            tensor = value.detach().to(device=self._reduce_device(), dtype=torch.float32)
         else:
-            tensor = torch.tensor(
-                float(value), device=self._reduce_device(), dtype=torch.float32
-            )
+            tensor = torch.tensor(float(value), device=self._reduce_device(), dtype=torch.float32)
         if self.is_distributed:
             dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
             tensor /= float(self.world_size)
@@ -231,20 +213,14 @@ class NopretokenizeSFTDistributedHelper:
 
     def reduce_sum(self, value: float | int | torch.Tensor) -> float:
         if isinstance(value, torch.Tensor):
-            tensor = value.detach().to(
-                device=self._reduce_device(), dtype=torch.float32
-            )
+            tensor = value.detach().to(device=self._reduce_device(), dtype=torch.float32)
         else:
-            tensor = torch.tensor(
-                float(value), device=self._reduce_device(), dtype=torch.float32
-            )
+            tensor = torch.tensor(float(value), device=self._reduce_device(), dtype=torch.float32)
         if self.is_distributed:
             dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
         return float(tensor.item())
 
-    def reduce_mean_dict(
-        self, metrics: dict[str, float | int | torch.Tensor]
-    ) -> dict[str, float]:
+    def reduce_mean_dict(self, metrics: dict[str, float | int | torch.Tensor]) -> dict[str, float]:
         keys = list(metrics.keys())
         if not keys:
             return {}
@@ -333,9 +309,7 @@ class NopretokenizeSFTDistributedHelper:
         return FSDP.state_dict_type(
             module,
             StateDictType.FULL_STATE_DICT,
-            state_dict_config=FullStateDictConfig(
-                offload_to_cpu=True, rank0_only=rank0_only
-            ),
+            state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=rank0_only),
             optim_state_dict_config=FullOptimStateDictConfig(
                 offload_to_cpu=True, rank0_only=rank0_only
             ),
@@ -359,9 +333,7 @@ class NopretokenizeSFTDistributedHelper:
             optimizer.load_state_dict(state_dict)
             return
         with self.model_state_dict_context(module, rank0_only=False):
-            converted_state_dict = FSDP.optim_state_dict_to_load(
-                module, optimizer, state_dict
-            )
+            converted_state_dict = FSDP.optim_state_dict_to_load(module, optimizer, state_dict)
         optimizer.load_state_dict(converted_state_dict)
 
     def _wrap_module_with_ddp(
@@ -376,13 +348,9 @@ class NopretokenizeSFTDistributedHelper:
         kwargs: dict[str, Any] = {
             "device_ids": [self.local_rank],
             "output_device": self.local_rank,
-            "broadcast_buffers": (
-                False if broadcast_buffers is None else bool(broadcast_buffers)
-            ),
+            "broadcast_buffers": (False if broadcast_buffers is None else bool(broadcast_buffers)),
             "find_unused_parameters": (
-                False
-                if find_unused_parameters is None
-                else bool(find_unused_parameters)
+                False if find_unused_parameters is None else bool(find_unused_parameters)
             ),
         }
         # Keep the legacy DDP constructor byte-identical unless a recipe opts in.
@@ -440,9 +408,7 @@ class NopretokenizeSFTDistributedHelper:
             "fp32": torch.float32,
         }.get(self.fsdp_mixed_precision)
         if dtype is None:
-            raise ValueError(
-                f"Unsupported FSDP mixed precision: {self.fsdp_mixed_precision}"
-            )
+            raise ValueError(f"Unsupported FSDP mixed precision: {self.fsdp_mixed_precision}")
         return MixedPrecision(
             param_dtype=dtype,
             reduce_dtype=dtype,

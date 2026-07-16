@@ -81,9 +81,7 @@ class PretokenizeDataset(BaseDataset):
             )
         manifest_value = meta_entries[0].get("path")
         if manifest_value is None:
-            raise ValueError(
-                f"PretokenizeDataset META[0] is missing 'path' in {self.config_path}"
-            )
+            raise ValueError(f"PretokenizeDataset META[0] is missing 'path' in {self.config_path}")
 
         self.manifest_path = self.resolve_project_path(
             manifest_value, base_dir=self.config_path.parent
@@ -91,25 +89,17 @@ class PretokenizeDataset(BaseDataset):
         with self.manifest_path.open("r", encoding="utf-8") as handle:
             self.records = json.load(handle)
         if not isinstance(self.records, list):
-            raise ValueError(
-                f"Pretokenize manifest must be a list: {self.manifest_path}"
-            )
+            raise ValueError(f"Pretokenize manifest must be a list: {self.manifest_path}")
 
-        self.max_token_length = max(
-            (int(item.get("len", 0)) for item in self.records), default=0
-        )
+        self.max_token_length = max((int(item.get("len", 0)) for item in self.records), default=0)
         seq_cfg = config.get("sequence", {}) or {}
         self.history = max(
             int(
-                history
-                if history is not None
-                else seq_cfg.get("history", config.get("history", 1))
+                history if history is not None else seq_cfg.get("history", config.get("history", 1))
             ),
             1,
         )
-        seq_window_cfg = {
-            key: value for key, value in seq_cfg.items() if key != "history"
-        }
+        seq_window_cfg = {key: value for key, value in seq_cfg.items() if key != "history"}
         self.sequence_mode = (
             batch_length is not None
             or replay_context is not None
@@ -171,9 +161,7 @@ class PretokenizeDataset(BaseDataset):
             )
             self.stride = max(
                 int(
-                    stride
-                    if stride is not None
-                    else seq_cfg.get("stride", config.get("stride", 1))
+                    stride if stride is not None else seq_cfg.get("stride", config.get("stride", 1))
                 ),
                 1,
             )
@@ -221,9 +209,7 @@ class PretokenizeDataset(BaseDataset):
         if self.sequence_mode:
             return self._getitem_sequence(index)
         record = self.records[index]
-        file_path = self.resolve_project_path(
-            record["file"], base_dir=self.manifest_path.parent
-        )
+        file_path = self.resolve_project_path(record["file"], base_dir=self.manifest_path.parent)
         with file_path.open("rb") as handle:
             payload = pickle.load(handle)
         return self._flat_item_from_payload(record, file_path, payload, index)
@@ -238,11 +224,7 @@ class PretokenizeDataset(BaseDataset):
         input_ids = list(payload["token"])
         labels = list(payload["label"])
         meta = dict(record.get("meta", {}))
-        if (
-            isinstance(payload, dict)
-            and "meta" in payload
-            and isinstance(payload["meta"], dict)
-        ):
+        if isinstance(payload, dict) and "meta" in payload and isinstance(payload["meta"], dict):
             meta.update(payload["meta"])
 
         image = list(payload.get("image", [])) if isinstance(payload, dict) else []
@@ -259,9 +241,7 @@ class PretokenizeDataset(BaseDataset):
         task_name = payload.get("task_name") if isinstance(payload, dict) else None
         if task_name is None:
             task_name = meta.get("task_name", "")
-        wm_obs_input_ids = (
-            payload.get("wm_obs_input_ids") if isinstance(payload, dict) else None
-        )
+        wm_obs_input_ids = payload.get("wm_obs_input_ids") if isinstance(payload, dict) else None
         if not isinstance(wm_obs_input_ids, list):
             wm_obs_input_ids = list(input_ids)
         wm_next_obs_input_ids = (
@@ -348,12 +328,12 @@ class PretokenizeDataset(BaseDataset):
         # the *next* observation will miss this and fall back to the scan.
         if not action_path or not Path(action_path).is_file():
             return None
-        file_path = self.resolve_project_path(
-            record["file"], base_dir=self.manifest_path.parent
+        file_path = self.resolve_project_path(record["file"], base_dir=self.manifest_path.parent)
+        manifest_task = (
+            record.get("meta", {}).get("task_name")
+            if isinstance(record.get("meta"), dict)
+            else None
         )
-        manifest_task = record.get("meta", {}).get("task_name") if isinstance(
-            record.get("meta"), dict
-        ) else None
         return _FrameRecord(
             file=str(file_path),
             task_name=str(manifest_task or task_name),
@@ -366,12 +346,8 @@ class PretokenizeDataset(BaseDataset):
             record_meta=dict(record.get("meta", {})),
         )
 
-    def _frame_from_pickle(
-        self, record_index: int, record: dict[str, Any]
-    ) -> _FrameRecord | None:
-        file_path = self.resolve_project_path(
-            record["file"], base_dir=self.manifest_path.parent
-        )
+    def _frame_from_pickle(self, record_index: int, record: dict[str, Any]) -> _FrameRecord | None:
+        file_path = self.resolve_project_path(record["file"], base_dir=self.manifest_path.parent)
         try:
             with file_path.open("rb") as handle:
                 payload = pickle.load(handle)
@@ -489,9 +465,7 @@ class PretokenizeDataset(BaseDataset):
             token_ids = obs_ids
             if idx > 0 and self.sequence_next_obs_source == "flat_next_obs":
                 if previous_payload is None:
-                    raise KeyError(
-                        f"missing previous payload for sequence window {index}"
-                    )
+                    raise KeyError(f"missing previous payload for sequence window {index}")
                 flat_next_ids = previous_payload.get("wm_next_obs_input_ids")
                 if not isinstance(flat_next_ids, list):
                     raise KeyError(
@@ -553,9 +527,7 @@ class PretokenizeDataset(BaseDataset):
         if not actions:
             return None, None
         max_steps = max(int(tensor.shape[0]) for tensor in actions)
-        max_dim = max(
-            int(tensor.shape[1]) if tensor.ndim == 2 else 0 for tensor in actions
-        )
+        max_dim = max(int(tensor.shape[1]) if tensor.ndim == 2 else 0 for tensor in actions)
         if max_steps <= 0 or max_dim <= 0:
             return None, None
         padded = torch.zeros(len(actions), max_steps, max_dim, dtype=torch.float32)
@@ -579,10 +551,7 @@ class PretokenizeDataset(BaseDataset):
                 max_steps = int(action_mask.shape[1])
                 for idx, item in enumerate(batch):
                     sample_mask = item.get("wm_action_mask")
-                    if (
-                        not isinstance(sample_mask, torch.Tensor)
-                        or sample_mask.numel() == 0
-                    ):
+                    if not isinstance(sample_mask, torch.Tensor) or sample_mask.numel() == 0:
                         continue
                     n = min(int(sample_mask.shape[0]), max_steps)
                     action_mask[idx, :n] &= sample_mask[:n].to(action_mask.device)
@@ -591,9 +560,7 @@ class PretokenizeDataset(BaseDataset):
             return {
                 "input_ids": [list(item["input_ids"]) for item in batch],
                 "labels": [list(item["labels"]) for item in batch],
-                "lengths": torch.tensor(
-                    [int(item["length"]) for item in batch], dtype=torch.long
-                ),
+                "lengths": torch.tensor([int(item["length"]) for item in batch], dtype=torch.long),
                 "image": [item["image"] for item in batch],
                 "action": padded_action,
                 "action_mask": action_mask,
@@ -604,24 +571,15 @@ class PretokenizeDataset(BaseDataset):
                 ),
                 "task_name": [str(item["task_name"]) for item in batch],
                 "wm_obs_input_ids": [list(item["wm_obs_input_ids"]) for item in batch],
-                "wm_next_obs_input_ids": [
-                    list(item["wm_next_obs_input_ids"]) for item in batch
-                ],
+                "wm_next_obs_input_ids": [list(item["wm_next_obs_input_ids"]) for item in batch],
                 "meta": [item["meta"] for item in batch],
                 "file": [item["file"] for item in batch],
-                "id": torch.tensor(
-                    [int(item["id"]) for item in batch], dtype=torch.long
-                ),
+                "id": torch.tensor([int(item["id"]) for item in batch], dtype=torch.long),
                 "wm_obs_input_ids_seq": [
-                    [list(step_ids) for step_ids in item["wm_obs_input_ids_seq"]]
-                    for item in batch
+                    [list(step_ids) for step_ids in item["wm_obs_input_ids_seq"]] for item in batch
                 ],
-                "action_seq": torch.stack(
-                    [item["action_seq"] for item in batch], dim=0
-                ),
-                "reward_seq": torch.stack(
-                    [item["reward_seq"] for item in batch], dim=0
-                ),
+                "action_seq": torch.stack([item["action_seq"] for item in batch], dim=0),
+                "reward_seq": torch.stack([item["reward_seq"] for item in batch], dim=0),
                 "done_seq": torch.stack([item["done_seq"] for item in batch], dim=0),
                 "meta_seq": [item["meta_seq"] for item in batch],
                 "history": int(batch[0].get("history", 1)),
@@ -637,10 +595,7 @@ class PretokenizeDataset(BaseDataset):
             max_steps = int(action_mask.shape[1])
             for idx, item in enumerate(batch):
                 sample_mask = item.get("wm_action_mask")
-                if (
-                    not isinstance(sample_mask, torch.Tensor)
-                    or sample_mask.numel() == 0
-                ):
+                if not isinstance(sample_mask, torch.Tensor) or sample_mask.numel() == 0:
                     continue
                 n = min(int(sample_mask.shape[0]), max_steps)
                 action_mask[idx, :n] &= sample_mask[:n].to(action_mask.device)
@@ -649,22 +604,16 @@ class PretokenizeDataset(BaseDataset):
         return {
             "input_ids": [list(item["input_ids"]) for item in batch],
             "labels": [list(item["labels"]) for item in batch],
-            "lengths": torch.tensor(
-                [int(item["length"]) for item in batch], dtype=torch.long
-            ),
+            "lengths": torch.tensor([int(item["length"]) for item in batch], dtype=torch.long),
             "image": [item["image"] for item in batch],
             "action": padded_action,
             "action_mask": action_mask,
             "state": [item["state"] for item in batch],
             "next_obs": [item["next_obs"] for item in batch],
-            "reward": torch.tensor(
-                [float(item["reward"]) for item in batch], dtype=torch.float32
-            ),
+            "reward": torch.tensor([float(item["reward"]) for item in batch], dtype=torch.float32),
             "task_name": [str(item["task_name"]) for item in batch],
             "wm_obs_input_ids": [list(item["wm_obs_input_ids"]) for item in batch],
-            "wm_next_obs_input_ids": [
-                list(item["wm_next_obs_input_ids"]) for item in batch
-            ],
+            "wm_next_obs_input_ids": [list(item["wm_next_obs_input_ids"]) for item in batch],
             "meta": [item["meta"] for item in batch],
             "file": [item["file"] for item in batch],
             "id": torch.tensor([int(item["id"]) for item in batch], dtype=torch.long),
@@ -702,16 +651,12 @@ class PretokenizeActionChunkDataset(PretokenizeDataset):
             sequence_next_obs_source=sequence_next_obs_source,
         )
         if self.sequence_mode:
-            raise ValueError(
-                "PretokenizeActionChunkDataset only supports flat atomic manifests."
-            )
+            raise ValueError("PretokenizeActionChunkDataset only supports flat atomic manifests.")
         self.action_horizon = max(int(action_horizon), 1)
         self._chunk_windows: list[tuple[int, ...]] = []
         self._record_payload_cache: dict[int, dict[str, Any]] = {}
         self._record_paths: list[Path] = [
-            self.resolve_project_path(
-                record["file"], base_dir=self.manifest_path.parent
-            )
+            self.resolve_project_path(record["file"], base_dir=self.manifest_path.parent)
             for record in self.records
         ]
         self._build_chunk_windows()
@@ -720,8 +665,7 @@ class PretokenizeActionChunkDataset(PretokenizeDataset):
             config_path=str(self.config_path),
             manifest_path=str(self.manifest_path),
             num_samples=len(self._chunk_windows),
-            max_token_length=self.max_token_length
-            + max(self.action_horizon - 1, 0) * 9,
+            max_token_length=self.max_token_length + max(self.action_horizon - 1, 0) * 9,
             history=self.history,
             prompt_text=self.data_spec.prompt_text,
         )
@@ -760,9 +704,7 @@ class PretokenizeActionChunkDataset(PretokenizeDataset):
             for start in sorted(frame_map):
                 wanted = range(start, start + self.action_horizon)
                 if all(frame in frame_set for frame in wanted):
-                    self._chunk_windows.append(
-                        tuple(frame_map[frame] for frame in wanted)
-                    )
+                    self._chunk_windows.append(tuple(frame_map[frame] for frame in wanted))
 
     @staticmethod
     def _action_label_block(labels: list[int]) -> list[int]:
@@ -777,9 +719,7 @@ class PretokenizeActionChunkDataset(PretokenizeDataset):
         return block
 
     @staticmethod
-    def _prompt_prefix(
-        input_ids: list[int], labels: list[int]
-    ) -> tuple[list[int], list[int]]:
+    def _prompt_prefix(input_ids: list[int], labels: list[int]) -> tuple[list[int], list[int]]:
         first_valid = next(
             (idx for idx, value in enumerate(labels) if int(value) >= 0), len(labels)
         )
@@ -792,9 +732,7 @@ class PretokenizeActionChunkDataset(PretokenizeDataset):
         first_record = self.records[first_index]
         first_file = self._record_paths[first_index]
 
-        item = self._flat_item_from_payload(
-            first_record, first_file, first_payload, first_index
-        )
+        item = self._flat_item_from_payload(first_record, first_file, first_payload, first_index)
 
         prefix_ids, prefix_labels = self._prompt_prefix(
             list(first_payload["token"]),

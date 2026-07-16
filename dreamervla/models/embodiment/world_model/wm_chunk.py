@@ -44,9 +44,7 @@ class _WMStyleAttention(nn.Module):
         if dim_head < 1:
             raise ValueError(f"dim_head must be >= 1, got {dim_head}")
         if attn_impl not in ("manual", "sdpa"):
-            raise ValueError(
-                f"attn_impl must be 'manual' or 'sdpa', got {attn_impl!r}"
-            )
+            raise ValueError(f"attn_impl must be 'manual' or 'sdpa', got {attn_impl!r}")
         self.heads = int(heads)
         self.dim_head = int(dim_head)
         self.attn_impl = str(attn_impl)
@@ -66,15 +64,10 @@ class _WMStyleAttention(nn.Module):
         bsz, seq_len, _dim = x.shape
         x = self.norm(x)
         qkv = self.to_qkv(x).chunk(3, dim=-1)
-        q, k, v = (
-            t.reshape(bsz, seq_len, self.heads, self.dim_head).transpose(1, 2)
-            for t in qkv
-        )
+        q, k, v = (t.reshape(bsz, seq_len, self.heads, self.dim_head).transpose(1, 2) for t in qkv)
         if self.attn_impl == "sdpa":
             attn_mask = (
-                mask.to(device=q.device, dtype=q.dtype)[None, None]
-                if mask is not None
-                else None
+                mask.to(device=q.device, dtype=q.dtype)[None, None] if mask is not None else None
             )
             out = F.scaled_dot_product_attention(
                 q,
@@ -119,9 +112,7 @@ class _WMStyleTransformer(nn.Module):
                             dropout=float(dropout),
                             attn_impl=str(attn_impl),
                         ),
-                        _WMStyleFeedForward(
-                            dim, int(mlp_dim), dropout=float(dropout)
-                        ),
+                        _WMStyleFeedForward(dim, int(mlp_dim), dropout=float(dropout)),
                     ]
                 )
                 for _ in range(int(depth))
@@ -175,9 +166,7 @@ class ChunkAwareWorldModel(WorldModel):
         **kwargs: Any,
     ) -> None:
         args_list = list(args)
-        requested_model_dim = (
-            args_list[5] if len(args_list) > 5 else kwargs.get("model_dim")
-        )
+        requested_model_dim = args_list[5] if len(args_list) > 5 else kwargs.get("model_dim")
         token_dim_hint = int(args_list[3] if len(args_list) > 3 else kwargs.get("token_dim", 4096))
         heads_hint = int(args_list[7] if len(args_list) > 7 else kwargs.get("heads", 8))
         safe_parent_model_dim = max(token_dim_hint, heads_hint)
@@ -196,28 +185,20 @@ class ChunkAwareWorldModel(WorldModel):
         if self.action_emb_dim < 1:
             raise ValueError(f"action_emb_dim must be >= 1, got {action_emb_dim}")
         if self.num_action_repeat < 1:
-            raise ValueError(
-                f"num_action_repeat must be >= 1, got {num_action_repeat}"
-            )
+            raise ValueError(f"num_action_repeat must be >= 1, got {num_action_repeat}")
         self.proprio_dim = int(proprio_dim)
         self.proprio_emb_dim = int(proprio_emb_dim)
         self.num_proprio_repeat = int(num_proprio_repeat)
-        self.proprio_reconstruction_loss_scale = float(
-            proprio_reconstruction_loss_scale
-        )
+        self.proprio_reconstruction_loss_scale = float(proprio_reconstruction_loss_scale)
         if self.proprio_reconstruction_loss_scale < 0:
             raise ValueError(
                 "proprio_reconstruction_loss_scale must be >= 0, got "
                 f"{proprio_reconstruction_loss_scale}"
             )
         if self.proprio_emb_dim < 0:
-            raise ValueError(
-                f"proprio_emb_dim must be >= 0, got {proprio_emb_dim}"
-            )
+            raise ValueError(f"proprio_emb_dim must be >= 0, got {proprio_emb_dim}")
         if self.num_proprio_repeat < 1:
-            raise ValueError(
-                f"num_proprio_repeat must be >= 1, got {num_proprio_repeat}"
-            )
+            raise ValueError(f"num_proprio_repeat must be >= 1, got {num_proprio_repeat}")
         self.proprio_condition_dim = self.proprio_emb_dim * self.num_proprio_repeat
         if self.proprio_condition_dim > 0:
             if self.proprio_dim < 1:
@@ -276,9 +257,7 @@ class ChunkAwareWorldModel(WorldModel):
         if int(chunk_size) < 1:
             raise ValueError(f"chunk_size must be >= 1, got {chunk_size}")
         if int(chunk_rollout_chunks) < 1:
-            raise ValueError(
-                f"chunk_rollout_chunks must be >= 1, got {chunk_rollout_chunks}"
-            )
+            raise ValueError(f"chunk_rollout_chunks must be >= 1, got {chunk_rollout_chunks}")
         if float(chunk_rollout_loss_scale) < 0:
             raise ValueError(
                 f"chunk_rollout_loss_scale must be >= 0, got {chunk_rollout_loss_scale}"
@@ -358,8 +337,7 @@ class ChunkAwareWorldModel(WorldModel):
             if isinstance(final, nn.Linear):
                 nn.init.constant_(final.bias, self.success_return_init_logit)
         self.pos_embedding = nn.Parameter(
-            torch.randn(1, self.pos_context_len * self.slots_per_step, self.model_dim)
-            * 0.02
+            torch.randn(1, self.pos_context_len * self.slots_per_step, self.model_dim) * 0.02
         )
         self.predictor = _WMStyleTransformer(
             dim=self.model_dim,
@@ -392,9 +370,7 @@ class ChunkAwareWorldModel(WorldModel):
         if not self.task_conditioning_enabled:
             return obs_tokens
         if task_ids is None:
-            raise ValueError(
-                "task_ids are required when world model task conditioning is enabled"
-            )
+            raise ValueError("task_ids are required when world model task conditioning is enabled")
         if self.task_embedding is None:
             raise RuntimeError("task conditioning is enabled without an embedding")
         task_emb = self.task_embedding(task_ids.to(obs_tokens.device).long())
@@ -457,8 +433,7 @@ class ChunkAwareWorldModel(WorldModel):
         action = actions[:, 0] if actions.ndim == 3 else actions
         if action.ndim != 2 or action.shape[-1] != self.action_dim:
             raise ValueError(
-                f"observe_next action must be [B,{self.action_dim}], "
-                f"got {tuple(actions.shape)}"
+                f"observe_next action must be [B,{self.action_dim}], got {tuple(actions.shape)}"
             )
         action_history[:, -1] = action.to(
             device=history.device,
@@ -476,9 +451,7 @@ class ChunkAwareWorldModel(WorldModel):
             ),
         }
 
-    def _obs_tokens_from_obs(
-        self, obs: dict[str, torch.Tensor] | torch.Tensor
-    ) -> torch.Tensor:
+    def _obs_tokens_from_obs(self, obs: dict[str, torch.Tensor] | torch.Tensor) -> torch.Tensor:
         """Normalize raw vision tokens or expanded observation tokens."""
         obs_embedding = self._obs_embedding_from_obs(obs)
         if obs_embedding.ndim == 3 and obs_embedding.shape[1:] == (
@@ -532,9 +505,7 @@ class ChunkAwareWorldModel(WorldModel):
         if proprio.ndim == 2:
             return proprio[:, None].expand(-1, int(steps), -1)
         if proprio.ndim != 3:
-            raise ValueError(
-                f"proprio must be [B,P] or [B,T,P], got {tuple(proprio.shape)}"
-            )
+            raise ValueError(f"proprio must be [B,P] or [B,T,P], got {tuple(proprio.shape)}")
         if proprio.shape[1] == int(steps):
             return proprio
         if proprio.shape[1] > int(steps):
@@ -584,9 +555,7 @@ class ChunkAwareWorldModel(WorldModel):
         action_emb = self.action_proj(actions)
         if self.num_action_repeat > 1:
             action_emb = action_emb.repeat(1, 1, self.num_action_repeat)
-        action_tokens = action_emb[:, :, None, :].expand(
-            -1, -1, obs_tokens.shape[2], -1
-        )
+        action_tokens = action_emb[:, :, None, :].expand(-1, -1, obs_tokens.shape[2], -1)
         parts.append(action_tokens)
         return torch.cat(parts, dim=-1)
 
@@ -594,12 +563,8 @@ class ChunkAwareWorldModel(WorldModel):
         self, batch: dict[str, torch.Tensor]
     ) -> dict[str, dict[str, torch.Tensor]]:
         """Encode replay windows into per-step latent starts for imagination."""
-        vision_tokens = self._normalize_raw_vision_tokens(
-            self._obs_embedding_from_obs(batch)
-        )
-        vision_tokens = self._apply_task_conditioning(
-            vision_tokens, batch.get("task_ids")
-        )
+        vision_tokens = self._normalize_raw_vision_tokens(self._obs_embedding_from_obs(batch))
+        vision_tokens = self._apply_task_conditioning(vision_tokens, batch.get("task_ids"))
         obs_tokens = self._observation_tokens(vision_tokens, batch.get("proprio"))
         bsz, steps = obs_tokens.shape[:2]
         actions = self._actions_or_zeros(batch.get("actions"), bsz, steps)
@@ -633,9 +598,7 @@ class ChunkAwareWorldModel(WorldModel):
         normalize_observations: bool = True,
     ) -> torch.Tensor:
         if normalize_observations:
-            obs_tokens = self._normalize_raw_vision_tokens(
-                self._obs_embedding_from_obs(obs)
-            )
+            obs_tokens = self._normalize_raw_vision_tokens(self._obs_embedding_from_obs(obs))
         else:
             obs_tokens = self._obs_tokens_from_obs(obs)
         proprio = obs.get("proprio") if isinstance(obs, dict) else None
@@ -675,16 +638,12 @@ class ChunkAwareWorldModel(WorldModel):
         obs_tokens = z[..., : self.obs_token_dim]
         return self._condition_tokens(obs_tokens, lang, act)
 
-    def actor_input(
-        self, latent: dict[str, torch.Tensor] | torch.Tensor
-    ) -> torch.Tensor:
+    def actor_input(self, latent: dict[str, torch.Tensor] | torch.Tensor) -> torch.Tensor:
         """Return the visual token segment consumed by VLA action actors."""
         hidden = self._latent_hidden(latent)
         return hidden[..., : self.token_dim]
 
-    def critic_input(
-        self, latent: dict[str, torch.Tensor] | torch.Tensor
-    ) -> torch.Tensor:
+    def critic_input(self, latent: dict[str, torch.Tensor] | torch.Tensor) -> torch.Tensor:
         """Mean-pool visual tokens for critics while retaining proprio for WM losses."""
         hidden = self._latent_hidden(latent)
         tokens = self._obs_tokens_from_obs(hidden)[..., : self.token_dim]
@@ -693,9 +652,7 @@ class ChunkAwareWorldModel(WorldModel):
             return pooled[:, 0]
         return pooled
 
-    def _latent_lang(
-        self, latent: dict[str, torch.Tensor] | torch.Tensor
-    ) -> torch.Tensor | None:
+    def _latent_lang(self, latent: dict[str, torch.Tensor] | torch.Tensor) -> torch.Tensor | None:
         if isinstance(latent, dict) and isinstance(latent.get("lang"), torch.Tensor):
             return latent["lang"]
         return None
@@ -707,9 +664,7 @@ class ChunkAwareWorldModel(WorldModel):
             return latent["proprio"]
         return None
 
-    def _latent_hidden(
-        self, latent: dict[str, torch.Tensor] | torch.Tensor
-    ) -> torch.Tensor:
+    def _latent_hidden(self, latent: dict[str, torch.Tensor] | torch.Tensor) -> torch.Tensor:
         if isinstance(latent, torch.Tensor):
             return self._obs_tokens_from_obs(latent)[:, -1]
         hidden = latent.get("hidden") if isinstance(latent, dict) else None
@@ -724,9 +679,7 @@ class ChunkAwareWorldModel(WorldModel):
             return self._obs_tokens_from_obs(history)[:, -1]
         raise KeyError("VLA latent must contain `hidden` or `history`.")
 
-    def _latent_history(
-        self, latent: dict[str, torch.Tensor] | torch.Tensor
-    ) -> torch.Tensor:
+    def _latent_history(self, latent: dict[str, torch.Tensor] | torch.Tensor) -> torch.Tensor:
         if isinstance(latent, dict) and isinstance(latent.get("history"), torch.Tensor):
             history = latent["history"]
             if history.ndim == 5:
@@ -757,9 +710,7 @@ class ChunkAwareWorldModel(WorldModel):
             )
 
         action_history = self._latent_actions(latent, bsz).clone()
-        action_history[:, -1] = action.to(
-            device=action_history.device, dtype=action_history.dtype
-        )
+        action_history[:, -1] = action.to(device=action_history.device, dtype=action_history.dtype)
         model_history = history
         if (
             proprio is not None
@@ -937,9 +888,7 @@ class ChunkAwareWorldModel(WorldModel):
         if visual.shape[1] >= self.num_hist:
             history = visual[:, -self.num_hist :]
         else:
-            pad = visual[:, :1].expand(
-                -1, self.num_hist - visual.shape[1], -1, -1
-            )
+            pad = visual[:, :1].expand(-1, self.num_hist - visual.shape[1], -1, -1)
             history = torch.cat([pad, visual], dim=1)
         if proprio is not None and self.proprio_condition_dim > 0:
             history = self._observation_tokens(
@@ -958,13 +907,9 @@ class ChunkAwareWorldModel(WorldModel):
             ),
         }
         if lang_emb is not None:
-            state["lang"] = lang_emb.to(
-                device=history.device, dtype=history.dtype
-            )
+            state["lang"] = lang_emb.to(device=history.device, dtype=history.dtype)
         if proprio is not None:
-            state["proprio"] = proprio.to(
-                device=history.device, dtype=history.dtype
-            )
+            state["proprio"] = proprio.to(device=history.device, dtype=history.dtype)
         return state
 
     # ------------------------------------------------------------------ #
@@ -988,9 +933,7 @@ class ChunkAwareWorldModel(WorldModel):
         H = self.num_hist
         K = self.chunk_size
         vision_tokens = self._normalize_raw_vision_tokens(obs)
-        vision_tokens = self._apply_task_conditioning(
-            vision_tokens, batch.get("task_ids")
-        )
+        vision_tokens = self._apply_task_conditioning(vision_tokens, batch.get("task_ids"))
         obs_tokens = self._observation_tokens(vision_tokens, batch.get("proprio"))
         lang_emb = batch.get("lang_emb")
         T = int(obs_tokens.shape[1])
@@ -1033,9 +976,7 @@ class ChunkAwareWorldModel(WorldModel):
         hidden_pred = out["hidden_seq"]
         self._last_hidden_target_width = int(hidden_target.shape[-1])
 
-        loss, hidden_mse, hidden_cosine = self._hidden_loss_terms(
-            hidden_pred, hidden_target
-        )
+        loss, hidden_mse, hidden_cosine = self._hidden_loss_terms(hidden_pred, hidden_target)
         # Comparable visual diagnostics deliberately exclude proprio/language
         # conditioning and never contribute to the optimized objective.  A
         # "model step" is one replay transition for Chunk-WM (environment
@@ -1150,18 +1091,10 @@ class ChunkAwareWorldModel(WorldModel):
                 else batch.get("return_to_go", batch.get("return_targets"))
             )
             if success_to_go is None:
-                raise KeyError(
-                    "success_return_loss_scale > 0 requires batch['success_to_go']"
-                )
+                raise KeyError("success_return_loss_scale > 0 requires batch['success_to_go']")
             success_chunk = self._slice_per_frame_signal(success_to_go, T)
-            success_return_out = self._success_return_loss_terms(
-                hidden_target, success_chunk
-            )
-            loss = (
-                loss
-                + self.success_return_loss_scale
-                * success_return_out["success_return_loss"]
-            )
+            success_return_out = self._success_return_loss_terms(hidden_target, success_chunk)
+            loss = loss + self.success_return_loss_scale * success_return_out["success_return_loss"]
 
         zero = loss.new_zeros(())
         out_dict: dict[str, torch.Tensor] = {
@@ -1204,15 +1137,9 @@ class ChunkAwareWorldModel(WorldModel):
         if success_return_out:
             out_dict.update(
                 {
-                    "success_return_loss": success_return_out[
-                        "success_return_loss"
-                    ].detach(),
-                    "success_return_pred_mean": success_return_out[
-                        "success_return_pred_mean"
-                    ],
-                    "success_return_target_mean": success_return_out[
-                        "success_return_target_mean"
-                    ],
+                    "success_return_loss": success_return_out["success_return_loss"].detach(),
+                    "success_return_pred_mean": success_return_out["success_return_pred_mean"],
+                    "success_return_target_mean": success_return_out["success_return_target_mean"],
                     "success_return_mse": success_return_out["success_return_mse"],
                 }
             )

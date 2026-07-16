@@ -28,9 +28,7 @@ def generate_dino_causal_mask(
     if patches < 1 or frames < 1:
         raise ValueError("num_patches and num_frames must be positive")
     frame_mask = torch.tril(torch.ones(frames, frames, dtype=torch.float32))
-    mask = frame_mask.repeat_interleave(patches, dim=0).repeat_interleave(
-        patches, dim=1
-    )
+    mask = frame_mask.repeat_interleave(patches, dim=0).repeat_interleave(patches, dim=1)
     return mask.unsqueeze(0).unsqueeze(0)
 
 
@@ -66,8 +64,7 @@ class DinoTokenEmbedding(nn.Module):
 
         if values.ndim != 3 or int(values.shape[-1]) != self.in_chans:
             raise ValueError(
-                f"embedding input must be [B,T,{self.in_chans}], "
-                f"got {tuple(values.shape)}"
+                f"embedding input must be [B,T,{self.in_chans}], got {tuple(values.shape)}"
             )
         values = values.to(dtype=self.patch_embed.weight.dtype)
         return self.patch_embed(values.permute(0, 2, 1)).permute(0, 2, 1)
@@ -126,16 +123,12 @@ class _DinoAttention(nn.Module):
     def forward(self, values: torch.Tensor) -> torch.Tensor:
         batch, sequence, _ = values.shape
         if sequence > int(self.bias.shape[-1]):
-            raise ValueError(
-                f"predictor sequence {sequence} exceeds mask {self.bias.shape[-1]}"
-            )
+            raise ValueError(f"predictor sequence {sequence} exceeds mask {self.bias.shape[-1]}")
         values = self.norm(values)
         qkv = self.to_qkv(values).chunk(3, dim=-1)
 
         def split_heads(tensor: torch.Tensor) -> torch.Tensor:
-            return tensor.reshape(batch, sequence, self.heads, self.dim_head).permute(
-                0, 2, 1, 3
-            )
+            return tensor.reshape(batch, sequence, self.heads, self.dim_head).permute(0, 2, 1, 3)
 
         query, key, value = (split_heads(tensor) for tensor in qkv)
         dots = torch.matmul(query, key.transpose(-1, -2)) * self.scale
@@ -282,9 +275,7 @@ class DinoTokenWorldModel(nn.Module):
         self.num_proprio_repeat = int(num_proprio_repeat)
         self.action_condition_dim = self.action_emb_dim * self.num_action_repeat
         self.proprio_condition_dim = self.proprio_emb_dim * self.num_proprio_repeat
-        self.model_dim = (
-            self.token_dim + self.proprio_condition_dim + self.action_condition_dim
-        )
+        self.model_dim = self.token_dim + self.proprio_condition_dim + self.action_condition_dim
         self.num_hist = int(num_hist)
         self.num_pred = int(num_pred)
         self.concat_dim = int(concat_dim)
@@ -373,9 +364,7 @@ class DinoTokenWorldModel(nn.Module):
                 "visual tokens must be "
                 f"[B,T,{self.token_count},{self.token_dim}], got {tuple(visual.shape)}"
             )
-        visual = self.token_norm(
-            visual.to(dtype=self.predictor.pos_embedding.dtype)
-        )
+        visual = self.token_norm(visual.to(dtype=self.predictor.pos_embedding.dtype))
         proprio_emb = self.encode_proprio(proprio)
         if proprio_emb.shape[:2] != visual.shape[:2]:
             raise ValueError("visual and proprio batch/time dimensions must match")
@@ -457,9 +446,7 @@ class DinoTokenWorldModel(nn.Module):
         if not isinstance(proprio, torch.Tensor):
             raise KeyError("DinoTokenWorldModel requires Tensor 'proprio'")
         if not isinstance(actions, torch.Tensor):
-            raise KeyError(
-                "DinoTokenWorldModel requires 'current_actions', 'actions', or 'action'"
-            )
+            raise KeyError("DinoTokenWorldModel requires 'current_actions', 'actions', or 'action'")
         expected_frames = self.num_hist + self.num_pred
         if int(visual.shape[1]) != expected_frames:
             raise ValueError(

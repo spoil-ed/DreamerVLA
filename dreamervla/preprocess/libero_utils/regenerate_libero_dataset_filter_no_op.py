@@ -90,14 +90,9 @@ def main(args):
             with open(metainfo_json_out_path) as f:
                 metainfo_json_dict = json.load(f)
             if not isinstance(metainfo_json_dict, dict):
-                raise ValueError(
-                    f"metainfo JSON must be an object: {metainfo_json_out_path}"
-                )
+                raise ValueError(f"metainfo JSON must be an object: {metainfo_json_out_path}")
         except (json.JSONDecodeError, ValueError) as exc:
-            print(
-                f"[resume] ignoring invalid metainfo JSON "
-                f"{metainfo_json_out_path}: {exc}"
-            )
+            print(f"[resume] ignoring invalid metainfo JSON {metainfo_json_out_path}: {exc}")
             metainfo_json_dict = {}
     else:
         metainfo_json_dict = {}
@@ -125,12 +120,8 @@ def main(args):
         env, task_description = get_libero_env(task, resolution=IMAGE_RESOLUTION)
 
         # Get dataset for task
-        orig_data_path = os.path.join(
-            args.libero_raw_data_dir, f"{task.name}_demo.hdf5"
-        )
-        assert os.path.exists(orig_data_path), (
-            f"Cannot find raw data file {orig_data_path}."
-        )
+        orig_data_path = os.path.join(args.libero_raw_data_dir, f"{task.name}_demo.hdf5")
+        assert os.path.exists(orig_data_path), f"Cannot find raw data file {orig_data_path}."
         orig_data_file = h5py.File(orig_data_path, "r")
         orig_data = orig_data_file["data"]
 
@@ -144,9 +135,7 @@ def main(args):
 
         for i in range(len(orig_data.keys())):
             episode_key = f"demo_{i}"
-            hdf5_complete = episode_key in grp and _complete_demo_group(
-                grp[episode_key]
-            )
+            hdf5_complete = episode_key in grp and _complete_demo_group(grp[episode_key])
             existing_episode = metainfo_json_dict.get(task_key, {}).get(episode_key)
             if resume and existing_episode is not None:
                 success = bool(existing_episode.get("success", False))
@@ -254,35 +243,19 @@ def main(args):
 
                 ep_data_grp = grp.create_group(episode_key)
                 obs_grp = ep_data_grp.create_group("obs")
-                obs_grp.create_dataset(
-                    "gripper_states", data=np.stack(gripper_states, axis=0)
-                )
-                obs_grp.create_dataset(
-                    "joint_states", data=np.stack(joint_states, axis=0)
-                )
+                obs_grp.create_dataset("gripper_states", data=np.stack(gripper_states, axis=0))
+                obs_grp.create_dataset("joint_states", data=np.stack(joint_states, axis=0))
                 obs_grp.create_dataset("ee_states", data=np.stack(ee_states, axis=0))
-                obs_grp.create_dataset(
-                    "ee_pos", data=np.stack(ee_states, axis=0)[:, :3]
-                )
-                obs_grp.create_dataset(
-                    "ee_ori", data=np.stack(ee_states, axis=0)[:, 3:]
-                )
-                obs_grp.create_dataset(
-                    "agentview_rgb", data=np.stack(agentview_images, axis=0)
-                )
-                obs_grp.create_dataset(
-                    "eye_in_hand_rgb", data=np.stack(eye_in_hand_images, axis=0)
-                )
+                obs_grp.create_dataset("ee_pos", data=np.stack(ee_states, axis=0)[:, :3])
+                obs_grp.create_dataset("ee_ori", data=np.stack(ee_states, axis=0)[:, 3:])
+                obs_grp.create_dataset("agentview_rgb", data=np.stack(agentview_images, axis=0))
+                obs_grp.create_dataset("eye_in_hand_rgb", data=np.stack(eye_in_hand_images, axis=0))
                 ep_data_grp.create_dataset("actions", data=actions)
                 ep_data_grp.create_dataset("states", data=np.stack(states))
-                ep_data_grp.create_dataset(
-                    "robot_states", data=np.stack(robot_states, axis=0)
-                )
+                ep_data_grp.create_dataset("robot_states", data=np.stack(robot_states, axis=0))
                 ep_data_grp.create_dataset("rewards", data=rewards)
                 ep_data_grp.create_dataset("dones", data=dones)
-                ep_data_grp.create_dataset(
-                    "noop_mask", data=np.asarray(noop_mask, dtype=np.bool_)
-                )
+                ep_data_grp.create_dataset("noop_mask", data=np.asarray(noop_mask, dtype=np.bool_))
                 ep_data_grp.create_dataset(
                     "source_indices", data=np.asarray(source_indices, dtype=np.int64)
                 )
@@ -303,9 +276,7 @@ def main(args):
             if episode_key not in metainfo_json_dict[task_key]:
                 metainfo_json_dict[task_key][episode_key] = {}
             metainfo_json_dict[task_key][episode_key]["success"] = bool(done)
-            metainfo_json_dict[task_key][episode_key]["initial_state"] = orig_states[
-                0
-            ].tolist()
+            metainfo_json_dict[task_key][episode_key]["initial_state"] = orig_states[0].tolist()
 
             # Write metainfo dict to JSON file
             # (We repeatedly overwrite, rather than doing this once at the end, just in case the script crashes midway)
@@ -323,15 +294,11 @@ def main(args):
         # Close HDF5 files
         orig_data_file.close()
         new_data_file.close()
-        print(
-            f"Saved regenerated demos for task '{task_description}' at: {new_data_path}"
-        )
+        print(f"Saved regenerated demos for task '{task_description}' at: {new_data_path}")
         tasks_pbar.update()
 
     tasks_pbar.close()
-    print(
-        f"Dataset regeneration complete! Saved new dataset at: {args.libero_target_dir}"
-    )
+    print(f"Dataset regeneration complete! Saved new dataset at: {args.libero_target_dir}")
     print(f"Saved metainfo JSON at: {metainfo_json_out_path}")
 
 

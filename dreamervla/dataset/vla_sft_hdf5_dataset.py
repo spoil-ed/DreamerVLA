@@ -45,9 +45,7 @@ def _list_demo_keys(data_group: h5py.Group) -> list[str]:
     keys = list(data_group.keys())
     return sorted(
         keys,
-        key=lambda key: int(_DEMO_RE.match(key).group(1))
-        if _DEMO_RE.match(key)
-        else key,
+        key=lambda key: int(_DEMO_RE.match(key).group(1)) if _DEMO_RE.match(key) else key,
     )
 
 
@@ -95,9 +93,7 @@ def _select_demo_keys(
         if count < 1:
             raise ValueError("demos_per_task must be >= 1 when set.")
         rng = random.Random(f"{int(demo_selection_seed)}:{file_path.name}")
-        return sorted(
-            rng.sample(ordered, k=min(count, len(ordered))), key=ordered.index
-        )
+        return sorted(rng.sample(ordered, k=min(count, len(ordered))), key=ordered.index)
     if max_demos_per_file is not None:
         return ordered[: int(max_demos_per_file)]
     return ordered
@@ -135,9 +131,7 @@ class VLASFTHDF5Dataset(Dataset):
         self.use_wrist_image = bool(use_wrist_image)
         self.use_proprio = bool(use_proprio)
         if self.image_keys != ("agentview_rgb",):
-            raise ValueError(
-                "OpenVLA-OFT mainline SFT requires image_keys=('agentview_rgb',)"
-            )
+            raise ValueError("OpenVLA-OFT mainline SFT requires image_keys=('agentview_rgb',)")
         if self.use_wrist_image:
             raise ValueError("OpenVLA-OFT mainline SFT does not include a wrist image")
         if self.use_proprio:
@@ -175,12 +169,8 @@ class VLASFTHDF5Dataset(Dataset):
                         if key not in obs_group:
                             raise KeyError(f"{file_path}:{demo_key} missing obs/{key}")
                     for index in range(length):
-                        self.samples.append(
-                            _HDF5Sample(str(file_path), demo_key, index)
-                        )
-                        if max_samples is not None and len(self.samples) >= int(
-                            max_samples
-                        ):
+                        self.samples.append(_HDF5Sample(str(file_path), demo_key, index))
+                        if max_samples is not None and len(self.samples) >= int(max_samples):
                             stop = True
                             break
                     if stop:
@@ -210,23 +200,17 @@ class VLASFTHDF5Dataset(Dataset):
         return len(self.samples)
 
     def _file(self, path: str) -> h5py.File:
-        return BaseDataset.cached_hdf5_file(
-            self._file_cache, path, self._hdf5_open_kwargs
-        )
+        return BaseDataset.cached_hdf5_file(self._file_cache, path, self._hdf5_open_kwargs)
 
     def _action_chunk(self, demo: h5py.Group, index: int) -> np.ndarray:
         actions_ds = demo["actions"]
         length = int(actions_ds.shape[0])
-        chunk = np.asarray(
-            actions_ds[index : index + self.action_horizon], dtype=np.float32
-        )
+        chunk = np.asarray(actions_ds[index : index + self.action_horizon], dtype=np.float32)
         if index + self.action_horizon > length:
             # Repeat the last frame for the tail past the episode end, matching
             # the previous `np.minimum(arange(...), length - 1)` clamping.
             pad = self.action_horizon - chunk.shape[0]
-            chunk = np.concatenate(
-                [chunk, np.repeat(chunk[-1:], pad, axis=0)], axis=0
-            )
+            chunk = np.concatenate([chunk, np.repeat(chunk[-1:], pad, axis=0)], axis=0)
         actions = _libero_oft_action_transform(chunk)
         return _normalize_bounds_q99(actions, self.dataset_statistics["action"])
 
@@ -244,24 +228,18 @@ class VLASFTHDF5Dataset(Dataset):
         task = _task_from_path(sample.file_path)
 
         images = [
-            Image.fromarray(
-                np.asarray(obs_group[self.image_keys[0]][sample.index], dtype=np.uint8)
-            )
+            Image.fromarray(np.asarray(obs_group[self.image_keys[0]][sample.index], dtype=np.uint8))
         ]
         if self.use_wrist_image:
             images.append(
                 Image.fromarray(
-                    np.asarray(
-                        obs_group[self.image_keys[1]][sample.index], dtype=np.uint8
-                    )
+                    np.asarray(obs_group[self.image_keys[1]][sample.index], dtype=np.uint8)
                 )
             )
         pixel_values = self.processor.image_processor.apply_transform(images[0])
         item: dict[str, Any] = {"pixel_values": pixel_values}
         if self.use_wrist_image:
-            item["pixel_values_wrist"] = self.processor.image_processor.apply_transform(
-                images[1]
-            )
+            item["pixel_values_wrist"] = self.processor.image_processor.apply_transform(images[1])
 
         actions = self._action_chunk(demo, sample.index)
         current_action_string = self.action_tokenizer(actions[0])
@@ -270,9 +248,7 @@ class VLASFTHDF5Dataset(Dataset):
         action_chunk_len = len(action_chunk_string)
 
         prompt_builder = self.prompt_builder_cls("openvla")
-        prompt_builder.add_turn(
-            "human", f"What action should the robot take to {task}?"
-        )
+        prompt_builder.add_turn("human", f"What action should the robot take to {task}?")
         prompt_builder.add_turn("gpt", action_chunk_string)
         input_ids = self.processor.tokenizer(
             prompt_builder.get_prompt(), add_special_tokens=True
@@ -333,9 +309,7 @@ class VLASFTHDF5DatasetFactory:
         self.use_wrist_image = bool(use_wrist_image)
         self.use_proprio = bool(use_proprio)
         if self.image_keys != ("agentview_rgb",):
-            raise ValueError(
-                "OpenVLA-OFT mainline SFT requires image_keys=('agentview_rgb',)"
-            )
+            raise ValueError("OpenVLA-OFT mainline SFT requires image_keys=('agentview_rgb',)")
         if self.use_wrist_image:
             raise ValueError("OpenVLA-OFT mainline SFT does not include a wrist image")
         if self.use_proprio:

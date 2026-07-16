@@ -26,10 +26,7 @@ def test_oft_rollout_bundle_wires_decoder_and_extractor(monkeypatch) -> None:
             self.image_keys = image_keys
 
         def predict_batch(self, preps):
-            return [
-                ([np.ones(7, np.float32)] * 8, np.zeros(8, np.float16))
-                for _ in preps
-            ]
+            return [([np.ones(7, np.float32)] * 8, np.zeros(8, np.float16)) for _ in preps]
 
     class _FakeExtractor:
         def __init__(self, policy, **kw) -> None:

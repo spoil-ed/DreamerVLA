@@ -16,16 +16,12 @@ _GOLDEN_PARAM_3EPOCH = 0.4701790511608124
 
 def test_outcome_step_gradient_matches_golden():
     grad, _ = _run_update(micro_batch_starts=0)
-    assert torch.allclose(
-        grad, torch.tensor(_GOLDEN_GRAD_1EPOCH), atol=1e-7
-    ), grad.item()
+    assert torch.allclose(grad, torch.tensor(_GOLDEN_GRAD_1EPOCH), atol=1e-7), grad.item()
 
 
 def test_outcome_step_multiepoch_param_matches_golden():
     _, param = _run_update(micro_batch_starts=0, update_epochs=3, lr=0.05)
-    assert torch.allclose(
-        param, torch.tensor(_GOLDEN_PARAM_3EPOCH), atol=1e-7
-    ), param.item()
+    assert torch.allclose(param, torch.tensor(_GOLDEN_PARAM_3EPOCH), atol=1e-7), param.item()
 
 
 def test_lumos_imaginer_satisfies_protocol():

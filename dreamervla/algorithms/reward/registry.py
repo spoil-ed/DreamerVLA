@@ -23,9 +23,7 @@ def register_reward_model(model: RewardModel, *, aliases: Iterable[str] = ()) ->
     for key in keys:
         existing = _REWARD_MODELS.get(key)
         if existing is not None and existing is not model:
-            raise ValueError(
-                f"Reward model `{key}` is already registered to `{existing.name}`."
-            )
+            raise ValueError(f"Reward model `{key}` is already registered to `{existing.name}`.")
     for key in keys:
         _REWARD_MODELS[key] = model
     return model

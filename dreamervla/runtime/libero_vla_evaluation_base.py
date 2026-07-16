@@ -38,13 +38,17 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _select_eval_render_backend(root_cfg: DictConfig, eval_cfg: Any) -> str:
-    backend = str(
-        OmegaConf.select(
-            eval_cfg,
-            "render_backend",
-            default=OmegaConf.select(root_cfg, "render_backend", default="osmesa"),
+    backend = (
+        str(
+            OmegaConf.select(
+                eval_cfg,
+                "render_backend",
+                default=OmegaConf.select(root_cfg, "render_backend", default="osmesa"),
+            )
         )
-    ).strip().lower()
+        .strip()
+        .lower()
+    )
     if backend not in {"egl", "osmesa"}:
         raise ValueError(f"eval.render_backend must be 'egl' or 'osmesa', got {backend!r}")
     return backend
@@ -78,9 +82,7 @@ def _eval_render_gpu_pool(root_cfg: DictConfig, eval_cfg: Any, backend: str) -> 
     return []
 
 
-def _eval_render_regime_params(
-    root_cfg: DictConfig, eval_cfg: Any
-) -> tuple[str, int, list[int]]:
+def _eval_render_regime_params(root_cfg: DictConfig, eval_cfg: Any) -> tuple[str, int, list[int]]:
     """Resolve (backend, shard_id, gpu_pool) for the LIBERO render regime.
 
     Used to hand the render regime to a subprocess env (EvalSubprocEnv) so the
@@ -129,9 +131,7 @@ def build_libero_env_cfg(
     """Assemble the LiberoEnv DictConfig from the Hydra eval block."""
     libero_env_cfg = OmegaConf.select(eval_cfg, "libero_env", default=None)
     if libero_env_cfg is None:
-        raise ValueError(
-            "eval.libero_env config block is required for eval.scheme=rlinf_chunk"
-        )
+        raise ValueError("eval.libero_env config block is required for eval.scheme=rlinf_chunk")
     return OmegaConf.create(
         {
             "task_suite_name": str(
@@ -240,25 +240,17 @@ class LIBEROVLAEvaluationBase(BaseRunner):
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         if output_dir is None:
             output_dir = str(
-                OmegaConf.select(
-                    config, "training.out_dir", default=self.default_output_dir
-                )
+                OmegaConf.select(config, "training.out_dir", default=self.default_output_dir)
             )
         super().__init__(config, output_dir=output_dir)
 
         self.distributed = NopretokenizeSFTDistributedHelper.initialize(
-            strategy=str(
-                OmegaConf.select(config, "training.distributed_strategy", default="ddp")
-            ),
+            strategy=str(OmegaConf.select(config, "training.distributed_strategy", default="ddp")),
             fsdp_mixed_precision=str(
-                OmegaConf.select(
-                    config, "training.fsdp_mixed_precision", default="bf16"
-                )
+                OmegaConf.select(config, "training.fsdp_mixed_precision", default="bf16")
             ),
             enable_activation_checkpointing=bool(
-                OmegaConf.select(
-                    config, "training.enable_activation_checkpointing", default=True
-                )
+                OmegaConf.select(config, "training.enable_activation_checkpointing", default=True)
             ),
         )
         self.rank = self.distributed.rank
@@ -299,14 +291,8 @@ class LIBEROVLAEvaluationBase(BaseRunner):
         if key == "encoder" and self.encoder is not None:
             with self.distributed.model_state_dict_context(self.encoder.backbone):
                 return self.encoder.state_dict()
-        if (
-            key == "vla_optimizer"
-            and self.vla_optimizer is not None
-            and self.encoder is not None
-        ):
-            return self.distributed.optimizer_state_dict(
-                self.encoder.backbone, self.vla_optimizer
-            )
+        if key == "vla_optimizer" and self.vla_optimizer is not None and self.encoder is not None:
+            return self.distributed.optimizer_state_dict(self.encoder.backbone, self.vla_optimizer)
         return value.state_dict()
 
     def _save_checkpoint_sidecars(self, path: Path, payload: dict[str, Any]) -> None:
@@ -325,9 +311,7 @@ class LIBEROVLAEvaluationBase(BaseRunner):
                 str(hf_dir),
                 state_dict=hf_state_dict,
                 safe_serialization=bool(
-                    OmegaConf.select(
-                        self.cfg, "checkpoint.hf_safe_serialization", default=True
-                    )
+                    OmegaConf.select(self.cfg, "checkpoint.hf_safe_serialization", default=True)
                 ),
             )
         except TypeError:
@@ -354,9 +338,7 @@ class LIBEROVLAEvaluationBase(BaseRunner):
         return path
 
     @staticmethod
-    def _extract_backbone_state_for_hf(
-        payload: dict[str, Any]
-    ) -> dict[str, torch.Tensor] | None:
+    def _extract_backbone_state_for_hf(payload: dict[str, Any]) -> dict[str, torch.Tensor] | None:
         encoder_state = payload.get("state_dicts", {}).get("encoder")
         if not isinstance(encoder_state, dict):
             return None
@@ -420,11 +402,7 @@ class LIBEROVLAEvaluationBase(BaseRunner):
             with self.distributed.model_state_dict_context(self.encoder.backbone):
                 value.load_state_dict(state_dict, **kwargs)
             return
-        if (
-            key == "vla_optimizer"
-            and self.vla_optimizer is not None
-            and self.encoder is not None
-        ):
+        if key == "vla_optimizer" and self.vla_optimizer is not None and self.encoder is not None:
             self.distributed.load_optimizer_state_dict(
                 self.encoder.backbone, self.vla_optimizer, state_dict
             )
@@ -434,9 +412,7 @@ class LIBEROVLAEvaluationBase(BaseRunner):
     # ---- Validation loss evaluation (FSDP-compatible) ----
 
     @torch.no_grad()
-    def evaluate_val_loss(
-        self, val_dataloader: DataLoader, split_name: str
-    ) -> dict[str, float]:
+    def evaluate_val_loss(self, val_dataloader: DataLoader, split_name: str) -> dict[str, float]:
         """Compute VLA loss on a validation set. Runs on all ranks (FSDP-safe)."""
         self.encoder.eval()
         val_losses: list[float] = []
@@ -464,15 +440,10 @@ class LIBEROVLAEvaluationBase(BaseRunner):
 
         count = max(self.distributed.reduce_sum(len(val_losses)), 1.0)
         metrics = {
-            f"val_{split_name}_loss": self.distributed.reduce_sum(sum(val_losses))
+            f"val_{split_name}_loss": self.distributed.reduce_sum(sum(val_losses)) / count,
+            f"val_{split_name}_token_loss": self.distributed.reduce_sum(sum(val_token_losses))
             / count,
-            f"val_{split_name}_token_loss": self.distributed.reduce_sum(
-                sum(val_token_losses)
-            )
-            / count,
-            f"val_{split_name}_action_loss": self.distributed.reduce_sum(
-                sum(val_action_losses)
-            )
+            f"val_{split_name}_action_loss": self.distributed.reduce_sum(sum(val_action_losses))
             / count,
         }
         if self.distributed.is_main_process:
@@ -526,21 +497,15 @@ class LIBEROVLAEvaluationBase(BaseRunner):
         seed = int(protocol["seed"])
         num_steps_wait = int(protocol["num_steps_wait"])
         np.random.seed(seed)
-        task_suite_name = str(
-            OmegaConf.select(eval_cfg, "task_suite_name", default="libero_goal")
-        )
-        num_episodes = int(
-            OmegaConf.select(eval_cfg, "num_episodes_per_task", default=3)
-        )
+        task_suite_name = str(OmegaConf.select(eval_cfg, "task_suite_name", default="libero_goal"))
+        num_episodes = int(OmegaConf.select(eval_cfg, "num_episodes_per_task", default=3))
         action_steps = int(OmegaConf.select(eval_cfg, "action_steps", default=10))
         resolution = int(OmegaConf.select(self.cfg, "encoder.resolution", default=256))
         # History length must match training (`his` in processed_data_generate_convs.sh).
         # Training builds img_c = [prev_third, prev_wrist, cur_third, cur_wrist] (his=2).
         history_length = int(OmegaConf.select(eval_cfg, "history_length", default=2))
         save_video = bool(OmegaConf.select(eval_cfg, "save_video", default=False))
-        video_max_episodes = int(
-            OmegaConf.select(eval_cfg, "video_max_episodes", default=1)
-        )
+        video_max_episodes = int(OmegaConf.select(eval_cfg, "video_max_episodes", default=1))
         video_dir = os.path.join(self.output_dir, "videos")
 
         item_processor = self.encoder._build_processor(self.device)
@@ -559,9 +524,7 @@ class LIBEROVLAEvaluationBase(BaseRunner):
             task_start = int(OmegaConf.select(eval_cfg, "task_start", default=0))
             max_tasks = OmegaConf.select(eval_cfg, "max_tasks", default=None)
             task_stop = (
-                total_tasks
-                if max_tasks is None
-                else min(total_tasks, task_start + int(max_tasks))
+                total_tasks if max_tasks is None else min(total_tasks, task_start + int(max_tasks))
             )
             task_ids = list(range(task_start, task_stop))
         if not task_ids:
@@ -570,9 +533,7 @@ class LIBEROVLAEvaluationBase(BaseRunner):
             )
         max_steps_cfg = OmegaConf.select(eval_cfg, "max_steps", default=None)
         max_steps = int(
-            max_steps_cfg
-            if max_steps_cfg is not None
-            else TASK_MAX_STEPS.get(task_suite_name, 300)
+            max_steps_cfg if max_steps_cfg is not None else TASK_MAX_STEPS.get(task_suite_name, 300)
         )
         print(
             f"  [Eval] suite='{task_suite_name}' tasks={task_ids} "
@@ -586,13 +547,9 @@ class LIBEROVLAEvaluationBase(BaseRunner):
         backbone = self.distributed.unwrap_module(self.encoder.backbone)
 
         num_envs = int(OmegaConf.select(eval_cfg, "num_envs", default=1))
-        scheme = str(
-            OmegaConf.select(eval_cfg, "scheme", default="rlinf_chunk")
-        ).strip().lower()
+        scheme = str(OmegaConf.select(eval_cfg, "scheme", default="rlinf_chunk")).strip().lower()
         if scheme != "rlinf_chunk":
-            raise ValueError(
-                f"eval.scheme must be 'rlinf_chunk', got {scheme!r}"
-            )
+            raise ValueError(f"eval.scheme must be 'rlinf_chunk', got {scheme!r}")
         return self._evaluate_libero_rlinf_chunk(
             epoch=epoch,
             eval_cfg=eval_cfg,
@@ -615,9 +572,7 @@ class LIBEROVLAEvaluationBase(BaseRunner):
         for task_index, task_id in enumerate(task_ids):
             task = task_suite.get_task(task_id)
             initial_states = task_suite.get_task_init_states(task_id)
-            env, task_description = get_libero_env(
-                task, resolution=resolution, seed=seed
-            )
+            env, task_description = get_libero_env(task, resolution=resolution, seed=seed)
             n_eps = num_episodes
             print(
                 f'  [Eval] >>> Task {task_id} ({task_index + 1}/{len(task_ids)}) start: "{task_description}" '
@@ -691,17 +646,13 @@ class LIBEROVLAEvaluationBase(BaseRunner):
                             task_description,
                             action_steps,
                         )
-                        actions_buffer = select_libero_action_chunk(
-                            predicted, action_steps
-                        )
+                        actions_buffer = select_libero_action_chunk(predicted, action_steps)
 
                     if len(actions_buffer) == 0:
                         break
                     action = actions_buffer.pop(0)
                     if bool(
-                        OmegaConf.select(
-                            self.cfg, "eval.empty_cuda_cache_each_step", default=False
-                        )
+                        OmegaConf.select(self.cfg, "eval.empty_cuda_cache_each_step", default=False)
                     ):
                         gc.collect()
                         if torch.cuda.is_available():
@@ -725,9 +676,7 @@ class LIBEROVLAEvaluationBase(BaseRunner):
                     )
                 total_episodes += 1
                 self.console_record_success(bool(done))
-                self.console_progress(
-                    total_episodes, len(task_ids) * num_episodes, "eval"
-                )
+                self.console_progress(total_episodes, len(task_ids) * num_episodes, "eval")
                 ep_dt = time.time() - ep_t0
                 tag = "OK " if done else "FAIL"
                 # Reclaim any per-episode GPU/CPU memory leaked by the
@@ -823,16 +772,12 @@ class LIBEROVLAEvaluationBase(BaseRunner):
 
         # Render regime was already applied in-process by evaluate_libero
         # (_apply_libero_eval_render_regime); spawn children inherit it.
-        render_backend, _shard_id, _gpu_pool = _eval_render_regime_params(
-            self.cfg, eval_cfg
-        )
+        render_backend, _shard_id, _gpu_pool = _eval_render_regime_params(self.cfg, eval_cfg)
 
         total_episodes = len(task_ids) * int(num_episodes)
         n_envs = max(1, int(num_envs))
 
-        extractors = [
-            _EvalFrameHistoryExtractor(history_length) for _ in range(n_envs)
-        ]
+        extractors = [_EvalFrameHistoryExtractor(history_length) for _ in range(n_envs)]
         has_oft = False
         for slot_extractor in extractors:
             oft_slot = self._make_parallel_oft_slot_extractor()
@@ -881,9 +826,7 @@ class LIBEROVLAEvaluationBase(BaseRunner):
                 oft_extractor = prep.get("oft_extractor")
                 if oft_extractor is not None:
                     self._base_oft_extractor = oft_extractor
-                    self._libero_current_eval_context = {
-                        "env_step": int(prep.get("env_step", 0))
-                    }
+                    self._libero_current_eval_context = {"env_step": int(prep.get("env_step", 0))}
                 predicted = self._generate_actions(
                     backbone,
                     item_processor,
@@ -896,9 +839,7 @@ class LIBEROVLAEvaluationBase(BaseRunner):
                     np.stack(
                         [
                             np.asarray(a, dtype=np.float64)
-                            for a in select_libero_action_chunk(
-                                predicted, action_steps
-                            )
+                            for a in select_libero_action_chunk(predicted, action_steps)
                         ]
                     )
                 )
@@ -947,9 +888,7 @@ class LIBEROVLAEvaluationBase(BaseRunner):
         if callable(finalize_observer):
             observer_metrics = finalize_observer()
             if not isinstance(observer_metrics, dict):
-                raise TypeError(
-                    "_finalize_libero_eval_observer() must return a mapping"
-                )
+                raise TypeError("_finalize_libero_eval_observer() must return a mapping")
             metrics.update(observer_metrics)
         print(
             f"  [Eval] Epoch {epoch} task-mean success rate: {avg_success:.1%} "
@@ -979,9 +918,7 @@ class LIBEROVLAEvaluationBase(BaseRunner):
         for third_pil, wrist_pil in frame_history:
             img_c.extend([third_pil, wrist_pil])
         human_val = (
-            f"Finish the task: {task_description}."
-            + "<|state|>" * 1
-            + "<|image|>" * len(img_c)
+            f"Finish the task: {task_description}." + "<|state|>" * 1 + "<|image|>" * len(img_c)
         )
 
         conv = {
@@ -994,9 +931,7 @@ class LIBEROVLAEvaluationBase(BaseRunner):
         if isinstance(tokens, tuple):
             tokens = tokens[0]
 
-        input_ids = torch.tensor(
-            tokens, dtype=torch.int64, device=self.device
-        ).unsqueeze(0)
+        input_ids = torch.tensor(tokens, dtype=torch.int64, device=self.device).unsqueeze(0)
 
         # generate_action_head: generate one token (trigger), then use the
         # action MLP head to predict a full action sequence.  Only needs 1
@@ -1029,9 +964,7 @@ class LIBEROVLAEvaluationBase(BaseRunner):
         )
         if hasattr(backbone, "generate_dis_ma"):
             try:
-                action_sequences = backbone.generate_dis_ma(
-                    input_ids, generation_config_ma
-                )
+                action_sequences = backbone.generate_dis_ma(input_ids, generation_config_ma)
                 results = []
                 for seq in action_sequences:
                     if isinstance(seq, torch.Tensor):
@@ -1048,9 +981,7 @@ class LIBEROVLAEvaluationBase(BaseRunner):
 
     @staticmethod
     def _unnorm_action(action: np.ndarray) -> np.ndarray:
-        min_values = np.array(
-            [-0.9375, -0.9375, -0.9375, -0.24214286, -0.375, -0.36428571, -1.0]
-        )
+        min_values = np.array([-0.9375, -0.9375, -0.9375, -0.24214286, -0.375, -0.36428571, -1.0])
         max_values = np.array([0.9375, 0.9375, 0.9375, 0.34821429, 0.375, 0.375, 1.0])
         if action.shape[0] > 7:
             action = action[:7]
@@ -1058,9 +989,7 @@ class LIBEROVLAEvaluationBase(BaseRunner):
 
     @staticmethod
     def _unnorm_actions(actions: np.ndarray) -> np.ndarray:
-        min_values = np.array(
-            [-0.9375, -0.9375, -0.9375, -0.24214286, -0.375, -0.36428571, -1.0]
-        )
+        min_values = np.array([-0.9375, -0.9375, -0.9375, -0.24214286, -0.375, -0.36428571, -1.0])
         max_values = np.array([0.9375, 0.9375, 0.9375, 0.34821429, 0.375, 0.375, 1.0])
         if actions.ndim == 2 and actions.shape[1] > 7:
             actions = actions[:, :7]
@@ -1077,9 +1006,7 @@ class LIBEROVLAEvaluationBase(BaseRunner):
         dataset: BaseDataset = hydra.utils.instantiate(cfg.dataset)
         assert isinstance(dataset, BaseDataset)
         dataset_action_horizon = getattr(dataset, "action_horizon", None)
-        encoder_time_horizon = int(
-            OmegaConf.select(cfg, "encoder.time_horizon", default=0) or 0
-        )
+        encoder_time_horizon = int(OmegaConf.select(cfg, "encoder.time_horizon", default=0) or 0)
         if dataset_action_horizon is not None and encoder_time_horizon:
             if int(dataset_action_horizon) != encoder_time_horizon:
                 raise ValueError(
@@ -1099,16 +1026,10 @@ class LIBEROVLAEvaluationBase(BaseRunner):
 
         encoder_cfg = self._build_trainable_encoder_cfg(cfg)
         self.encoder = hydra.utils.instantiate(encoder_cfg).to(self.device)
-        if bool(
-            OmegaConf.select(cfg, "training.vla_train_action_head_only", default=False)
-        ):
-            matched = self._set_trainable_encoder_parameters(
-                self.encoder, patterns=["action_head"]
-            )
+        if bool(OmegaConf.select(cfg, "training.vla_train_action_head_only", default=False)):
+            matched = self._set_trainable_encoder_parameters(self.encoder, patterns=["action_head"])
             if matched == 0:
-                raise ValueError(
-                    "No trainable parameters matched pattern `action_head`."
-                )
+                raise ValueError("No trainable parameters matched pattern `action_head`.")
         self.distributed.wrap_encoder(self.encoder)
         vla_optim_cfg = OmegaConf.select(cfg, "optim.vla")
         if vla_optim_cfg is None:
@@ -1116,16 +1037,11 @@ class LIBEROVLAEvaluationBase(BaseRunner):
         self.vla_optimizer = build_optimizer(self.encoder, vla_optim_cfg)
 
         # configure ema
-        if (
-            bool(OmegaConf.select(cfg, "training.use_ema", default=False))
-            and self.vla_ema is None
-        ):
+        if bool(OmegaConf.select(cfg, "training.use_ema", default=False)) and self.vla_ema is None:
             self.vla_ema = EMAHelper(
                 self.encoder,
                 decay=float(OmegaConf.select(cfg, "ema.decay", default=0.9999)),
-                update_after_step=int(
-                    OmegaConf.select(cfg, "ema.update_after_step", default=0)
-                ),
+                update_after_step=int(OmegaConf.select(cfg, "ema.update_after_step", default=0)),
             )
 
         # resume training
@@ -1134,9 +1050,7 @@ class LIBEROVLAEvaluationBase(BaseRunner):
             self.epoch += 1
             self.global_step += 1
             if self.distributed.is_main_process:
-                print(
-                    f"  [resume] advanced to epoch={self.epoch} global_step={self.global_step}"
-                )
+                print(f"  [resume] advanced to epoch={self.epoch} global_step={self.global_step}")
 
         # After optimizer state restore, param_groups may lack `initial_lr`
         # (LambdaLR requires it when last_epoch > -1).
@@ -1150,9 +1064,7 @@ class LIBEROVLAEvaluationBase(BaseRunner):
         lr_scheduler = get_scheduler(
             str(OmegaConf.select(cfg, "training.lr_scheduler", default="constant")),
             optimizer=self.vla_optimizer,
-            num_warmup_steps=int(
-                OmegaConf.select(cfg, "training.lr_warmup_steps", default=0)
-            ),
+            num_warmup_steps=int(OmegaConf.select(cfg, "training.lr_warmup_steps", default=0)),
             num_training_steps=(len(train_dataloader) * num_epochs)
             // int(cfg.training.gradient_accumulate_every),
             last_epoch=self.global_step - 1,
@@ -1186,36 +1098,32 @@ class LIBEROVLAEvaluationBase(BaseRunner):
 
                     self.encoder.train()
                     for batch_idx, batch in enumerate(train_dataloader):
-                        has_tokenized = isinstance(
-                            batch.get("input_ids"), list
-                        ) and isinstance(batch.get("labels"), list)
+                        has_tokenized = isinstance(batch.get("input_ids"), list) and isinstance(
+                            batch.get("labels"), list
+                        )
                         if not has_tokenized:
                             continue
 
-                        vla_loss_dict = (
-                            self.encoder.compute_action_sft_loss_from_tokenized(
-                                input_ids_list=batch["input_ids"],
-                                labels_list=batch["labels"],
-                                token_loss_coef=float(
-                                    OmegaConf.select(
-                                        cfg,
-                                        "training.vla_token_loss_coef",
-                                        default=1.0,
-                                    )
-                                ),
-                                action_loss_coef=float(
-                                    OmegaConf.select(
-                                        cfg,
-                                        "training.vla_action_loss_coef",
-                                        default=1.0,
-                                    )
-                                ),
-                            )
+                        vla_loss_dict = self.encoder.compute_action_sft_loss_from_tokenized(
+                            input_ids_list=batch["input_ids"],
+                            labels_list=batch["labels"],
+                            token_loss_coef=float(
+                                OmegaConf.select(
+                                    cfg,
+                                    "training.vla_token_loss_coef",
+                                    default=1.0,
+                                )
+                            ),
+                            action_loss_coef=float(
+                                OmegaConf.select(
+                                    cfg,
+                                    "training.vla_action_loss_coef",
+                                    default=1.0,
+                                )
+                            ),
                         )
                         vla_raw_loss = vla_loss_dict["loss"]
-                        vla_loss = (
-                            vla_raw_loss / cfg.training.gradient_accumulate_every
-                        )
+                        vla_loss = vla_raw_loss / cfg.training.gradient_accumulate_every
                         vla_loss.backward()
 
                         grad_clip_norm = cfg.optim.get("grad_clip_norm")
@@ -1226,9 +1134,7 @@ class LIBEROVLAEvaluationBase(BaseRunner):
 
                         self.vla_optimizer.step()
                         self.vla_optimizer.zero_grad(
-                            set_to_none=bool(
-                                cfg.optim.get("zero_grad_set_to_none", True)
-                            )
+                            set_to_none=bool(cfg.optim.get("zero_grad_set_to_none", True))
                         )
                         lr_scheduler.step()
 
@@ -1237,26 +1143,16 @@ class LIBEROVLAEvaluationBase(BaseRunner):
                             self.vla_ema.step(self.encoder)
 
                         train_vla_losses.append(float(vla_raw_loss.item()))
-                        train_vla_token_losses.append(
-                            float(vla_loss_dict["token_loss"].item())
-                        )
-                        train_vla_action_losses.append(
-                            float(vla_loss_dict["action_loss"].item())
-                        )
+                        train_vla_token_losses.append(float(vla_loss_dict["token_loss"].item()))
+                        train_vla_action_losses.append(float(vla_loss_dict["action_loss"].item()))
 
                         local_step_metrics = {
                             "train_vla_loss": float(vla_raw_loss.item()),
-                            "train_vla_token_loss": float(
-                                vla_loss_dict["token_loss"].item()
-                            ),
-                            "train_vla_action_loss": float(
-                                vla_loss_dict["action_loss"].item()
-                            ),
+                            "train_vla_token_loss": float(vla_loss_dict["token_loss"].item()),
+                            "train_vla_action_loss": float(vla_loss_dict["action_loss"].item()),
                             "lr": float(lr_scheduler.get_last_lr()[0]),
                         }
-                        reduced = self.distributed.reduce_mean_dict(
-                            local_step_metrics
-                        )
+                        reduced = self.distributed.reduce_mean_dict(local_step_metrics)
                         step_log = {
                             **reduced,
                             "global_step": self.global_step,
@@ -1274,9 +1170,8 @@ class LIBEROVLAEvaluationBase(BaseRunner):
                             self.log_metrics(step_log, step=self.global_step)
                             self.global_step += 1
 
-                        if (
-                            cfg.training.max_train_steps is not None
-                            and batch_idx >= (cfg.training.max_train_steps - 1)
+                        if cfg.training.max_train_steps is not None and batch_idx >= (
+                            cfg.training.max_train_steps - 1
                         ):
                             reached_max_steps = True
                             break
@@ -1286,19 +1181,15 @@ class LIBEROVLAEvaluationBase(BaseRunner):
                         self.epoch += 1
                         continue
 
-                    vla_count = max(
-                        self.distributed.reduce_sum(len(train_vla_losses)), 1.0
-                    )
+                    vla_count = max(self.distributed.reduce_sum(len(train_vla_losses)), 1.0)
                     step_log["train_vla_loss"] = (
                         self.distributed.reduce_sum(sum(train_vla_losses)) / vla_count
                     )
                     step_log["train_vla_token_loss"] = (
-                        self.distributed.reduce_sum(sum(train_vla_token_losses))
-                        / vla_count
+                        self.distributed.reduce_sum(sum(train_vla_token_losses)) / vla_count
                     )
                     step_log["train_vla_action_loss"] = (
-                        self.distributed.reduce_sum(sum(train_vla_action_losses))
-                        / vla_count
+                        self.distributed.reduce_sum(sum(train_vla_action_losses)) / vla_count
                     )
 
                     self.console_metrics(
@@ -1312,9 +1203,7 @@ class LIBEROVLAEvaluationBase(BaseRunner):
                     )
 
                     # ---- Validation loss eval at end of epoch ----
-                    eval_every = int(
-                        OmegaConf.select(cfg, "eval.eval_every", default=1)
-                    )
+                    eval_every = int(OmegaConf.select(cfg, "eval.eval_every", default=1))
                     if val_dataloaders and (self.epoch % eval_every) == 0:
                         for split_name, val_dl in val_dataloaders.items():
                             val_metrics = self.evaluate_val_loss(val_dl, split_name)
@@ -1327,15 +1216,12 @@ class LIBEROVLAEvaluationBase(BaseRunner):
                         if cfg.checkpoint.save_last_ckpt:
                             self.save_checkpoint()
                         metric_dict = {
-                            key.replace("/", "_"): value
-                            for key, value in step_log.items()
+                            key.replace("/", "_"): value for key, value in step_log.items()
                         }
                         topk_ckpt_path = None
                         if self.distributed.is_main_process:
                             topk_ckpt_path = topk_manager.get_ckpt_path(metric_dict)
-                        topk_ckpt_path = self.distributed.broadcast_object(
-                            topk_ckpt_path
-                        )
+                        topk_ckpt_path = self.distributed.broadcast_object(topk_ckpt_path)
                         if topk_ckpt_path is not None:
                             self.save_checkpoint(path=topk_ckpt_path)
 

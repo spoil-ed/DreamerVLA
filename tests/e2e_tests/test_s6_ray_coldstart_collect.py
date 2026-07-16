@@ -70,7 +70,10 @@ def test_ray_coldstart_runner_writes_reward_and_sidecar(tmp_path) -> None:
     hidden_path = hidden_dir / "ray_shard_000.hdf5"
     assert reward_path.is_file()
     assert hidden_path.is_file()
-    assert json.loads((hidden_dir / "preprocess_config.json").read_text())["hidden_key"] == "obs_embedding"
+    assert (
+        json.loads((hidden_dir / "preprocess_config.json").read_text())["hidden_key"]
+        == "obs_embedding"
+    )
 
     with h5py.File(reward_path, "r") as reward_f, h5py.File(hidden_path, "r") as hidden_f:
         assert reward_f["data"].attrs["num_demos"] == "4"

@@ -23,11 +23,7 @@ def test_validation_workflow_registers_only_exact_hidden_token_check() -> None:
     assert cfg.steps[0].env.TASK == "{item}"
     assert not (root / "dreamervla" / "preprocess" / "validate_libero_data_prep.py").exists()
     assert not (
-        root
-        / "configs"
-        / "scripts"
-        / "preprocess"
-        / "validate_libero_data_prep.yaml"
+        root / "configs" / "scripts" / "preprocess" / "validate_libero_data_prep.yaml"
     ).exists()
 
 

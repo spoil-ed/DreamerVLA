@@ -85,8 +85,7 @@ class LatentSuccessClassifier(nn.Module):
             configured_token_count == 56 and configured_token_dim == 1024
         ):
             raise ValueError(
-                "the removed 56x1024 observation interface is closed; "
-                "use hidden_token [256,4096]"
+                "the removed 56x1024 observation interface is closed; use hidden_token [256,4096]"
             )
         self.proprio_dim = int(getattr(cfg, "proprio_dim", 0) or 0)
         self.proprio_emb_dim = int(getattr(cfg, "proprio_emb_dim", 0) or 0)
@@ -94,9 +93,7 @@ class LatentSuccessClassifier(nn.Module):
         if self.proprio_emb_dim < 0:
             raise ValueError(f"proprio_emb_dim must be >= 0, got {self.proprio_emb_dim}")
         if self.num_proprio_repeat < 1:
-            raise ValueError(
-                f"num_proprio_repeat must be >= 1, got {self.num_proprio_repeat}"
-            )
+            raise ValueError(f"num_proprio_repeat must be >= 1, got {self.num_proprio_repeat}")
         self.proprio_condition_dim = self.proprio_emb_dim * self.num_proprio_repeat
         if self.proprio_condition_dim > 0 and self.proprio_dim < 1:
             raise ValueError("proprio_emb_dim>0 requires proprio_dim>=1")
@@ -119,17 +116,14 @@ class LatentSuccessClassifier(nn.Module):
         if cfg.latent_dim is None and str(getattr(cfg, "token_pool", "flat")) == "mean":
             cfg.latent_dim = int(self.state_token_dim)
         if cfg.latent_dim is None:
-            raise ValueError(
-                "latent_dim must be explicit; inference from action slots is removed"
-            )
+            raise ValueError("latent_dim must be explicit; inference from action slots is removed")
         if int(cfg.latent_dim) == 56 * 1024:
             raise ValueError(
-                "the removed 56x1024 observation interface is closed; "
-                "use hidden_token [256,4096]"
+                "the removed 56x1024 observation interface is closed; use hidden_token [256,4096]"
             )
-        if (
-            self.supports_proprio_conditioning or self.supports_language_conditioning
-        ) and int(cfg.latent_dim) != int(self.state_token_dim):
+        if (self.supports_proprio_conditioning or self.supports_language_conditioning) and int(
+            cfg.latent_dim
+        ) != int(self.state_token_dim):
             raise ValueError(
                 "LatentSuccessClassifier WM conditioning requires "
                 "latent_dim == token_dim + proprio_emb_dim * num_proprio_repeat "
@@ -204,9 +198,7 @@ class LatentSuccessClassifier(nn.Module):
             self.frame_pos_embed = nn.Parameter(
                 torch.zeros(1, int(cfg.window), 1, int(cfg.hidden_dim))
             )
-            self.token_pos_embed = nn.Parameter(
-                torch.zeros(1, 1, token_count, int(cfg.hidden_dim))
-            )
+            self.token_pos_embed = nn.Parameter(torch.zeros(1, 1, token_count, int(cfg.hidden_dim)))
             self.proprio_token_proj = (
                 nn.Linear(self.proprio_condition_dim, int(cfg.hidden_dim))
                 if self.supports_proprio_conditioning
@@ -272,9 +264,7 @@ class LatentSuccessClassifier(nn.Module):
                 nn.Linear(cfg.hidden_dim, self.output_dim),
             )
         else:
-            raise ValueError(
-                f"unknown head_type: {ht!r} (spatial_tf|transformer|linear|mlp2)"
-            )
+            raise ValueError(f"unknown head_type: {ht!r} (spatial_tf|transformer|linear|mlp2)")
 
     def _encode_proprio(self, proprio: torch.Tensor | None, *, window: int) -> torch.Tensor | None:
         if not self.supports_proprio_conditioning:
@@ -282,7 +272,9 @@ class LatentSuccessClassifier(nn.Module):
         if proprio is None:
             raise ValueError("proprio is required when proprio_emb_dim>0")
         if proprio.ndim != 3:
-            raise ValueError(f"proprio must be [B,W,{self.proprio_dim}], got {tuple(proprio.shape)}")
+            raise ValueError(
+                f"proprio must be [B,W,{self.proprio_dim}], got {tuple(proprio.shape)}"
+            )
         if int(proprio.shape[1]) != int(window) or int(proprio.shape[-1]) != self.proprio_dim:
             raise ValueError(
                 f"proprio shape mismatch: got {tuple(proprio.shape)}, "
@@ -350,17 +342,13 @@ class LatentSuccessClassifier(nn.Module):
             latent_window = latent_window.reshape(
                 latent_window.shape[0], latent_window.shape[1], tc, -1
             ).mean(dim=2)
-        proprio_emb = self._encode_proprio(
-            proprio, window=int(latent_window.shape[1])
-        )
+        proprio_emb = self._encode_proprio(proprio, window=int(latent_window.shape[1]))
         lang_proj = self._project_lang(lang_emb)
         parts = [latent_window]
         if proprio_emb is not None:
             parts.append(proprio_emb.to(device=latent_window.device, dtype=latent_window.dtype))
         if lang_proj is not None:
-            lang_window = lang_proj[:, None, :].expand(
-                -1, latent_window.shape[1], -1
-            )
+            lang_window = lang_proj[:, None, :].expand(-1, latent_window.shape[1], -1)
             parts.append(lang_window.to(device=latent_window.device, dtype=latent_window.dtype))
         out = torch.cat(parts, dim=-1) if len(parts) > 1 else latent_window
         if int(out.shape[-1]) != int(self.cfg.latent_dim):
@@ -559,9 +547,7 @@ class LatentSuccessClassifier(nn.Module):
                               the classifier's NATIVE unit.
         """
         if latent_video.ndim < 3:
-            raise ValueError(
-                f"latent_video must be [B,T,...], got {tuple(latent_video.shape)}"
-            )
+            raise ValueError(f"latent_video must be [B,T,...], got {tuple(latent_video.shape)}")
         B, T = int(latent_video.shape[0]), int(latent_video.shape[1])
         W = self.cfg.window
         device = latent_video.device
@@ -572,9 +558,7 @@ class LatentSuccessClassifier(nn.Module):
         # don't pool twice. Pooling at generation time with the same chunk_pool
         # is identical to ``_chunk_aggregate`` here, so the scan is unchanged.
         scan_video = (
-            latent_video
-            if (gran != "chunk" or pre_pooled)
-            else self._chunk_aggregate(latent_video)
+            latent_video if (gran != "chunk" or pre_pooled) else self._chunk_aggregate(latent_video)
         )
         scan_proprio = None
         if proprio is not None:
@@ -588,9 +572,7 @@ class LatentSuccessClassifier(nn.Module):
                     f"match latent_video {(B, T)}"
                 )
             scan_proprio = (
-                proprio
-                if (gran != "chunk" or pre_pooled)
-                else self._chunk_aggregate(proprio)
+                proprio if (gran != "chunk" or pre_pooled) else self._chunk_aggregate(proprio)
             )
 
         T_scan = scan_video.shape[1]
@@ -602,9 +584,7 @@ class LatentSuccessClassifier(nn.Module):
         first_end = max(W, int(min_steps) + W)
         for end in range(first_end, T_scan + 1, stride):
             window = scan_video[:, end - W : end]
-            proprio_window = (
-                scan_proprio[:, end - W : end] if scan_proprio is not None else None
-            )
+            proprio_window = scan_proprio[:, end - W : end] if scan_proprio is not None else None
             logits = self.forward(
                 window,
                 task_ids=task_ids,

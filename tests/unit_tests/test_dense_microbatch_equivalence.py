@@ -26,11 +26,7 @@ ACTION_DIM = 1
 
 def test_dense_ppo_messages_use_role_based_wm_wording():
     source = (
-        Path(__file__).resolve().parents[2]
-        / "dreamervla"
-        / "algorithms"
-        / "ppo"
-        / "dense.py"
+        Path(__file__).resolve().parents[2] / "dreamervla" / "algorithms" / "ppo" / "dense.py"
     ).read_text(encoding="utf-8")
     assert ("DINO" + "-WM") not in source
     assert ("dino" + "_wm") not in source.lower()
@@ -65,9 +61,7 @@ class _DetWM(torch.nn.Module):
             hidden = latent["hidden"] if isinstance(latent, dict) else latent
             act = batch["actions"]  # [B, K, A]
             chunk = hidden.unsqueeze(1).repeat(1, act.shape[1], 1)
-            chunk = chunk + act.reshape(act.shape[0], act.shape[1], -1).mean(
-                dim=2, keepdim=True
-            )
+            chunk = chunk + act.reshape(act.shape[0], act.shape[1], -1).mean(dim=2, keepdim=True)
             return {
                 "hidden_seq": chunk,
                 "history": hidden,
@@ -162,9 +156,7 @@ def _run_dense(micro_batch_starts, *, update_epochs=1, lr=0.0, bc_scale=0.0, wit
         obs=_obs(),
         device=torch.device("cpu"),
         algorithm_cfg=_base_cfg(micro_batch_starts, update_epochs, bc_scale=bc_scale),
-        optim_cfg=OmegaConf.create(
-            {"grad_clip_norm": 1e9, "zero_grad_set_to_none": True}
-        ),
+        optim_cfg=OmegaConf.create({"grad_clip_norm": 1e9, "zero_grad_set_to_none": True}),
         ref_policy=ref_policy,
     )
     return policy.action_value.grad.clone(), policy.action_value.detach().clone(), policy
@@ -181,9 +173,7 @@ def _run_dense_chunk(micro_batch_starts, *, update_epochs=1, lr=0.0):
         obs=_obs(),
         device=torch.device("cpu"),
         algorithm_cfg=_base_cfg(micro_batch_starts, update_epochs),
-        optim_cfg=OmegaConf.create(
-            {"grad_clip_norm": 1e9, "zero_grad_set_to_none": True}
-        ),
+        optim_cfg=OmegaConf.create({"grad_clip_norm": 1e9, "zero_grad_set_to_none": True}),
         ref_policy=None,
     )
     return policy.action_value.grad.clone(), policy.action_value.detach().clone(), policy

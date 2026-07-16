@@ -33,8 +33,7 @@ def load_component_checkpoint(
         module = load_module_pretrained(str(checkpoint_path), map_location="cpu")
         return LoadedComponentCheckpoint(
             state_dict={
-                str(key): value.detach().cpu()
-                for key, value in module.state_dict().items()
+                str(key): value.detach().cpu() for key, value in module.state_dict().items()
             },
             metadata={
                 "checkpoint_path": str(checkpoint_path),

@@ -170,16 +170,17 @@ def test_failed_episode_start_conditions_filter_failures_and_repeat() -> None:
     failed_1 = _episode(task_id=1, length=3, success=False)
     for value, episode in ((99, successful), (10, failed_0), (20, failed_1)):
         for step_index, step in enumerate(episode):
-            step["obs_embedding"] = np.full(
-                (2,), value + step_index, dtype=np.float32
-            )
+            step["obs_embedding"] = np.full((2,), value + step_index, dtype=np.float32)
             step["lang_emb"] = np.full((3,), value, dtype=np.float32)
         replay.add_episode(episode)
 
-    assert replay.eligible_initial_condition_count(
-        selector="failed_episode_start",
-        task_ids=(0, 1),
-    ) == 2
+    assert (
+        replay.eligible_initial_condition_count(
+            selector="failed_episode_start",
+            task_ids=(0, 1),
+        )
+        == 2
+    )
     batch = replay.sample_initial_conditions(
         6,
         task_ids=(0, 1),
@@ -197,9 +198,7 @@ def test_failed_episode_start_conditions_do_not_fallback_to_success() -> None:
     replay = OnlineReplay(capacity=100, sequence_length=1, task_ids=(0,))
     replay.add_episode(_episode(task_id=0, length=3, success=True))
 
-    assert replay.eligible_initial_condition_count(
-        selector="failed_episode_start"
-    ) == 0
+    assert replay.eligible_initial_condition_count(selector="failed_episode_start") == 0
     with pytest.raises(RuntimeError, match="no failed episodes"):
         replay.sample_initial_conditions(
             1,
@@ -417,9 +416,7 @@ def test_online_replay_classifier_wmpo_balanced_batches_mix_success_and_failure(
     for success, task_id in ((True, 2), (False, 9)):
         episode = _episode(task_id=task_id, length=12, success=success)
         for idx, step in enumerate(episode):
-            step["obs_embedding"] = np.full(
-                (1,), float(task_id * 100 + idx), dtype=np.float32
-            )
+            step["obs_embedding"] = np.full((1,), float(task_id * 100 + idx), dtype=np.float32)
         replay.add_episode(episode)
 
     batch = replay.sample_classifier_windows(
@@ -715,21 +712,27 @@ def test_online_replay_classifier_evidence_readiness_requires_pos_and_neg() -> N
     replay = OnlineReplay(capacity=100, sequence_length=3)
     replay.add_episode(_episode(task_id=0, length=6, success=True))
 
-    assert replay.ready_for_training(
-        min_transitions=3,
-        task_ids=(0,),
-        min_episodes_per_task=1,
-        require_classifier_evidence=True,
-    ) is False
+    assert (
+        replay.ready_for_training(
+            min_transitions=3,
+            task_ids=(0,),
+            min_episodes_per_task=1,
+            require_classifier_evidence=True,
+        )
+        is False
+    )
 
     replay.add_episode(_episode(task_id=0, length=6, success=False))
 
-    assert replay.ready_for_training(
-        min_transitions=3,
-        task_ids=(0,),
-        min_episodes_per_task=1,
-        require_classifier_evidence=True,
-    ) is True
+    assert (
+        replay.ready_for_training(
+            min_transitions=3,
+            task_ids=(0,),
+            min_episodes_per_task=1,
+            require_classifier_evidence=True,
+        )
+        is True
+    )
 
 
 def test_online_replay_readiness_requires_sampleable_window_budget() -> None:

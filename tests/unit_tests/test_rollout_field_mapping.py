@@ -81,14 +81,14 @@ def _load_demo() -> dict:
     with h5py.File(DEMO_PATH, "r") as f:
         d = f["data"]["demo_0"]
         return {
-            "init_state":    d.attrs["init_state"][:],
-            "states":        d["states"][:],
-            "robot_states":  d["robot_states"][:],
-            "ee_pos":        d["obs"]["ee_pos"][:],
-            "ee_ori":        d["obs"]["ee_ori"][:],
-            "ee_states":     d["obs"]["ee_states"][:],
-            "gripper_states":d["obs"]["gripper_states"][:],
-            "joint_states":  d["obs"]["joint_states"][:],
+            "init_state": d.attrs["init_state"][:],
+            "states": d["states"][:],
+            "robot_states": d["robot_states"][:],
+            "ee_pos": d["obs"]["ee_pos"][:],
+            "ee_ori": d["obs"]["ee_ori"][:],
+            "ee_states": d["obs"]["ee_states"][:],
+            "gripper_states": d["obs"]["gripper_states"][:],
+            "joint_states": d["obs"]["joint_states"][:],
         }
 
 
@@ -102,17 +102,17 @@ def test_demo_schema_shapes_and_dtypes() -> None:
     demo = _load_demo()
 
     T = LIBERO_GOAL_T
-    assert demo["states"].shape        == (T, LIBERO_GOAL_S), "states shape"
-    assert demo["robot_states"].shape  == (T, 9),             "robot_states shape"
-    assert demo["ee_pos"].shape        == (T, 3),             "ee_pos shape"
-    assert demo["ee_ori"].shape        == (T, 3),             "ee_ori shape"
-    assert demo["ee_states"].shape     == (T, 6),             "ee_states shape"
-    assert demo["gripper_states"].shape== (T, 2),             "gripper_states shape"
-    assert demo["joint_states"].shape  == (T, 7),             "joint_states shape"
+    assert demo["states"].shape == (T, LIBERO_GOAL_S), "states shape"
+    assert demo["robot_states"].shape == (T, 9), "robot_states shape"
+    assert demo["ee_pos"].shape == (T, 3), "ee_pos shape"
+    assert demo["ee_ori"].shape == (T, 3), "ee_ori shape"
+    assert demo["ee_states"].shape == (T, 6), "ee_states shape"
+    assert demo["gripper_states"].shape == (T, 2), "gripper_states shape"
+    assert demo["joint_states"].shape == (T, 7), "joint_states shape"
 
-    assert demo["states"].dtype        == np.float64
-    assert demo["robot_states"].dtype  == np.float64
-    assert demo["ee_pos"].dtype        == np.float64
+    assert demo["states"].dtype == np.float64
+    assert demo["robot_states"].dtype == np.float64
+    assert demo["ee_pos"].dtype == np.float64
 
 
 def test_init_state_equals_states_t0() -> None:
@@ -180,6 +180,7 @@ _LIBERO_AVAILABLE = False
 if _RUN_LIVE_LIBERO:
     try:
         import libero  # noqa: F401
+
         _LIBERO_AVAILABLE = True
     except ImportError:
         pass
@@ -187,8 +188,7 @@ if _RUN_LIVE_LIBERO:
 _LIBERO_ENV_MARK = pytest.mark.skipif(
     not _RUN_LIVE_LIBERO or not _LIBERO_AVAILABLE or not DEMO_PATH.exists(),
     reason=(
-        "live LIBERO env tests require DVLA_RUN_LIVE_LIBERO_TESTS=1, "
-        "LIBERO, and the demo file"
+        "live LIBERO env tests require DVLA_RUN_LIVE_LIBERO_TESTS=1, LIBERO, and the demo file"
     ),
 )
 
@@ -214,9 +214,7 @@ def test_states_from_sim_get_state_flatten() -> None:
     task_bddl_file = os.path.join(
         get_libero_path("bddl_files"), task.problem_folder, task.bddl_file
     )
-    env = OffScreenRenderEnv(
-        bddl_file_name=task_bddl_file, camera_heights=128, camera_widths=128
-    )
+    env = OffScreenRenderEnv(bddl_file_name=task_bddl_file, camera_heights=128, camera_widths=128)
     env.seed(0)
     try:
         env.reset()
@@ -257,9 +255,7 @@ def test_proprio_formulas_from_live_env() -> None:
     task_bddl_file = os.path.join(
         get_libero_path("bddl_files"), task.problem_folder, task.bddl_file
     )
-    env = OffScreenRenderEnv(
-        bddl_file_name=task_bddl_file, camera_heights=128, camera_widths=128
-    )
+    env = OffScreenRenderEnv(bddl_file_name=task_bddl_file, camera_heights=128, camera_widths=128)
     env.seed(0)
     try:
         env.reset()

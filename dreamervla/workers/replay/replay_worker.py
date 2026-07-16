@@ -46,14 +46,9 @@ class ReplayWorker(Worker):
         episodes: list[list[dict[str, Any]]] = []
         for trajectory in batch.trajectories:
             if int(trajectory.global_step) != expected:
-                raise ValueError(
-                    "step-local trajectory global_step does not match batch"
-                )
+                raise ValueError("step-local trajectory global_step does not match batch")
             episode = [dict(transition) for transition in trajectory.transitions]
-            versions = {
-                int(transition.get("encoder_version", -1))
-                for transition in episode
-            }
+            versions = {int(transition.get("encoder_version", -1)) for transition in episode}
             if versions != {expected}:
                 raise ValueError(
                     "step-local replay requires every transition encoder_version "
@@ -67,9 +62,7 @@ class ReplayWorker(Worker):
         )
         return {
             "replay_buffer/step_local_trajectories": float(added),
-            "replay_buffer/step_local_transitions": float(
-                self._replay().num_transitions
-            ),
+            "replay_buffer/step_local_transitions": float(self._replay().num_transitions),
             "replay_buffer/step_local_encoder_version": float(expected),
         }
 
@@ -85,9 +78,7 @@ class ReplayWorker(Worker):
         failures = 0
         for trajectory in batch.trajectories:
             if int(trajectory.global_step) != expected:
-                raise ValueError(
-                    "real trajectory global_step does not match batch"
-                )
+                raise ValueError("real trajectory global_step does not match batch")
             episode = [dict(transition) for transition in trajectory.transitions]
             record = self._replay().add_episode(
                 episode,
@@ -155,9 +146,7 @@ class ReplayWorker(Worker):
     ) -> Any:
         kwargs: dict[str, Any] = {
             "task_ids": (
-                tuple(int(task_id) for task_id in task_ids)
-                if task_ids is not None
-                else None
+                tuple(int(task_id) for task_id in task_ids) if task_ids is not None else None
             ),
             "keys": tuple(str(key) for key in keys),
         }
@@ -177,9 +166,7 @@ class ReplayWorker(Worker):
         return self._replay().eligible_initial_condition_count(
             str(selector),
             task_ids=(
-                tuple(int(task_id) for task_id in task_ids)
-                if task_ids is not None
-                else None
+                tuple(int(task_id) for task_id in task_ids) if task_ids is not None else None
             ),
         )
 
@@ -209,25 +196,17 @@ class ReplayWorker(Worker):
         }
         unsupported = sorted(set(cfg) - allowed)
         if unsupported:
-            raise ValueError(
-                "unsupported replay seed options: " + ", ".join(unsupported)
-            )
+            raise ValueError("unsupported replay seed options: " + ", ".join(unsupported))
         task_ids = tuple(int(task_id) for task_id in cfg.pop("task_ids", ()) or ())
         default_task_id = cfg.pop("task_id", cfg.pop("default_task_id", None))
         added = seed_replay_from_offline(
             self._replay(),
             data_dir=cfg.pop("data_dir"),
             hidden_dir=cfg.pop("hidden_dir"),
-            default_task_id=(
-                None if default_task_id is None else int(default_task_id)
-            ),
-            infer_task_id_from_shard=bool(
-                cfg.pop("infer_task_id_from_shard", False)
-            ),
+            default_task_id=(None if default_task_id is None else int(default_task_id)),
+            infer_task_id_from_shard=bool(cfg.pop("infer_task_id_from_shard", False)),
             max_episodes_per_task=cfg.pop("max_episodes_per_task", None),
-            require_reference_complete=bool(
-                cfg.pop("require_reference_complete", True)
-            ),
+            require_reference_complete=bool(cfg.pop("require_reference_complete", True)),
         )
         stats = self._replay().task_stats(task_ids or None)
         if task_ids:
@@ -238,17 +217,13 @@ class ReplayWorker(Worker):
             ]
             if missing:
                 raise RuntimeError(
-                    "offline replay seed did not retain episodes for task IDs "
-                    f"{missing}"
+                    f"offline replay seed did not retain episodes for task IDs {missing}"
                 )
         return {
             "replay_buffer/seeded_episodes": float(added),
             "replay_buffer/seeded_transitions": float(self._replay().num_transitions),
             "replay_buffer/seeded_task_count": float(
-                sum(
-                    int(item.get("episodes", 0)) > 0
-                    for item in stats.values()
-                )
+                sum(int(item.get("episodes", 0)) > 0 for item in stats.values())
             ),
         }
 

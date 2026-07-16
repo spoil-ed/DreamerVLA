@@ -139,9 +139,7 @@ def test_dino_runner_config_prefers_complete_checkpoint_payload(tmp_path) -> Non
     OmegaConf.save({"dataset": {"valid": {"source": "disk"}}}, persisted)
     payload_cfg = OmegaConf.create({"dataset": {"valid": {"source": "payload"}}})
 
-    loaded = _runner_config_from_checkpoint(
-        {"cfg": payload_cfg}, checkpoint, config_path=None
-    )
+    loaded = _runner_config_from_checkpoint({"cfg": payload_cfg}, checkpoint, config_path=None)
 
     assert loaded.dataset.valid.source == "payload"
 
@@ -150,9 +148,7 @@ def test_dino_runner_config_accepts_complete_config_payload_without_disk_config(
     tmp_path: Path,
 ) -> None:
     checkpoint = tmp_path / "run" / "checkpoints" / "latest.ckpt"
-    payload_config = OmegaConf.create(
-        {"dataset": {"valid": {"source": "config-payload"}}}
-    )
+    payload_config = OmegaConf.create({"dataset": {"valid": {"source": "config-payload"}}})
 
     loaded = _runner_config_from_checkpoint(
         {"config": payload_config}, checkpoint, config_path=None
@@ -280,17 +276,13 @@ def test_eval_chunkwm_load_demo_preserves_tokenized_sidecar_shape(tmp_path) -> N
         handle.create_dataset("data/demo_0/actions", data=np.zeros((3, 2)))
         handle.create_dataset("data/demo_0/obs/ee_pos", data=np.ones((3, 3)))
         handle.create_dataset("data/demo_0/obs/ee_ori", data=np.ones((3, 3)) * 2)
-        handle.create_dataset(
-            "data/demo_0/obs/gripper_states", data=np.ones((3, 2)) * 3
-        )
+        handle.create_dataset("data/demo_0/obs/gripper_states", data=np.ones((3, 2)) * 3)
     with h5py.File(hidden_path, "w") as handle:
         handle.create_dataset(
             "data/demo_0/obs_embedding",
             data=np.zeros((3, 2, 4), dtype=np.float16),
         )
-        handle.create_dataset(
-            "data/demo_0/lang_emb", data=np.arange(5, dtype=np.float16)
-        )
+        handle.create_dataset("data/demo_0/lang_emb", data=np.arange(5, dtype=np.float16))
 
     loaded = load_demo(raw_path, hidden_path, "data/demo_0")
 
@@ -338,9 +330,7 @@ def test_eval_chunkwm_rollout_scores_layer_normalized_visual_targets() -> None:
     cfg = _tiny_wm_cfg()
     cfg.update({"token_normalization": "layer_norm", "token_norm_eps": 1.0e-6})
     wm = ChunkAwareWorldModel(**{k: v for k, v in cfg.items() if k != "_target_"})
-    observations = torch.arange(1, 1 + 6 * 2 * 4, dtype=torch.float32).reshape(
-        6, 2, 4
-    )
+    observations = torch.arange(1, 1 + 6 * 2 * 4, dtype=torch.float32).reshape(6, 2, 4)
 
     _prediction, target = rollout(
         wm,

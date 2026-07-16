@@ -26,14 +26,10 @@ class ActionChunkQueue:
         if chunk.ndim != 2:
             raise ValueError(f"action chunk must be [K,A], got shape {tuple(chunk.shape)}")
         if chunk.shape[1] < self.action_dim:
-            raise ValueError(
-                f"action chunk dim {chunk.shape[1]} < action_dim={self.action_dim}"
-            )
+            raise ValueError(f"action chunk dim {chunk.shape[1]} < action_dim={self.action_dim}")
         steps = self.action_steps if self.action_steps is not None else int(chunk.shape[0])
         if chunk.shape[0] < steps:
-            raise ValueError(
-                f"policy returned {chunk.shape[0]} actions, need action_steps={steps}"
-            )
+            raise ValueError(f"policy returned {chunk.shape[0]} actions, need action_steps={steps}")
         self._pending.clear()
         for row in chunk[:steps, : self.action_dim]:
             self._pending.append(np.asarray(row, dtype=np.float32).copy())

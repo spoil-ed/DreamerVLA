@@ -56,9 +56,7 @@ class VLAPolicy(nn.Module):
             cur = int(policy_head_hidden_dim)
         layers.append(nn.Linear(cur, self.action_dim))
         self.policy_head = nn.Sequential(*layers)
-        self.log_std = nn.Parameter(
-            torch.full((self.action_dim,), float(initial_log_std))
-        )
+        self.log_std = nn.Parameter(torch.full((self.action_dim,), float(initial_log_std)))
         self.embedding: SharedObservationEmbedding | None = None
 
     def _reduce_hidden(self, hidden: torch.Tensor) -> torch.Tensor:

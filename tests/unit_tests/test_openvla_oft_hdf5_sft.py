@@ -182,6 +182,8 @@ def test_vla_sft_hdf5_dataset_rejects_non_mainline_inputs(
             dataset_statistics=stats,
             **kwargs,
         )
+
+
 def test_openvla_oft_lm_head_mode_computes_token_loss_without_action_head() -> None:
     from dreamervla.models.embodiment.openvla_oft_policy import OpenVLAOFTPolicy
 

@@ -51,9 +51,9 @@ def dreamer_image_from_record(rec: dict[str, Any], image_size: int) -> np.ndarra
     """
     third = resize_hwc_uint8(rec["agentview_rgb"], image_size)
     wrist = resize_hwc_uint8(rec["eye_in_hand_rgb"], image_size)
-    return np.concatenate(
-        [third.transpose(2, 0, 1), wrist.transpose(2, 0, 1)], axis=0
-    ).astype(np.uint8, copy=False)
+    return np.concatenate([third.transpose(2, 0, 1), wrist.transpose(2, 0, 1)], axis=0).astype(
+        np.uint8, copy=False
+    )
 
 
 def extractor_obs_from_record(rec: dict[str, Any]) -> dict[str, Any]:
@@ -77,7 +77,7 @@ def build_step_record(
         "actions": np.asarray(wm_action, dtype=np.float64),
         "rewards": np.float32(0.0),
         "sparse_rewards": np.uint8(0),  # set on the terminal frame
-        "dones": np.uint8(0),           # set on the terminal frame
+        "dones": np.uint8(0),  # set on the terminal frame
         "robot_states": rec["robot_states"].astype(np.float64),
         "states": rec["states"].astype(np.float64),
         "obs": {
@@ -175,8 +175,12 @@ def collect_vectorized(
     desc_by_episode: dict[tuple[int, int], str] = {}
 
     pbar = AggregateProgress(
-        len(work_items), "collect", rank=rank, world_size=world_size,
-        progress_dir=progress_dir, unit="ep",
+        len(work_items),
+        "collect",
+        rank=rank,
+        world_size=world_size,
+        progress_dir=progress_dir,
+        unit="ep",
     )
 
     def _on_step(ctx: Any) -> dict[str, Any]:

@@ -58,23 +58,11 @@ class WorldModel(BaseWorldModel):
         self.action_dim = int(action_dim)
         self.token_dim = int(token_dim)
         self.time_horizon = int(time_horizon) if time_horizon is not None else 8
-        self.token_count = (
-            int(token_count)
-            if token_count is not None
-            else 256
-        )
-        self.obs_dim = (
-            int(obs_dim)
-            if obs_dim is not None
-            else self.token_count * self.token_dim
-        )
-        if (
-            self.token_count == 56
-            and self.token_dim == 1024
-        ) or self.obs_dim == 56 * 1024:
+        self.token_count = int(token_count) if token_count is not None else 256
+        self.obs_dim = int(obs_dim) if obs_dim is not None else self.token_count * self.token_dim
+        if (self.token_count == 56 and self.token_dim == 1024) or self.obs_dim == 56 * 1024:
             raise ValueError(
-                "the removed 56x1024 observation interface is closed; "
-                "use hidden_token [256,4096]"
+                "the removed 56x1024 observation interface is closed; use hidden_token [256,4096]"
             )
         self.model_dim = int(model_dim)
         self.num_hist = int(num_hist)
@@ -133,13 +121,9 @@ class WorldModel(BaseWorldModel):
         if self.num_pred < 1:
             raise ValueError(f"num_pred must be positive, got {self.num_pred}")
         if self.rollout_horizon < 0:
-            raise ValueError(
-                f"rollout_horizon must be non-negative, got {self.rollout_horizon}"
-            )
+            raise ValueError(f"rollout_horizon must be non-negative, got {self.rollout_horizon}")
         if self.rollout_context < 1:
-            raise ValueError(
-                f"rollout_context must be positive, got {self.rollout_context}"
-            )
+            raise ValueError(f"rollout_context must be positive, got {self.rollout_context}")
         if self.reward_loss_scale < 0.0:
             raise ValueError(
                 f"reward_loss_scale must be non-negative, got {self.reward_loss_scale}"
@@ -166,9 +150,7 @@ class WorldModel(BaseWorldModel):
             "regression",
         }
         if self.reward_hidden_dim < 1:
-            raise ValueError(
-                f"reward_hidden_dim must be positive, got {self.reward_hidden_dim}"
-            )
+            raise ValueError(f"reward_hidden_dim must be positive, got {self.reward_hidden_dim}")
         if self.success_return_loss_scale < 0.0:
             raise ValueError(
                 f"success_return_loss_scale must be non-negative, got {self.success_return_loss_scale}"
@@ -199,8 +181,7 @@ class WorldModel(BaseWorldModel):
             nn.Linear(self.action_dim, self.model_dim),
         )
         self.pos_embedding = nn.Parameter(
-            torch.randn(1, self.max_seq_len * self.slots_per_step, self.model_dim)
-            * 0.02
+            torch.randn(1, self.max_seq_len * self.slots_per_step, self.model_dim) * 0.02
         )
         layer = nn.TransformerEncoderLayer(
             d_model=self.model_dim,
@@ -227,9 +208,7 @@ class WorldModel(BaseWorldModel):
             if self.reward_pos_weight_value is not None:
                 self.register_buffer(
                     "reward_pos_weight",
-                    torch.tensor(
-                        float(self.reward_pos_weight_value), dtype=torch.float32
-                    ),
+                    torch.tensor(float(self.reward_pos_weight_value), dtype=torch.float32),
                 )
             else:
                 self.reward_pos_weight = None
@@ -265,10 +244,7 @@ class WorldModel(BaseWorldModel):
                 if parameter.requires_grad:
                     parameter.requires_grad = False
                     frozen += parameter.numel()
-        if (
-            isinstance(self.pos_embedding, nn.Parameter)
-            and self.pos_embedding.requires_grad
-        ):
+        if isinstance(self.pos_embedding, nn.Parameter) and self.pos_embedding.requires_grad:
             self.pos_embedding.requires_grad = False
             frozen += self.pos_embedding.numel()
         return frozen
@@ -284,11 +260,7 @@ class WorldModel(BaseWorldModel):
         seen: set[int] = set()
         for name in ("backbone", "encoder", "base_model"):
             module = getattr(self, name, None)
-            if (
-                not isinstance(module, nn.Module)
-                or module is self
-                or id(module) in seen
-            ):
+            if not isinstance(module, nn.Module) or module is self or id(module) in seen:
                 continue
             seen.add(id(module))
             module.eval()
@@ -323,9 +295,7 @@ class WorldModel(BaseWorldModel):
             raise ValueError(
                 f"action dim mismatch: got {actions.shape[-1]}, expected {self.action_dim}"
             )
-        return actions[:, :steps].to(
-            device=self._module_device(), dtype=self._module_dtype()
-        )
+        return actions[:, :steps].to(device=self._module_device(), dtype=self._module_dtype())
 
     def obs_to_tokens(self, obs_embedding: torch.Tensor) -> torch.Tensor:
         """Validate tokenized observations and normalize to ``[B,T,N,D]``."""
@@ -357,9 +327,7 @@ class WorldModel(BaseWorldModel):
             )
         return tokens.to(device=self._module_device(), dtype=self._module_dtype())
 
-    def _obs_embedding_from_obs(
-        self, obs: dict[str, torch.Tensor] | torch.Tensor
-    ) -> torch.Tensor:
+    def _obs_embedding_from_obs(self, obs: dict[str, torch.Tensor] | torch.Tensor) -> torch.Tensor:
         if isinstance(obs, torch.Tensor):
             return obs
         if "obs_embedding" in obs:
@@ -372,9 +340,7 @@ class WorldModel(BaseWorldModel):
         device: torch.device,
         dtype: torch.dtype | None = None,
     ) -> torch.Tensor:
-        frame_ids = torch.arange(int(steps), device=device).repeat_interleave(
-            self.slots_per_step
-        )
+        frame_ids = torch.arange(int(steps), device=device).repeat_interleave(self.slots_per_step)
         future = frame_ids[None, :] > frame_ids[:, None]
         mask = torch.zeros(
             int(steps) * self.slots_per_step,
@@ -384,9 +350,7 @@ class WorldModel(BaseWorldModel):
         )
         return mask.masked_fill(future, float("-inf"))
 
-    def encode_obs(
-        self, obs: dict[str, torch.Tensor] | torch.Tensor
-    ) -> dict[str, torch.Tensor]:
+    def encode_obs(self, obs: dict[str, torch.Tensor] | torch.Tensor) -> dict[str, torch.Tensor]:
         visual = self.obs_to_tokens(self._obs_embedding_from_obs(obs))
         proprio = visual.new_zeros(visual.shape[0], visual.shape[1], 0)
         return {"visual": visual, "proprio": proprio}
@@ -408,18 +372,14 @@ class WorldModel(BaseWorldModel):
         z = z + self.pos_embedding[:, : z.shape[1]]
         return z.reshape(z.shape[0], steps, self.slots_per_step, self.model_dim)
 
-    def separate_emb(
-        self, z: torch.Tensor
-    ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
+    def separate_emb(self, z: torch.Tensor) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
         visual_model = z[:, :, : self.token_count]
         act_emb = z[:, :, -1]
         visual = self.out_proj(self.out_norm(visual_model))
         proprio = visual.new_zeros(visual.shape[0], visual.shape[1], 0)
         return {"visual": visual, "proprio": proprio}, act_emb
 
-    def replace_actions_from_z(
-        self, z: torch.Tensor, act: torch.Tensor
-    ) -> torch.Tensor:
+    def replace_actions_from_z(self, z: torch.Tensor, act: torch.Tensor) -> torch.Tensor:
         z = z.clone()
         z[:, :, -1] = self.encode_act(act)
         return z
@@ -501,9 +461,7 @@ class WorldModel(BaseWorldModel):
         if obs_tokens.shape[1] >= self.num_hist:
             history = obs_tokens[:, -self.num_hist :]
         else:
-            pad = obs_tokens[:, :1].expand(
-                -1, self.num_hist - obs_tokens.shape[1], -1, -1
-            )
+            pad = obs_tokens[:, :1].expand(-1, self.num_hist - obs_tokens.shape[1], -1, -1)
             history = torch.cat([pad, obs_tokens], dim=1)
         actions = torch.zeros(
             bsz,
@@ -525,9 +483,7 @@ class WorldModel(BaseWorldModel):
         actions: torch.Tensor,
         is_first: bool | torch.Tensor = False,
     ) -> dict[str, torch.Tensor]:
-        if isinstance(is_first, torch.Tensor) and bool(
-            is_first.detach().flatten()[0].item()
-        ):
+        if isinstance(is_first, torch.Tensor) and bool(is_first.detach().flatten()[0].item()):
             return self.encode_latent(hidden)
         if isinstance(is_first, bool) and is_first:
             return self.encode_latent(hidden)
@@ -559,9 +515,7 @@ class WorldModel(BaseWorldModel):
             "actions": next_action_history,
         }
 
-    def _latent_hidden(
-        self, latent: dict[str, torch.Tensor] | torch.Tensor
-    ) -> torch.Tensor:
+    def _latent_hidden(self, latent: dict[str, torch.Tensor] | torch.Tensor) -> torch.Tensor:
         if isinstance(latent, torch.Tensor):
             return latent
         hidden = latent.get("hidden")
@@ -579,9 +533,7 @@ class WorldModel(BaseWorldModel):
                 return history[:, :, -1]
         raise KeyError("VLA latent must contain `hidden` or `history`.")
 
-    def _latent_history(
-        self, latent: dict[str, torch.Tensor] | torch.Tensor
-    ) -> torch.Tensor:
+    def _latent_history(self, latent: dict[str, torch.Tensor] | torch.Tensor) -> torch.Tensor:
         if isinstance(latent, dict) and isinstance(latent.get("history"), torch.Tensor):
             history = latent["history"]
             if history.ndim == 4 and history.shape[-1] == self.obs_dim:
@@ -613,9 +565,7 @@ class WorldModel(BaseWorldModel):
                     f"flat latent action history must be [B,H,A], got {tuple(actions.shape)}"
                 )
             if actions.shape[1] == self.num_hist:
-                return actions.to(
-                    device=self._module_device(), dtype=self._module_dtype()
-                )
+                return actions.to(device=self._module_device(), dtype=self._module_dtype())
             if actions.shape[1] > self.num_hist:
                 return actions[:, -self.num_hist :].to(
                     device=self._module_device(), dtype=self._module_dtype()
@@ -670,27 +620,20 @@ class WorldModel(BaseWorldModel):
             "actions": next_action_history,
         }
 
-    def actor_input(
-        self, latent: dict[str, torch.Tensor] | torch.Tensor
-    ) -> torch.Tensor:
+    def actor_input(self, latent: dict[str, torch.Tensor] | torch.Tensor) -> torch.Tensor:
         return self._latent_hidden(latent)
 
-    def critic_input(
-        self, latent: dict[str, torch.Tensor] | torch.Tensor
-    ) -> torch.Tensor:
+    def critic_input(self, latent: dict[str, torch.Tensor] | torch.Tensor) -> torch.Tensor:
         hidden = self._latent_hidden(latent)
         tokens = self.obs_to_tokens(hidden)
         pooled = tokens.mean(dim=2)
         if hidden.ndim == 2 or (
-            hidden.ndim == 3
-            and hidden.shape[1:] == (self.token_count, self.token_dim)
+            hidden.ndim == 3 and hidden.shape[1:] == (self.token_count, self.token_dim)
         ):
             return pooled[:, 0]
         return pooled
 
-    def reward_from_latent(
-        self, latent: dict[str, torch.Tensor] | torch.Tensor
-    ) -> torch.Tensor:
+    def reward_from_latent(self, latent: dict[str, torch.Tensor] | torch.Tensor) -> torch.Tensor:
         hidden = self._latent_hidden(latent)
         reward = self.predict_reward(hidden)
         if self.obs_to_tokens(hidden).shape[1] == 1:
@@ -706,9 +649,7 @@ class WorldModel(BaseWorldModel):
             return success_return[:, 0]
         return success_return
 
-    def continue_from_latent(
-        self, latent: dict[str, torch.Tensor] | torch.Tensor
-    ) -> torch.Tensor:
+    def continue_from_latent(self, latent: dict[str, torch.Tensor] | torch.Tensor) -> torch.Tensor:
         return torch.ones_like(self.reward_from_latent(latent))
 
     def _hidden_loss_terms(
@@ -718,9 +659,7 @@ class WorldModel(BaseWorldModel):
         pred_norm = F.normalize(hidden_pred.float(), dim=-1)
         target_norm = F.normalize(hidden_target.float(), dim=-1)
         hidden_cosine = 1.0 - (pred_norm * target_norm).sum(dim=-1).mean()
-        hidden_loss = (
-            self.hidden_loss_scale * hidden_mse + self.cosine_loss_scale * hidden_cosine
-        )
+        hidden_loss = self.hidden_loss_scale * hidden_mse + self.cosine_loss_scale * hidden_cosine
         return hidden_loss, hidden_mse, hidden_cosine
 
     def _require_reward_head(self) -> None:
@@ -757,17 +696,13 @@ class WorldModel(BaseWorldModel):
     def predict_success_return(self, obs_embedding: torch.Tensor) -> torch.Tensor:
         return torch.sigmoid(self.success_return_logits(obs_embedding).float())
 
-    def _align_reward_target(
-        self, rewards: torch.Tensor, target_steps: int
-    ) -> torch.Tensor:
+    def _align_reward_target(self, rewards: torch.Tensor, target_steps: int) -> torch.Tensor:
         if rewards.ndim == 1:
             rewards = rewards[:, None]
         if rewards.ndim == 3 and rewards.shape[-1] == 1:
             rewards = rewards.squeeze(-1)
         if rewards.ndim != 2:
-            raise ValueError(
-                f"rewards must be [B,T] or [B,T,1], got {tuple(rewards.shape)}"
-            )
+            raise ValueError(f"rewards must be [B,T] or [B,T,1], got {tuple(rewards.shape)}")
         if rewards.shape[1] == target_steps + self.num_pred:
             rewards = rewards[:, self.num_pred :]
         elif rewards.shape[1] != target_steps:
@@ -783,9 +718,7 @@ class WorldModel(BaseWorldModel):
         rewards: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
         logits = self.reward_logits(hidden_target.detach())
-        target = self._align_reward_target(rewards, int(logits.shape[1])).to(
-            dtype=logits.dtype
-        )
+        target = self._align_reward_target(rewards, int(logits.shape[1])).to(dtype=logits.dtype)
         if self.reward_is_scalar:
             # MSE regression to a continuous per-step reward target (e.g. progress delta).
             pred = logits.float()
@@ -847,9 +780,7 @@ class WorldModel(BaseWorldModel):
         if self.success_return_loss_type == "mse":
             success_return_loss = F.mse_loss(pred, target)
         else:
-            success_return_loss = F.binary_cross_entropy_with_logits(
-                logits.float(), target
-            )
+            success_return_loss = F.binary_cross_entropy_with_logits(logits.float(), target)
         out = {
             "success_return_loss": success_return_loss,
             "success_return_pred_mean": pred.mean().detach(),
@@ -925,21 +856,15 @@ class WorldModel(BaseWorldModel):
         hidden_pred = pred_tokens
         hidden_target = target_tokens
 
-        loss, hidden_mse, hidden_cosine = self._hidden_loss_terms(
-            hidden_pred, hidden_target
-        )
+        loss, hidden_mse, hidden_cosine = self._hidden_loss_terms(hidden_pred, hidden_target)
         rollout_out: dict[str, torch.Tensor] = {}
         if self.rollout_loss_scale > 0.0 and self.rollout_horizon > 0:
-            rollout_out = self._open_loop_rollout_loss(
-                obs_embedding, transition_actions
-            )
+            rollout_out = self._open_loop_rollout_loss(obs_embedding, transition_actions)
             loss = loss + self.rollout_loss_scale * rollout_out["rollout_loss"]
         reward_out: dict[str, torch.Tensor] = {}
         if self.reward_loss_scale > 0.0:
             if rewards is None:
-                raise KeyError(
-                    "reward_loss_scale > 0 requires batch to contain `rewards`"
-                )
+                raise KeyError("reward_loss_scale > 0 requires batch to contain `rewards`")
             reward_out = self._reward_loss_terms(hidden_target, rewards)
             loss = loss + self.reward_loss_scale * reward_out["reward_loss"]
         success_return_out: dict[str, torch.Tensor] = {}
@@ -948,14 +873,8 @@ class WorldModel(BaseWorldModel):
                 raise KeyError(
                     "success_return_loss_scale > 0 requires batch to contain `success_to_go`"
                 )
-            success_return_out = self._success_return_loss_terms(
-                hidden_target, success_to_go
-            )
-            loss = (
-                loss
-                + self.success_return_loss_scale
-                * success_return_out["success_return_loss"]
-            )
+            success_return_out = self._success_return_loss_terms(hidden_target, success_to_go)
+            loss = loss + self.success_return_loss_scale * success_return_out["success_return_loss"]
         zero = loss.new_zeros(())
         out = {
             "_loss": loss,
@@ -995,15 +914,9 @@ class WorldModel(BaseWorldModel):
         if success_return_out:
             out.update(
                 {
-                    "success_return_loss": success_return_out[
-                        "success_return_loss"
-                    ].detach(),
-                    "success_return_pred_mean": success_return_out[
-                        "success_return_pred_mean"
-                    ],
-                    "success_return_target_mean": success_return_out[
-                        "success_return_target_mean"
-                    ],
+                    "success_return_loss": success_return_out["success_return_loss"].detach(),
+                    "success_return_pred_mean": success_return_out["success_return_pred_mean"],
+                    "success_return_target_mean": success_return_out["success_return_target_mean"],
                     "success_return_mse": success_return_out["success_return_mse"],
                 }
             )
@@ -1033,15 +946,9 @@ class WorldModel(BaseWorldModel):
             if success_return_out:
                 out.update(
                     {
-                        "success_return_logits": success_return_out[
-                            "success_return_logits"
-                        ],
-                        "success_return_pred": success_return_out[
-                            "success_return_pred"
-                        ],
-                        "success_return_target": success_return_out[
-                            "success_return_target"
-                        ],
+                        "success_return_logits": success_return_out["success_return_logits"],
+                        "success_return_pred": success_return_out["success_return_pred"],
+                        "success_return_target": success_return_out["success_return_target"],
                     }
                 )
         return out
@@ -1086,9 +993,7 @@ class WorldModel(BaseWorldModel):
         if obs_0 is not None or act is not None:
             if obs_0 is None or act is None:
                 raise ValueError("WM-style rollout requires both obs_0 and act")
-            rollout, z_rollout = self._rollout_hidden(
-                self._obs_embedding_from_obs(obs_0), act
-            )
+            rollout, z_rollout = self._rollout_hidden(self._obs_embedding_from_obs(obs_0), act)
             return self.encode_obs(rollout), z_rollout
         if obs_embedding is None or actions is None:
             raise ValueError(
@@ -1125,9 +1030,7 @@ class WorldModel(BaseWorldModel):
         if isinstance(batch, dict) and batch.get("mode") == "encode_latent":
             hidden = batch.get("hidden", batch.get("obs_embedding"))
             if hidden is None:
-                raise KeyError(
-                    "encode_latent mode requires `hidden` or `obs_embedding`"
-                )
+                raise KeyError("encode_latent mode requires `hidden` or `obs_embedding`")
             return self.encode_latent(hidden)
         if isinstance(batch, dict) and batch.get("mode") == "observe_next":
             hidden = batch.get("hidden", batch.get("obs_embedding"))
@@ -1164,9 +1067,7 @@ class WorldModel(BaseWorldModel):
                 return self.success_return_from_latent(batch["latent"])
             obs_embedding = batch.get("obs_embedding", batch.get("hidden"))
             if obs_embedding is None:
-                raise KeyError(
-                    "success_return mode requires `obs_embedding` or `hidden`"
-                )
+                raise KeyError("success_return mode requires `obs_embedding` or `hidden`")
             return self.predict_success_return(obs_embedding)
         return self.loss(batch)
 

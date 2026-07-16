@@ -85,12 +85,8 @@ def _decode_bpe_block_to_pil(
     vq_ids = bpe2vq[bpe_tensor]
     if (vq_ids < 0).any():
         bad = int((vq_ids < 0).sum().item())
-        raise ValueError(
-            f"image block contains {bad} non-image bpe ids after stripping"
-        )
-    pixels = vq_tokens_to_pixels(
-        vq_ids.unsqueeze(0), vq_model, h_latent=side, w_latent=side
-    )
+        raise ValueError(f"image block contains {bad} non-image bpe ids after stripping")
+    pixels = vq_tokens_to_pixels(vq_ids.unsqueeze(0), vq_model, h_latent=side, w_latent=side)
     return tensor_to_pil(pixels[0])
 
 
@@ -133,12 +129,8 @@ def _save_panel_strip(
             resized = img.convert("RGB").resize((cell_size, cell_size), Image.BILINEAR)
             canvas.paste(resized, (x0, header))
         else:
-            draw.rectangle(
-                [x0, header, x0 + cell_size, header + cell_size], fill=(60, 20, 20)
-            )
-            draw.text(
-                (x0 + 10, header + cell_size // 2), "(missing)", fill=(230, 230, 230)
-            )
+            draw.rectangle([x0, header, x0 + cell_size, header + cell_size], fill=(60, 20, 20))
+            draw.text((x0 + 10, header + cell_size // 2), "(missing)", fill=(230, 230, 230))
         draw.text((x0 + 4, 4), label, fill=(230, 230, 230))
     path.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(path)
@@ -210,10 +202,7 @@ class WorldModelImageVisualizer:
         self._image_bpe_set = set(self.image_token_bpe_ids.tolist())
         self.lm_head = encoder.backbone.lm_head
         self.encoder = encoder
-        vocab_map = (
-            getattr(getattr(encoder.backbone, "config", None), "vocabulary_map", {})
-            or {}
-        )
+        vocab_map = getattr(getattr(encoder.backbone, "config", None), "vocabulary_map", {}) or {}
         self.state_start_token_id = int(vocab_map.get("<reserved15500>", 15504))
         self.state_end_token_id = int(vocab_map.get("<reserved16000>", 16004))
 
@@ -238,16 +227,12 @@ class WorldModelImageVisualizer:
             output_hidden_states=True,
             att_mask=False,
         )
-        mask = torch.zeros(
-            hidden_states.shape[:2], dtype=torch.bool, device=hidden_states.device
-        )
+        mask = torch.zeros(hidden_states.shape[:2], dtype=torch.bool, device=hidden_states.device)
         for idx, length in enumerate(lengths):
             if length > 0:
                 mask[idx, :length] = True
         weights = mask.to(hidden_states.dtype).unsqueeze(-1)
-        pooled = (hidden_states * weights).sum(dim=1) / weights.sum(dim=1).clamp_min(
-            1.0
-        )
+        pooled = (hidden_states * weights).sum(dim=1) / weights.sum(dim=1).clamp_min(1.0)
         return pooled.float(), hidden_states.float()
 
     @torch.no_grad()
@@ -261,11 +246,7 @@ class WorldModelImageVisualizer:
         blocks = extract_image_blocks(current_input_ids)
         if not blocks:
             return None, None
-        idx = (
-            self.which_block
-            if self.which_block >= 0
-            else len(blocks) + self.which_block
-        )
+        idx = self.which_block if self.which_block >= 0 else len(blocks) + self.which_block
         if idx < 0 or idx >= len(blocks):
             return None, None
         start, _end, block_ids = blocks[idx]
@@ -296,9 +277,7 @@ class WorldModelImageVisualizer:
             sample=0,
         )
         pred_pil = _safe_decode(
-            lambda: _decode_bpe_block_to_pil(
-                predicted_bpe, self.bpe2vq, self.vq_model
-            ),
+            lambda: _decode_bpe_block_to_pil(predicted_bpe, self.bpe2vq, self.vq_model),
             what=None,
             sample=0,
         )
@@ -326,18 +305,12 @@ class WorldModelImageVisualizer:
             blocks = extract_image_blocks(list(seq))
             if not blocks:
                 raise ValueError(f"viz: sample {idx} has no image block")
-            bidx = (
-                self.which_block
-                if self.which_block >= 0
-                else len(blocks) + self.which_block
-            )
+            bidx = self.which_block if self.which_block >= 0 else len(blocks) + self.which_block
             if not (0 <= bidx < len(blocks)):
                 raise ValueError(f"viz: which_block={self.which_block} out of range")
             start, _end, block_ids = blocks[bidx]
             pos = [
-                start + off
-                for off, tok in enumerate(block_ids)
-                if int(tok) in self._image_bpe_set
+                start + off for off, tok in enumerate(block_ids) if int(tok) in self._image_bpe_set
             ]
             pos_t = torch.tensor(pos, device=hidden_states.device)
             per_sample.append(hidden_states[idx].index_select(0, pos_t))
@@ -455,9 +428,7 @@ class WorldModelImageVisualizer:
                 blocks = extract_image_blocks(list(seq))
                 selected: list[list[int]] = []
                 for which_block in self.which_blocks:
-                    bidx = (
-                        which_block if which_block >= 0 else len(blocks) + which_block
-                    )
+                    bidx = which_block if which_block >= 0 else len(blocks) + which_block
                     if not (0 <= bidx < len(blocks)):
                         raise ValueError(
                             f"viz: sample {sample_idx} which_block={which_block} out of range"
@@ -511,9 +482,7 @@ class WorldModelImageVisualizer:
                         what="gt_next",
                     )
 
-                    n_block_tokens = sum(
-                        1 for tok in block_ids if int(tok) in self._image_bpe_set
-                    )
+                    n_block_tokens = sum(1 for tok in block_ids if int(tok) in self._image_bpe_set)
                     pred_ids_i = pred_bpe[i, offset : offset + n_block_tokens].tolist()
                     offset += n_block_tokens
                     pred_next_pil = _safe_decode(
@@ -545,12 +514,8 @@ class WorldModelImageVisualizer:
             cur_img_hiddens, cur_block_ids = self._encode_per_image_token(cur_ids)
             cur_img_hiddens_wm = cur_img_hiddens.to(device=wm_device, dtype=wm_dtype)
             # predict_next_hidden accepts [B, N_img, C_in] under spatial_codec
-            pred_pooled_b = world_model.predict_next_hidden(
-                cur_img_hiddens_wm, action_b
-            )
-            pred_image_hiddens_b = world_model.decode_pooled_to_image_hiddens(
-                pred_pooled_b
-            )
+            pred_pooled_b = world_model.predict_next_hidden(cur_img_hiddens_wm, action_b)
+            pred_image_hiddens_b = world_model.decode_pooled_to_image_hiddens(pred_pooled_b)
             # Keep on lm_head's device — _decode_image_hiddens_to_pil needs
             # to run lm_head which lives on GPU.
             lm_device = next(self.lm_head.parameters()).device
@@ -577,9 +542,7 @@ class WorldModelImageVisualizer:
                 )
                 # predicted next from WM conv deconv
                 pred_latent_pil = _safe_decode(
-                    lambda i=i: self._decode_image_hiddens_to_pil(
-                        pred_image_hiddens[i]
-                    ),
+                    lambda i=i: self._decode_image_hiddens_to_pil(pred_image_hiddens[i]),
                     what="pred_latent",
                     sample=i,
                 )
@@ -606,9 +569,7 @@ class WorldModelImageVisualizer:
 
         pred_image_hiddens_b = None
         if getattr(world_model, "image_decoder", None) is not None:
-            pred_image_hiddens_b = world_model.decode_pooled_to_image_hiddens(
-                pred_pooled_b
-            )
+            pred_image_hiddens_b = world_model.decode_pooled_to_image_hiddens(pred_pooled_b)
 
         saved: list[Path] = []
         for i in range(n):
@@ -628,9 +589,7 @@ class WorldModelImageVisualizer:
             pred_latent_pil = None
             if pred_image_hiddens_b is not None:
                 pred_latent_pil = _safe_decode(
-                    lambda i=i: self._decode_image_hiddens_to_pil(
-                        pred_image_hiddens_b[i]
-                    ),
+                    lambda i=i: self._decode_image_hiddens_to_pil(pred_image_hiddens_b[i]),
                     what=None,
                     sample=i,
                 )
@@ -649,9 +608,7 @@ class WorldModelImageVisualizer:
         return saved
 
     @torch.no_grad()
-    def _decode_image_hiddens_to_pil(
-        self, pred_image_hiddens: torch.Tensor
-    ) -> Image.Image:
+    def _decode_image_hiddens_to_pil(self, pred_image_hiddens: torch.Tensor) -> Image.Image:
         """Decode [n_img_tok, obs_dim] → PIL via lm_head + VQGAN. No anchor."""
         n = pred_image_hiddens.shape[0]
         side = int(math.isqrt(n))

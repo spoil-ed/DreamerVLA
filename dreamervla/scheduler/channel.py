@@ -30,8 +30,7 @@ class _ChannelActor:
             return await asyncio.wait_for(queue.get(), timeout=float(timeout_s))
         except TimeoutError as exc:
             raise TimeoutError(
-                f"timed out waiting for channel key {key!r} "
-                f"after {float(timeout_s):.3f}s"
+                f"timed out waiting for channel key {key!r} after {float(timeout_s):.3f}s"
             ) from exc
 
     async def get_batch(self, n: int, key: str = "default") -> list[Any]:
@@ -70,16 +69,13 @@ class Channel:
 
     @classmethod
     def create(cls, name: str, maxsize: int = 0) -> Channel:
-        actor = (
-            _ChannelActor.options(
-                name=name,
-                namespace="DreamerVLA",
-                lifetime="detached",
-                max_concurrency=100,
-                enable_task_events=False,
-            )
-            .remote(int(maxsize))
-        )
+        actor = _ChannelActor.options(
+            name=name,
+            namespace="DreamerVLA",
+            lifetime="detached",
+            max_concurrency=100,
+            enable_task_events=False,
+        ).remote(int(maxsize))
         ray.get(actor.qsize.remote())
         return cls(actor)
 

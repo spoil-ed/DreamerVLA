@@ -43,8 +43,7 @@ def normalize_candidate(
     """
     if require_all_valid:
         if not candidate or not all(
-            isinstance(k, str) and isinstance(v, torch.Tensor)
-            for k, v in candidate.items()
+            isinstance(k, str) and isinstance(v, torch.Tensor) for k, v in candidate.items()
         ):
             return {}
     normalized: dict[str, torch.Tensor] = {}

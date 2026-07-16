@@ -23,9 +23,7 @@ def _make_pair(dim: int, heads: int, dim_head: int):
     """Return (manual, sdpa) attention modules sharing identical weights."""
     torch.manual_seed(0)
     manual = _WMStyleAttention(dim, heads=heads, dim_head=dim_head, dropout=0.0)
-    sdpa = _WMStyleAttention(
-        dim, heads=heads, dim_head=dim_head, dropout=0.0, attn_impl="sdpa"
-    )
+    sdpa = _WMStyleAttention(dim, heads=heads, dim_head=dim_head, dropout=0.0, attn_impl="sdpa")
     sdpa.load_state_dict(manual.state_dict())
     manual.eval()
     sdpa.eval()
@@ -41,10 +39,7 @@ def _reference_manual_forward(
     bsz, seq_len, _dim = x.shape
     x = module.norm(x)
     qkv = module.to_qkv(x).chunk(3, dim=-1)
-    q, k, v = (
-        t.reshape(bsz, seq_len, module.heads, module.dim_head).transpose(1, 2)
-        for t in qkv
-    )
+    q, k, v = (t.reshape(bsz, seq_len, module.heads, module.dim_head).transpose(1, 2) for t in qkv)
     dots = torch.matmul(q, k.transpose(-1, -2)) * module.scale
     if mask is not None:
         dots = dots + mask.to(device=dots.device, dtype=dots.dtype)[None, None]

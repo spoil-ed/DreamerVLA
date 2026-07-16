@@ -14,8 +14,8 @@ import numpy as np
 import pytest
 
 # ── test parameters ─────────────────────────────────────────────────────────
-T = 10        # episode length; must satisfy T >= SEQ_LEN + 1 so there are negatives
-SEQ_LEN = 4   # positive window at start=(T-SEQ_LEN), negative windows at 0..(T-SEQ_LEN-1)
+T = 10  # episode length; must satisfy T >= SEQ_LEN + 1 so there are negatives
+SEQ_LEN = 4  # positive window at start=(T-SEQ_LEN), negative windows at 0..(T-SEQ_LEN-1)
 IMAGE_H = 64
 IMAGE_W = 64
 ACTION_DIM = 7
@@ -42,9 +42,7 @@ def _make_step(t: int, is_terminal: bool, episode_seed: int = 0) -> dict:
             "gripper_states": rng.standard_normal(2),
             "joint_states": rng.standard_normal(7),
         },
-        "obs_embedding": np.broadcast_to(
-            np.asarray(t, dtype=np.float16), HIDDEN_TOKEN_SHAPE
-        ),
+        "obs_embedding": np.broadcast_to(np.asarray(t, dtype=np.float16), HIDDEN_TOKEN_SHAPE),
     }
 
 
@@ -111,6 +109,7 @@ def dataset(dump):
 
 # ── tests ────────────────────────────────────────────────────────────────────
 
+
 def test_import():
     """Class is importable from its module."""
     from dreamervla.dataset.collected_rollout_classifier_dataset import (
@@ -134,9 +133,7 @@ def test_item_has_obs_embedding(dataset):
 def test_item_has_success_float(dataset):
     item = dataset[0]
     assert "success" in item, "item is missing 'success' key"
-    assert isinstance(item["success"], float), (
-        f"expected float, got {type(item['success'])}"
-    )
+    assert isinstance(item["success"], float), f"expected float, got {type(item['success'])}"
 
 
 def test_success_window_label(dataset):

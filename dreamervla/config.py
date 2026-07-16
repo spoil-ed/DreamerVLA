@@ -83,9 +83,7 @@ def _validate_logger_backends(cfg: DictConfig) -> None:
     backends = _normalize_backends(
         OmegaConf.select(cfg, "runner.logger.logger_backends", default=None)
     )
-    unsupported = [
-        backend for backend in backends if backend not in MetricLogger.supported_logger
-    ]
+    unsupported = [backend for backend in backends if backend not in MetricLogger.supported_logger]
     if unsupported:
         raise ValueError(
             "runner.logger.logger_backends contains unsupported backend(s): "
@@ -105,27 +103,18 @@ def _validate_training_batch(cfg: DictConfig, *, world_size: int) -> None:
     if batch_size is not None and int(batch_size) <= 0:
         raise ValueError(f"dataloader.batch_size must be > 0, got {batch_size!r}")
 
-    grad_accum = int(
-        OmegaConf.select(cfg, "training.gradient_accumulate_every", default=1) or 1
-    )
+    grad_accum = int(OmegaConf.select(cfg, "training.gradient_accumulate_every", default=1) or 1)
     if grad_accum <= 0:
-        raise ValueError(
-            "training.gradient_accumulate_every must be > 0, "
-            f"got {grad_accum!r}"
-        )
+        raise ValueError(f"training.gradient_accumulate_every must be > 0, got {grad_accum!r}")
 
-    global_batch_size = OmegaConf.select(
-        cfg, "training.global_batch_size", default=None
-    )
+    global_batch_size = OmegaConf.select(cfg, "training.global_batch_size", default=None)
     if global_batch_size is None:
         return
 
     global_batch_size = int(global_batch_size)
     divisor = max(1, int(world_size)) * grad_accum
     if global_batch_size <= 0:
-        raise ValueError(
-            f"training.global_batch_size must be > 0, got {global_batch_size!r}"
-        )
+        raise ValueError(f"training.global_batch_size must be > 0, got {global_batch_size!r}")
     if global_batch_size % divisor != 0:
         raise ValueError(
             "training.global_batch_size must be divisible by "
@@ -186,9 +175,7 @@ def _validate_removed_observation_routes(cfg: DictConfig) -> None:
     for key in source_paths:
         value = _select_str(cfg, key)
         if value == "action_query":
-            raise ValueError(
-                f"{key}={value!r} is removed; use {HIDDEN_TOKEN_SOURCE!r}"
-            )
+            raise ValueError(f"{key}={value!r} is removed; use {HIDDEN_TOKEN_SOURCE!r}")
 
     action_head_paths = (
         "dataset.expected_action_head_type",
@@ -199,9 +186,7 @@ def _validate_removed_observation_routes(cfg: DictConfig) -> None:
     )
     for key in action_head_paths:
         if _select_str(cfg, key) == "action_query":
-            raise ValueError(
-                f"{key}='action_query' is removed; use {HIDDEN_TOKEN_ACTION_HEAD!r}"
-            )
+            raise ValueError(f"{key}='action_query' is removed; use {HIDDEN_TOKEN_ACTION_HEAD!r}")
 
     target_paths = (
         "encoder._target_",
@@ -239,17 +224,11 @@ def _validate_removed_observation_routes(cfg: DictConfig) -> None:
     for path, value in _iter_config_nodes(resolved):
         field = path.rsplit(".", 1)[-1]
         if field in dimension_fields and _is_exact_int(value, 56 * 1024):
-            raise ValueError(
-                f"{path} exposes the removed 56x1024 observation interface"
-            )
+            raise ValueError(f"{path} exposes the removed 56x1024 observation interface")
         if field in token_count_fields and _is_exact_int(value, 56):
-            raise ValueError(
-                f"{path} exposes the removed 56-token observation interface"
-            )
+            raise ValueError(f"{path} exposes the removed 56-token observation interface")
         if field == "obs_embedding_shape" and _int_sequence(value) == [56, 1024]:
-            raise ValueError(
-                f"{path} exposes the removed 56x1024 observation interface"
-            )
+            raise ValueError(f"{path} exposes the removed 56x1024 observation interface")
 
 
 def _validate_mainline_hidden_token_contract(cfg: DictConfig) -> None:
@@ -323,10 +302,7 @@ def _validate_mainline_hidden_token_contract(cfg: DictConfig) -> None:
 
     hidden_token_dir = _select_str(cfg, "task.openvla_oft.hidden_token_dir")
     if hidden_token_dir is None or "hidden_token" not in hidden_token_dir:
-        raise ValueError(
-            "task.openvla_oft.hidden_token_dir must name the "
-            "hidden_token sidecar"
-        )
+        raise ValueError("task.openvla_oft.hidden_token_dir must name the hidden_token sidecar")
 
     component_specs = (
         ("world_model", "obs_dim"),
@@ -350,15 +326,13 @@ def _validate_mainline_hidden_token_contract(cfg: DictConfig) -> None:
             )
         if component_token_dim is not None and component_token_dim != token_dim:
             raise ValueError(
-                f"{key}.token_dim must match task metadata {token_dim}, "
-                f"got {component_token_dim}"
+                f"{key}.token_dim must match task metadata {token_dim}, got {component_token_dim}"
             )
         if obs_dim_field is not None:
             obs_dim = _select_int(cfg, f"{key}.{obs_dim_field}")
             if obs_dim is not None and obs_dim != wm_obs_dim:
                 raise ValueError(
-                    f"{key}.{obs_dim_field} must match task metadata {wm_obs_dim}, "
-                    f"got {obs_dim}"
+                    f"{key}.{obs_dim_field} must match task metadata {wm_obs_dim}, got {obs_dim}"
                 )
 
     for key in (
@@ -410,8 +384,7 @@ def _validate_pre_mainline_routes(cfg: DictConfig) -> None:
         return
     if _select_str(cfg, "task.suite") != "libero_goal":
         raise ValueError(
-            "independent component training currently supports only "
-            "task.suite=libero_goal"
+            "independent component training currently supports only task.suite=libero_goal"
         )
     if _select_str(cfg, "pre_mainline.suite") != "libero_goal":
         raise ValueError(
@@ -448,21 +421,15 @@ def _validate_pre_mainline_routes(cfg: DictConfig) -> None:
         raise ValueError("canonical official LIBERO metadata requires task IDs [0..9]")
     if official_filenames != _LIBERO_GOAL_OFFICIAL_SHARDS:
         raise ValueError("canonical official LIBERO metadata requires all ten reward shards")
-    canonical_processed_root = (
-        data_root().expanduser().resolve() / "processed_data" / artifact_name
-    )
+    canonical_processed_root = data_root().expanduser().resolve() / "processed_data" / artifact_name
     canonical_paths = {
-        "task.hdf5_reward_dir": canonical_processed_root
-        / "no_noops_t_256_remaining_reward",
+        "task.hdf5_reward_dir": canonical_processed_root / "no_noops_t_256_remaining_reward",
         "task.openvla_oft.hidden_token_dir": canonical_processed_root
         / "no_noops_t_256_oft_hidden_token_vla_policy_h1",
     }
     for key, expected_path in canonical_paths.items():
         actual = _select_str(cfg, key)
-        if (
-            actual is None
-            or Path(actual).expanduser().resolve() != expected_path.resolve()
-        ):
+        if actual is None or Path(actual).expanduser().resolve() != expected_path.resolve():
             raise ValueError(
                 f"{key} must use the canonical official LIBERO path: "
                 f"{actual!r} != {str(expected_path.resolve())!r}"
@@ -472,29 +439,19 @@ def _validate_pre_mainline_routes(cfg: DictConfig) -> None:
             ("offline_warmup.data_dir", "task.hdf5_reward_dir"),
             ("offline_warmup.hidden_dir", "task.openvla_oft.hidden_token_dir"),
         )
-        if _select_str(cfg, "_target_") != (
-            "dreamervla.runners.WorldModelTrainingRunner"
-        ):
-            raise ValueError(
-                "independent WM training must use WorldModelTrainingRunner"
-            )
+        if _select_str(cfg, "_target_") != ("dreamervla.runners.WorldModelTrainingRunner"):
+            raise ValueError("independent WM training must use WorldModelTrainingRunner")
         if int(_select_int(cfg, "training.wm_warmup_steps") or 0) <= 0:
-            raise ValueError(
-                "pre-mainline WM upper bound requires wm_warmup_steps > 0"
-            )
+            raise ValueError("pre-mainline WM upper bound requires wm_warmup_steps > 0")
         if bool(OmegaConf.select(cfg, "training.debug", default=False)):
             raise ValueError(
                 "pre-mainline WM upper bound forbids training.debug because it "
                 "rewrites classifier and online rollout budgets at runtime"
             )
         if _select_int(cfg, "training.classifier_warmup_steps") != 0:
-            raise ValueError(
-                "pre-mainline WM upper bound requires classifier_warmup_steps=0"
-            )
+            raise ValueError("pre-mainline WM upper bound requires classifier_warmup_steps=0")
         if _select_int(cfg, "online_rollout.total_env_steps") != 0:
-            raise ValueError(
-                "pre-mainline WM upper bound cannot run online environment steps"
-            )
+            raise ValueError("pre-mainline WM upper bound cannot run online environment steps")
         required_task_ids = [
             int(value)
             for value in (
@@ -507,9 +464,7 @@ def _validate_pre_mainline_routes(cfg: DictConfig) -> None:
             )
         ]
         if required_task_ids != official_task_ids:
-            raise ValueError(
-                "pre-mainline WM upper bound must require all ten official task IDs"
-            )
+            raise ValueError("pre-mainline WM upper bound must require all ten official task IDs")
         _reject_official_complete_marker_requirement(
             cfg,
             "offline_warmup.require_reference_complete",
@@ -519,17 +474,12 @@ def _validate_pre_mainline_routes(cfg: DictConfig) -> None:
             ("data.success_dir_raw", "task.hdf5_reward_dir"),
             ("data.success_dir_hidden", "task.openvla_oft.hidden_token_dir"),
         )
-        if _select_str(cfg, "_target_") != (
-            "dreamervla.runners.SuccessClassifierTrainingRunner"
-        ):
+        if _select_str(cfg, "_target_") != ("dreamervla.runners.SuccessClassifierTrainingRunner"):
             raise ValueError(
-                "independent classifier training must use "
-                "SuccessClassifierTrainingRunner"
+                "independent classifier training must use SuccessClassifierTrainingRunner"
             )
         if int(_select_int(cfg, "training.num_epochs") or 0) <= 0:
-            raise ValueError(
-                "pre-mainline classifier upper bound requires num_epochs > 0"
-            )
+            raise ValueError("pre-mainline classifier upper bound requires num_epochs > 0")
         if bool(
             OmegaConf.select(
                 cfg,
@@ -541,23 +491,18 @@ def _validate_pre_mainline_routes(cfg: DictConfig) -> None:
                 "pre-mainline classifier upper bound uses held-out window F1; "
                 "episode evaluation is invalid without failure trajectories"
             )
-        if _select_str(cfg, "data.train_split") != "train" or _select_str(
-            cfg, "data.val_split"
-        ) != "val":
+        if (
+            _select_str(cfg, "data.train_split") != "train"
+            or _select_str(cfg, "data.val_split") != "val"
+        ):
             raise ValueError(
                 "pre-mainline classifier upper bound requires disjoint train/val splits"
             )
-        val_fraction = float(
-            OmegaConf.select(cfg, "data.val_fraction", default=0.0) or 0.0
-        )
+        val_fraction = float(OmegaConf.select(cfg, "data.val_fraction", default=0.0) or 0.0)
         if not 0.0 < val_fraction < 1.0:
-            raise ValueError(
-                "pre-mainline classifier data.val_fraction must be within (0,1)"
-            )
+            raise ValueError("pre-mainline classifier data.val_fraction must be within (0,1)")
         if _select_str(cfg, "training.final_selection_metric") != "window_f1":
-            raise ValueError(
-                "pre-mainline classifier upper bound must select held-out window F1"
-            )
+            raise ValueError("pre-mainline classifier upper bound must select held-out window F1")
         if not bool(
             OmegaConf.select(
                 cfg,
@@ -584,16 +529,12 @@ def _validate_pre_mainline_routes(cfg: DictConfig) -> None:
             )
         )
         if required_filenames != official_filenames:
-            raise ValueError(
-                "pre-mainline classifier must require all ten official reward shards"
-            )
+            raise ValueError("pre-mainline classifier must require all ten official reward shards")
         if any(
             OmegaConf.select(cfg, key, default=None) is not None
             for key in ("data.failure_dir_raw", "data.failure_dir_hidden")
         ):
-            raise ValueError(
-                "pre-mainline classifier upper bound cannot add failure datasets"
-            )
+            raise ValueError("pre-mainline classifier upper bound cannot add failure datasets")
     else:
         raise ValueError(f"unknown pre_mainline.stage: {stage!r}")
 
@@ -612,9 +553,7 @@ def _reject_official_complete_marker_requirement(
     config_path: str,
 ) -> None:
     if bool(OmegaConf.select(cfg, config_path, default=True)):
-        raise ValueError(
-            "official LIBERO reward shards do not use rollout complete markers"
-        )
+        raise ValueError("official LIBERO reward shards do not use rollout complete markers")
 
 
 def _validate_chunk_horizon_consistency(cfg: DictConfig) -> None:
@@ -858,29 +797,22 @@ def _validate_chunk_wm_token_space(cfg: DictConfig, key: str) -> None:
         return
     if action_emb_dim is None:
         raise ValueError(
-            f"{key}.action_emb_dim must be set for "
-            "ChunkAwareWorldModel WM concat conditioning"
+            f"{key}.action_emb_dim must be set for ChunkAwareWorldModel WM concat conditioning"
         )
     if action_emb_dim < 1:
         raise ValueError(f"{key}.action_emb_dim must be > 0, got {action_emb_dim}")
     if num_action_repeat is None:
         num_action_repeat = 1
     if num_action_repeat < 1:
-        raise ValueError(
-            f"{key}.num_action_repeat must be > 0, got {num_action_repeat}"
-        )
+        raise ValueError(f"{key}.num_action_repeat must be > 0, got {num_action_repeat}")
     if proprio_emb_dim is None:
         proprio_emb_dim = 0
     if proprio_emb_dim < 0:
-        raise ValueError(
-            f"{key}.proprio_emb_dim must be >= 0, got {proprio_emb_dim}"
-        )
+        raise ValueError(f"{key}.proprio_emb_dim must be >= 0, got {proprio_emb_dim}")
     if num_proprio_repeat is None:
         num_proprio_repeat = 1
     if num_proprio_repeat < 1:
-        raise ValueError(
-            f"{key}.num_proprio_repeat must be > 0, got {num_proprio_repeat}"
-        )
+        raise ValueError(f"{key}.num_proprio_repeat must be > 0, got {num_proprio_repeat}")
     if lang_emb_dim is None:
         lang_emb_dim = 0
     if lang_emb_dim < 0:
@@ -888,9 +820,7 @@ def _validate_chunk_wm_token_space(cfg: DictConfig, key: str) -> None:
     if num_lang_repeat is None:
         num_lang_repeat = 1
     if num_lang_repeat < 1:
-        raise ValueError(
-            f"{key}.num_lang_repeat must be > 0, got {num_lang_repeat}"
-        )
+        raise ValueError(f"{key}.num_lang_repeat must be > 0, got {num_lang_repeat}")
     expected_model_dim = (
         token_dim
         + proprio_emb_dim * num_proprio_repeat
@@ -945,14 +875,9 @@ def _validate_latent_spec(
 
     chunk_size = _select_int(cfg, f"{key}.chunk_size")
     time_horizon = _select_int(cfg, f"{key}.time_horizon")
-    if (
-        chunk_size is not None
-        and time_horizon is not None
-        and chunk_size != time_horizon
-    ):
+    if chunk_size is not None and time_horizon is not None and chunk_size != time_horizon:
         raise ValueError(
-            f"{key}.chunk_size must match {key}.time_horizon "
-            f"({chunk_size} != {time_horizon})"
+            f"{key}.chunk_size must match {key}.time_horizon ({chunk_size} != {time_horizon})"
         )
 
     if not check_action_token_count:
@@ -979,22 +904,14 @@ def _validate_dino_token_training(cfg: DictConfig) -> None:
     model_target = _component_target(cfg, "world_model")
     if model_target is None or not model_target.endswith("DinoTokenWorldModel"):
         raise ValueError(
-            "DinoTokenWorldModelTrainingRunner requires world_model="
-            "DinoTokenWorldModel"
+            "DinoTokenWorldModelTrainingRunner requires world_model=DinoTokenWorldModel"
         )
     precision = str(OmegaConf.select(cfg, "optim.precision", default="")).lower()
     if precision != "fp32":
-        raise ValueError(
-            "DinoTokenWorldModelTrainingRunner requires optim.precision=fp32"
-        )
-    param_precision = str(
-        OmegaConf.select(cfg, "optim.param_precision", default="")
-    ).lower()
+        raise ValueError("DinoTokenWorldModelTrainingRunner requires optim.precision=fp32")
+    param_precision = str(OmegaConf.select(cfg, "optim.param_precision", default="")).lower()
     if param_precision != "fp32":
-        raise ValueError(
-            "DinoTokenWorldModelTrainingRunner requires "
-            "optim.param_precision=fp32"
-        )
+        raise ValueError("DinoTokenWorldModelTrainingRunner requires optim.param_precision=fp32")
     frameskip = _select_int(cfg, "dino_wm.frameskip")
     action_dim = _select_int(cfg, "task.action_dim")
     model_action_dim = _select_int(cfg, "world_model.action_dim")
@@ -1032,9 +949,7 @@ def _validate_world_model_training_pipeline(cfg: DictConfig) -> None:
     target = str(OmegaConf.select(cfg, "_target_", default="") or "")
     if target.rsplit(".", 1)[-1] != "WorldModelTrainingRunner":
         return
-    total_env_steps = int(
-        OmegaConf.select(cfg, "online_rollout.total_env_steps", default=0) or 0
-    )
+    total_env_steps = int(OmegaConf.select(cfg, "online_rollout.total_env_steps", default=0) or 0)
     if total_env_steps != 0:
         raise ValueError(
             "WorldModelTrainingRunner only supports offline warmup; "
@@ -1069,16 +984,9 @@ def _validate_epoch_checkpoint_cadence(cfg: DictConfig) -> None:
                 "training.warmup_checkpoint_every was removed; use "
                 "training.warmup_checkpoint_every_epochs"
             )
-        cadence = int(
-            OmegaConf.select(
-                cfg, "training.warmup_checkpoint_every_epochs", default=1
-            )
-        )
+        cadence = int(OmegaConf.select(cfg, "training.warmup_checkpoint_every_epochs", default=1))
         if cadence < 0:
-            raise ValueError(
-                "training.warmup_checkpoint_every_epochs must be >= 0, "
-                f"got {cadence}"
-            )
+            raise ValueError(f"training.warmup_checkpoint_every_epochs must be >= 0, got {cadence}")
         epochs = int(OmegaConf.select(cfg, "training.warmup_replay_epochs", default=0) or 0)
         if epochs > 1 and cadence == 0:
             raise ValueError(
@@ -1090,13 +998,9 @@ def _validate_epoch_checkpoint_cadence(cfg: DictConfig) -> None:
             raise ValueError(
                 "training.ckpt_every was removed; use training.checkpoint_every_epochs"
             )
-        cadence = int(
-            OmegaConf.select(cfg, "training.checkpoint_every_epochs", default=1)
-        )
+        cadence = int(OmegaConf.select(cfg, "training.checkpoint_every_epochs", default=1))
         if cadence < 0:
-            raise ValueError(
-                f"training.checkpoint_every_epochs must be >= 0, got {cadence}"
-            )
+            raise ValueError(f"training.checkpoint_every_epochs must be >= 0, got {cadence}")
         epochs = int(OmegaConf.select(cfg, "training.num_epochs", default=1) or 0)
         if epochs > 1 and cadence == 0:
             raise ValueError(
@@ -1255,9 +1159,7 @@ def _validate_manual_cotrain_placement(cfg: DictConfig) -> None:
                 default=True,
             )
         ):
-            raise ValueError(
-                "failure_imagined_rl requires learner_updates_enabled=false"
-            )
+            raise ValueError("failure_imagined_rl requires learner_updates_enabled=false")
         if bool(
             OmegaConf.select(
                 cfg,
@@ -1265,9 +1167,7 @@ def _validate_manual_cotrain_placement(cfg: DictConfig) -> None:
                 default=False,
             )
         ):
-            raise ValueError(
-                "failure_imagined_rl requires staged_policy_update=false"
-            )
+            raise ValueError("failure_imagined_rl requires staged_policy_update=false")
         selector = str(
             OmegaConf.select(
                 cfg,
@@ -1277,8 +1177,7 @@ def _validate_manual_cotrain_placement(cfg: DictConfig) -> None:
         ).strip()
         if selector != "failed_episode_start":
             raise ValueError(
-                "failure_imagined_rl requires initial_condition_selector="
-                "failed_episode_start"
+                "failure_imagined_rl requires initial_condition_selector=failed_episode_start"
             )
 
     if bool(
@@ -1295,9 +1194,7 @@ def _validate_manual_cotrain_placement(cfg: DictConfig) -> None:
                 default=True,
             )
         ):
-            raise ValueError(
-                "manual_cotrain.staged_policy_update requires real_env_enabled=true"
-            )
+            raise ValueError("manual_cotrain.staged_policy_update requires real_env_enabled=true")
         if not bool(
             OmegaConf.select(
                 cfg,
@@ -1306,23 +1203,17 @@ def _validate_manual_cotrain_placement(cfg: DictConfig) -> None:
             )
         ):
             raise ValueError(
-                "manual_cotrain.staged_policy_update requires "
-                "learner_updates_enabled=true"
+                "manual_cotrain.staged_policy_update requires learner_updates_enabled=true"
             )
-        if int(
-            OmegaConf.select(cfg, "manual_cotrain.sync_every", default=1)
-        ) != 1:
-            raise ValueError(
-                "manual_cotrain.staged_policy_update requires sync_every=1"
-            )
+        if int(OmegaConf.select(cfg, "manual_cotrain.sync_every", default=1)) != 1:
+            raise ValueError("manual_cotrain.staged_policy_update requires sync_every=1")
 
     precision = OmegaConf.select(cfg, "learner.train_cfg.precision", default=None)
     if precision is not None:
         normalized = str(precision).strip().lower()
         if normalized not in {"fp32", "float32", "bf16", "bfloat16", "fp16", "float16"}:
             raise ValueError(
-                "learner.train_cfg.precision must be one of "
-                f"fp32, bf16, or fp16; got {precision!r}"
+                f"learner.train_cfg.precision must be one of fp32, bf16, or fp16; got {precision!r}"
             )
     _warn_manual_cotrain_baseline_overrides(cfg)
 
@@ -1410,9 +1301,7 @@ def _validate_manual_cotrain_group_geometry(cfg: DictConfig) -> None:
             default=envs_per_worker,
         )
     )
-    rollout_epoch = int(
-        OmegaConf.select(cfg, "manual_cotrain.rollout_epoch", default=1)
-    )
+    rollout_epoch = int(OmegaConf.select(cfg, "manual_cotrain.rollout_epoch", default=1))
     real_rollout_epoch_raw = OmegaConf.select(
         cfg,
         "manual_cotrain.real_rollout_epoch",
@@ -1421,11 +1310,7 @@ def _validate_manual_cotrain_group_geometry(cfg: DictConfig) -> None:
     real_rollout_epoch = (
         0
         if real_workers <= 0
-        else int(
-            rollout_epoch
-            if real_rollout_epoch_raw is None
-            else real_rollout_epoch_raw
-        )
+        else int(rollout_epoch if real_rollout_epoch_raw is None else real_rollout_epoch_raw)
     )
     wm_rollout_epoch = int(
         OmegaConf.select(
@@ -1467,9 +1352,7 @@ def _validate_manual_cotrain_group_geometry(cfg: DictConfig) -> None:
                 f"real_workers={real_workers}"
             )
     else:
-        real_trajectory_count = (
-            real_envs_per_worker * real_workers * real_rollout_epoch
-        )
+        real_trajectory_count = real_envs_per_worker * real_workers * real_rollout_epoch
     if wm_workers > 0 and wm_rollout_target is not None:
         wm_trajectory_count = int(wm_rollout_target)
         if wm_trajectory_count % wm_envs_per_worker != 0:
@@ -1529,8 +1412,7 @@ def _validate_manual_actor_ppo_batches(cfg: DictConfig) -> None:
         return
     if global_batch_raw is None or micro_batch_raw is None:
         raise ValueError(
-            "actor.train_cfg.global_batch_size and micro_batch_size must be "
-            "configured together"
+            "actor.train_cfg.global_batch_size and micro_batch_size must be configured together"
         )
     global_batch = int(global_batch_raw)
     micro_batch = int(micro_batch_raw)
@@ -1693,8 +1575,7 @@ def _validate_fsdp_config(cfg: DictConfig) -> None:
                 "float16",
             }:
                 raise ValueError(
-                    f"{base}.precision must be one of fp32, bf16, or fp16; "
-                    f"got {precision!r}"
+                    f"{base}.precision must be one of fp32, bf16, or fp16; got {precision!r}"
                 )
 
 
@@ -1726,9 +1607,7 @@ def _validate_ray_single_node_placement(cfg: DictConfig) -> None:
             if count <= 0:
                 raise ValueError("count must be >= 1")
             if num_workers is not None and count != num_workers:
-                raise ValueError(
-                    f"count must match learner.num_workers ({count} != {num_workers})"
-                )
+                raise ValueError(f"count must match learner.num_workers ({count} != {num_workers})")
         elif strategy == "packed":
             _validate_ray_packed_placement(raw, num_workers=num_workers)
         elif strategy == "flexible":
@@ -1740,10 +1619,7 @@ def _validate_ray_single_node_placement(cfg: DictConfig) -> None:
                     f"({actual_workers} != {num_workers})"
                 )
         else:
-            raise ValueError(
-                "strategy must be one of node, packed, or flexible; "
-                f"got {strategy!r}"
-            )
+            raise ValueError(f"strategy must be one of node, packed, or flexible; got {strategy!r}")
     except Exception as exc:
         raise ValueError(f"learner.placement is invalid: {exc}") from exc
 
@@ -1768,14 +1644,11 @@ def _validate_ray_packed_placement(
         raise ValueError(f"invalid GPU range [{start_gpu}, {end_gpu}]")
     span = end_gpu - start_gpu + 1
     if span % num_gpus_per_worker != 0:
-        raise ValueError(
-            "GPU span must be divisible by learner.placement.num_gpus_per_worker"
-        )
+        raise ValueError("GPU span must be divisible by learner.placement.num_gpus_per_worker")
     actual_workers = span // num_gpus_per_worker
     if num_workers is not None and actual_workers != num_workers:
         raise ValueError(
-            "packed GPU span must match learner.num_workers "
-            f"({actual_workers} != {num_workers})"
+            f"packed GPU span must match learner.num_workers ({actual_workers} != {num_workers})"
         )
 
 
@@ -1838,22 +1711,14 @@ def _validate_existing_paths(cfg: DictConfig) -> None:
 
 def _looks_oft_sidecar_cfg(cfg: DictConfig) -> bool:
     expected_action_head = _select_str(cfg, "dataset.expected_action_head_type")
-    task_action_head = _select_str(
-        cfg, "task.openvla_oft.hidden_token.expected_action_head_type"
-    )
+    task_action_head = _select_str(cfg, "task.openvla_oft.hidden_token.expected_action_head_type")
     expected_model_path = _select_str(cfg, "dataset.expected_model_path")
     oft_ckpt_path = _select_str(cfg, "task.openvla_oft.ckpt_path")
     target = _select_str(cfg, "_target_") or ""
     return (
         "OFT" in target
-        or (
-            expected_action_head is not None
-            and expected_action_head == task_action_head
-        )
-        or (
-            expected_model_path is not None
-            and expected_model_path == oft_ckpt_path
-        )
+        or (expected_action_head is not None and expected_action_head == task_action_head)
+        or (expected_model_path is not None and expected_model_path == oft_ckpt_path)
     )
 
 
@@ -1861,9 +1726,7 @@ def _looks_oft_hidden_token_cfg(cfg: DictConfig) -> bool:
     if not _looks_oft_sidecar_cfg(cfg):
         return False
     expected_source = _select_str(cfg, "dataset.expected_obs_hidden_source")
-    task_source = _select_str(
-        cfg, "task.openvla_oft.hidden_token.expected_obs_hidden_source"
-    )
+    task_source = _select_str(cfg, "task.openvla_oft.hidden_token.expected_obs_hidden_source")
     return expected_source is not None and expected_source == task_source
 
 
@@ -1885,9 +1748,7 @@ def _require_equal_if_present(
     if left is None or right is None:
         return
     if left != right:
-        raise ValueError(
-            f"{message} {left_key}={left!r}, {right_key}={right!r}"
-        )
+        raise ValueError(f"{message} {left_key}={left!r}, {right_key}={right!r}")
 
 
 def _require_positive_if_present(cfg: DictConfig, key: str) -> None:

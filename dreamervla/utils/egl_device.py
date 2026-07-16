@@ -5,9 +5,7 @@ from __future__ import annotations
 import logging
 import os
 
-_ZERO_GPU_EGL_ERROR = (
-    "render_backend=egl requires ngpu>=1; use render_backend=osmesa for ngpu=0"
-)
+_ZERO_GPU_EGL_ERROR = "render_backend=egl requires ngpu>=1; use render_backend=osmesa for ngpu=0"
 
 
 def apply_egl_device_regime(

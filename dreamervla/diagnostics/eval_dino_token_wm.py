@@ -36,9 +36,7 @@ def deterministic_window_starts(
     limit = int(max_windows)
     if limit <= 0 or limit >= count:
         return list(range(count))
-    return sorted(
-        set(np.linspace(0, count - 1, num=limit, dtype=np.int64).tolist())
-    )
+    return sorted(set(np.linspace(0, count - 1, num=limit, dtype=np.int64).tolist()))
 
 
 @torch.no_grad()
@@ -53,9 +51,7 @@ def one_step_token_predictions(
 
     expected = int(world_model.num_hist + world_model.num_pred)
     if tokens.ndim != 4 or int(tokens.shape[1]) != expected:
-        raise ValueError(
-            f"tokens must be [B,{expected},N,D], got {tuple(tokens.shape)}"
-        )
+        raise ValueError(f"tokens must be [B,{expected},N,D], got {tuple(tokens.shape)}")
     latent = world_model.encode(
         {"visual": tokens, "proprio": proprio},
         actions,
@@ -82,9 +78,9 @@ def token_prediction_metrics(
     flat_target = target.float().reshape(-1, int(np.prod(target.shape[-2:])))
     cosine = F.cosine_similarity(flat_pred, flat_target, dim=-1)
     mse = (flat_pred - flat_target).square().mean(dim=-1)
-    relative_l2 = (flat_pred - flat_target).norm(dim=-1) / flat_target.norm(
-        dim=-1
-    ).clamp_min(1.0e-8)
+    relative_l2 = (flat_pred - flat_target).norm(dim=-1) / flat_target.norm(dim=-1).clamp_min(
+        1.0e-8
+    )
     return {
         "cos": cosine.cpu().numpy(),
         "mse": mse.cpu().numpy(),
@@ -147,8 +143,7 @@ def load_dino_token_checkpoint(
     model = hydra.utils.instantiate(model_cfg)
     if not isinstance(model, DinoTokenWorldModel):
         raise TypeError(
-            "DINO token evaluation requires DinoTokenWorldModel, got "
-            f"{type(model).__name__}"
+            f"DINO token evaluation requires DinoTokenWorldModel, got {type(model).__name__}"
         )
     model.load_state_dict(
         _load_world_model_state(payload, checkpoint_path),
@@ -246,9 +241,7 @@ def main() -> None:
         "model_minus_persistence": {
             "cos": float(model_summary["cos"] - persistence_summary["cos"]),
             "mse": float(model_summary["mse"] - persistence_summary["mse"]),
-            "rel_l2": float(
-                model_summary["rel_l2"] - persistence_summary["rel_l2"]
-            ),
+            "rel_l2": float(model_summary["rel_l2"] - persistence_summary["rel_l2"]),
         },
     }
     print("\n=== DINO token one-step vs persistence ===")

@@ -6,6 +6,7 @@ from dreamervla.workers.rollout import dump_worker as dw
 class _FakeWriter:
     created: list[str] = []
     instances: list = []
+
     def __init__(self, reward_dir, hidden_dir, shard_name):
         self.shard_name = str(shard_name)
         self.demos: list[int] = []
@@ -13,9 +14,11 @@ class _FakeWriter:
         self.closed = False
         _FakeWriter.created.append(self.shard_name)
         _FakeWriter.instances.append(self)
+
     def write_demo(self, index, steps, preprocess_config=None, data_attrs=None, **kw):
         self.demos.append(int(index))
         self.kwargs.append(dict(kw))
+
     def close(self):
         self.closed = True
 
@@ -37,6 +40,7 @@ class _FileWriter:
     def close(self):
         self.closed = True
 
+
 def _episode():
     return [
         {
@@ -57,7 +61,7 @@ def test_no_rotation_when_disabled():
         w.init()
         for _ in range(5):
             w.add_episode(_episode())
-        assert _FakeWriter.created == ["ray_shard_000.hdf5"]   # single shard
+        assert _FakeWriter.created == ["ray_shard_000.hdf5"]  # single shard
         assert w.size() == 5
         assert _FakeWriter.instances[0].demos == [0, 1, 2, 3, 4]
 
@@ -72,7 +76,9 @@ def test_rotates_every_n_demos():
             w.add_episode(_episode())
         # 5 demos / 2 per shard -> shards 000(2), 001(2), 002(1)
         assert _FakeWriter.created == [
-            "ray_shard_000.hdf5", "ray_shard_001.hdf5", "ray_shard_002.hdf5"
+            "ray_shard_000.hdf5",
+            "ray_shard_001.hdf5",
+            "ray_shard_002.hdf5",
         ]
         assert w.size() == 5
         assert [w.demos for w in _FakeWriter.instances] == [[0, 1], [0, 1], [0]]
@@ -142,18 +148,10 @@ def test_one_episode_shard_records_manifest_and_prunes_recent_global_steps(tmp_p
     entries = dw.read_online_rollout_manifest(tmp_path)
     assert [int(item["global_step"]) for item in entries] == [11, 12]
     assert (
-        tmp_path
-        / "episodes"
-        / "task_07"
-        / "global_step000012_success_True"
-        / "ep_000003.h5"
+        tmp_path / "episodes" / "task_07" / "global_step000012_success_True" / "ep_000003.h5"
     ).is_file()
     assert not (
-        tmp_path
-        / "episodes"
-        / "task_07"
-        / "global_step000010_success_True"
-        / "ep_000001.h5"
+        tmp_path / "episodes" / "task_07" / "global_step000010_success_True" / "ep_000001.h5"
     ).exists()
 
 
@@ -174,8 +172,9 @@ def test_start_shard_index_names_single_shard_on_resume():
     _FakeWriter.instances = []
     with mock.patch.object(dw, "RolloutDumpWriter", _FakeWriter):
         # No rotation (demos_per_shard=0) still appends at the resume-aware name.
-        w = dw.RolloutDumpWorker("r", "h", "ray_shard_002.hdf5", demos_per_shard=0,
-                                 start_shard_index=2)
+        w = dw.RolloutDumpWorker(
+            "r", "h", "ray_shard_002.hdf5", demos_per_shard=0, start_shard_index=2
+        )
         w.init()
         w.add_episode(_episode())
         assert _FakeWriter.created == ["ray_shard_002.hdf5"]
@@ -231,9 +230,7 @@ def test_coldstart_per_traj_identity_naming(tmp_path):
     assert (tmp_path / "reward" / "traj_t02_ep000005.hdf5").is_file()
     assert (tmp_path / "hidden" / "traj_t02_ep000005.hdf5").is_file()
     assert not (tmp_path / "reward" / "ray_shard_000.hdf5").exists()
-    rec = json.loads(
-        (tmp_path / "reward" / "episode_index.jsonl").read_text().splitlines()[-1]
-    )
+    rec = json.loads((tmp_path / "reward" / "episode_index.jsonl").read_text().splitlines()[-1])
     assert rec["file"] == "traj_t02_ep000005.hdf5"
     assert rec["task_id"] == 2 and rec["episode_id"] == 5 and rec["success"] is True
 
@@ -256,6 +253,4 @@ def test_coldstart_per_traj_recollect_overwrites(tmp_path):
         w.close()
 
     assert result["shard_name"] == "traj_t00_ep000000.hdf5"
-    assert [p.name for p in (tmp_path / "reward").glob("*.hdf5")] == [
-        "traj_t00_ep000000.hdf5"
-    ]
+    assert [p.name for p in (tmp_path / "reward").glob("*.hdf5")] == ["traj_t00_ep000000.hdf5"]

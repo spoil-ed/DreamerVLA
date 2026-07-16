@@ -48,9 +48,7 @@ def test_per_trajectory_shard_name():
     assert per_trajectory_shard_name("traj", 3, 41) == "traj_t03_ep000041.hdf5"
 
 
-def test_writes_one_identity_named_pair_per_trajectory(
-    tmp_path, hidden_token_preprocess_config
-):
+def test_writes_one_identity_named_pair_per_trajectory(tmp_path, hidden_token_preprocess_config):
     reward_dir, hidden_dir = tmp_path / "reward", tmp_path / "hidden"
     with PerTrajectoryDumpWriter(reward_dir, hidden_dir) as writer:
         writer.write_demo(
@@ -96,8 +94,7 @@ def test_writes_one_identity_named_pair_per_trajectory(
 
     # episode index records correspondence
     lines = [
-        json.loads(line)
-        for line in (reward_dir / EPISODE_INDEX_NAME).read_text().splitlines()
+        json.loads(line) for line in (reward_dir / EPISODE_INDEX_NAME).read_text().splitlines()
     ]
     assert lines[0]["file"] == "traj_t00_ep000000.hdf5"
     assert lines[0]["task_id"] == 0 and lines[0]["episode_id"] == 0
@@ -153,9 +150,7 @@ def test_no_canonical_file_left_when_write_crashes(tmp_path, monkeypatch):
     assert list(hidden_dir.glob("*.hdf5")) == []
 
 
-def test_no_tmp_files_left_after_successful_write(
-    tmp_path, hidden_token_preprocess_config
-):
+def test_no_tmp_files_left_after_successful_write(tmp_path, hidden_token_preprocess_config):
     reward_dir, hidden_dir = tmp_path / "reward", tmp_path / "hidden"
     with PerTrajectoryDumpWriter(reward_dir, hidden_dir) as writer:
         writer.write_demo(

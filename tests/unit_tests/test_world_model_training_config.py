@@ -295,10 +295,7 @@ def test_world_model_training_runner_rejects_non_ray_online_cotrain(tmp_path):
 
     with pytest.raises(
         ValueError,
-        match=(
-            "WorldModelTrainingRunner only supports offline warmup; "
-            "use CotrainRunner"
-        ),
+        match=("WorldModelTrainingRunner only supports offline warmup; use CotrainRunner"),
     ):
         validate_cfg(cfg)
 

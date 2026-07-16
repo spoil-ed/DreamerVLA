@@ -75,9 +75,7 @@ def test_write_demo_persists_identity_attrs(tmp_path, hidden_token_preprocess_co
         assert int(hidden_demo.attrs["env_step"]) == 4567
 
 
-def test_write_demo_persists_data_attrs_on_hidden_sidecar(
-    tmp_path, hidden_token_preprocess_config
-):
+def test_write_demo_persists_data_attrs_on_hidden_sidecar(tmp_path, hidden_token_preprocess_config):
     data_attrs = {
         "task_suite_name": "libero_goal",
         "env_name": "libero",
@@ -113,9 +111,7 @@ def test_write_demo_identity_optional(tmp_path, hidden_token_preprocess_config):
         assert "task_id" not in f["data"]["demo_0"].attrs
 
 
-def test_write_demo_persists_demo_language_embedding(
-    tmp_path, hidden_token_preprocess_config
-):
+def test_write_demo_persists_demo_language_embedding(tmp_path, hidden_token_preprocess_config):
     first = _one_step()
     second = _one_step()
     first["lang_emb"] = np.arange(8, dtype=np.float32)

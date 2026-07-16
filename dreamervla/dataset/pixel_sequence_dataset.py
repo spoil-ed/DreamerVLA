@@ -114,13 +114,9 @@ class PixelSequenceDataset(BaseDataset):
                     last_start = episode_length - self.sequence_length
                     for start in range(0, last_start + 1, self.stride):
                         self._entries.append(
-                            _WindowEntry(
-                                str(file_path), demo_key, start, episode_length
-                            )
+                            _WindowEntry(str(file_path), demo_key, start, episode_length)
                         )
-                        if max_windows is not None and len(self._entries) >= int(
-                            max_windows
-                        ):
+                        if max_windows is not None and len(self._entries) >= int(max_windows):
                             stop = True
                             break
                     if stop:
@@ -158,9 +154,7 @@ class PixelSequenceDataset(BaseDataset):
         return len(self._entries)
 
     def _file(self, path: str) -> h5py.File:
-        return self.cached_hdf5_file(
-            self._file_cache, path, self._hdf5_open_kwargs
-        )
+        return self.cached_hdf5_file(self._file_cache, path, self._hdf5_open_kwargs)
 
     def _resize_images(self, images: torch.Tensor) -> torch.Tensor:
         # images: [T, C, H, W] in [0, 255]
@@ -188,18 +182,14 @@ class PixelSequenceDataset(BaseDataset):
         images = self._resize_images(torch.cat(frames, dim=1)).contiguous()
 
         window = np.asarray(demo["actions"][start:end], dtype=np.float32)
-        prev_actions = np.zeros(
-            (self.sequence_length, window.shape[-1]), dtype=np.float32
-        )
+        prev_actions = np.zeros((self.sequence_length, window.shape[-1]), dtype=np.float32)
         if self.sequence_length > 1:
             prev_actions[1:] = window[:-1]
         actions = torch.from_numpy(prev_actions)
         # ``window`` is a fresh owned array (HDF5 slice read), so no .copy() needed.
         current_actions = torch.from_numpy(window)
 
-        rewards = torch.from_numpy(
-            np.asarray(demo["rewards"][start:end], dtype=np.float32)
-        )
+        rewards = torch.from_numpy(np.asarray(demo["rewards"][start:end], dtype=np.float32))
         dones = torch.from_numpy(np.asarray(demo["dones"][start:end], dtype=np.float32))
         is_first = torch.zeros(self.sequence_length, dtype=torch.bool)
         is_first[0] = True

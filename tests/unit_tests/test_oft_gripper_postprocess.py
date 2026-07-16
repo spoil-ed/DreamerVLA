@@ -33,12 +33,12 @@ class _EvalActionHarness(EmbodiedEvalActionMixin):
 @pytest.mark.parametrize(
     "g_in, g_out",
     [
-        (1.0, -1.0),   # fully closed model output -> +1 after 2g-1 -> sign +1 -> *-1 = -1
+        (1.0, -1.0),  # fully closed model output -> +1 after 2g-1 -> sign +1 -> *-1 = -1
         (0.9, -1.0),
         (0.51, -1.0),
         (0.49, 1.0),
         (0.1, 1.0),
-        (0.0, 1.0),    # fully open model output -> -1 after 2g-1 -> sign -1 -> *-1 = +1
+        (0.0, 1.0),  # fully open model output -> -1 after 2g-1 -> sign -1 -> *-1 = +1
     ],
 )
 def test_gripper_binarize_and_invert(g_in: float, g_out: float) -> None:

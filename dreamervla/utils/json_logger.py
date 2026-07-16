@@ -6,9 +6,7 @@ from typing import Any
 
 
 class JsonLogger:
-    def __init__(
-        self, path: str, filter_fn: Callable[[str, Any], bool] | None = None
-    ):
+    def __init__(self, path: str, filter_fn: Callable[[str, Any], bool] | None = None):
         if filter_fn is None:
 
             def filter_fn(k, v):

@@ -67,9 +67,7 @@ def test_coldstart_suite_binds_own_ckpt_and_suite(task, ckpt_suffix, unnorm_key,
     assert oft.dataset_statistics_key == unnorm_key
     assert artifact in str(oft.hdf5_reward_dir)
     assert ("input_" + "tokens") not in oft
-    assert str(oft.hidden_token_dir).endswith(
-        "_oft_hidden_token_vla_policy_h1"
-    )
+    assert str(oft.hidden_token_dir).endswith("_oft_hidden_token_vla_policy_h1")
     # generated rollouts live under a marked root, never the offline processed_data/
     assert "/collected_rollouts/" in str(oft.hdf5_reward_dir)
     assert "/collected_rollouts/" in str(oft.hidden_token_dir)

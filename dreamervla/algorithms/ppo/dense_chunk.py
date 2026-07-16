@@ -84,18 +84,16 @@ def dino_lumos_dense_chunk_step(
     """One PPO/GRPO update using chunk-WM imagined trajectories + dense state-reward."""
     if (
         real_relabel_batch is not None
-        and float(
-            (algorithm_cfg.get("real_rollout_relabel", {}) or {}).get("loss_scale", 0.0)
-        )
+        and float((algorithm_cfg.get("real_rollout_relabel", {}) or {}).get("loss_scale", 0.0))
         > 0.0
     ):
         raise NotImplementedError(
             "dino_lumos_dense_chunk_step: real_rollout_relabel not yet wired; "
             "use dino_lumos_dense_step or set real_rollout_relabel.loss_scale=0."
         )
-    if (
-        critic is not None or target_critic is not None or critic_optimizer is not None
-    ) and bool((algorithm_cfg.get("tdmpc_ac", {}) or {}).get("enabled", False)):
+    if (critic is not None or target_critic is not None or critic_optimizer is not None) and bool(
+        (algorithm_cfg.get("tdmpc_ac", {}) or {}).get("enabled", False)
+    ):
         raise NotImplementedError(
             "dino_lumos_dense_chunk_step: TD-MPC critic side-update not yet wired; "
             "use dino_lumos_dense_step or set tdmpc_ac.enabled=false."
@@ -128,17 +126,13 @@ def dino_lumos_dense_chunk_step(
 
     obs = move_mapping_to_device(dict(obs), device)
     with torch.no_grad():
-        latent_seq = _detach_latent(
-            _world_model_observe_sequence(chunk_world_model, obs)
-        )
+        latent_seq = _detach_latent(_world_model_observe_sequence(chunk_world_model, obs))
         seq_len = _latent_time_dim(latent_seq)
         starts = min(imag_last if imag_last > 0 else seq_len, seq_len)
         current = _repeat_latent(_flatten_last_steps(latent_seq, starts), group_size)
 
     actor_feats: list[torch.Tensor] = []
-    action_chunks: list[
-        torch.Tensor
-    ] = []  # [B_eff, K, A] per chunk — basis for PPO ratio
+    action_chunks: list[torch.Tensor] = []  # [B_eff, K, A] per chunk — basis for PPO ratio
     action_token_ids: list[torch.Tensor | None] = []
     old_log_probs: list[torch.Tensor] = []
     ref_kls: list[torch.Tensor] = []
@@ -148,9 +142,7 @@ def dino_lumos_dense_chunk_step(
 
     with _temporarily_freeze(chunk_world_model):
         for _ in range(horizon):
-            actor_feat = (
-                _world_model_actor_input(chunk_world_model, current).detach().float()
-            )
+            actor_feat = _world_model_actor_input(chunk_world_model, current).detach().float()
             with torch.no_grad():
                 # return_chunk=True: actor samples the full K-step chunk stochastically
                 # and returns chunk-level log_prob (sum over K * action_dim). This is
@@ -173,9 +165,7 @@ def dino_lumos_dense_chunk_step(
             action_chunks.append(action_chunk.detach())
             sampled_token_ids = _sample_extra.get("action_token_ids")
             action_token_ids.append(
-                sampled_token_ids.detach()
-                if isinstance(sampled_token_ids, torch.Tensor)
-                else None
+                sampled_token_ids.detach() if isinstance(sampled_token_ids, torch.Tensor) else None
             )
             old_log_probs.append(old_lp.detach())
 
@@ -226,9 +216,7 @@ def dino_lumos_dense_chunk_step(
                         clip=True,
                     )
                     clip_delta = (env_clipped - env_unclipped).abs()
-                    chunk_clip_fracs.append(
-                        float((clip_delta > 0).float().mean().item())
-                    )
+                    chunk_clip_fracs.append(float((clip_delta > 0).float().mean().item()))
                     chunk_clip_max.append(float(clip_delta.max().item()))
                 next_seq = chunk_world_model(
                     {
@@ -249,9 +237,7 @@ def dino_lumos_dense_chunk_step(
                 # The WM's reward head consumes the latent dict shape used by predict_next
                 # (which downstreams to the hidden tensor), so a single-frame dict suffices.
                 per_frame = [
-                    _world_model_state_reward(
-                        chunk_world_model, {"hidden": hidden_seq[:, k]}
-                    )
+                    _world_model_state_reward(chunk_world_model, {"hidden": hidden_seq[:, k]})
                     .detach()
                     .float()
                     for k in range(K)
@@ -271,9 +257,7 @@ def dino_lumos_dense_chunk_step(
 
     # KL-into-reward (LUMOS/verl): subtract chunk-level KL sum from the return.
     if use_ref and ref_kls and kl_coef > 0.0:
-        kl_per_chunk = torch.stack(ref_kls, dim=1).to(
-            dtype=reward_stack.dtype
-        )  # [B_eff, horizon]
+        kl_per_chunk = torch.stack(ref_kls, dim=1).to(dtype=reward_stack.dtype)  # [B_eff, horizon]
         kl_per_rollout = kl_per_chunk.sum(dim=1)
         traj_score = discounted - kl_coef * kl_per_rollout
     else:
@@ -361,9 +345,7 @@ def dino_lumos_dense_chunk_step(
             epoch_entropy_sum += float(entropy_stack.detach().sum().cpu())
             ratio_records.append(ratio.detach())
 
-        grad_norm = torch.nn.utils.clip_grad_norm_(
-            policy.parameters(), max_norm=grad_clip
-        )
+        grad_norm = torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=grad_clip)
         actor_optimizer.step()
 
         total_actor_loss += epoch_loss
@@ -404,10 +386,7 @@ def dino_lumos_dense_chunk_step(
         "ppo_ratio_min": float(ratio_last.min().cpu()) if ratio_last.numel() else 1.0,
         "ppo_ratio_max": float(ratio_last.max().cpu()) if ratio_last.numel() else 1.0,
         "ppo_clipfrac": float(
-            ((ratio_last < 1.0 - clip_low) | (ratio_last > 1.0 + clip_high))
-            .float()
-            .mean()
-            .cpu()
+            ((ratio_last < 1.0 - clip_low) | (ratio_last > 1.0 + clip_high)).float().mean().cpu()
         )
         if ratio_last.numel()
         else 0.0,
@@ -421,9 +400,7 @@ def dino_lumos_dense_chunk_step(
         "dense_chunk/advantage_mag": advantage_mag,
         "dense_chunk/reward_mean": reward_mean,
         "dense_chunk/ref_kl_mean": float(kl_per_rollout.detach().mean().cpu()),
-        "dense_chunk/ratio_mean": float(ratio_last.mean().cpu())
-        if ratio_last.numel()
-        else 0.0,
+        "dense_chunk/ratio_mean": float(ratio_last.mean().cpu()) if ratio_last.numel() else 0.0,
         "dense_chunk/horizon_chunks": float(horizon),
         "dense_chunk/chunk_size": float(K),
         "dense_chunk/total_env_steps": float(total_steps),
@@ -437,11 +414,8 @@ def dino_lumos_dense_chunk_step(
         # density. If ``action_clip_frac`` is non-trivial (>1-2%), the
         # PPO ratio is biased on those samples; consider tanh-bounding the
         # actor or switching to ``rssm_action_clip=False``.
-        "dense_chunk/action_clip_frac": sum(chunk_clip_fracs)
-        / max(1, len(chunk_clip_fracs)),
-        "dense_chunk/action_clip_max_env": max(chunk_clip_max)
-        if chunk_clip_max
-        else 0.0,
+        "dense_chunk/action_clip_frac": sum(chunk_clip_fracs) / max(1, len(chunk_clip_fracs)),
+        "dense_chunk/action_clip_max_env": max(chunk_clip_max) if chunk_clip_max else 0.0,
     }
 
 

@@ -47,10 +47,7 @@ class _ReplayWithInitialEmbeddings:
             source = self.proprios
         elif key != "obs_embedding":
             raise KeyError(key)
-        values = [
-            source[index % source.shape[0]]
-            for index in range(int(batch_size))
-        ]
+        values = [source[index % source.shape[0]] for index in range(int(batch_size))]
         return np.stack(values, axis=0)
 
 
@@ -136,9 +133,7 @@ def test_latent_world_model_env_uses_per_slot_initial_latents() -> None:
         action_dim=1,
         num_envs=2,
     )
-    env.set_initial_latents(
-        np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
-    )
+    env.set_initial_latents(np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
 
     obs0, _ = env.reset_slot(0, task_id=0, episode_id=0)
     obs1, _ = env.reset_slot(1, task_id=0, episode_id=1)
@@ -150,16 +145,10 @@ def test_latent_world_model_env_uses_per_slot_initial_latents() -> None:
 def test_wm_env_worker_bootstraps_initial_latents_from_replay() -> None:
     worker = WMEnvWorker(
         env_cfg={
-            "target": (
-                "dreamervla.envs.world_model.latent_world_model_env:"
-                "LatentWorldModelEnv"
-            ),
+            "target": ("dreamervla.envs.world_model.latent_world_model_env:LatentWorldModelEnv"),
             "kwargs": {
                 "world_model": {
-                    "target": (
-                        "dreamervla.workers.actor._test_models:"
-                        "TinyLumosWorldModel"
-                    ),
+                    "target": ("dreamervla.workers.actor._test_models:TinyLumosWorldModel"),
                     "kwargs": {"hidden_dim": 2, "action_dim": 1},
                 },
                 "classifier": None,
@@ -174,9 +163,7 @@ def test_wm_env_worker_bootstraps_initial_latents_from_replay() -> None:
         max_steps_per_rollout_epoch=2,
         num_action_chunks=1,
         task_id=0,
-        replay=_ReplayWithInitialEmbeddings(
-            np.array([[5.0, 6.0], [7.0, 8.0]], dtype=np.float32)
-        ),
+        replay=_ReplayWithInitialEmbeddings(np.array([[5.0, 6.0], [7.0, 8.0]], dtype=np.float32)),
     )
     try:
         worker.init()
@@ -191,16 +178,10 @@ def test_wm_env_worker_bootstraps_initial_latents_from_replay() -> None:
 def test_wm_env_worker_bootstraps_aligned_multi_task_conditions() -> None:
     worker = WMEnvWorker(
         env_cfg={
-            "target": (
-                "dreamervla.envs.world_model.latent_world_model_env:"
-                "LatentWorldModelEnv"
-            ),
+            "target": ("dreamervla.envs.world_model.latent_world_model_env:LatentWorldModelEnv"),
             "kwargs": {
                 "world_model": {
-                    "target": (
-                        "dreamervla.workers.actor._test_models:"
-                        "TinyLumosWorldModel"
-                    ),
+                    "target": ("dreamervla.workers.actor._test_models:TinyLumosWorldModel"),
                     "kwargs": {"hidden_dim": 2, "action_dim": 1},
                 },
                 "classifier": None,
@@ -245,18 +226,12 @@ def test_wm_env_worker_repeats_one_aligned_condition_for_each_policy_group() -> 
     replay = _CyclingGroupedInitialConditions()
     worker = WMEnvWorker(
         env_cfg={
-            "target": (
-                "dreamervla.envs.world_model.latent_world_model_env:"
-                "LatentWorldModelEnv"
-            ),
+            "target": ("dreamervla.envs.world_model.latent_world_model_env:LatentWorldModelEnv"),
             "bootstrap_group_size": 4,
             "defer_initial_condition_bootstrap": True,
             "kwargs": {
                 "world_model": {
-                    "target": (
-                        "dreamervla.workers.actor._test_models:"
-                        "TinyLumosWorldModel"
-                    ),
+                    "target": ("dreamervla.workers.actor._test_models:TinyLumosWorldModel"),
                     "kwargs": {"hidden_dim": 2, "action_dim": 1},
                 },
                 "classifier": None,
@@ -299,19 +274,13 @@ def test_wm_env_worker_forwards_failure_initial_condition_selector() -> None:
     replay = _SelectorInitialConditions()
     worker = WMEnvWorker(
         env_cfg={
-            "target": (
-                "dreamervla.envs.world_model.latent_world_model_env:"
-                "LatentWorldModelEnv"
-            ),
+            "target": ("dreamervla.envs.world_model.latent_world_model_env:LatentWorldModelEnv"),
             "bootstrap_group_size": 4,
             "defer_initial_condition_bootstrap": True,
             "initial_condition_selector": "failed_episode_start",
             "kwargs": {
                 "world_model": {
-                    "target": (
-                        "dreamervla.workers.actor._test_models:"
-                        "TinyLumosWorldModel"
-                    ),
+                    "target": ("dreamervla.workers.actor._test_models:TinyLumosWorldModel"),
                     "kwargs": {"hidden_dim": 2, "action_dim": 1},
                 },
                 "classifier": None,
@@ -344,16 +313,10 @@ def test_wm_env_worker_forwards_failure_initial_condition_selector() -> None:
 def test_wm_env_worker_bootstraps_initial_lang_embs_from_replay() -> None:
     worker = WMEnvWorker(
         env_cfg={
-            "target": (
-                "dreamervla.envs.world_model.latent_world_model_env:"
-                "LatentWorldModelEnv"
-            ),
+            "target": ("dreamervla.envs.world_model.latent_world_model_env:LatentWorldModelEnv"),
             "kwargs": {
                 "world_model": {
-                    "target": (
-                        "dreamervla.workers.actor._test_models:"
-                        "TinyLumosWorldModel"
-                    ),
+                    "target": ("dreamervla.workers.actor._test_models:TinyLumosWorldModel"),
                     "kwargs": {"hidden_dim": 2, "action_dim": 1},
                 },
                 "classifier": None,
@@ -387,16 +350,10 @@ def test_wm_env_worker_bootstraps_initial_lang_embs_from_replay() -> None:
 def test_wm_env_worker_bootstraps_initial_proprios_from_replay() -> None:
     worker = WMEnvWorker(
         env_cfg={
-            "target": (
-                "dreamervla.envs.world_model.latent_world_model_env:"
-                "LatentWorldModelEnv"
-            ),
+            "target": ("dreamervla.envs.world_model.latent_world_model_env:LatentWorldModelEnv"),
             "kwargs": {
                 "world_model": {
-                    "target": (
-                        "dreamervla.workers.actor._test_models:"
-                        "TinyLumosWorldModel"
-                    ),
+                    "target": ("dreamervla.workers.actor._test_models:TinyLumosWorldModel"),
                     "kwargs": {"hidden_dim": 2, "action_dim": 1},
                 },
                 "classifier": None,

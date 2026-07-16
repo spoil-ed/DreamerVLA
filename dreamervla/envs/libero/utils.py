@@ -79,9 +79,7 @@ def get_libero_dummy_action():
 def get_libero_image(obs, resize_size, image_view: str = "agentview_image"):
     """Extract an image from the observation dict and rotate 180 degrees."""
     img = obs[image_view]
-    return np.ascontiguousarray(
-        img[::-1, ::-1]
-    )  # rotate 180° to match training preprocessing
+    return np.ascontiguousarray(img[::-1, ::-1])  # rotate 180° to match training preprocessing
 
 
 def quat2axisangle(quat):
@@ -126,12 +124,7 @@ def save_rollout_video(
 ) -> str:
     """Save an MP4 replay of a single episode."""
     os.makedirs(rollout_dir, exist_ok=True)
-    sanitised = (
-        task_description.lower()
-        .replace(" ", "_")
-        .replace("\n", "_")
-        .replace(".", "_")[:50]
-    )
+    sanitised = task_description.lower().replace(" ", "_").replace("\n", "_").replace(".", "_")[:50]
     mp4_path = os.path.join(
         rollout_dir,
         f"{DATE_TIME}--episode={idx}--success={success}--task={sanitised}.mp4",
@@ -178,9 +171,7 @@ class LIBERODreamerEnv:
             raise RuntimeError(
                 f"LIBERO task {self.task_suite_name}/{self.task_id} has no initial states"
             )
-        self.env, self.task_description = get_libero_env(
-            self.task, resolution=self.resolution
-        )
+        self.env, self.task_description = get_libero_env(self.task, resolution=self.resolution)
         self.env.seed(self.seed)
         self.max_steps = TASK_MAX_STEPS.get(self.task_suite_name, 300)
         self.frame_history: list[tuple[Image.Image, Image.Image]] = []

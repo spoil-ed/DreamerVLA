@@ -119,9 +119,7 @@ class EmbodiedEvalLatentMixin:
         self, hidden_states: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         batch, seq_len = int(hidden_states.shape[0]), int(hidden_states.shape[1])
-        input_ids = torch.zeros(
-            batch, seq_len + 1, dtype=torch.long, device=hidden_states.device
-        )
+        input_ids = torch.zeros(batch, seq_len + 1, dtype=torch.long, device=hidden_states.device)
         input_ids[:, seq_len] = self._action_token_id
         attention_mask = torch.ones(
             batch, seq_len + 1, dtype=torch.bool, device=hidden_states.device
@@ -167,9 +165,7 @@ class EmbodiedEvalLatentMixin:
                     "input_ids": seq_input_ids,
                     "attention_mask": seq_attention_mask,
                     "target_token_id": self._action_token_id,
-                    "deterministic": bool(
-                        getattr(self, "_dreamer_deterministic", True)
-                    ),
+                    "deterministic": bool(getattr(self, "_dreamer_deterministic", True)),
                     "return_chunk": True,
                 }
             )
@@ -181,9 +177,7 @@ class EmbodiedEvalLatentMixin:
                 {
                     "mode": "sample",
                     "hidden": feat,
-                    "deterministic": bool(
-                        getattr(self, "_dreamer_deterministic", True)
-                    ),
+                    "deterministic": bool(getattr(self, "_dreamer_deterministic", True)),
                     "return_chunk": True,
                 }
             )
@@ -195,17 +189,14 @@ class EmbodiedEvalLatentMixin:
             action_chunk_np = action_chunk_np.reshape(-1, action_chunk_np.shape[-1])
         max_actions = max(int(action_steps), 1)
         raw_actions = [
-            np.asarray(row[:7], dtype=np.float32).copy()
-            for row in action_chunk_np[:max_actions]
+            np.asarray(row[:7], dtype=np.float32).copy() for row in action_chunk_np[:max_actions]
         ]
         env_actions = [
             self._dreamer_policy_raw_to_env_action(row).astype(np.float32, copy=False)
             for row in raw_actions
         ]
         latent_actions = [
-            self._dreamer_latent_action_from_raw_env(raw, env).astype(
-                np.float32, copy=False
-            )
+            self._dreamer_latent_action_from_raw_env(raw, env).astype(np.float32, copy=False)
             for raw, env in zip(raw_actions, env_actions, strict=True)
         ]
         if not env_actions:
@@ -226,26 +217,16 @@ class EmbodiedEvalLatentMixin:
                             "action": raw_action_t,
                         }
                     )
-                old_log_prob = float(
-                    old_log_prob_t.detach().float().reshape(-1)[0].cpu()
-                )
+                old_log_prob = float(old_log_prob_t.detach().float().reshape(-1)[0].cpu())
             except Exception:
                 old_log_prob = float("nan")
             self._last_real_relabel_actor_step = {
-                "actor_input": feat.detach()
-                .float()
-                .reshape(feat.shape[0], -1)[0]
-                .cpu()
-                .tolist(),
-                "raw_action": np.asarray(raw_action_np, dtype=np.float32)
-                .reshape(-1)
-                .tolist(),
+                "actor_input": feat.detach().float().reshape(feat.shape[0], -1)[0].cpu().tolist(),
+                "raw_action": np.asarray(raw_action_np, dtype=np.float32).reshape(-1).tolist(),
                 "old_log_prob": old_log_prob,
             }
         live_hidden_tensor = (
-            self._hidden_tensor_from_eval_obs(live_hidden)
-            if live_hidden is not None
-            else None
+            self._hidden_tensor_from_eval_obs(live_hidden) if live_hidden is not None else None
         )
         self._record_hidden_action_compare(
             live_hidden=live_hidden_tensor,
@@ -256,9 +237,7 @@ class EmbodiedEvalLatentMixin:
             source="online_latent",
         )
         live_trace_hidden = self._hidden_token_grid_for_trace(live_hidden_tensor)
-        recon_trace_hidden = self._hidden_token_grid_for_trace(
-            feat if "feat" in locals() else None
-        )
+        recon_trace_hidden = self._hidden_token_grid_for_trace(feat if "feat" in locals() else None)
         self._write_policy_trace(
             source="dreamer",
             state=np.asarray(
@@ -272,15 +251,11 @@ class EmbodiedEvalLatentMixin:
             obs_embedding=live_hidden,
             actor_input=feat if "feat" in locals() else None,
             latent=latent,
-            input_ids=np.asarray(input_ids, dtype=np.float32)
-            if input_ids is not None
-            else None,
+            input_ids=np.asarray(input_ids, dtype=np.float32) if input_ids is not None else None,
         )
         if bool(OmegaConf.select(self.cfg, "eval.log_action_stats", default=False)):
             count = int(getattr(self, "_dreamer_eval_action_log_count", 0))
-            limit = int(
-                OmegaConf.select(self.cfg, "eval.log_action_stats_limit", default=8)
-            )
+            limit = int(OmegaConf.select(self.cfg, "eval.log_action_stats_limit", default=8))
             if count < limit:
                 print(
                     "  [Eval][online-action] "
@@ -308,15 +283,11 @@ class EmbodiedEvalLatentMixin:
     def _dreamer_online_update_latent(self, obs_embedding: Any) -> Any:
         hidden = self._hidden_tensor_from_eval_obs(obs_embedding)
         if getattr(self, "_dreamer_online_latent", None) is None:
-            latent = self.world_model(
-                {"mode": "encode_latent", "hidden": hidden}
-            )
+            latent = self.world_model({"mode": "encode_latent", "hidden": hidden})
         else:
             prev_action = getattr(self, "_dreamer_online_prev_action", None)
             if not isinstance(prev_action, torch.Tensor):
-                raise RuntimeError(
-                    "online_latent update missing previous executed action"
-                )
+                raise RuntimeError("online_latent update missing previous executed action")
             latent = self.world_model(
                 {
                     "mode": "observe_next",

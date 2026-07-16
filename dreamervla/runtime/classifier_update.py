@@ -115,9 +115,7 @@ def online_classifier_update_step(
     )
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
-    grad_norm = torch.nn.utils.clip_grad_norm_(
-        classifier.parameters(), max_norm=float(grad_clip)
-    )
+    grad_norm = torch.nn.utils.clip_grad_norm_(classifier.parameters(), max_norm=float(grad_clip))
     optimizer.step()
     classifier.eval()
     module.eval()
@@ -147,18 +145,14 @@ def online_classifier_update_step(
         "pos_frac": float(pos_frac.detach().cpu().item()),
         "prob_mean": float(probs.float().mean().detach().cpu().item()),
         "grad_norm": float(
-            grad_norm.detach().cpu().item()
-            if isinstance(grad_norm, torch.Tensor)
-            else grad_norm
+            grad_norm.detach().cpu().item() if isinstance(grad_norm, torch.Tensor) else grad_norm
         ),
         "updated": 1.0,
         "skipped_single_class_batch": 0.0,
         "loss_type": str(resolved_loss_type),
         "sampling_protocol": str(sampling_protocol),
         "balance_batches": bool(balance_batches),
-        "batch": _json_safe(
-            {key: value for key, value in cls_batch.items() if key != "windows"}
-        ),
+        "batch": _json_safe({key: value for key, value in cls_batch.items() if key != "windows"}),
     }
 
 

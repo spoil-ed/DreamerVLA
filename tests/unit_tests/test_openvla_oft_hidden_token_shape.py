@@ -198,9 +198,7 @@ def test_hidden_token_sidecar_rejects_dataset_metadata_geometry_mismatch(tmp_pat
     _write_sidecar_fixture(tmp_path, token_count=255)
     with h5py.File(tmp_path / "shard.hdf5", "a") as handle:
         del handle["data/demo_0/obs_embedding"]
-        handle["data/demo_0"].create_dataset(
-            "obs_embedding", shape=(2, 256, 4096), dtype="float16"
-        )
+        handle["data/demo_0"].create_dataset("obs_embedding", shape=(2, 256, 4096), dtype="float16")
 
     with pytest.raises(ValueError, match=r"expected trailing shape \(255, 4096\)"):
         validate_hidden_token_sidecar_dir(tmp_path)

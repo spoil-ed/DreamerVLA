@@ -53,9 +53,7 @@ def validate_model_type(model_type: str) -> None:
 
     key = _normalize_model_type(model_type)
     if key and key not in _MODEL_REGISTRY:
-        raise ValueError(
-            f"unknown model_type {key!r}; supported: {registered_model_types()}"
-        )
+        raise ValueError(f"unknown model_type {key!r}; supported: {registered_model_types()}")
 
 
 def _normalize_model_type(model_type: str) -> str:

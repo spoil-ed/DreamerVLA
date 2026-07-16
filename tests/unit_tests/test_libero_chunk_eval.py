@@ -104,9 +104,7 @@ def test_tally_dedups_wrapped_reset_ids():
 def test_driver_covers_grid_with_rolling_blocks():
     # 6 episodes, 4 envs -> 2 epochs, last block wraps (dedup keeps 6)
     env = _ScriptedChunkEnv(num_envs=4, auto_reset=False)
-    tally = run_rlinf_chunk_eval(
-        env, _policy, n_chunk_steps=3, num_epochs=2, total_episodes=6
-    )
+    tally = run_rlinf_chunk_eval(env, _policy, n_chunk_steps=3, num_epochs=2, total_episodes=6)
     assert tally.num_episodes == 6
     metrics = tally.summarize(episodes_per_task=3)
     # success iff (task+trial) even: task0 -> trials 0,2 succeed (2/3); task1 -> trial 1 (1/3)
@@ -117,17 +115,13 @@ def test_driver_covers_grid_with_rolling_blocks():
 
 def test_driver_auto_reset_counts_newly_done_each_chunk():
     env = _ScriptedChunkEnv(num_envs=3, auto_reset=True)
-    tally = run_rlinf_chunk_eval(
-        env, _policy, n_chunk_steps=2, num_epochs=1, total_episodes=6
-    )
+    tally = run_rlinf_chunk_eval(env, _policy, n_chunk_steps=2, num_epochs=1, total_episodes=6)
     assert tally.num_episodes == 6
 
 
 def test_driver_records_env_chunk_and_action_step_units():
     env = _ScriptedChunkEnv(num_envs=3, auto_reset=True)
-    tally = run_rlinf_chunk_eval(
-        env, _policy, n_chunk_steps=2, num_epochs=1, total_episodes=6
-    )
+    tally = run_rlinf_chunk_eval(env, _policy, n_chunk_steps=2, num_epochs=1, total_episodes=6)
     assert tally.env_chunk_steps == 6
     assert tally.env_action_steps == 12
 
@@ -226,9 +220,7 @@ def test_runner_rlinf_chunk_uses_configured_num_envs_without_episode_cap(monkeyp
     )
     runner._make_parallel_oft_slot_extractor = lambda: None
 
-    runner._finalize_libero_eval_observer = lambda: {
-        "eval/cotrain_trajectory_count": 100.0
-    }
+    runner._finalize_libero_eval_observer = lambda: {"eval/cotrain_trajectory_count": 100.0}
 
     metrics = runner._evaluate_libero_rlinf_chunk(
         epoch=-1,

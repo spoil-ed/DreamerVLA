@@ -192,6 +192,7 @@ class CotrainLaunchContract(DefaultLaunchContract):
             f"classifier={OmegaConf.select(cfg, 'init.classifier_state_ckpt')}",
         ]
 
+
 def _hydra_string(value: str | Path) -> str:
     return json.dumps(str(value))
 

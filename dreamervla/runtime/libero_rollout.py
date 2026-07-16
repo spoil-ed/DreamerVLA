@@ -6,6 +6,7 @@ active slots in parallel -> per-step callback -> on a slot's done: on_episode +
 refill.  Mirrors RLinf's SubprocVectorEnv scatter/gather.  Ported from
 `vectorized_collect.collect_vectorized`, which now delegates here.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
@@ -24,12 +25,13 @@ def _decode_action_chunk(result: Any) -> Any:
 @dataclass
 class SlotStepContext:
     """Everything a sink needs for one executed slot-step."""
+
     slot: int
     task_id: int
     episode_id: int
     task_description: str
     record_before: Any
-    out: Any                # infer_fn output for this slot (has .action_chunk / .hidden_state)
+    out: Any  # infer_fn output for this slot (has .action_chunk / .hidden_state)
     action: Any
     reward: float
     terminated: bool
@@ -103,8 +105,7 @@ def run_vectorized_rollout(
     while any(active):
         active_ids = [k for k in range(num_envs) if active[k]]
         preps = [
-            extractors[k].prepare(obs_from_record(slot_rec[k]), slot_desc[k])
-            for k in active_ids
+            extractors[k].prepare(obs_from_record(slot_rec[k]), slot_desc[k]) for k in active_ids
         ]
         outs = infer_fn(preps)
         actions = [
@@ -117,13 +118,22 @@ def run_vectorized_rollout(
         for i, k in enumerate(active_ids):
             reward, terminated, truncated, info, rec_after = step_results[i]
             if on_step is not None:
-                rec = on_step(SlotStepContext(
-                    slot=k, task_id=slot_task[k], episode_id=slot_ep[k],
-                    task_description=slot_desc[k], record_before=slot_rec[k],
-                    out=outs[i], action=actions[i], reward=reward,
-                    terminated=terminated, truncated=truncated, info=info,
-                    record_after=rec_after,
-                ))
+                rec = on_step(
+                    SlotStepContext(
+                        slot=k,
+                        task_id=slot_task[k],
+                        episode_id=slot_ep[k],
+                        task_description=slot_desc[k],
+                        record_before=slot_rec[k],
+                        out=outs[i],
+                        action=actions[i],
+                        reward=reward,
+                        terminated=terminated,
+                        truncated=truncated,
+                        info=info,
+                        record_after=rec_after,
+                    )
+                )
                 if rec is not None:
                     slot_steps[k].append(rec)
             slot_t[k] += 1

@@ -77,9 +77,7 @@ class PrismaticProcessor(PrismaticProcessorOriginal):
         assert self.tokenizer.padding_side == "left", (
             "Required: Init tokenizer with padding_side='left'"
         )
-        pixel_values = self.image_processor(images, return_tensors=return_tensors)[
-            "pixel_values"
-        ]
+        pixel_values = self.image_processor(images, return_tensors=return_tensors)["pixel_values"]
         text_inputs = self.tokenizer(
             text,
             return_tensors=return_tensors,
@@ -89,18 +87,14 @@ class PrismaticProcessor(PrismaticProcessorOriginal):
         )
         self._normalize_left_padded_bos(text_inputs)
         if pixel_values.shape[0] != text_inputs.input_ids.shape[0]:
-            raise ValueError(
-                "Batch is malformed; expected same number of images and text inputs!"
-            )
+            raise ValueError("Batch is malformed; expected same number of images and text inputs!")
         return BatchFeature(data={**text_inputs, "pixel_values": pixel_values})
 
     def _normalize_left_padded_bos(self, text_inputs) -> None:
         input_ids = text_inputs["input_ids"]
         attention_mask = text_inputs["attention_mask"]
         first_nonzero_indices = torch.argmax(attention_mask, dim=1).unsqueeze(1)
-        assert torch.all(
-            input_ids.gather(1, first_nonzero_indices) == self.tokenizer.bos_token_id
-        )
+        assert torch.all(input_ids.gather(1, first_nonzero_indices) == self.tokenizer.bos_token_id)
         assert torch.all(input_ids[:, -1] != self.tokenizer.pad_token_id)
         input_ids.scatter_(1, first_nonzero_indices, self.tokenizer.pad_token_id)
         attention_mask.scatter_(1, first_nonzero_indices, 0)
@@ -133,7 +127,5 @@ class MultiInputPrismaticProcessor(PrismaticProcessor):
         )
         self._normalize_left_padded_bos(text_inputs)
         if input_pixel_values.shape[0] != text_inputs.input_ids.shape[0]:
-            raise ValueError(
-                "Batch is malformed; expected same number of images and text inputs!"
-            )
+            raise ValueError("Batch is malformed; expected same number of images and text inputs!")
         return BatchFeature(data={**text_inputs, "pixel_values": input_pixel_values})

@@ -27,7 +27,9 @@ def test_obs_action_policy_returns_action_chunk_from_backend() -> None:
         return [np.ones(7), np.zeros(7)]
 
     policy = OpenVLAOFTObsActionPolicy.from_backend(
-        cfg=SimpleNamespace(task_suite_name="libero_spatial", num_images_in_input=1, use_proprio=False),
+        cfg=SimpleNamespace(
+            task_suite_name="libero_spatial", num_images_in_input=1, use_proprio=False
+        ),
         model=object(),
         processor=object(),
         action_backend=fake_backend,

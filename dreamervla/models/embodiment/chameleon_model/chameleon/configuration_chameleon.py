@@ -13,7 +13,6 @@
 # limitations under the License.
 """chameleon model configuration"""
 
-
 from transformers.configuration_utils import PretrainedConfig
 from transformers.utils import logging
 
@@ -269,10 +268,7 @@ class ChameleonConfig(PretrainedConfig):
 
         # Newer transformers may auto-populate a default rope metadata dict like:
         # {"rope_type": "default", "rope_theta": 10000.0}. Treat that as no scaling.
-        if (
-            isinstance(self.rope_scaling, dict)
-            and self.rope_scaling.get("rope_type") == "default"
-        ):
+        if isinstance(self.rope_scaling, dict) and self.rope_scaling.get("rope_type") == "default":
             self.rope_scaling = None
             return
 

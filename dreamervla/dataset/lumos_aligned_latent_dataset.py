@@ -84,8 +84,7 @@ def _partition_demo_pairs(
         raise ValueError(f"val_fraction must be within (0,1), got {fraction}")
     if len(values) < 2:
         raise ValueError(
-            f"trajectory-level {split} split requires at least two demos, "
-            f"got {len(values)}"
+            f"trajectory-level {split} split requires at least two demos, got {len(values)}"
         )
 
     def rank(pair: tuple[Path, Path, str]) -> tuple[str, str, str]:
@@ -234,9 +233,7 @@ def _load_all(
             skipped += 1
             continue
         out.append(rec)
-    print(
-        f"[lumos-latent:{label}] loaded {len(out)} demos (skipped {skipped})", flush=True
-    )
+    print(f"[lumos-latent:{label}] loaded {len(out)} demos (skipped {skipped})", flush=True)
     return out
 
 
@@ -411,14 +408,10 @@ class LumosAlignedLatentTrainDataset(IterableDataset):
         for did, rec in enumerate(self._demos):
             if rec.complete:
                 positive_ids.append(did)
-                for end in self._wmpo_success_negative_ends(
-                    finish_step=rec.finish_step
-                ):
+                for end in self._wmpo_success_negative_ends(finish_step=rec.finish_step):
                     negative_slots.append((did, end))
             else:
-                for end in self._wmpo_failure_negative_ends(
-                    finish_step=rec.finish_step
-                ):
+                for end in self._wmpo_failure_negative_ends(finish_step=rec.finish_step):
                     negative_slots.append((did, end))
         if not positive_ids:
             raise RuntimeError("WMPO sampling requires at least one successful trajectory")
@@ -453,7 +446,7 @@ class LumosAlignedLatentTrainDataset(IterableDataset):
         label: int,
     ) -> tuple[torch.Tensor, int] | tuple[torch.Tensor, int, dict[str, torch.Tensor]]:
         start = int(end) - int(self.window_env)
-        window = rec.obs[start:int(end)]
+        window = rec.obs[start : int(end)]
         extra = self._window_extra(rec, start, int(end))
         item = (self._to_tensor(self._pool_window(window)), int(label))
         return (*item, extra) if extra else item
@@ -483,7 +476,9 @@ class LumosAlignedLatentTrainDataset(IterableDataset):
 
     # ---- WebDataset-style infinite stream with per-worker shard ---------
 
-    def __iter__(self) -> Iterator[tuple[torch.Tensor, int] | tuple[torch.Tensor, int, dict[str, torch.Tensor]]]:
+    def __iter__(
+        self,
+    ) -> Iterator[tuple[torch.Tensor, int] | tuple[torch.Tensor, int, dict[str, torch.Tensor]]]:
         info = get_worker_info()
         distributed_rank = int(getattr(self, "distributed_rank", 0) or 0)
         distributed_world_size = max(
@@ -562,15 +557,16 @@ class LumosAlignedLatentTrainDataset(IterableDataset):
                 np.ascontiguousarray(self._pool_window(proprio_window))
             ).float()
         if rec.lang_emb is not None:
-            extra["lang_emb"] = torch.from_numpy(
-                np.ascontiguousarray(rec.lang_emb)
-            ).float()
+            extra["lang_emb"] = torch.from_numpy(np.ascontiguousarray(rec.lang_emb)).float()
         return extra
 
     @staticmethod
     def collate_fn(
         batch: list[tuple[torch.Tensor, int] | tuple[torch.Tensor, int, dict[str, torch.Tensor]]],
-    ) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+    ) -> (
+        tuple[torch.Tensor, torch.Tensor]
+        | tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]
+    ):
         xs = torch.stack([b[0] for b in batch])  # [B, W, 256, 4096]
         ys = torch.tensor([b[1] for b in batch], dtype=torch.long)
         if len(batch[0]) < 3:
@@ -712,8 +708,7 @@ class LumosAlignedLatentValDataset(Dataset):
             n_pos = sum(1 for s in slots if s.label == 1)
             n_neg = len(slots) - n_pos
             print(
-                f"[lumos-latent:val] total windows={len(slots)}  "
-                f"pos={n_pos}  neg={n_neg}",
+                f"[lumos-latent:val] total windows={len(slots)}  pos={n_pos}  neg={n_neg}",
                 flush=True,
             )
 
@@ -771,9 +766,7 @@ class LumosAlignedLatentValDataset(Dataset):
         if rec.proprio is not None:
             proprio_window = rec.proprio[slot.end_idx - self.window_env : slot.end_idx]
             if self.K > 1:
-                reshaped_proprio = proprio_window.reshape(
-                    self.W, self.K, proprio_window.shape[-1]
-                )
+                reshaped_proprio = proprio_window.reshape(self.W, self.K, proprio_window.shape[-1])
                 if self.chunk_pool == "last":
                     proprio_pooled = reshaped_proprio[:, -1]
                 elif self.chunk_pool == "first":
@@ -782,13 +775,9 @@ class LumosAlignedLatentValDataset(Dataset):
                     proprio_pooled = reshaped_proprio.mean(axis=1)
             else:
                 proprio_pooled = proprio_window
-            meta["proprio"] = torch.from_numpy(
-                np.ascontiguousarray(proprio_pooled)
-            ).float()
+            meta["proprio"] = torch.from_numpy(np.ascontiguousarray(proprio_pooled)).float()
         if rec.lang_emb is not None:
-            meta["lang_emb"] = torch.from_numpy(
-                np.ascontiguousarray(rec.lang_emb)
-            ).float()
+            meta["lang_emb"] = torch.from_numpy(np.ascontiguousarray(rec.lang_emb)).float()
         x = torch.from_numpy(np.ascontiguousarray(window)).float()
         return x, int(slot.label), meta
 

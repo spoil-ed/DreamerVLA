@@ -36,8 +36,7 @@ class OFTRolloutBundle:
             raise ValueError("OpenVLA-OFT hidden-token mainline requires history=1")
         if str(obs_hidden_source) != "hidden_token":
             raise ValueError(
-                "OpenVLA-OFT rollout observations require "
-                "obs_hidden_source='hidden_token'"
+                "OpenVLA-OFT rollout observations require obs_hidden_source='hidden_token'"
             )
         self._policy = oft_collect_common.load_policy(cfg, device_ref)
         if expected_action_head_type is not None:
@@ -102,8 +101,7 @@ def _select_image_keys_for_policy(
     count = int(num_images_in_input)
     if count != 1:
         raise ValueError(
-            "OpenVLA-OFT hidden-token mainline requires num_images_in_input=1, "
-            f"got {count}"
+            f"OpenVLA-OFT hidden-token mainline requires num_images_in_input=1, got {count}"
         )
     if keys != ["agentview_rgb"]:
         raise ValueError(

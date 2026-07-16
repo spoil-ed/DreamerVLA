@@ -51,21 +51,15 @@ def test_libero_env_helper_uses_explicit_eval_seed(monkeypatch) -> None:
         def seed(self, seed: int) -> None:
             seeded.append(int(seed))
 
-    monkeypatch.setattr(
-        sys.modules["libero.libero.envs"], "OffScreenRenderEnv", FakeOffscreenEnv
-    )
-    monkeypatch.setattr(
-        sys.modules["libero.libero"], "get_libero_path", lambda _kind: "/libero"
-    )
+    monkeypatch.setattr(sys.modules["libero.libero.envs"], "OffScreenRenderEnv", FakeOffscreenEnv)
+    monkeypatch.setattr(sys.modules["libero.libero"], "get_libero_path", lambda _kind: "/libero")
     task = SimpleNamespace(
         language="put the bowl on the plate",
         problem_folder="libero_goal",
         bddl_file="task.bddl",
     )
 
-    env, task_description = libero_env_mod.get_libero_env(
-        task, resolution=128, seed=7
-    )
+    env, task_description = libero_env_mod.get_libero_env(task, resolution=128, seed=7)
 
     assert task_description == "put the bowl on the plate"
     assert seeded == [7]
@@ -151,11 +145,7 @@ def test_manual_ray_oft_eval_normalizer_keeps_stateless_latent_mode() -> None:
             },
             "eval": {},
             "task": {
-                "openvla_oft": {
-                    "hidden_token": {
-                        "expected_obs_hidden_source": "hidden_token"
-                    }
-                }
+                "openvla_oft": {"hidden_token": {"expected_obs_hidden_source": "hidden_token"}}
             },
         }
     )

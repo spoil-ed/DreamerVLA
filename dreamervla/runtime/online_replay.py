@@ -30,15 +30,11 @@ class OnlineReplay:
         self.capacity = int(capacity)
         self.sequence_length = int(sequence_length)
         self.task_ids = (
-            tuple(int(task_id) for task_id in task_ids)
-            if task_ids is not None
-            else None
+            tuple(int(task_id) for task_id in task_ids) if task_ids is not None else None
         )
         self.capacity_mode = str(capacity_mode)
         if self.capacity_mode not in {"per_task", "total_sharded"}:
-            raise ValueError(
-                "capacity_mode must be one of {'per_task', 'total_sharded'}"
-            )
+            raise ValueError("capacity_mode must be one of {'per_task', 'total_sharded'}")
         self.failure_prefix_steps = int(failure_prefix_steps)
         self.failure_prefix_ratio = float(failure_prefix_ratio)
         self.task_balanced = bool(task_balanced)
@@ -52,9 +48,7 @@ class OnlineReplay:
             "online_replay": float(mix_cfg.get("online_replay", 0.3)),
             "coldstart_anchor": float(mix_cfg.get("coldstart_anchor", 0.2)),
         }
-        self.latest_online_required = bool(
-            sampling_cfg.get("latest_online_required", False)
-        )
+        self.latest_online_required = bool(sampling_cfg.get("latest_online_required", False))
         self.episodes_by_task: dict[int, deque[dict[str, Any]]] = {}
         self._transitions_by_task: Counter[int] = Counter()
         # Off-policy staleness (Phase 4): episodes are stamped with the rollout
@@ -66,9 +60,7 @@ class OnlineReplay:
         self._task_sample_cursor = 0
         self._initial_condition_cursor = 0
         self._pending_latest_online_episode_ids: set[int] = set()
-        self._classifier_pending_windows: deque[
-            tuple[Mapping[str, Any], int, int, bool]
-        ] = deque()
+        self._classifier_pending_windows: deque[tuple[Mapping[str, Any], int, int, bool]] = deque()
         self._classifier_pending_key: tuple[Any, ...] | None = None
 
     def state_dict(self) -> dict[str, Any]:
@@ -96,21 +88,18 @@ class OnlineReplay:
                 for task_id, records in self.episodes_by_task.items()
             },
             "transitions_by_task": {
-                int(task_id): int(count)
-                for task_id, count in self._transitions_by_task.items()
+                int(task_id): int(count) for task_id, count in self._transitions_by_task.items()
             },
             "current_policy_version": int(self._current_policy_version),
             "next_episode_id": int(self._next_episode_id),
             "next_collection_index": int(self._next_collection_index),
             "next_task_episode_index": {
-                int(task_id): int(count)
-                for task_id, count in self._next_task_episode_index.items()
+                int(task_id): int(count) for task_id, count in self._next_task_episode_index.items()
             },
             "task_sample_cursor": int(self._task_sample_cursor),
             "initial_condition_cursor": int(self._initial_condition_cursor),
             "pending_latest_online_episode_ids": sorted(
-                int(episode_id)
-                for episode_id in self._pending_latest_online_episode_ids
+                int(episode_id) for episode_id in self._pending_latest_online_episode_ids
             ),
             "num_transitions": int(self.num_transitions),
         }
@@ -134,17 +123,12 @@ class OnlineReplay:
         raw_transitions = state.get("transitions_by_task")
         if isinstance(raw_transitions, Mapping):
             self._transitions_by_task = Counter(
-                {
-                    int(task_id): int(count)
-                    for task_id, count in raw_transitions.items()
-                }
+                {int(task_id): int(count) for task_id, count in raw_transitions.items()}
             )
         else:
             self._transitions_by_task = Counter(
                 {
-                    int(task_id): sum(
-                        len(record.get("episode", ())) for record in records
-                    )
+                    int(task_id): sum(len(record.get("episode", ())) for record in records)
                     for task_id, records in self.episodes_by_task.items()
                 }
             )
@@ -173,14 +157,10 @@ class OnlineReplay:
                     self._next_task_episode_index[int(task_id)] = int(next_idx)
 
         self.set_task_sample_cursor(int(state.get("task_sample_cursor", 0)))
-        self._initial_condition_cursor = int(
-            state.get("initial_condition_cursor", 0)
-        )
+        self._initial_condition_cursor = int(state.get("initial_condition_cursor", 0))
 
         pending = state.get("pending_latest_online_episode_ids", ())
-        self._pending_latest_online_episode_ids = {
-            int(episode_id) for episode_id in pending
-        }
+        self._pending_latest_online_episode_ids = {int(episode_id) for episode_id in pending}
         self._classifier_pending_windows.clear()
         self._classifier_pending_key = None
 
@@ -257,9 +237,7 @@ class OnlineReplay:
         if len(episode) < self.sequence_length:
             return None
         task_id = self._episode_task_id(episode)
-        episode_success = (
-            self._episode_success(episode) if success is None else bool(success)
-        )
+        episode_success = self._episode_success(episode) if success is None else bool(success)
         finish_step = self._episode_finish_step(episode)
         episode_id = int(self._next_episode_id)
         collection_index = int(self._next_collection_index)
@@ -333,11 +311,7 @@ class OnlineReplay:
 
         records = self._valid_records()
         if task_id is not None:
-            records = [
-                record
-                for record in records
-                if int(record["task_id"]) == int(task_id)
-            ]
+            records = [record for record in records if int(record["task_id"]) == int(task_id)]
         if not records:
             raise RuntimeError("online replay has no records for WMEnv bootstrap")
         latents = []
@@ -390,16 +364,13 @@ class OnlineReplay:
         )
         if not selected_tasks:
             if normalized_selector == "failed_episode_start":
-                raise RuntimeError(
-                    "online replay has no failed episodes for WMEnv bootstrap"
-                )
+                raise RuntimeError("online replay has no failed episodes for WMEnv bootstrap")
             raise RuntimeError("online replay has no records for WMEnv bootstrap")
         missing_tasks = [task_id for task_id in requested_tasks if not records_by_task.get(task_id)]
         if missing_tasks:
             if normalized_selector == "episode_start":
                 raise RuntimeError(
-                    "online replay has no WMEnv bootstrap records for task IDs "
-                    f"{missing_tasks}"
+                    f"online replay has no WMEnv bootstrap records for task IDs {missing_tasks}"
                 )
 
         cursor = int(self._initial_condition_cursor)
@@ -459,8 +430,7 @@ class OnlineReplay:
         allowed = {"episode_start", "failed_episode_start"}
         if normalized not in allowed:
             raise ValueError(
-                "initial-condition selector must be one of "
-                f"{sorted(allowed)}, got {selector!r}"
+                f"initial-condition selector must be one of {sorted(allowed)}, got {selector!r}"
             )
         return normalized
 
@@ -544,12 +514,8 @@ class OnlineReplay:
     def task_episode_counts(self) -> Counter[int]:
         return Counter(int(record["task_id"]) for record in self._valid_records())
 
-    def task_stats(
-        self, task_ids: tuple[int, ...] | None = None
-    ) -> dict[str, dict[str, int]]:
-        requested = (
-            set(int(task_id) for task_id in task_ids) if task_ids is not None else None
-        )
+    def task_stats(self, task_ids: tuple[int, ...] | None = None) -> dict[str, dict[str, int]]:
+        requested = set(int(task_id) for task_id in task_ids) if task_ids is not None else None
         stats: dict[int, dict[str, int]] = {}
         for record in self._valid_records():
             task_id = int(record["task_id"])
@@ -661,15 +627,17 @@ class OnlineReplay:
         self, valid: list[dict[str, Any]]
     ) -> dict[str, list[dict[str, Any]]]:
         online = [record for record in valid if record.get("source", "online") == "online"]
-        coldstart = [
-            record for record in valid if record.get("source", "online") == "coldstart"
-        ]
+        coldstart = [record for record in valid if record.get("source", "online") == "coldstart"]
         recent_n = max(0, int(self.recent_episode_count))
-        recent = sorted(
-            online,
-            key=lambda record: int(record.get("collection_index", 0)),
-            reverse=True,
-        )[:recent_n] if recent_n > 0 else []
+        recent = (
+            sorted(
+                online,
+                key=lambda record: int(record.get("collection_index", 0)),
+                reverse=True,
+            )[:recent_n]
+            if recent_n > 0
+            else []
+        )
         return {
             "online_recent": recent,
             "online_replay": online,
@@ -695,9 +663,7 @@ class OnlineReplay:
                 return name
         return available[-1][0]
 
-    def _pop_pending_latest_online(
-        self, valid: list[dict[str, Any]]
-    ) -> dict[str, Any] | None:
+    def _pop_pending_latest_online(self, valid: list[dict[str, Any]]) -> dict[str, Any] | None:
         if not self.latest_online_required or not self._pending_latest_online_episode_ids:
             return None
         by_id = {int(record["episode_id"]): record for record in valid}
@@ -777,33 +743,19 @@ class OnlineReplay:
             episode_lengths.append(int(record["length"]))
             sample_limits.append(int(limit))
             source_ranks.append(int(record["rank"]))
-            replay_source_ids.append(
-                int(record.get("source_id", self._source_id("online")))
-            )
+            replay_source_ids.append(int(record.get("source_id", self._source_id("online"))))
 
         obs_embedding = np.stack(
             [[step["obs_embedding"] for step in window] for window in windows], axis=0
         )
-        rewards = np.stack(
-            [[_step_reward(step) for step in window] for window in windows], axis=0
-        )
-        dones = np.stack(
-            [[_step_done(step) for step in window] for window in windows], axis=0
-        )
+        rewards = np.stack([[_step_reward(step) for step in window] for window in windows], axis=0)
+        dones = np.stack([[_step_done(step) for step in window] for window in windows], axis=0)
         is_terminal = np.stack(
             [[_step_is_terminal(step) for step in window] for window in windows], axis=0
         )
-        is_last = np.stack(
-            [[_step_is_last(step) for step in window] for window in windows], axis=0
-        )
-        action_dim = int(
-            _step_action(windows[0][0])
-            .reshape(-1)
-            .shape[0]
-        )
-        actions = np.zeros(
-            (len(windows), self.sequence_length, action_dim), dtype=np.float32
-        )
+        is_last = np.stack([[_step_is_last(step) for step in window] for window in windows], axis=0)
+        action_dim = int(_step_action(windows[0][0]).reshape(-1).shape[0])
+        actions = np.zeros((len(windows), self.sequence_length, action_dim), dtype=np.float32)
         current_actions = np.zeros_like(actions)
         for batch_idx, window in enumerate(windows):
             for time_idx in range(self.sequence_length):
@@ -816,10 +768,7 @@ class OnlineReplay:
         if all("proprio" in step for window in windows for step in window):
             proprio = np.stack(
                 [
-                    [
-                        np.asarray(step["proprio"], dtype=np.float32).reshape(-1)
-                        for step in window
-                    ]
+                    [np.asarray(step["proprio"], dtype=np.float32).reshape(-1) for step in window]
                     for window in windows
                 ],
                 axis=0,
@@ -847,9 +796,7 @@ class OnlineReplay:
             "start_indices": torch.tensor(start_indices, dtype=torch.long),
             "episode_ids": torch.tensor(episode_ids, dtype=torch.long),
             "collection_indices": torch.tensor(collection_indices, dtype=torch.long),
-            "task_episode_indices": torch.tensor(
-                task_episode_indices, dtype=torch.long
-            ),
+            "task_episode_indices": torch.tensor(task_episode_indices, dtype=torch.long),
             "episode_lengths": torch.tensor(episode_lengths, dtype=torch.long),
             "sample_limits": torch.tensor(sample_limits, dtype=torch.long),
             "source_ranks": torch.tensor(source_ranks, dtype=torch.long),
@@ -859,12 +806,8 @@ class OnlineReplay:
             batch["proprio"] = torch.from_numpy(proprio.astype(np.float32, copy=False))
         if lang_emb is not None:
             batch["lang_emb"] = torch.from_numpy(lang_emb.astype(np.float32, copy=False))
-        if bool(include_images) and all(
-            "image" in step for window in windows for step in window
-        ):
-            images = np.stack(
-                [[step["image"] for step in window] for window in windows], axis=0
-            )
+        if bool(include_images) and all("image" in step for window in windows for step in window):
+            images = np.stack([[step["image"] for step in window] for window in windows], axis=0)
             batch["images"] = torch.from_numpy(images).to(torch.float32)
         return batch
 
@@ -886,8 +829,7 @@ class OnlineReplay:
         sampling_protocol = str(sampling_protocol).lower()
         if sampling_protocol not in {"lumos", "wmpo"}:
             raise ValueError(
-                "sampling_protocol must be one of {'lumos', 'wmpo'}, "
-                f"got {sampling_protocol!r}"
+                f"sampling_protocol must be one of {{'lumos', 'wmpo'}}, got {sampling_protocol!r}"
             )
         balance_batches = bool(balance_batches)
         if balance_batches and int(batch_size) % 2:
@@ -968,9 +910,7 @@ class OnlineReplay:
                 )
                 if chunk_size > 1:
                     trailing_shape = env_proprio.shape[1:]
-                    reshaped_proprio = env_proprio.reshape(
-                        window, chunk_size, *trailing_shape
-                    )
+                    reshaped_proprio = env_proprio.reshape(window, chunk_size, *trailing_shape)
                     if chunk_pool == "last":
                         pooled_proprio = reshaped_proprio[:, -1]
                     elif chunk_pool == "first":
@@ -981,14 +921,10 @@ class OnlineReplay:
                         raise ValueError(f"unknown chunk_pool={chunk_pool!r}")
                 else:
                     pooled_proprio = env_proprio
-                proprio_windows.append(
-                    np.ascontiguousarray(pooled_proprio, dtype=np.float32)
-                )
+                proprio_windows.append(np.ascontiguousarray(pooled_proprio, dtype=np.float32))
             if all("lang_emb" in step for step in selected_steps):
                 lang_embs.append(
-                    np.asarray(selected_steps[0]["lang_emb"], dtype=np.float32).reshape(
-                        -1
-                    )
+                    np.asarray(selected_steps[0]["lang_emb"], dtype=np.float32).reshape(-1)
                 )
 
             windows.append(np.ascontiguousarray(pooled, dtype=np.float32))
@@ -1016,9 +952,7 @@ class OnlineReplay:
                     positive_specs.append((record, finish_step, 1, True))
                     max_negative_end = int(finish_step) - int(window_env)
                     if max_negative_end >= window_env:
-                        negative_ends = list(
-                            range(max_negative_end, window_env - 1, -stride)
-                        )
+                        negative_ends = list(range(max_negative_end, window_env - 1, -stride))
                         if not negative_ends:
                             negative_ends = [max_negative_end]
                         for end in negative_ends:
@@ -1028,9 +962,7 @@ class OnlineReplay:
                     if not negative_ends:
                         negative_ends = [finish_step]
                     for end in negative_ends:
-                        negative_specs.append(
-                            (record, int(end), 0, int(end) == int(finish_step))
-                        )
+                        negative_specs.append((record, int(end), 0, int(end) == int(finish_step)))
             if not positive_specs:
                 raise RuntimeError("online replay has no WMPO positive classifier windows")
             if not negative_specs:
@@ -1074,12 +1006,8 @@ class OnlineReplay:
                 finish_step = int(record.get("finish_step", len(episode)))
                 sample_specs = [(finish_step, int(bool(record["success"])), True)]
                 if finish_step - stride >= window_env:
-                    valid_ends = list(
-                        range(finish_step - stride, window_env - 1, -stride)
-                    )
-                    valid_ends = valid_ends or list(
-                        range(finish_step - 1, window_env - 1, -1)
-                    )
+                    valid_ends = list(range(finish_step - stride, window_env - 1, -stride))
+                    valid_ends = valid_ends or list(range(finish_step - 1, window_env - 1, -1))
                     if valid_ends:
                         sample_specs.append((int(random.choice(valid_ends)), 0, False))
                 for end, label, end_window in sample_specs:
@@ -1095,9 +1023,7 @@ class OnlineReplay:
             "labels": torch.tensor(labels, dtype=torch.long),
             "episode_ids": torch.tensor(episode_ids, dtype=torch.long),
             "collection_indices": torch.tensor(collection_indices, dtype=torch.long),
-            "task_episode_indices": torch.tensor(
-                task_episode_indices, dtype=torch.long
-            ),
+            "task_episode_indices": torch.tensor(task_episode_indices, dtype=torch.long),
             "task_ids": torch.tensor(task_ids, dtype=torch.long),
             "source_ranks": torch.tensor(source_ranks, dtype=torch.long),
             "replay_source_ids": torch.tensor(replay_source_ids, dtype=torch.long),
@@ -1144,8 +1070,7 @@ class OnlineReplay:
         ]
         if not records:
             raise RuntimeError(
-                "online replay has no classifier endpoint windows with "
-                f"finish_step >= {window_env}"
+                f"online replay has no classifier endpoint windows with finish_step >= {window_env}"
             )
 
         windows: list[np.ndarray] = []
@@ -1201,9 +1126,7 @@ class OnlineReplay:
             else:
                 all_have_proprio = False
             if all("lang_emb" in step for step in selected):
-                lang_embs.append(
-                    np.asarray(selected[0]["lang_emb"], dtype=np.float32).reshape(-1)
-                )
+                lang_embs.append(np.asarray(selected[0]["lang_emb"], dtype=np.float32).reshape(-1))
             else:
                 all_have_language = False
 
@@ -1214,9 +1137,7 @@ class OnlineReplay:
             "episode_ids": torch.tensor(episode_ids, dtype=torch.long),
         }
         if all_have_proprio and len(proprio_windows) == len(windows):
-            batch["proprio"] = torch.from_numpy(
-                np.stack(proprio_windows, axis=0)
-            ).float()
+            batch["proprio"] = torch.from_numpy(np.stack(proprio_windows, axis=0)).float()
         if all_have_language and len(lang_embs) == len(windows):
             batch["lang_emb"] = torch.from_numpy(np.stack(lang_embs, axis=0)).float()
         return batch
@@ -1340,8 +1261,7 @@ def unpack_replay_task_stats_from_ddp(
     local_ready_sum = int(round(float(cpu[len(task_ids), 1].item())))
     all_ranks_ready = local_ready_sum >= int(world_size)
     global_task_ready = all(
-        stats[str(int(task_id))]["episodes"] >= int(min_episodes_per_task)
-        for task_id in task_ids
+        stats[str(int(task_id))]["episodes"] >= int(min_episodes_per_task) for task_id in task_ids
     )
     total_sampleable_windows = sum(
         stats[str(int(task_id))]["sampleable_windows"] for task_id in task_ids

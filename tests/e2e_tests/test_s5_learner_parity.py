@@ -99,9 +99,7 @@ def test_ray_actor_learner_matches_in_process_learner_on_fixed_batch() -> None:
 
     try:
         # Capture one deterministic batch from a populated replay.
-        replay = ReplayWorker(
-            {"capacity": 100, "sequence_length": 3, "task_ids": (0,), "rank": 0}
-        )
+        replay = ReplayWorker({"capacity": 100, "sequence_length": 3, "task_ids": (0,), "rank": 0})
         replay.init()
         for _ in range(4):
             replay.add_episode(_episode())

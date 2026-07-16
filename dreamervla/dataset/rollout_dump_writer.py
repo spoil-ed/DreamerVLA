@@ -125,8 +125,7 @@ class RolloutDumpWriter:
             return
         if not self._preprocess_config_written and preprocess_config is None:
             raise ValueError(
-                "the first rollout demo must provide the canonical hidden-token "
-                "preprocess_config"
+                "the first rollout demo must provide the canonical hidden-token preprocess_config"
             )
         if preprocess_config is not None:
             validate_hidden_token_preprocess_config(
@@ -136,23 +135,15 @@ class RolloutDumpWriter:
 
         T = len(steps)
         demo_key = f"demo_{index}"
-        resolved_init_state_index = _resolve_init_state_index(
-            init_state_index, steps
-        )
+        resolved_init_state_index = _resolve_init_state_index(init_state_index, steps)
 
         # Stack per-step arrays
         actions = np.stack(
             [np.asarray(s["actions"], dtype=np.float64) for s in steps], axis=0
         )  # (T, 7)
-        rewards = np.array(
-            [float(s["rewards"]) for s in steps], dtype=np.float32
-        )  # (T,)
-        sparse_rewards = np.array(
-            [int(s["sparse_rewards"]) for s in steps], dtype=np.uint8
-        )  # (T,)
-        dones = np.array(
-            [int(s["dones"]) for s in steps], dtype=np.uint8
-        )  # (T,)
+        rewards = np.array([float(s["rewards"]) for s in steps], dtype=np.float32)  # (T,)
+        sparse_rewards = np.array([int(s["sparse_rewards"]) for s in steps], dtype=np.uint8)  # (T,)
+        dones = np.array([int(s["dones"]) for s in steps], dtype=np.uint8)  # (T,)
         robot_states = np.stack(
             [np.asarray(s["robot_states"], dtype=np.float64) for s in steps], axis=0
         )  # (T, 9)
@@ -164,21 +155,16 @@ class RolloutDumpWriter:
         )  # (T, token_count, token_dim)
         if obs_embedding.ndim != 3:
             raise ValueError(
-                "rollout obs_embedding must be tokenized [T,N,D], "
-                f"got {obs_embedding.shape}"
+                f"rollout obs_embedding must be tokenized [T,N,D], got {obs_embedding.shape}"
             )
         validate_hidden_token_array_shape(
             obs_embedding.shape,
             context="rollout obs_embedding",
             token_count=(
-                int(preprocess_config["token_count"])
-                if preprocess_config is not None
-                else None
+                int(preprocess_config["token_count"]) if preprocess_config is not None else None
             ),
             token_dim=(
-                int(preprocess_config["token_dim"])
-                if preprocess_config is not None
-                else None
+                int(preprocess_config["token_dim"]) if preprocess_config is not None else None
             ),
         )
         lang_emb = None
@@ -449,24 +435,18 @@ class PerTrajectoryDumpWriter:
         task_id = kwargs.get("task_id")
         episode_id = kwargs.get("episode_id")
         if task_id is None or episode_id is None:
-            raise ValueError(
-                "PerTrajectoryDumpWriter requires task_id and episode_id kwargs"
-            )
+            raise ValueError("PerTrajectoryDumpWriter requires task_id and episode_id kwargs")
         if preprocess_config is not None and self._saved_config is None:
             self._saved_config = preprocess_config
         if data_attrs is not None and self._saved_attrs is None:
             self._saved_attrs = data_attrs
-        shard_name = per_trajectory_shard_name(
-            self.file_prefix, int(task_id), int(episode_id)
-        )
+        shard_name = per_trajectory_shard_name(self.file_prefix, int(task_id), int(episode_id))
         # Write under a .tmp name and atomically rename on success so a crash
         # mid-write never leaves a partial file at the canonical identity name
         # (readers/resume glob *.hdf5 and cannot see the .hdf5.tmp files).
         tmp_name = shard_name + ".tmp"
         try:
-            with RolloutDumpWriter(
-                self.reward_dir, self.hidden_dir, tmp_name
-            ) as writer:
+            with RolloutDumpWriter(self.reward_dir, self.hidden_dir, tmp_name) as writer:
                 writer.write_demo(
                     index=0,
                     steps=steps,
@@ -490,9 +470,7 @@ class PerTrajectoryDumpWriter:
             "episode_id": int(episode_id),
             "horizon": len(steps),
         }
-        init_state_index = _resolve_init_state_index(
-            kwargs.get("init_state_index"), steps
-        )
+        init_state_index = _resolve_init_state_index(kwargs.get("init_state_index"), steps)
         if init_state_index is not None:
             record["init_state_index"] = int(init_state_index)
         episode_success = kwargs.get("episode_success")
@@ -552,11 +530,7 @@ def _episode_attrs(
         for key, value in dict(episode_metadata).items():
             if str(key) in _CANONICAL_EPISODE_METADATA_KEYS:
                 attrs[str(key)] = value
-    return {
-        str(key): value
-        for key, value in attrs.items()
-        if _is_hdf5_attr_scalar(value)
-    }
+    return {str(key): value for key, value in attrs.items() if _is_hdf5_attr_scalar(value)}
 
 
 def _resolve_init_state_index(
