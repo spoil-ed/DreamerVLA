@@ -1032,7 +1032,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                 T = T_env
             ep_true.append(int(bool(complete)))
             first_end = max(W, min_steps + W)
-            if T < first_end or obs_pooled is None:
+            if first_end > T or obs_pooled is None:
                 ep_max_prob.append(0.0)
                 continue
             ep_max_prob.append(-1.0)  # placeholder; updated below

@@ -1571,7 +1571,6 @@ def _looks_like_missing_chunk_mode(exc: Exception) -> bool:
     message = str(exc).lower()
     return (
         "predict_next_chunk" in message
-        or "unknown" in message
-        and "mode" in message
+        or ("unknown" in message and "mode" in message)
         or "notimplemented" in type(exc).__name__.lower()
     )

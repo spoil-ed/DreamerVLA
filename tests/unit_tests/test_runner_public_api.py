@@ -75,7 +75,7 @@ def test_runner_public_api_exports_only_canonical_mainline_roles() -> None:
         "LIBEROVLAEvaluationRunner",
     ]
 
-    assert runners.PUBLIC_RUNNERS == expected
+    assert expected == runners.PUBLIC_RUNNERS
     assert set(expected).issubset(set(runners.__all__))
     for name in expected:
         cls = getattr(runners, name)

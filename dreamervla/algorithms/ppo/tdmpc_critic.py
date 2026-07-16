@@ -104,8 +104,8 @@ def _tdmpc_critic_hidden(
 
 __all__ = [
     "_sequence_field",
-    "_tdmpc_value_mode",
     "_tdmpc_action_dim",
-    "_tdmpc_prepare_action",
     "_tdmpc_critic_hidden",
+    "_tdmpc_prepare_action",
+    "_tdmpc_value_mode",
 ]

@@ -424,9 +424,7 @@ class OpenVLAOFTPolicy(nn.Module):
                 "vision_backbone" in lowered
                 or "vision_projector" in lowered
                 or ".projector." in lowered
-                or lowered.endswith(".projector.weight")
-                or lowered.endswith(".projector.bias")
-                or lowered.endswith(".vision_scale")
+                or lowered.endswith((".projector.weight", ".projector.bias", ".vision_scale"))
             ):
                 names.append(str(name))
         if not names:

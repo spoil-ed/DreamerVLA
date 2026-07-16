@@ -784,7 +784,7 @@ class PretokenizeActionChunkDataset(PretokenizeDataset):
 
 
 __all__ = [
+    "PretokenizeActionChunkDataset",
     "PretokenizeDataSpec",
     "PretokenizeDataset",
-    "PretokenizeActionChunkDataset",
 ]

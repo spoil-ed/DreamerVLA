@@ -72,7 +72,7 @@ def _experiment_from_argv(argv: Sequence[str]) -> str:
             experiment = items[index + 1]
             index += 2
             continue
-        if item.startswith("--config=") or item.startswith("--config-name="):
+        if item.startswith(("--config=", "--config-name=")):
             experiment = item.split("=", 1)[1]
         elif "=" in item and item.split("=", 1)[0].lstrip("+") == "experiment":
             experiment = item.split("=", 1)[1]
@@ -119,7 +119,7 @@ def _parse_args(
             launcher["resume"] = item.split("=", 1)[1]
             index += 1
             continue
-        if item.startswith("--config=") or item.startswith("--config-name="):
+        if item.startswith(("--config=", "--config-name=")):
             experiment = item.split("=", 1)[1]
             index += 1
             continue

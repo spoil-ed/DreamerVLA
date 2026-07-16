@@ -47,7 +47,19 @@ extend-exclude = ["third_party"]
 force-exclude = true
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+select = [
+    "B",
+    "E",
+    "F",
+    "I",
+    "PIE808",
+    "PIE810",
+    "RUF021",
+    "RUF022",
+    "SIM300",
+    "SIM910",
+    "UP",
+]
 ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]

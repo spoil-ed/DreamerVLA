@@ -517,7 +517,7 @@ class LumosAlignedLatentTrainDataset(IterableDataset):
                 # 1 end window — label = int(complete)
                 yield self._window_item(rec, end=T, label=int(rec.complete))
                 # 1 random earlier window — label = 0
-                if T - self.S >= self.window_env:
+                if self.window_env <= T - self.S:
                     ends = range(T - self.S, self.window_env - 1, -self.S)
                     ends_list = list(ends)
                     if ends_list:

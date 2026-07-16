@@ -1124,4 +1124,4 @@ def dino_lumos_step(
     }
 
 
-__all__ = ["dino_lumos_step", "build_valid_chunk_count", "_build_reward_tensor"]
+__all__ = ["_build_reward_tensor", "build_valid_chunk_count", "dino_lumos_step"]

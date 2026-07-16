@@ -1,11 +1,11 @@
 # Copyright 2025 The LIBERO project and The RLinf Authors.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 #     https://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -42,9 +42,7 @@ import numpy as np
 from dreamervla.utils.egl_device import apply_egl_device_regime
 
 gym_old_venv_step_type = Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
-gym_new_venv_step_type = Tuple[
-    np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray
-]
+gym_new_venv_step_type = Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
 _NP_TO_CT = {
     np.bool_: ctypes.c_bool,
     np.uint8: ctypes.c_uint8,
@@ -136,9 +134,7 @@ class EnvWorker(ABC):
     def reset(self, **kwargs: Any) -> Union[np.ndarray, Tuple[np.ndarray, dict]]:
         pass
 
-    def step(
-        self, action: np.ndarray
-    ) -> Union[gym_old_venv_step_type, gym_new_venv_step_type]:
+    def step(self, action: np.ndarray) -> Union[gym_old_venv_step_type, gym_new_venv_step_type]:
         """Perform one timestep of the environment's dynamic.
 
         "send" and "recv" are coupled in sync simulation, so users only call
@@ -186,9 +182,7 @@ class ShArray:
     def save(self, ndarray: np.ndarray) -> None:
         assert isinstance(ndarray, np.ndarray)
         dst = self.arr.get_obj()
-        dst_np = np.frombuffer(dst, dtype=self.dtype).reshape(
-            self.shape
-        )  # type: ignore
+        dst_np = np.frombuffer(dst, dtype=self.dtype).reshape(self.shape)  # type: ignore
         np.copyto(dst_np, ndarray)
 
     def get(self) -> np.ndarray:
@@ -352,9 +346,7 @@ class DummyEnvWorker(EnvWorker):
 class SubprocEnvWorker(EnvWorker):
     """Subprocess worker used in SubprocVectorEnv and ShmemVectorEnv."""
 
-    def __init__(
-        self, env_fn: Callable[[], gym.Env], share_memory: bool = False
-    ) -> None:
+    def __init__(self, env_fn: Callable[[], gym.Env], share_memory: bool = False) -> None:
         self.parent_remote, self.child_remote = Pipe()
         self.share_memory = share_memory
         self.buffer: Optional[Union[dict, tuple, ShArray]] = None
@@ -384,7 +376,7 @@ class SubprocEnvWorker(EnvWorker):
 
     def _decode_obs(self) -> Union[dict, tuple, np.ndarray]:
         def decode_obs(
-            buffer: Optional[Union[dict, tuple, ShArray]]
+            buffer: Optional[Union[dict, tuple, ShArray]],
         ) -> Union[dict, tuple, np.ndarray]:
             if isinstance(buffer, ShArray):
                 return buffer.get()
@@ -583,13 +575,13 @@ class BaseVectorEnv(object):
 
         self.env_num = len(env_fns)
         self.wait_num = wait_num or len(env_fns)
-        assert (
-            1 <= self.wait_num <= len(env_fns)
-        ), f"wait_num should be in [1, {len(env_fns)}], but got {wait_num}"
+        assert 1 <= self.wait_num <= len(env_fns), (
+            f"wait_num should be in [1, {len(env_fns)}], but got {wait_num}"
+        )
         self.timeout = timeout
-        assert (
-            self.timeout is None or self.timeout > 0
-        ), f"timeout is {timeout}, it should be positive if provided!"
+        assert self.timeout is None or self.timeout > 0, (
+            f"timeout is {timeout}, it should be positive if provided!"
+        )
         self.is_async = self.wait_num != len(env_fns) or timeout is not None
         self.waiting_conn: List[EnvWorker] = []
         # environments in self.ready_id is actually ready
@@ -602,9 +594,9 @@ class BaseVectorEnv(object):
         self.is_closed = False
 
     def _assert_is_not_closed(self) -> None:
-        assert (
-            not self.is_closed
-        ), f"Methods of {self.__class__.__name__} cannot be called after close."
+        assert not self.is_closed, (
+            f"Methods of {self.__class__.__name__} cannot be called after close."
+        )
 
     def __len__(self) -> int:
         """Return len(self), which is the number of environments."""
@@ -679,12 +671,10 @@ class BaseVectorEnv(object):
 
     def _assert_id(self, id: Union[List[int], np.ndarray]) -> None:
         for i in id:
-            assert (
-                i not in self.waiting_id
-            ), f"Cannot interact with environment {i} which is stepping now."
-            assert (
-                i in self.ready_id
-            ), f"Can only interact with ready environments {self.ready_id}."
+            assert i not in self.waiting_id, (
+                f"Cannot interact with environment {i} which is stepping now."
+            )
+            assert i in self.ready_id, f"Can only interact with ready environments {self.ready_id}."
 
     def reset(
         self,
@@ -804,9 +794,7 @@ class BaseVectorEnv(object):
                 self.ready_id = [x for x in self.ready_id if x not in id]
             ready_conns: List[EnvWorker] = []
             while not ready_conns:
-                ready_conns = self.worker_class.wait(
-                    self.waiting_conn, self.wait_num, self.timeout
-                )
+                ready_conns = self.worker_class.wait(self.waiting_conn, self.wait_num, self.timeout)
             result = []
             for conn in ready_conns:
                 waiting_index = self.waiting_conn.index(conn)
@@ -855,8 +843,7 @@ class BaseVectorEnv(object):
         self._assert_is_not_closed()
         if self.is_async and len(self.waiting_id) > 0:
             raise RuntimeError(
-                f"Environments {self.waiting_id} are still stepping, cannot "
-                "render them now."
+                f"Environments {self.waiting_id} are still stepping, cannot render them now."
             )
         return [w.render(**kwargs) for w in self.workers]
 
@@ -888,8 +875,7 @@ class DummyVectorEnv(BaseVectorEnv):
 
     def get_segmentation_of_interest(self, segmentation_images):
         return [
-            w.get_segmentation_of_interest(img)
-            for w, img in zip(self.workers, segmentation_images)
+            w.get_segmentation_of_interest(img) for w, img in zip(self.workers, segmentation_images)
         ]
 
     def get_sim_state(self):
@@ -939,8 +925,7 @@ class SubprocVectorEnv(BaseVectorEnv):
 
     def get_segmentation_of_interest(self, segmentation_images):
         return [
-            w.get_segmentation_of_interest(img)
-            for w, img in zip(self.workers, segmentation_images)
+            w.get_segmentation_of_interest(img) for w, img in zip(self.workers, segmentation_images)
         ]
 
     def get_sim_state(self):
@@ -970,7 +955,9 @@ class SubprocVectorEnv(BaseVectorEnv):
         obs = np.stack(obs_list)
         return obs
 
+
 # DreamerVLA LIBERO-specific vector env adapters.
+
 
 def _reconfigure_worker(
     parent: connection.Connection,
@@ -1179,7 +1166,10 @@ def _egl_worker(
             elif cmd == "step":
                 _obs, reward, terminated, truncated, info = env.step(data)
                 p.send(
-                    ("ok", (float(reward), bool(terminated), bool(truncated), info, env.full_record()))
+                    (
+                        "ok",
+                        (float(reward), bool(terminated), bool(truncated), info, env.full_record()),
+                    )
                 )
             elif cmd == "task_description":
                 p.send(("ok", env.task_description))

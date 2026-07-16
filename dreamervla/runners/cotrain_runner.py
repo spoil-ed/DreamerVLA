@@ -2865,11 +2865,9 @@ def _sum_metric_lists(items: list[Any]) -> dict[str, float]:
     for key, values in values_by_key.items():
         if key.endswith("/batch_size_avg"):
             continue
-        if key.endswith("/score_mean") or key.endswith("/score_p50") or key.endswith("/score_p90"):
+        if key.endswith(("/score_mean", "/score_p50", "/score_p90")):
             continue
-        if key.endswith("/classifier_success_rate") or key.endswith(
-            "/classifier_trajectory_success_rate"
-        ):
+        if key.endswith(("/classifier_success_rate", "/classifier_trajectory_success_rate")):
             continue
         if key.endswith("/batch_size_min"):
             summed[key] = float(min(values))
@@ -2958,7 +2956,7 @@ def _aggregate_sync_metric_lists(items: list[Any]) -> dict[str, float]:
             aggregated[key] = float(sum(values))
         elif key.endswith("_version"):
             aggregated[key] = float(max(values))
-        elif key.endswith("_bytes") or key.endswith("_tensors"):
+        elif key.endswith(("_bytes", "_tensors")):
             aggregated[key] = float(max(values))
         else:
             aggregated[key] = float(sum(values))

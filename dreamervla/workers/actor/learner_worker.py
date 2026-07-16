@@ -1075,7 +1075,7 @@ def _estimated_imagined_rollouts(
             )
         )
     )
-    num_groups = raw_metrics.get("LUMOS/num_groups", None)
+    num_groups = raw_metrics.get("LUMOS/num_groups")
     if num_groups is not None:
         return int(float(num_groups) * max(1, group_size))
 

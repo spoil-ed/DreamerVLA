@@ -438,7 +438,7 @@ def main() -> None:
         f"{'open mse':>10}  {'close mse':>10}   {'open rL2':>10}  {'close rL2':>10}"
     )
     T_show = open_agg["T_pred"]
-    for c in range(0, T_show // K):
+    for c in range(T_show // K):
         env_step = (c + 1) * K - 1  # chunk-end env-step (0-indexed)
         # average within the chunk
         sl = slice(c * K, (c + 1) * K)

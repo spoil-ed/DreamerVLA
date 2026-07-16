@@ -6,11 +6,11 @@ from .wm_chunk import ChunkAwareWorldModel
 
 __all__ = [
     "BaseWorldModel",
+    "BinaryRewardHead",
+    "ChunkAwareWorldModel",
+    "DinoTokenWorldModel",
     "DreamerV3LatentState",
     "DreamerV3Loss",
-    "DinoTokenWorldModel",
-    "WorldModel",
-    "ChunkAwareWorldModel",
-    "BinaryRewardHead",
     "SymexpTwoHotHead",
+    "WorldModel",
 ]

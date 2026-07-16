@@ -220,7 +220,7 @@ class OpenVLAOFTForRLActionPrediction(OpenVLAOFTForActionPrediction, BasePolicy)
         input_ids = batchdata["input_ids"]
         attention_mask = batchdata["attention_mask"]
         pixel_values = batchdata["pixel_values"]
-        proprio = batchdata.get("proprio", None)
+        proprio = batchdata.get("proprio")
 
         input_ids = pad_tensor_to_length(
             input_ids,

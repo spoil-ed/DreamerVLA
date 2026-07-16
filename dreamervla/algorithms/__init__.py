@@ -34,16 +34,16 @@ from .ppo import (
 from .registry import ActorUpdateRoute, actor_update_names, get_actor_update_route
 
 __all__ = [
+    "ActorUpdateRoute",
+    "actor_update_names",
+    "compute_lambda_returns",
+    "compute_replay_lambda_returns",
+    "dino_lumos_dense_chunk_step",
+    # PPO routes (distinguished by reward form).
+    "dino_lumos_dense_step",
+    "dino_lumos_step",
+    "get_actor_update_route",
     # DreamerV3 actor-critic route.
     "imagine_actor_critic_step",
     "world_model_pretrain_step",
-    "compute_lambda_returns",
-    "compute_replay_lambda_returns",
-    # PPO routes (distinguished by reward form).
-    "dino_lumos_dense_step",
-    "dino_lumos_dense_chunk_step",
-    "dino_lumos_step",
-    "ActorUpdateRoute",
-    "actor_update_names",
-    "get_actor_update_route",
 ]

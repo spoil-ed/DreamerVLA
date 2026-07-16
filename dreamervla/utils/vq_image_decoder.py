@@ -273,12 +273,12 @@ class ChameleonImageReconstructor:
 
 
 __all__ = [
-    "load_vq_model",
-    "build_bpe2vq_tensor",
-    "bpe_to_vq",
-    "vq_tokens_to_pixels",
-    "bpe_tokens_to_pixels",
-    "tensor_to_pil",
-    "pixels_to_pil",
     "ChameleonImageReconstructor",
+    "bpe_to_vq",
+    "bpe_tokens_to_pixels",
+    "build_bpe2vq_tensor",
+    "load_vq_model",
+    "pixels_to_pil",
+    "tensor_to_pil",
+    "vq_tokens_to_pixels",
 ]

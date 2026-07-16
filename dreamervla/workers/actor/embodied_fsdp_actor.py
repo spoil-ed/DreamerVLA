@@ -1392,7 +1392,7 @@ class EmbodiedFSDPActor(Worker):
 
     def _clip_or_measure_grad_norm(self, optim_cfg: dict[str, Any]) -> float:
         policy = self._policy()
-        grad_clip_norm = optim_cfg.get("grad_clip_norm", None)
+        grad_clip_norm = optim_cfg.get("grad_clip_norm")
         if _is_fsdp_module(policy):
             max_norm = float("inf") if grad_clip_norm is None else float(grad_clip_norm)
             return float(_to_float(policy.clip_grad_norm_(max_norm)))

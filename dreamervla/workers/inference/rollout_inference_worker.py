@@ -54,9 +54,7 @@ class RolloutInferenceWorker(Worker):
         decoder_cfg = dict(self._cfg["decoder"])
         decoder_kwargs = dict(decoder_cfg.get("kwargs", {}))
         target = str(decoder_cfg.get("target") or decoder_cfg.get("_target_") or "")
-        if target.endswith("oft_rollout:OFTRolloutBundle") or target.endswith(
-            "oft_rollout.OFTRolloutBundle"
-        ):
+        if target.endswith(("oft_rollout:OFTRolloutBundle", "oft_rollout.OFTRolloutBundle")):
             decoder_kwargs.setdefault("device", self.device)
         decoder_cfg["kwargs"] = decoder_kwargs
         self._bundle = _build_from_cfg(decoder_cfg)

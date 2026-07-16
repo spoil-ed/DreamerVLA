@@ -209,4 +209,4 @@ class ReturnPercentileTracker:
 
 # soft_update now lives in dreamervla.utils.polyak (generic, model-independent);
 # re-exported here for existing importers.
-__all__ = ["TwohotCritic", "ReturnPercentileTracker", "symlog", "symexp", "soft_update"]
+__all__ = ["ReturnPercentileTracker", "TwohotCritic", "soft_update", "symexp", "symlog"]

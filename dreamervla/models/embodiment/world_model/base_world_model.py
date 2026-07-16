@@ -239,6 +239,6 @@ __all__ = [
     "DreamerV3ActorAdapterMixin",
     "DreamerV3LatentState",
     "DreamerV3Loss",
-    "_module_dtype",
     "_module_device",
+    "_module_dtype",
 ]

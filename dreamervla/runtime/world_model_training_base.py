@@ -1721,8 +1721,7 @@ class WorldModelTrainingBase(BaseRunner):
                                 )
                                 for name, value in ac_metrics.items():
                                     if (
-                                        name.startswith("actor_grad_norm_")
-                                        or name.startswith("tdmpc_")
+                                        name.startswith(("actor_grad_norm_", "tdmpc_"))
                                     ) and isinstance(value, (int, float)):
                                         local_metrics[f"train_{name}"] = value
                                 policy_lr_scheduler.step()
@@ -1836,9 +1835,7 @@ class WorldModelTrainingBase(BaseRunner):
                             topk_ckpt_path = topk_manager.get_ckpt_path(checkpoint_metrics)
                         topk_ckpt_path = self.distributed.broadcast_object(topk_ckpt_path)
                         self.save_checkpoint(
-                            extra_paths=(
-                                () if topk_ckpt_path is None else (topk_ckpt_path,)
-                            )
+                            extra_paths=(() if topk_ckpt_path is None else (topk_ckpt_path,))
                         )
 
                     self.global_step += 1

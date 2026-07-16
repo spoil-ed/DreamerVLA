@@ -35,7 +35,7 @@ from dreamervla.algorithms.ppo.dense_chunk import dino_lumos_dense_chunk_step
 from dreamervla.algorithms.ppo.outcome import dino_lumos_step
 
 __all__ = [
-    "dino_lumos_dense_step",
     "dino_lumos_dense_chunk_step",
+    "dino_lumos_dense_step",
     "dino_lumos_step",
 ]

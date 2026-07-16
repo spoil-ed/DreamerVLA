@@ -1441,10 +1441,10 @@ def imagine_actor_critic_step(
 
 
 __all__ = [
+    "_actor_action_for_world_model",
     "compute_lambda_returns",
     "compute_replay_lambda_returns",
-    "normalize_returns_for_actor_critic",
     "imagine_actor_critic_step",
+    "normalize_returns_for_actor_critic",
     "world_model_pretrain_step",
-    "_actor_action_for_world_model",
 ]
