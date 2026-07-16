@@ -988,13 +988,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         configured_k = (
             OmegaConf.select(topk_cfg, "k", default=None) if topk_cfg is not None else None
         )
-        k_value = (
-            int(k)
-            if k is not None
-            else int(
-                configured_k or OmegaConf.select(self.cfg, "training.warmup_topk_k", default=0) or 0
-            )
-        )
+        k_value = int(k) if k is not None else int(configured_k or 0)
         if k_value <= 0:
             return None
         if component == "wm":

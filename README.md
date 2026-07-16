@@ -25,11 +25,11 @@ bash scripts/download_assets.sh only=[20_libero_dataset] env.LIBERO_SUITES=liber
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   bash scripts/experiments/cotrain/train.sh \
   --config openvla_libero \
-  --wm_ckpt /path/to/wm_warmup.ckpt \
-  --cls_ckpt /path/to/classifier_warmup.ckpt
+  --wm_ckpt /path/to/wm-run/checkpoints/latest.ckpt \
+  --cls_ckpt /path/to/classifier-run/checkpoints/latest.ckpt
 
 bash scripts/experiments/cotrain/eval.sh \
-  eval.ckpt_path=/path/to/manual_cotrain.ckpt
+  eval.ckpt_path=/path/to/cotrain-run
 ```
 
 For the independent official-data upper-bound jobs:
@@ -85,8 +85,8 @@ Common overrides:
 DVLA_DATA_ROOT=data
 bash scripts/experiments/cotrain/train.sh \
   --config openvla_libero \
-  --wm_ckpt /path/to/wm_warmup.ckpt \
-  --cls_ckpt /path/to/classifier_warmup.ckpt \
+  --wm_ckpt /path/to/wm-run/checkpoints/latest.ckpt \
+  --cls_ckpt /path/to/classifier-run/checkpoints/latest.ckpt \
   manual_cotrain.global_steps=20000
 bash scripts/experiments/world_model_training/train.sh \
   training.out_dir="${DVLA_DATA_ROOT}/outputs/wm_full_dataset_train/run"
@@ -94,6 +94,12 @@ bash scripts/experiments/world_model_training/train.sh \
 
 `DVLA_DATA_ROOT` is independent of `DVLA_ROOT`; use a separate disk or shared
 storage path when that is more convenient.
+
+Training artifacts live at `outputs/<experiment>/<timestamp>/`. Its flat
+`checkpoints/` contains `latest.ckpt` and optional
+`epoch=<epoch>-<metric>=<value>.ckpt` top-k files. Explicit HF export writes the
+sibling `checkpoint_hf/`. Evaluation writes to `outputs/eval/<task-suite>/` and
+accepts a concrete checkpoint, `checkpoints/`, or a training run root.
 
 Shell entrypoints do not define training or evaluation defaults. They select complete
 recipes directly under `configs/experiment/`; use Hydra `key=value` overrides for

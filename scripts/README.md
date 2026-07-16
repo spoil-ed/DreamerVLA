@@ -130,10 +130,9 @@ bash scripts/experiments/cotrain/train.sh \
 internally. It deliberately uses this same cotrain launcher, so checkpoint and
 resume parsing have only one shell entrypoint.
 
-Checkpoints are written below the owning run root as
-`checkpoints/global_step_<N>/manual_cotrain.ckpt`, with
-`checkpoints/latest.ckpt` updated for discovery. Resume accepts a run root, a
-checkpoint directory, or a checkpoint file and continues in the original run root:
+Checkpoints are flat files below the owning run root: `checkpoints/latest.ckpt` plus
+configured `epoch=<epoch>-<metric>=<value>.ckpt` top-k files. Resume accepts a run
+root, `checkpoints/`, or a checkpoint file and continues in the original run root:
 
 ```bash
 bash scripts/experiments/cotrain/train.sh \
@@ -146,5 +145,5 @@ Evaluation requires a policy checkpoint as a Hydra override. Its fixed 100-episo
 
 ```bash
 bash scripts/experiments/cotrain/eval.sh \
-  eval.ckpt_path=/path/to/manual_cotrain.ckpt
+  eval.ckpt_path=/path/to/openvla_libero/<timestamp>
 ```

@@ -63,12 +63,9 @@ WM-only replay warm-up implementation with these non-negotiable overrides:
 - `online_rollout.total_env_steps == 0`;
 - the complete official replay is seeded before the first optimizer step.
 
-The stage writes the normal split WM checkpoint and loss-ranked progress
-checkpoints. The launcher first requires a valid, complete `wm_warmup.ckpt`.
-Only after that completion gate passes may it select the lowest-loss ranked
-checkpoint; every ranked artifact must carry matching step, loss, component,
-and Hydra construction metadata. It uses the complete checkpoint when ranked
-checkpoints are disabled.
+The stage writes a complete WM payload to `checkpoints/latest.ckpt` and retains
+loss-ranked flat files such as `epoch=0003-loss=0.250000.ckpt`. Every selected
+artifact carries matching epoch, loss, component, and Hydra construction metadata.
 
 ## Stage B: Official-Data Success Classifier
 
@@ -225,14 +222,14 @@ bash scripts/experiments/classifier_training/train.sh
 ```
 
 They create separate timestamped run directories. The frozen Ray route accepts
-the canonical `wm_warmup.ckpt` and `classifier_warmup.ckpt` files through the
-shared Hydra train launcher.
+each run's canonical `checkpoints/latest.ckpt` through the shared Hydra train
+launcher.
 
 ```bash
 bash scripts/experiments/cotrain/train.sh \
   --config openvla_libero \
-  --wm_ckpt /path/to/wm_warmup.ckpt \
-  --cls_ckpt /path/to/classifier_warmup.ckpt
+  --wm_ckpt /path/to/wm-run/checkpoints/latest.ckpt \
+  --cls_ckpt /path/to/classifier-run/checkpoints/latest.ckpt
 ```
 
 Resume uses the full manual-cotrain checkpoint and reuses its owning run root:

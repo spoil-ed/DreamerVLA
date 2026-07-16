@@ -77,11 +77,11 @@ The retained shell surface exposes train and eval separately:
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   bash scripts/experiments/cotrain/train.sh \
   --config openvla_libero \
-  --wm_ckpt /path/to/wm_warmup.ckpt \
-  --cls_ckpt /path/to/classifier_warmup.ckpt
+  --wm_ckpt /path/to/wm-run/checkpoints/latest.ckpt \
+  --cls_ckpt /path/to/classifier-run/checkpoints/latest.ckpt
 
 bash scripts/experiments/cotrain/eval.sh \
-  eval.ckpt_path=/path/to/manual_cotrain.ckpt
+  eval.ckpt_path=/path/to/cotrain-run
 ```
 
 These scripts contain no training defaults. Train selects
@@ -130,6 +130,7 @@ stepping 和 trajectory assembly。DreamerVLA manual route 额外增加 `Learner
 
 - `run_manifest.json`
 - `checkpoints/`
+- `checkpoint_hf/` (only when explicitly enabled)
 - `logs/`
 - `tensorboard/`
 - `wandb/`
@@ -140,7 +141,8 @@ stepping 和 trajectory assembly。DreamerVLA manual route 额外增加 `Learner
 By default one invocation owns
 `${RUN_ROOT:-${DVLA_DATA_ROOT}/outputs}/${run.name}/${run.timestamp}`. Resume reuses
 the checkpoint's owning run root; do not create a second timestamp or scatter extra
-artifacts elsewhere.
+artifacts elsewhere. Evaluation is the deliberate exception: its run root is
+`${run.output_root}/eval/${eval.task_suite_name}` with no timestamp layer.
 
 ---
 
@@ -181,11 +183,15 @@ artifacts elsewhere.
   `time/`, and `sync/`.
 - Logger backends come from `runner.logger.logger_backends`; defaults use TensorBoard
   and W&B where the active experiment declares them.
-- Base checkpoints use `${training.out_dir}/checkpoints/global_step_<N>/`.
-- Pipeline warmup checkpoints use `${training.out_dir}/checkpoints/wm_warmup.ckpt`
-  and `${training.out_dir}/checkpoints/classifier_warmup.ckpt`.
-- Use `BaseRunner.get_global_step_checkpoint_dir` and component checkpoint helpers
-  instead of hand-built paths.
+- Every training route writes the resumable payload to
+  `${training.out_dir}/checkpoints/latest.ckpt`.
+- Metric-selected files are flat siblings named
+  `epoch=<completed-epoch>-<metric>=<value>.ckpt`; the metric name and top-k count
+  come from `checkpoint.topk`.
+- `checkpoint_hf/` is a sibling of `checkpoints/` and is created only when HF export
+  is explicitly enabled. Never create route or step subdirectories below `checkpoints/`.
+- Resume accepts a concrete checkpoint, `checkpoints/`, or a run root and resolves
+  directories to `latest.ckpt`; historical layouts remain read-only fallbacks.
 - Cotrain evaluation goes through `scripts/experiments/cotrain/eval.sh` and
   `configs/experiment/eval_cotrain.yaml`.
 

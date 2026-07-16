@@ -212,8 +212,14 @@ checkpoints/  wandb/  tensorboard/  logs/  video/  diagnostics/  .hydra/
   创建新的内存 replay，并按当前 Hydra 实验的数据流从新一轮真实轨迹开始积累或替换。
 - `failure_imagined_rl` resume 后不保留历史 failure anchors；如果新一轮真实轨迹没有失败样本，
   按现有语义跳过该步 imagined policy update。
-- cotrain checkpoint 使用 `checkpoints/global_step_<N>/manual_cotrain.ckpt`，并维护规范的
-  `checkpoints/latest.ckpt` 指针或副本。
+- 所有训练 checkpoint 都平铺在唯一的 `checkpoints/`：始终维护 `latest.ckpt`，并按
+  `epoch=<完成 epoch>-<metric>=<value>.ckpt` 保留 Hydra 配置的 top-k；不得创建 step、
+  component 或 route 子目录。
+- HF 导出必须显式开启，且只写到 run root 下与 `checkpoints/` 同级的
+  `checkpoint_hf/`。
+- eval run root 固定为 `<output_root>/eval/<任务名>/`，不增加 timestamp 层，也不创建
+  checkpoint 输出目录。eval 输入为目录时读取其中的 `checkpoints/latest.ckpt`，具体
+  `.ckpt` 文件仍直接兼容。
 
 #### 5. 修改这些行为时必须保留回归证据
 

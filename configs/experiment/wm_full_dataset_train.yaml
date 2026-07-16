@@ -35,7 +35,6 @@ training:
   classifier_warmup_steps: 0
   warmup_replay_epochs: 10
   warmup_checkpoint_every_epochs: 1
-  warmup_topk_k: 3
   wm_profile_steps: 8
   wm_prefetch_workers: 1
   # Diagnose resume divergence without changing the optimizer update.
@@ -56,7 +55,7 @@ checkpoint:
     monitor_key: loss
     metric_name: loss
     mode: min
-    k: ${training.warmup_topk_k}
+    k: 3
 
 offline_warmup:
   data_dir: ${task.collected_reward_dir}

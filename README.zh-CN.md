@@ -28,11 +28,11 @@ bash scripts/download_assets.sh only=[20_libero_dataset] env.LIBERO_SUITES=liber
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   bash scripts/experiments/cotrain/train.sh \
   --config openvla_libero \
-  --wm_ckpt /path/to/wm_warmup.ckpt \
-  --cls_ckpt /path/to/classifier_warmup.ckpt
+  --wm_ckpt /path/to/wm-run/checkpoints/latest.ckpt \
+  --cls_ckpt /path/to/classifier-run/checkpoints/latest.ckpt
 
 bash scripts/experiments/cotrain/eval.sh \
-  eval.ckpt_path=/path/to/manual_cotrain.ckpt
+  eval.ckpt_path=/path/to/cotrain-run
 ```
 
 两个独立的官方数据上限训练入口：
@@ -71,6 +71,10 @@ docs/               文档索引、参考、教程、报告和论文草稿
 ```
 
 `DVLA_DATA_ROOT` 和 `DVLA_ROOT` 相互独立；数据可以放在仓库之外的磁盘或共享存储。
+训练产物统一写入 `outputs/<实验名>/<时间戳>/`。其中平铺的 `checkpoints/`
+只包含 `latest.ckpt` 和可选的 `epoch=<epoch>-<metric>=<value>.ckpt` top-k
+文件；显式开启 HF 导出后，才会创建同级 `checkpoint_hf/`。评估产物写入
+`outputs/eval/<任务名>/`，输入可以是具体 checkpoint、`checkpoints/` 或训练 run root。
 实验 shell 不保存训练或评估默认参数；入口和默认值由 `configs/experiment/` 中的
 Hydra 配置提供，修改时使用 `key=value` override。`configs/scripts/` 只保留
 install、download、preprocess 三类工作流。

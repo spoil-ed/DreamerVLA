@@ -67,16 +67,20 @@ Shell launchers expose a small set of convenience keys and pass remaining
 | `manual_cotrain.max_policy_kl` | per-step actor PPO trust-region allowance |
 | `manual_cotrain.wm_rollout_target_trajectories` | imagined trajectories used by actor PPO |
 | `manual_cotrain.wm_env_write_replay` | whether imagined episodes enter replay; mainline keeps this `false` |
-| `manual_cotrain.checkpoint_every` | completed global-step checkpoint cadence; segmented eval forces its boundary checkpoint |
-| `manual_cotrain.keep_last_checkpoints` | number of numeric step directories retained; default `2` |
+| `manual_cotrain.checkpoint_every` | completed global-step checkpoint cadence |
+| `checkpoint.topk.monitor_key` | metric key used to select top-k checkpoints |
+| `checkpoint.topk.metric_name` | filesystem-safe metric label used in the flat filename |
+| `checkpoint.topk.mode` | `min` or `max` selection direction |
+| `checkpoint.topk.k` | number of flat metric checkpoints retained; `0` disables top-k |
 | `training.resume` | enable restoration for the selected runner |
 | `training.resume_path` | exact checkpoint resolved by the launcher |
 | `training.resume_dir` | owning run root reused by the resumed invocation |
 | `manual_cotrain.resume_ckpt` | legacy/internal full-checkpoint override; public launchers should use `--resume` |
 | `actor.train_cfg.optimizers.policy.lr` | original LM/OFT actor PPO LR |
 
-The canonical checkpoint tree is `${training.out_dir}/checkpoints/`. Public train
-launchers accept either a run root or a checkpoint:
+The canonical checkpoint tree is flat: `${training.out_dir}/checkpoints/latest.ckpt`
+plus selected `epoch=<epoch>-<metric>=<value>.ckpt` files. Public train launchers
+accept a run root, `checkpoints/`, or a concrete checkpoint:
 
 ```bash
 bash scripts/experiments/world_model_training/train.sh \
@@ -91,6 +95,11 @@ checkpoints to the original run root.
 Cotrain checkpoints restore model, optimizer, progress, RNG, TensorBoard, and W&B
 state. Replay contents and sampling cursors are intentionally not checkpointed;
 legacy replay fields are ignored.
+
+Training run roots are `${run.output_root}/${run.name}/${run.timestamp}`. Evaluation
+uses `${run.output_root}/eval/${eval.task_suite_name}` directly, without a timestamp,
+and never creates a checkpoint directory. Optional HF export is explicit and writes
+the sibling `${training.out_dir}/checkpoint_hf/`.
 
 Cotrain real-rollout and evaluation progress bars use completed trajectories as the
 numerator and the configured trajectory total as the denominator. `chunks` remains a

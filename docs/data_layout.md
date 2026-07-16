@@ -121,7 +121,14 @@ Training runs default to
 `${RUN_ROOT:-${DVLA_DATA_ROOT}/outputs}/${run.name}/${run.timestamp}`. Every invocation
 owns one run root with sibling `checkpoints/`, `logs/`, `tensorboard/`, `wandb/`,
 `video/`, `diagnostics/`, and `.hydra/` directories. Collection, warmup, cotrain, and
-evaluation use their experiment names as `run.name`; resuming keeps the original root.
+other training routes use their experiment names as `run.name`; resuming keeps the
+original root. `checkpoints/` is flat and contains `latest.ckpt` plus configured
+`epoch=<epoch>-<metric>=<value>.ckpt` top-k files. Explicit HF export uses the sibling
+`checkpoint_hf/`.
+
+Evaluation uses `${RUN_ROOT:-${DVLA_DATA_ROOT}/outputs}/eval/${eval.task_suite_name}`.
+That task directory is the eval run root; it has no timestamp layer and does not own
+training checkpoints.
 
 ## Move Data
 

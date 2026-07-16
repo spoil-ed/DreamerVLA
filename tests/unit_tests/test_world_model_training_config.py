@@ -25,7 +25,7 @@ def test_hidden_token_pipeline_uses_traj1_proprio_language_wm_profile():
     assert cfg.training.wm_warmup_steps == 20000
     assert cfg.training.warmup_replay_epochs == 10
     assert cfg.training.warmup_checkpoint_every_epochs == 1
-    assert cfg.training.warmup_topk_k == 3
+    assert cfg.checkpoint.topk.k == 3
     assert cfg.training.wm_profile_steps == 8
     assert cfg.training.wm_prefetch_workers == 1
     assert cfg.dataloader.batch_size == 16
@@ -76,7 +76,7 @@ def test_full_dataset_wm_experiment_owns_complete_training_recipe(tmp_path, monk
     assert cfg.training.classifier_warmup_steps == 0
     assert cfg.training.warmup_replay_epochs == 10
     assert cfg.training.warmup_checkpoint_every_epochs == 1
-    assert cfg.training.warmup_topk_k == 3
+    assert cfg.checkpoint.topk.k == 3
     assert cfg.training.wm_profile_steps == 8
     assert cfg.training.wm_prefetch_workers == 1
     assert cfg.training.world_model_ddp.find_unused_parameters is False

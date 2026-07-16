@@ -130,6 +130,9 @@ Runners write under one `${training.out_dir}`:
 ${training.out_dir}/
 ├── run_manifest.json
 ├── checkpoints/
+│   ├── latest.ckpt
+│   └── epoch=<epoch>-<metric>=<value>.ckpt
+├── checkpoint_hf/              # explicit HF export only
 ├── logs/
 ├── tensorboard/
 ├── wandb/
@@ -140,7 +143,11 @@ ${training.out_dir}/
 
 The default run root is
 `${RUN_ROOT:-${DVLA_DATA_ROOT}/outputs}/${run.name}/${run.timestamp}`. Warmup and
-periodic checkpoints are written under its `checkpoints/` directory. Supplying
+periodic checkpoints are flat files under its `checkpoints/` directory. Supplying
 `--resume <run-or-checkpoint>` to a train launcher restores the checkpoint and keeps
 writing into that same run root, including the TensorBoard timeline and W&B run
 identity.
+
+Evaluation instead owns `${run.output_root}/eval/${eval.task_suite_name}` directly;
+the task directory is the run root and has no timestamp child. Evaluation accepts a
+specific checkpoint, `checkpoints/`, or a training run root and reads `latest.ckpt`.
