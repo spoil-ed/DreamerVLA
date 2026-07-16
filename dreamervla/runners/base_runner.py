@@ -78,6 +78,7 @@ class BaseRunner(ABC):
     include_keys = tuple()
     exclude_keys = tuple()
     checkpoint_restore_output_dir = False
+    checkpoint_output_enabled = True
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
         # Runtime config
@@ -179,7 +180,9 @@ class BaseRunner(ABC):
         pprint(OmegaConf.to_container(self.config, resolve=True))
 
     def _checkpoint_format(self) -> str:
-        return str(OmegaConf.select(self.cfg, "training.checkpoint_format", default="both")).lower()
+        return str(
+            OmegaConf.select(self.cfg, "training.checkpoint_format", default="torch")
+        ).lower()
 
     def checkpoint_save_torch(self) -> bool:
         return self._checkpoint_format() in ("torch", "both")
@@ -194,7 +197,8 @@ class BaseRunner(ABC):
             return None
 
         self.get_run_dir().mkdir(parents=True, exist_ok=True)
-        self.get_checkpoint_dir().mkdir(parents=True, exist_ok=True)
+        if self.checkpoint_output_enabled:
+            self.get_checkpoint_dir().mkdir(parents=True, exist_ok=True)
         manifest = self.build_run_manifest()
         self.get_run_manifest_path().write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n",
@@ -593,51 +597,28 @@ class BaseRunner(ABC):
         """Load latest checkpoint when training.resume=True."""
         if cfg is None:
             cfg = self.cfg
-        if cfg.training.resume:
-            explicit_resume_path = OmegaConf.select(cfg, "training.resume_path", default=None)
-            if explicit_resume_path not in (None, ""):
-                resume_path = pathlib.Path(str(explicit_resume_path)).expanduser().resolve()
-                if is_hf_checkpoint(resume_path):
-                    self.load_hf_checkpoint(resume_path)
-                    return
-                if resume_path.is_file():
-                    if self.is_main_process:
-                        print(f"Resuming from checkpoint {resume_path}")
-                    self.load_checkpoint(path=resume_path)
-                    return
-            explicit_resume_dir = OmegaConf.select(cfg, "training.resume_dir", default=None)
-            if explicit_resume_dir is not None:
-                resume_path = pathlib.Path(str(explicit_resume_dir)).expanduser().resolve()
-                if is_hf_checkpoint(resume_path):
-                    self.load_hf_checkpoint(resume_path)
-                    return
-                if resume_path.is_dir():
-                    hf_candidates = (
-                        resume_path / "checkpoints" / "latest_hf",
-                        resume_path / "latest_hf",
-                    )
-                    for hf_path in hf_candidates:
-                        if is_hf_checkpoint(hf_path):
-                            self.load_hf_checkpoint(hf_path)
-                            return
-                    try:
-                        resume_path = resolve_resume_checkpoint(resume_path)
-                    except FileNotFoundError:
-                        resume_path = resume_path / "checkpoints" / "latest.ckpt"
-                if resume_path.is_file():
-                    if self.is_main_process:
-                        print(f"Resuming from checkpoint {resume_path}")
-                    self.load_checkpoint(path=resume_path)
-                    return
-            lastest_ckpt_path = self.get_checkpoint_path(prefer_existing=True)
-            if lastest_ckpt_path.is_file():
-                if self.is_main_process:
-                    print(f"Resuming from checkpoint {lastest_ckpt_path}")
-                self.load_checkpoint(path=lastest_ckpt_path)
-                return
-            latest_hf_path = self.get_hf_checkpoint_path(prefer_existing=True)
-            if latest_hf_path.is_dir():
-                self.load_hf_checkpoint(latest_hf_path)
+        if not bool(OmegaConf.select(cfg, "training.resume", default=False)):
+            return
+
+        resume_source = OmegaConf.select(cfg, "training.resume_path", default=None)
+        if resume_source in (None, ""):
+            resume_source = OmegaConf.select(cfg, "training.resume_dir", default=None)
+        explicit_source = resume_source not in (None, "")
+        if not explicit_source:
+            resume_source = self.get_run_dir()
+        try:
+            resume_path = resolve_resume_checkpoint(str(resume_source))
+        except FileNotFoundError:
+            if explicit_source:
+                raise
+            return
+
+        if is_hf_checkpoint(resume_path):
+            self.load_hf_checkpoint(resume_path)
+            return
+        if self.is_main_process:
+            print(f"Resuming from checkpoint {resume_path}")
+        self.load_checkpoint(path=resume_path)
 
     def print_history(self, history: list[dict[str, float | str | int]]) -> None:
         # Metric print
@@ -878,15 +859,20 @@ class BaseRunner(ABC):
         *,
         prefer_existing: bool = False,
     ) -> pathlib.Path:
-        # HF sidecar directory for VLA-compatible checkpoints.
-        canonical_path = self.get_checkpoint_dir().joinpath(f"{tag}_hf")
+        # Optional latest HF export, separate from flat Torch checkpoint files.
+        canonical_path = self.get_artifact_dir("checkpoint_hf")
         if not prefer_existing:
             return canonical_path
         if canonical_path.is_dir():
             return canonical_path
-        compat_path = self.get_compat_checkpoint_dir().joinpath(f"{tag}_hf")
-        if compat_path.is_dir():
-            return compat_path
+        legacy_candidates = (
+            self.get_checkpoint_dir().joinpath(f"{tag}_hf"),
+            self.get_compat_checkpoint_dir().joinpath(f"{tag}_hf"),
+            self.get_run_dir().joinpath(f"{tag}_hf"),
+        )
+        for compat_path in legacy_candidates:
+            if compat_path.is_dir():
+                return compat_path
         return canonical_path
 
     def _save_checkpoint_sidecars(self, path: pathlib.Path, payload: dict[str, Any]) -> None:

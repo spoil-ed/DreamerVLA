@@ -10,6 +10,7 @@ from torch import nn
 from torch.utils.data import Dataset, Sampler
 
 from dreamervla.runners.base_runner import BaseRunner
+from dreamervla.runtime.libero_vla_evaluation_base import LIBEROVLAEvaluationBase
 from dreamervla.utils.hf_checkpoint import (
     is_hf_checkpoint,
     load_hf_prefixed_tensors,
@@ -22,6 +23,22 @@ class _ConcreteRunner(BaseRunner):
 
     def run(self) -> object:
         return None
+
+
+class _FakeHFBackbone:
+    def save_pretrained(self, path: str, **_kwargs: Any) -> None:
+        output = Path(path)
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "config.json").write_text("{}", encoding="utf-8")
+        (output / "model.safetensors").touch()
+
+
+class _FakeHFDistributed:
+    is_main_process = True
+
+    @staticmethod
+    def unwrap_module(module: object) -> object:
+        return module
 
 
 def test_base_runner_resolves_vla_init_path_and_frozen_encoder_cfg(
@@ -91,6 +108,39 @@ def test_base_runner_prefers_compat_latest_hf_when_canonical_missing(
     compat_hf.mkdir(parents=True)
 
     assert workspace.get_hf_checkpoint_path(prefer_existing=True) == compat_hf
+
+
+def test_vla_hf_export_is_explicit_latest_only_and_sibling(tmp_path: Path) -> None:
+    runner = object.__new__(LIBEROVLAEvaluationBase)
+    runner.config = OmegaConf.create(
+        {
+            "training": {
+                "out_dir": str(tmp_path),
+                "checkpoint_format": "torch",
+            },
+            "checkpoint": {"save_hf_encoder": True},
+        }
+    )
+    runner.cfg = runner.config
+    runner._output_dir = str(tmp_path)
+    runner.encoder = type("Encoder", (), {"backbone": _FakeHFBackbone()})()
+    runner.distributed = _FakeHFDistributed()
+    runner.global_step = 4
+    runner.epoch = 2
+    latest = tmp_path / "checkpoints" / "latest.ckpt"
+    metric = tmp_path / "checkpoints" / "epoch=0002-accuracy=0.500000.ckpt"
+    payload = {"state_dicts": {"encoder": {}}}
+
+    runner._save_checkpoint_sidecars(latest, payload)
+    assert not (tmp_path / "checkpoint_hf").exists()
+
+    runner.config.training.checkpoint_format = "both"
+    runner._save_checkpoint_sidecars(metric, payload)
+    assert not (tmp_path / "checkpoint_hf").exists()
+
+    runner._save_checkpoint_sidecars(latest, payload)
+    assert (tmp_path / "checkpoint_hf" / "config.json").is_file()
+    assert not (tmp_path / "checkpoints" / "latest_hf").exists()
 
 
 class _ToyDataset(Dataset[int]):

@@ -24,9 +24,10 @@ def test_save_load_roundtrip(tmp_path):
         assert torch.equal(loaded.state_dict()[k], v)
 
 
-def _runner(fmt):
+def _runner(fmt=None):
     obj = types.SimpleNamespace()
-    obj.cfg = OmegaConf.create({"training": {"checkpoint_format": fmt}})
+    training = {} if fmt is None else {"checkpoint_format": fmt}
+    obj.cfg = OmegaConf.create({"training": training})
     obj._checkpoint_format = types.MethodType(BaseRunner._checkpoint_format, obj)
     obj.checkpoint_save_torch = types.MethodType(BaseRunner.checkpoint_save_torch, obj)
     obj.checkpoint_save_hf = types.MethodType(BaseRunner.checkpoint_save_hf, obj)
@@ -34,6 +35,7 @@ def _runner(fmt):
 
 
 def test_checkpoint_format_flags():
+    assert _runner().checkpoint_save_torch() and not _runner().checkpoint_save_hf()
     assert _runner("both").checkpoint_save_torch() and _runner("both").checkpoint_save_hf()
     assert _runner("torch").checkpoint_save_torch() and not _runner("torch").checkpoint_save_hf()
     assert _runner("hf").checkpoint_save_hf() and not _runner("hf").checkpoint_save_torch()

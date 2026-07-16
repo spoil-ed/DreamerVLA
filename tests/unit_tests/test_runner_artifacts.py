@@ -19,6 +19,20 @@ class _ConcreteRunner(BaseRunner):
         return None
 
 
+class _EvalOnlyRunner(_ConcreteRunner):
+    checkpoint_output_enabled = False
+
+
+class _RecordingRunner(_ConcreteRunner):
+    def __init__(self, config) -> None:
+        super().__init__(config)
+        self.loaded_checkpoint: Path | None = None
+
+    def load_checkpoint(self, path=None, **_kwargs):
+        self.loaded_checkpoint = Path(path)
+        return {}
+
+
 def test_base_runner_uses_rlinf_style_run_artifact_dirs(tmp_path: Path) -> None:
     out_dir = tmp_path / "run"
     runner = _ConcreteRunner(OmegaConf.create({"training": {"out_dir": str(out_dir)}}))
@@ -29,6 +43,7 @@ def test_base_runner_uses_rlinf_style_run_artifact_dirs(tmp_path: Path) -> None:
     assert runner.get_tensorboard_dir() == out_dir.resolve() / "tensorboard"
     assert runner.get_wandb_dir() == out_dir.resolve() / "wandb"
     assert runner.get_video_dir("eval") == out_dir.resolve() / "video" / "eval"
+    assert runner.get_hf_checkpoint_path() == out_dir.resolve() / "checkpoint_hf"
     assert (
         runner.get_global_step_checkpoint_dir(12)
         == out_dir.resolve() / "checkpoints" / "global_step_12"
@@ -76,6 +91,28 @@ def test_base_runner_resume_reuses_checkpoint_owning_run_root(tmp_path: Path) ->
     runner = _ConcreteRunner(cfg)
 
     assert runner.get_run_dir() == run_dir.resolve()
+
+
+def test_base_runner_resume_directory_loads_canonical_latest(tmp_path: Path) -> None:
+    run_dir = tmp_path / "dreamer-wm" / "20260714_120000"
+    checkpoint = run_dir / "checkpoints" / "latest.ckpt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.touch()
+    cfg = OmegaConf.create(
+        {
+            "training": {
+                "out_dir": str(tmp_path / "fresh"),
+                "resume": True,
+                "resume_dir": str(run_dir),
+                "resume_path": None,
+            }
+        }
+    )
+    runner = _RecordingRunner(cfg)
+
+    runner.resume()
+
+    assert runner.loaded_checkpoint == checkpoint.resolve()
 
 
 def test_base_runner_setup_writes_only_shallow_run_artifacts(tmp_path: Path) -> None:
@@ -128,6 +165,26 @@ def test_base_runner_setup_writes_only_shallow_run_artifacts(tmp_path: Path) -> 
     assert manifest["logging"]["backends"] == ["tensorboard", "wandb"]
     assert manifest["distributed"]["strategy"] == "ddp"
     assert "git" in manifest
+
+
+def test_eval_only_runner_setup_does_not_create_checkpoint_directory(
+    tmp_path: Path,
+) -> None:
+    out_dir = tmp_path / "eval" / "libero_goal"
+    runner = _EvalOnlyRunner(
+        OmegaConf.create(
+            {
+                "seed": 7,
+                "training": {"out_dir": str(out_dir)},
+            }
+        )
+    )
+
+    runner.setup()
+
+    assert (out_dir / "run_manifest.json").is_file()
+    assert not (out_dir / "checkpoints").exists()
+    assert not (out_dir / "checkpoint_hf").exists()
 
 
 def test_base_runner_metric_logger_keeps_tensorboard_artifacts_shallow(

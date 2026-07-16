@@ -296,11 +296,14 @@ class LIBEROVLAEvaluationBase(BaseRunner):
         return value.state_dict()
 
     def _save_checkpoint_sidecars(self, path: Path, payload: dict[str, Any]) -> None:
-        if self.encoder is None or not bool(
-            OmegaConf.select(self.cfg, "checkpoint.save_hf_encoder", default=True)
+        if (
+            self.encoder is None
+            or not self.checkpoint_save_hf()
+            or not bool(OmegaConf.select(self.cfg, "checkpoint.save_hf_encoder", default=True))
+            or path.resolve() != self.get_checkpoint_path().resolve()
         ):
             return
-        hf_dir = self._hf_dir_for_runner_ckpt(path)
+        hf_dir = self.get_hf_checkpoint_path()
         hf_dir.mkdir(parents=True, exist_ok=True)
         backbone = self.distributed.unwrap_module(self.encoder.backbone)
         if not hasattr(backbone, "save_pretrained"):
@@ -330,12 +333,6 @@ class LIBEROVLAEvaluationBase(BaseRunner):
         )
         if self.distributed.is_main_process:
             print(f"  [Checkpoint] wrote HF VLA checkpoint: {hf_dir}")
-
-    @staticmethod
-    def _hf_dir_for_runner_ckpt(path: Path) -> Path:
-        if path.suffix:
-            return path.with_name(f"{path.stem}_hf")
-        return path
 
     @staticmethod
     def _extract_backbone_state_for_hf(payload: dict[str, Any]) -> dict[str, torch.Tensor] | None:
