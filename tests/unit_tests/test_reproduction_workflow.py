@@ -279,3 +279,31 @@ def test_build_stage_command_constructs_resumable_frozen_dreamer(tmp_path: Path)
     assert str(classifier) in command
     assert "manual_cotrain.global_steps=20000" in command
     assert not any(item.startswith("training.out_dir=") for item in command)
+
+
+def test_dockerfile_pins_runtime_source_and_complete_third_party_install() -> None:
+    text = (PROJECT_ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04" in text
+    assert "WORKDIR /opt/dreamervla" in text
+    assert "DVLA_DATA_ROOT=/data" in text
+    assert "bash scripts/install_env.sh" in text
+    assert "INSTALL_OPENVLA_OFT_THIRD_PARTY=true" in text
+    assert "python -m dreamervla.diagnostics.verify_install" in text
+    assert ".dreamervla-image.json" in text
+    assert 'CMD ["/bin/bash"]' in text
+
+
+def test_dockerignore_excludes_runtime_state_but_keeps_source() -> None:
+    entries = {
+        line.strip()
+        for line in (PROJECT_ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+
+    assert ".git" in entries
+    assert ".worktrees" in entries
+    assert "data" in entries
+    assert "third_party" in entries
+    assert "dreamervla" not in entries
+    assert "configs" not in entries
