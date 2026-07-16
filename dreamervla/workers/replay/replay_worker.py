@@ -170,16 +170,6 @@ class ReplayWorker(Worker):
             ),
         )
 
-    def sampling_state_dict(self) -> dict[str, int]:
-        """Return cursor-only replay state for transfer or diagnostics."""
-
-        return self._replay().sampling_state_dict()
-
-    def load_sampling_state_dict(self, state: dict[str, Any]) -> None:
-        """Load cursor-only replay state after deterministic offline seeding."""
-
-        self._replay().load_sampling_state_dict(state)
-
     def seed_from_offline(self, seed_cfg: dict[str, Any]) -> dict[str, float]:
         """Seed official/collected HDF5 through the shared replay loader."""
 
@@ -287,12 +277,6 @@ class ReplayWorker(Worker):
 
     def task_stats(self, task_ids: tuple[int, ...] | None = None) -> dict[str, dict[str, int]]:
         return self._replay().task_stats(task_ids)
-
-    def state_dict(self) -> dict[str, Any]:
-        return self._replay().state_dict()
-
-    def load_state_dict(self, state: dict[str, Any]) -> None:
-        self._replay().load_state_dict(state)
 
     def _replay(self) -> Any:
         if self.replay is None:

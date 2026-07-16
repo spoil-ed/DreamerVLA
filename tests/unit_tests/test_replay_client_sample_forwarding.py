@@ -15,6 +15,7 @@ test doubles) that don't know about staleness still work.
 from __future__ import annotations
 
 import dreamervla.workers.replay.replay_worker as replay_worker_module
+from dreamervla.runtime.online_replay import OnlineReplay
 from dreamervla.workers.actor.learner_worker import ReplayClient
 from dreamervla.workers.replay.replay_worker import ReplayWorker
 
@@ -62,6 +63,19 @@ class _SeedSpyReplay:
     @staticmethod
     def task_stats(task_ids=None):
         return {str(task_id): {"episodes": 1, "transitions": 36} for task_id in (task_ids or ())}
+
+
+def test_replay_exposes_no_checkpoint_serialization_api() -> None:
+    replay = OnlineReplay(capacity=16, sequence_length=1)
+
+    for method in (
+        "state_dict",
+        "load_state_dict",
+        "sampling_state_dict",
+        "load_sampling_state_dict",
+    ):
+        assert not hasattr(replay, method)
+        assert not hasattr(ReplayWorker, method)
 
 
 def test_default_path_sends_no_staleness_kwarg():

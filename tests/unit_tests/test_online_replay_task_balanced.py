@@ -207,38 +207,6 @@ def test_failed_episode_start_conditions_do_not_fallback_to_success() -> None:
         )
 
 
-def test_online_replay_lightweight_sampling_state_restores_initial_condition_cursor() -> None:
-    replay = OnlineReplay(
-        capacity=100,
-        sequence_length=1,
-        task_ids=(0, 1),
-        task_balanced=True,
-    )
-    for task_id in (0, 1):
-        replay.add_episode(_episode(task_id=task_id, length=2, success=True))
-    replay.sample_initial_conditions(3, task_ids=(0, 1), keys=("obs_embedding",))
-    replay.set_task_sample_cursor(9)
-
-    state = replay.sampling_state_dict()
-    restored = OnlineReplay(
-        capacity=100,
-        sequence_length=1,
-        task_ids=(0, 1),
-        task_balanced=True,
-    )
-    for task_id in (0, 1):
-        restored.add_episode(_episode(task_id=task_id, length=2, success=True))
-    restored.load_sampling_state_dict(state)
-
-    assert restored.task_sample_cursor == 9
-    batch = restored.sample_initial_conditions(
-        1,
-        task_ids=(0, 1),
-        keys=("obs_embedding",),
-    )
-    assert batch["task_ids"].tolist() == [1]
-
-
 def test_online_replay_samples_collect_schema_steps_without_reward_aliases() -> None:
     random.seed(0)
     replay = OnlineReplay(capacity=100, sequence_length=3, task_balanced=False)
@@ -250,48 +218,6 @@ def test_online_replay_samples_collect_schema_steps_without_reward_aliases() -> 
     assert batch["actions"].shape == (1, 3, 1)
     assert batch["current_actions"].shape == (1, 3, 1)
     assert "images" not in batch
-
-
-def test_online_replay_state_dict_round_trips_records_and_cursors() -> None:
-    replay = OnlineReplay(
-        capacity=100,
-        sequence_length=3,
-        task_ids=(2, 9),
-        rank=4,
-        replay_sampling={"latest_online_required": True},
-    )
-    replay.set_policy_version(7)
-    replay.set_task_sample_cursor(11)
-    online = replay.add_episode(_episode(task_id=2, length=5, success=True), source="online")
-    replay.add_episode(_episode(task_id=9, length=6, success=False), source="coldstart")
-
-    restored = OnlineReplay(
-        capacity=100,
-        sequence_length=3,
-        task_ids=(2, 9),
-        rank=4,
-        replay_sampling={"latest_online_required": True},
-    )
-    restored.load_state_dict(replay.state_dict())
-
-    assert online is not None
-    assert restored.num_transitions == replay.num_transitions
-    assert restored.task_stats((2, 9)) == replay.task_stats((2, 9))
-    assert restored._current_policy_version == 7
-    assert restored._next_episode_id == replay._next_episode_id
-    assert restored._next_collection_index == replay._next_collection_index
-    assert restored._next_task_episode_index == replay._next_task_episode_index
-    assert restored._pending_latest_online_episode_ids == {int(online["episode_id"])}
-    assert restored.task_sample_cursor == 11
-
-    next_record = restored.add_episode(
-        _episode(task_id=2, length=5, success=False),
-        source="online",
-    )
-
-    assert next_record is not None
-    assert int(next_record["episode_id"]) == int(replay._next_episode_id)
-    assert int(next_record["policy_version"]) == 7
 
 
 def test_online_replay_samples_proprio_and_episode_language_sidecar() -> None:
