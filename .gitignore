@@ -36,6 +36,7 @@ wandb/
 .codex/
 .cursor/
 .planning/
+.worktrees/
 docs/TODO.md
 docs/task_plan.md
 docs/*_plan.md
