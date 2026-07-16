@@ -294,6 +294,13 @@ def test_dockerfile_pins_runtime_source_and_complete_third_party_install() -> No
     assert 'CMD ["/bin/bash"]' in text
 
 
+def test_dockerfile_uses_cpu_rendering_for_build_time_import_checks() -> None:
+    text = (PROJECT_ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "MUJOCO_GL=osmesa" in text
+    assert "PYOPENGL_PLATFORM=osmesa" in text
+
+
 def test_dockerignore_excludes_runtime_state_but_keeps_source() -> None:
     entries = {
         line.strip()
