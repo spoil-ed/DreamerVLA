@@ -4,6 +4,7 @@
 # stock GitHub runners:
 #   * `ruff check` and `ruff format --check` are the whole-repo source gates
 #     (fast, no heavy deps). The vendored LIBERO venv remains format-exempt.
+#   * `bash -n` checks every tracked launcher/install/preprocess shell script.
 #   * The pytest suite is NOT run here: it requires the hand-built `dreamervla`
 #     conda env (transformers 4.40.1 fork, robosuite/third_party, torch) which
 #     is not reproducible from PyPI on a stock runner. Run it locally with
@@ -33,3 +34,5 @@ jobs:
         run: >-
           ruff format --check dreamervla tests
           --exclude dreamervla/envs/libero/venv.py
+      - name: Check shell syntax
+        run: find scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n

@@ -80,6 +80,14 @@ def test_hygiene_source_scan_ignores_untracked_files(tmp_path) -> None:
     assert untracked not in paths
 
 
+def test_ci_checks_all_shell_script_syntax() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    ci = (project_root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    assert "find scripts -type f -name '*.sh' -print0" in ci
+    assert "xargs -0 -n1 bash -n" in ci
+
+
 def test_docs_and_smoke_script_do_not_point_at_removed_entrypoints() -> None:
     project_root = Path(__file__).resolve().parents[2]
 
