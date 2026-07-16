@@ -38,7 +38,10 @@ from transformers import GenerationConfig
 import dreamervla.runtime.libero_vla_eval_helpers as _eh
 from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
 from dreamervla.runtime.cotrain_eval import CotrainEvalObserver
-from dreamervla.runtime.eval_metrics import summarize_libero_task_success
+from dreamervla.runtime.eval_metrics import (
+    shard_libero_eval_tasks,
+    summarize_libero_task_success,
+)
 from dreamervla.runtime.libero_vla_eval_action import EmbodiedEvalActionMixin
 from dreamervla.runtime.libero_vla_eval_export import EmbodiedEvalExportMixin
 from dreamervla.runtime.libero_vla_eval_image_token import EmbodiedEvalImageTokenMixin
@@ -170,6 +173,28 @@ class LIBEROVLAEvaluationRunner(
             raise ValueError(
                 "eval.cotrain_diagnostics requires a positive eval.cotrain_expected_trajectories"
             )
+        self._cotrain_eval_global_expected = int(expected)
+        self._cotrain_eval_distributed = bool(
+            self.world_size > 1 and OmegaConf.select(cfg, "eval.distributed", default=False)
+        )
+        if self._cotrain_eval_distributed:
+            configured_task_ids = OmegaConf.select(cfg, "eval.task_ids", default=None)
+            if configured_task_ids is None:
+                raise ValueError("distributed cotrain diagnostics require explicit eval.task_ids")
+            all_task_ids = [int(task_id) for task_id in configured_task_ids]
+            episodes_per_task = int(OmegaConf.select(cfg, "eval.num_episodes_per_task", default=0))
+            protocol_total = len(all_task_ids) * episodes_per_task
+            if protocol_total != self._cotrain_eval_global_expected:
+                raise ValueError(
+                    "eval.cotrain_expected_trajectories must equal "
+                    "len(eval.task_ids) * eval.num_episodes_per_task"
+                )
+            local_tasks = shard_libero_eval_tasks(
+                all_task_ids,
+                rank=self.rank,
+                world_size=self.world_size,
+            )
+            expected = len(local_tasks) * episodes_per_task
         state_dicts = payload.get("state_dicts", {})
         if not isinstance(state_dicts, Mapping):
             raise TypeError("cotrain diagnostic checkpoint state_dicts must be a mapping")
@@ -256,7 +281,21 @@ class LIBEROVLAEvaluationRunner(
 
     def _finalize_libero_eval_observer(self) -> dict[str, Any]:
         observer = getattr(self, "_cotrain_eval_observer", None)
-        return {} if observer is None else observer.finalize_metrics()
+        if observer is None:
+            return {}
+        if not bool(getattr(self, "_cotrain_eval_distributed", False)):
+            return observer.finalize_metrics()
+        rank_payloads = self.distributed.all_gather_objects(observer.rank_payload())
+        return observer.metrics_from_rank_payloads(
+            rank_payloads,
+            expected_trajectories=int(
+                getattr(
+                    self,
+                    "_cotrain_eval_global_expected",
+                    observer.expected_trajectories,
+                )
+            ),
+        )
 
     @property
     def default_output_dir(self) -> str:
@@ -459,11 +498,6 @@ class LIBEROVLAEvaluationRunner(
             print("EvalLiberoVLA Runner begin.")
         cfg = copy.deepcopy(self.cfg)
 
-        if self.world_size != 1:
-            raise RuntimeError(
-                f"LIBEROVLAEvaluationRunner must run on a single process (got world_size={self.world_size}). "
-                "Rollout evaluation does not support multi-process inference."
-            )
         if self.distributed.uses_fsdp:
             raise RuntimeError(
                 "LIBEROVLAEvaluationRunner requires DDP (not FSDP). "
@@ -1085,9 +1119,7 @@ class LIBEROVLAEvaluationRunner(
             OmegaConf.select(cfg, "rollout.encoder_cfg.target", default="")
             or OmegaConf.select(cfg, "rollout.encoder_cfg._target_", default="")
         )
-        return target.endswith("oft_rollout:OFTRolloutBundle") or target.endswith(
-            "oft_rollout.OFTRolloutBundle"
-        )
+        return target.endswith(("oft_rollout:OFTRolloutBundle", "oft_rollout.OFTRolloutBundle"))
 
     @staticmethod
     def _build_from_target_cfg(component_cfg: Any) -> Any:

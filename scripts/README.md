@@ -141,9 +141,14 @@ bash scripts/experiments/cotrain/train.sh \
 ```
 
 Evaluation requires a policy checkpoint as a Hydra override. Its fixed 100-episode,
-25-environment protocol is defined by `configs/experiment/eval_cotrain.yaml`:
+25-environment protocol is defined by `configs/experiment/eval_cotrain.yaml`. The
+launcher defaults to 8 GPUs, shards tasks across ranks, and rank 0 renders one global
+episode progress line:
 
 ```bash
 bash scripts/experiments/cotrain/eval.sh \
   eval.ckpt_path=/path/to/openvla_libero/<timestamp>
 ```
+
+Use `ngpu=<N> gpus=<comma-separated-ids>` to override the default GPU set.
+Evaluation writes to `outputs/eval/<task-suite>/` with no timestamp child.

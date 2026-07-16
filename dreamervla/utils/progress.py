@@ -95,9 +95,10 @@ class ProgressReporter:
 class AggregateProgress:
     """Cross-process collect progress: ONE aggregated bar across independent workers.
 
-    The multi-rank (torchrun) collector has no DDP process group, so each rank persists
-    its ``{done, total, finished}`` to a shared ``progress_dir`` (atomic temp+rename) and
-    rank 0 renders a single ``global_done / global_total`` bar by summing every rank's file.
+    Each multi-rank worker persists its ``{done, total, finished}`` to a shared
+    ``progress_dir`` (atomic temp+rename), so live per-step reporting does not require
+    synchronized collectives. Rank 0 renders one ``global_done / global_total`` bar by
+    summing every rank's file.
     Non-zero ranks only persist (silent), so 6 GPUs show up as one moving total instead of
     a per-episode flood or a rank-0-only view.
 
@@ -168,16 +169,22 @@ class AggregateProgress:
                 continue
         return done, total
 
-    def _render(self) -> None:
+    def _render(self, *, force: bool = False) -> None:
         done, total = self._global()
         self._reporter.total = total
-        self._reporter.set(done)
+        self._reporter.set(done, force=force)
 
-    def set(self, current: int) -> None:
+    def set(
+        self,
+        current: int,
+        *,
+        force: bool = False,
+        render: bool = True,
+    ) -> None:
         self._done = int(current)
         self._persist(finished=False)
-        if self.rank == 0:
-            self._render()
+        if self.rank == 0 and render:
+            self._render(force=force)
 
     def update(self, n: int = 1) -> None:
         self.set(self._done + n)

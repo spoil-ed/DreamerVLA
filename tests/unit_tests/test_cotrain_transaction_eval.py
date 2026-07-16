@@ -156,6 +156,101 @@ def test_accumulator_keeps_real_and_wm_classifier_results_separate() -> None:
     assert summary["per_task"]["0"]["wm_classifier"]["f1"] == 0.0
 
 
+def test_accumulator_merges_raw_rank_states_before_recomputing_auc() -> None:
+    positive_rank = CotrainTransactionAccumulator(
+        classifier_threshold=0.5,
+        threshold_source="checkpoint",
+    )
+    positive_rank.add_world_model_metrics(
+        task_id=0,
+        mse_by_horizon=[1.0],
+        cosine_by_horizon=[0.5],
+    )
+    positive_rank.add_classifier_result(
+        task_id=0,
+        success=True,
+        real_score=0.9,
+        wm_score=0.8,
+    )
+    negative_rank = CotrainTransactionAccumulator(
+        classifier_threshold=0.5,
+        threshold_source="checkpoint",
+    )
+    negative_rank.add_world_model_metrics(
+        task_id=1,
+        mse_by_horizon=[3.0],
+        cosine_by_horizon=[0.25],
+    )
+    negative_rank.add_classifier_result(
+        task_id=1,
+        success=False,
+        real_score=0.1,
+        wm_score=0.2,
+    )
+
+    merged = CotrainTransactionAccumulator.from_rank_states(
+        [positive_rank.rank_state(), negative_rank.rank_state()]
+    ).summarize()
+
+    assert merged["trajectory_count"] == 2
+    assert merged["wm_closed_loop_mse"] == 2.0
+    assert merged["real_classifier"]["roc_auc"] == 1.0
+    assert merged["wm_classifier"]["roc_auc"] == 1.0
+
+
+def test_observer_formats_global_metrics_from_raw_rank_states() -> None:
+    rank_states = []
+    for task_id, success, real_score, wm_score in (
+        (0, True, 0.9, 0.8),
+        (1, False, 0.1, 0.2),
+    ):
+        accumulator = CotrainTransactionAccumulator(
+            classifier_threshold=0.5,
+            threshold_source="checkpoint",
+        )
+        accumulator.add_world_model_metrics(
+            task_id=task_id,
+            mse_by_horizon=[float(task_id + 1)],
+            cosine_by_horizon=[0.5],
+        )
+        accumulator.add_classifier_result(
+            task_id=task_id,
+            success=success,
+            real_score=real_score,
+            wm_score=wm_score,
+        )
+        rank_states.append(accumulator.rank_state())
+
+    metrics = CotrainEvalObserver.metrics_from_rank_states(
+        rank_states,
+        expected_trajectories=2,
+    )
+
+    assert metrics["eval/cotrain_trajectory_count"] == 2.0
+    assert metrics["eval/cotrain_expected_trajectories"] == 2.0
+    assert metrics["eval/classifier_real_roc_auc"] == 1.0
+    assert metrics["eval_cotrain_diagnostics"]["trajectory_count"] == 2
+
+
+def test_observer_rejects_a_local_rank_count_mismatch_after_gather() -> None:
+    accumulator = CotrainTransactionAccumulator(
+        classifier_threshold=0.5,
+        threshold_source="checkpoint",
+    )
+
+    with pytest.raises(RuntimeError, match="rank 0.*expected 1, got 0"):
+        CotrainEvalObserver.metrics_from_rank_payloads(
+            [
+                {
+                    "pending_trajectory_count": 0,
+                    "expected_trajectories": 1,
+                    "state": accumulator.rank_state(),
+                }
+            ],
+            expected_trajectories=1,
+        )
+
+
 class _RawEvalPolicy(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()

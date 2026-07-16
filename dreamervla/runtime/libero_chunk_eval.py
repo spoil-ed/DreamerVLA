@@ -81,6 +81,7 @@ def run_rlinf_chunk_eval(
     on_epoch_start: Callable[[], None] | None = None,
     on_reset: Callable[..., None] | None = None,
     on_chunk: Callable[..., None] | None = None,
+    on_progress: Callable[[int], None] | None = None,
 ) -> ChunkEvalTally:
     tally = ChunkEvalTally()
     for _epoch in range(int(num_epochs)):
@@ -127,6 +128,8 @@ def run_rlinf_chunk_eval(
                     epoch=int(_epoch),
                     chunk_index=int(_chunk),
                 )
+            if on_progress is not None:
+                on_progress(tally.num_episodes)
             if not env.auto_reset and prev_done.all():
                 break
             if tally.num_episodes >= total_episodes:

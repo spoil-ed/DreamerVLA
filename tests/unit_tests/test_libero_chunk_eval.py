@@ -173,7 +173,10 @@ def test_libero_env_ordered_reset_ids_tile_to_requested_num_envs():
     assert env.reset_state_ids.tolist() == [0, 1, 2, 3, 4, 5, 0, 1]
 
 
-def test_runner_rlinf_chunk_uses_configured_num_envs_without_episode_cap(monkeypatch):
+def test_runner_rlinf_chunk_uses_configured_num_envs_without_episode_cap(
+    monkeypatch,
+    tmp_path,
+):
     from dreamervla.runtime.libero_vla_evaluation_base import LIBEROVLAEvaluationBase
 
     created: dict[str, int] = {}
@@ -191,6 +194,13 @@ def test_runner_rlinf_chunk_uses_configured_num_envs_without_episode_cap(monkeyp
     class FakeTally:
         env_chunk_steps = 0
         env_action_steps = 0
+        num_episodes = 30
+
+        def records(self):
+            return {
+                task_id: {task_id * 3 + episode_id: False for episode_id in range(3)}
+                for task_id in range(10)
+            }
 
         def summarize(self, *, episodes_per_task):
             return {
@@ -209,6 +219,7 @@ def test_runner_rlinf_chunk_uses_configured_num_envs_without_episode_cap(monkeyp
     )
 
     runner = LIBEROVLAEvaluationBase.__new__(LIBEROVLAEvaluationBase)
+    runner._output_dir = str(tmp_path)
     runner.cfg = OmegaConf.create(
         {
             "eval": {

@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import gc
 import os
+import shutil
 import time
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,12 @@ from transformers import GenerationConfig
 from dreamervla.dataset import BaseDataset
 from dreamervla.runners.base_runner import BaseRunner
 from dreamervla.runtime.distributed import NopretokenizeSFTDistributedHelper
-from dreamervla.runtime.eval_metrics import summarize_libero_task_success
+from dreamervla.runtime.eval_metrics import (
+    allocate_divisible_worker_budget,
+    merge_libero_eval_rank_payloads,
+    shard_libero_eval_tasks,
+    summarize_libero_task_success,
+)
 from dreamervla.runtime.render_device import (
     cuda_visible_devices_from_env,
     parse_device_ids,
@@ -32,6 +38,7 @@ from dreamervla.utils.ema import EMAHelper
 from dreamervla.utils.hf_checkpoint import resolve_hf_checkpoint_dir
 from dreamervla.utils.optim import build_optimizer
 from dreamervla.utils.paths import checkpoints_path, data_path
+from dreamervla.utils.progress import AggregateProgress
 from dreamervla.utils.seed import set_seed
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -451,22 +458,25 @@ class LIBEROVLAEvaluationBase(BaseRunner):
             )
         return metrics
 
-    # ---- LIBERO rollout evaluation (single-GPU only) ----
+    # ---- LIBERO rollout evaluation ----
 
     @torch.no_grad()
     def evaluate_libero(self, epoch: int) -> dict[str, float]:
-        """Run LIBERO rollout evaluation (single-process only).
-
-        LIBERO rollout is too slow for inline distributed evaluation.
-        This method only works when running in single-GPU (non-FSDP) mode.
-        For multi-GPU FSDP training, use the standalone eval script instead.
-        """
-        if not self.distributed.is_main_process:
-            return {}
+        """Run standalone LIBERO rollout evaluation on one or more DDP ranks."""
 
         eval_cfg = OmegaConf.select(self.cfg, "eval", default=None)
         if eval_cfg is None:
             return {}
+        distributed_eval = bool(OmegaConf.select(eval_cfg, "distributed", default=False))
+        if self.world_size > 1 and not distributed_eval:
+            if not self.distributed.is_main_process:
+                return {}
+            effective_rank = 0
+            effective_world_size = 1
+        else:
+            effective_rank = self.rank
+            effective_world_size = self.world_size
+        self._libero_distributed_eval = bool(effective_world_size > 1)
 
         # Skip eval under FSDP — model is sharded, can't do single-rank inference
         if self.distributed.uses_fsdp:
@@ -507,10 +517,11 @@ class LIBEROVLAEvaluationBase(BaseRunner):
 
         item_processor = self.encoder._build_processor(self.device)
 
-        print(
-            f"  [Eval] loading LIBERO benchmark suite '{task_suite_name}' ...",
-            flush=True,
-        )
+        if self.distributed.is_main_process:
+            print(
+                f"  [Eval] loading LIBERO benchmark suite '{task_suite_name}' ...",
+                flush=True,
+            )
         benchmark_dict = libero_benchmark.get_benchmark_dict()
         task_suite = benchmark_dict[task_suite_name]()
         total_tasks = int(task_suite.n_tasks)
@@ -528,22 +539,53 @@ class LIBEROVLAEvaluationBase(BaseRunner):
             raise ValueError(
                 "LIBERO eval selected no tasks; check eval.task_ids/task_start/max_tasks."
             )
+        global_task_ids = list(task_ids)
+        self._libero_global_total_episodes = len(global_task_ids) * num_episodes
+        if effective_world_size > len(global_task_ids):
+            raise ValueError(
+                "distributed LIBERO eval requires world_size <= selected task count "
+                f"({effective_world_size} > {len(global_task_ids)})"
+            )
+        task_ids = shard_libero_eval_tasks(
+            global_task_ids,
+            rank=effective_rank,
+            world_size=effective_world_size,
+        )
         max_steps_cfg = OmegaConf.select(eval_cfg, "max_steps", default=None)
         max_steps = int(
             max_steps_cfg if max_steps_cfg is not None else TASK_MAX_STEPS.get(task_suite_name, 300)
         )
-        print(
-            f"  [Eval] suite='{task_suite_name}' tasks={task_ids} "
-            f"episodes_per_task={num_episodes} max_steps={max_steps} "
-            f"action_steps={action_steps} history_length={history_length} "
-            f"seed={seed} num_steps_wait={num_steps_wait}",
-            flush=True,
-        )
+        if self.distributed.is_main_process:
+            print(
+                f"  [Eval] suite='{task_suite_name}' tasks={global_task_ids} "
+                f"episodes_per_task={num_episodes} max_steps={max_steps} "
+                f"action_steps={action_steps} history_length={history_length} "
+                f"seed={seed} num_steps_wait={num_steps_wait} ranks={effective_world_size}",
+                flush=True,
+            )
 
         self.encoder.eval()
         backbone = self.distributed.unwrap_module(self.encoder.backbone)
 
         num_envs = int(OmegaConf.select(eval_cfg, "num_envs", default=1))
+        self._libero_global_num_envs = num_envs
+        if effective_world_size > 1:
+            local_episode_totals = [
+                len(
+                    shard_libero_eval_tasks(
+                        global_task_ids,
+                        rank=rank,
+                        world_size=effective_world_size,
+                    )
+                )
+                * num_episodes
+                for rank in range(effective_world_size)
+            ]
+            num_envs = allocate_divisible_worker_budget(
+                local_episode_totals,
+                total_workers=num_envs,
+            )
+            num_envs = num_envs[effective_rank]
         scheme = str(OmegaConf.select(eval_cfg, "scheme", default="rlinf_chunk")).strip().lower()
         if scheme != "rlinf_chunk":
             raise ValueError(f"eval.scheme must be 'rlinf_chunk', got {scheme!r}")
@@ -846,13 +888,46 @@ class LIBEROVLAEvaluationBase(BaseRunner):
             for slot_extractor in extractors:
                 slot_extractor.reset()
 
-        run_t0 = time.time()
-        print(
-            f"  [Eval] rlinf_chunk rollout: num_envs={n_envs} "
-            f"episodes={total_episodes} chunk_steps={n_chunk_steps} "
-            f"epochs={num_epochs} render_backend={render_backend}",
-            flush=True,
+        distributed = getattr(self, "distributed", None)
+        distributed_eval = bool(getattr(self, "_libero_distributed_eval", False))
+        rank = int(getattr(distributed, "rank", 0) or 0) if distributed_eval else 0
+        world_size = int(getattr(distributed, "world_size", 1) or 1) if distributed_eval else 1
+        is_main_process = bool(getattr(distributed, "is_main_process", True))
+        barrier = getattr(distributed, "barrier", None) if distributed_eval else None
+        gather = getattr(distributed, "all_gather_objects", None) if distributed_eval else None
+        progress_dir = self.get_diagnostics_dir().joinpath("eval_progress")
+        if world_size > 1 and is_main_process:
+            shutil.rmtree(progress_dir, ignore_errors=True)
+        if callable(barrier):
+            barrier()
+        progress = AggregateProgress(
+            total_episodes,
+            "eval",
+            rank=rank,
+            world_size=world_size,
+            progress_dir=progress_dir if world_size > 1 else None,
+            unit="ep",
+            min_interval_s=float(
+                OmegaConf.select(self.cfg, "console.progress_every_s", default=5.0)
+            ),
         )
+        progress.set(0, render=world_size == 1)
+        if callable(barrier):
+            barrier()
+        if world_size > 1 and rank == 0:
+            # Every rank has persisted its local total before this render.
+            progress.set(0, force=True)
+
+        run_t0 = time.time()
+        if is_main_process:
+            print(
+                f"  [Eval] rlinf_chunk rollout: global_num_envs="
+                f"{int(getattr(self, '_libero_global_num_envs', n_envs))} "
+                f"local_num_envs={n_envs} global_episodes="
+                f"{int(getattr(self, '_libero_global_total_episodes', total_episodes))} "
+                f"chunk_steps={n_chunk_steps} render_backend={render_backend}",
+                flush=True,
+            )
         with LiberoEnv(env_cfg, num_envs=n_envs) as libero_env:
             libero_env_ref[0] = libero_env
             tally = run_rlinf_chunk_eval(
@@ -864,19 +939,27 @@ class LIBEROVLAEvaluationBase(BaseRunner):
                 on_epoch_start=_on_epoch_start,
                 on_reset=getattr(self, "_on_libero_eval_reset", None),
                 on_chunk=getattr(self, "_on_libero_eval_chunk", None),
+                on_progress=progress.set,
             )
-        metrics = tally.summarize(episodes_per_task=num_episodes)
-        avg_success = float(metrics["eval_success_rate"])
+        progress.set(tally.num_episodes)
+        if callable(barrier):
+            barrier()
+        progress.close()
+
         run_dt = time.time() - run_t0
-        metrics["eval/env_chunk_steps"] = float(tally.env_chunk_steps)
-        metrics["eval/env_action_steps"] = float(tally.env_action_steps)
-        metrics["eval/elapsed_seconds"] = float(run_dt)
-        metrics["eval/env_chunk_per_s"] = (
-            float(tally.env_chunk_steps) / run_dt if run_dt > 0 else 0.0
+        local_payload = {
+            "records": tally.records(),
+            "expected_episodes": int(total_episodes),
+            "env_chunk_steps": int(tally.env_chunk_steps),
+            "env_action_steps": int(tally.env_action_steps),
+            "elapsed_seconds": float(run_dt),
+        }
+        rank_payloads = gather(local_payload) if callable(gather) else [local_payload]
+        metrics = merge_libero_eval_rank_payloads(
+            rank_payloads,
+            episodes_per_task=num_episodes,
         )
-        metrics["eval/env_action_step_per_s"] = (
-            float(tally.env_action_steps) / run_dt if run_dt > 0 else 0.0
-        )
+        avg_success = float(metrics["eval_success_rate"])
         finalize_observer = getattr(
             self,
             "_finalize_libero_eval_observer",
@@ -887,12 +970,14 @@ class LIBEROVLAEvaluationBase(BaseRunner):
             if not isinstance(observer_metrics, dict):
                 raise TypeError("_finalize_libero_eval_observer() must return a mapping")
             metrics.update(observer_metrics)
-        print(
-            f"  [Eval] Epoch {epoch} task-mean success rate: {avg_success:.1%} "
-            f"(rlinf_chunk num_envs={n_envs}) total_time={run_dt:.1f}s "
-            f"env_chunk_per_s={metrics['eval/env_chunk_per_s']:.2f}",
-            flush=True,
-        )
+        if is_main_process:
+            print(
+                f"  [Eval] Epoch {epoch} task-mean success rate: {avg_success:.1%} "
+                f"(rlinf_chunk ranks={world_size}) "
+                f"total_time={metrics['eval/elapsed_seconds']:.1f}s "
+                f"env_chunk_per_s={metrics['eval/env_chunk_per_s']:.2f}",
+                flush=True,
+            )
         return metrics
 
     def _generate_actions(

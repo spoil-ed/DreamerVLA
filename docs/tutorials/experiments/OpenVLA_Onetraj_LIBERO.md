@@ -114,7 +114,9 @@ bash scripts/experiments/cotrain/eval.sh \
 ```
 
 评估入口选择 `experiment=eval_cotrain`。真实 LIBERO 协议、task 数、每 task episode 数、
-并行环境数和渲染后端都在 Hydra 配置中定义。
+并行环境数和渲染后端都在 Hydra 配置中定义。该入口默认使用 8 卡；每个 rank 独立加载
+policy 并分摊 task，rank 0 显示一条全局 episode 进度，结束后统一汇总 100 条轨迹的指标。
+可用 `ngpu=<N> gpus=<逗号分隔的 GPU ID>` 覆盖默认卡数。
 
 ## Config Ownership
 

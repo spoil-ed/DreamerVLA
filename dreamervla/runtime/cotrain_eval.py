@@ -347,6 +347,40 @@ class CotrainTransactionAccumulator:
             }
         )
 
+    def rank_state(self) -> dict[str, Any]:
+        """Return raw, picklable records for exact cross-rank metric recomputation."""
+
+        return {
+            "classifier_threshold": self.classifier_threshold,
+            "threshold_source": self.threshold_source,
+            "wm_records": list(self._wm_records),
+            "classifier_records": list(self._classifier_records),
+        }
+
+    @classmethod
+    def from_rank_states(
+        cls,
+        states: Iterable[dict[str, Any]],
+    ) -> CotrainTransactionAccumulator:
+        """Merge raw rank states, rejecting incompatible classifier protocols."""
+
+        rank_states = list(states)
+        if not rank_states:
+            raise ValueError("cotrain eval rank states must be non-empty")
+        first = rank_states[0]
+        merged = cls(
+            classifier_threshold=float(first["classifier_threshold"]),
+            threshold_source=str(first["threshold_source"]),
+        )
+        for state in rank_states:
+            if float(state["classifier_threshold"]) != merged.classifier_threshold:
+                raise ValueError("cotrain eval classifier thresholds differ across ranks")
+            if str(state["threshold_source"]) != merged.threshold_source:
+                raise ValueError("cotrain eval threshold sources differ across ranks")
+            merged._wm_records.extend(list(state["wm_records"]))
+            merged._classifier_records.extend(list(state["classifier_records"]))
+        return merged
+
     @staticmethod
     def _wm_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
         if not records:
@@ -652,23 +686,23 @@ class CotrainEvalObserver:
             accumulator=self.accumulator,
         )
 
-    def finalize_metrics(self) -> dict[str, Any]:
-        """Validate the fixed protocol and return flat plus detailed metrics."""
-
-        if self.pending_trajectory_count:
-            raise RuntimeError("cotrain eval ended with unfinished physical trajectories")
-        summary = self.accumulator.summarize()
+    @staticmethod
+    def _metrics_from_summary(
+        summary: dict[str, Any],
+        *,
+        expected_trajectories: int,
+    ) -> dict[str, Any]:
         count = int(summary["trajectory_count"])
-        if count != self.expected_trajectories:
+        if count != int(expected_trajectories):
             raise RuntimeError(
                 "cotrain eval trajectory count mismatch: "
-                f"expected {self.expected_trajectories}, got {count}"
+                f"expected {int(expected_trajectories)}, got {count}"
             )
         if int(summary["wm_trajectory_count"]) != count:
             raise RuntimeError("cotrain eval WM and classifier trajectory counts differ")
         metrics: dict[str, Any] = {
             "eval/cotrain_trajectory_count": float(count),
-            "eval/cotrain_expected_trajectories": float(self.expected_trajectories),
+            "eval/cotrain_expected_trajectories": float(expected_trajectories),
             "eval/wm_closed_loop_mse": float(summary["wm_closed_loop_mse"]),
             "eval/wm_closed_loop_cosine": float(summary["wm_closed_loop_cosine"]),
             "eval/classifier_threshold": float(summary["classifier_threshold"]),
@@ -701,6 +735,74 @@ class CotrainEvalObserver:
                 bool(values["pr_auc_defined"])
             )
         return metrics
+
+    @classmethod
+    def metrics_from_rank_states(
+        cls,
+        states: Iterable[dict[str, Any]],
+        *,
+        expected_trajectories: int,
+    ) -> dict[str, Any]:
+        """Recompute all diagnostics from raw rank records."""
+
+        summary = CotrainTransactionAccumulator.from_rank_states(states).summarize()
+        return cls._metrics_from_summary(
+            summary,
+            expected_trajectories=int(expected_trajectories),
+        )
+
+    def rank_payload(self) -> dict[str, Any]:
+        """Return local validation metadata and raw records for one collective."""
+
+        return {
+            "pending_trajectory_count": self.pending_trajectory_count,
+            "expected_trajectories": self.expected_trajectories,
+            "state": self.accumulator.rank_state(),
+        }
+
+    @classmethod
+    def metrics_from_rank_payloads(
+        cls,
+        payloads: Iterable[dict[str, Any]],
+        *,
+        expected_trajectories: int,
+    ) -> dict[str, Any]:
+        """Validate every local shard after gather, then recompute global metrics."""
+
+        rank_payloads = list(payloads)
+        states: list[dict[str, Any]] = []
+        for rank, payload in enumerate(rank_payloads):
+            pending = int(payload["pending_trajectory_count"])
+            if pending:
+                raise RuntimeError(
+                    f"cotrain eval rank {rank} ended with {pending} unfinished trajectories"
+                )
+            state = dict(payload["state"])
+            expected = int(payload["expected_trajectories"])
+            classifier_count = len(state["classifier_records"])
+            world_model_count = len(state["wm_records"])
+            if classifier_count != expected:
+                raise RuntimeError(
+                    "cotrain eval rank "
+                    f"{rank} trajectory count mismatch: expected {expected}, got {classifier_count}"
+                )
+            if world_model_count != classifier_count:
+                raise RuntimeError(
+                    f"cotrain eval rank {rank} WM and classifier trajectory counts differ"
+                )
+            states.append(state)
+        return cls.metrics_from_rank_states(
+            states,
+            expected_trajectories=int(expected_trajectories),
+        )
+
+    def finalize_metrics(self) -> dict[str, Any]:
+        """Validate the fixed protocol and return flat plus detailed metrics."""
+
+        return self.metrics_from_rank_payloads(
+            [self.rank_payload()],
+            expected_trajectories=self.expected_trajectories,
+        )
 
 
 @torch.no_grad()

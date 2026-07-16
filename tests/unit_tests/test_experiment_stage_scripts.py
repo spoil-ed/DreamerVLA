@@ -115,7 +115,7 @@ def test_mainline_experiments_compose_only_the_components_their_stage_needs() ->
     assert cotrain.task.openvla_oft.hidden_token.token_dim == 4096
 
 
-def test_active_experiments_use_one_named_timestamped_run_root(
+def test_active_experiments_use_expected_run_roots(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -126,7 +126,6 @@ def test_active_experiments_use_one_named_timestamped_run_root(
         "dreamer-wm": "dreamer-wm",
         "classifier_official_upper_bound": "classifier_official_upper_bound",
         "openvla_libero": "openvla_libero",
-        "eval_cotrain": "eval_cotrain",
     }
     root = Path(__file__).resolve().parents[2]
     with initialize_config_dir(config_dir=str(root / "configs"), version_base=None):
@@ -137,6 +136,10 @@ def test_active_experiments_use_one_named_timestamped_run_root(
             )
             for experiment in expected
         }
+        eval_cfg = compose(
+            config_name="train",
+            overrides=["experiment=eval_cotrain"],
+        )
 
     for experiment, run_name in expected.items():
         cfg = configs[experiment]
@@ -146,6 +149,10 @@ def test_active_experiments_use_one_named_timestamped_run_root(
         assert out_dir.parent == tmp_path / run_name
         assert re.fullmatch(r"\d{8}_\d{6}", out_dir.name)
         assert "pre_mainline" not in out_dir.parts
+
+    OmegaConf.resolve(eval_cfg)
+    assert eval_cfg.run.name == "eval_cotrain"
+    assert Path(eval_cfg.training.out_dir) == tmp_path / "eval" / "libero_goal"
 
 
 def test_world_model_training_config_switch_selects_expected_recipe() -> None:
@@ -246,7 +253,11 @@ def test_cotrain_eval_protocol_lives_in_hydra_config() -> None:
     assert cfg.eval.ckpt_kind == "vla_policy"
     assert cfg.eval.num_episodes_per_task == 10
     assert cfg.eval.num_envs == 25
+    assert cfg.eval.distributed is True
     assert cfg.eval.require_strict_component_load is True
+    assert cfg.launch.distributed is True
+    assert cfg.launch.ngpu == 8
+    assert str(cfg.launch.gpus) == "0,1,2,3,4,5,6,7"
 
 
 def test_cotrain_eval_script_rejects_missing_checkpoint() -> None:

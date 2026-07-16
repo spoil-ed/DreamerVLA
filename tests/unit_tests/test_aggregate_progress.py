@@ -53,6 +53,27 @@ def test_rank0_renders_global_total_in_the_line(tmp_path):
     assert "16" in lines[-1] and "5" in lines[-1]
 
 
+def test_rank0_can_force_refresh_after_all_rank_totals_arrive(tmp_path):
+    pd = tmp_path / ".progress"
+    lines: list[str] = []
+    r0 = AggregateProgress(
+        8,
+        "eval",
+        rank=0,
+        world_size=2,
+        progress_dir=pd,
+        sink=lines.append,
+        min_interval_s=60.0,
+    )
+    r0.set(0, render=False)
+    AggregateProgress(8, "eval", rank=1, world_size=2, progress_dir=pd).set(0)
+
+    assert lines == []
+    r0.set(0, force=True)
+
+    assert "0/16" in lines[-1]
+
+
 def test_nonzero_rank_is_silent(tmp_path):
     pd = tmp_path / ".progress"
     lines: list[str] = []
