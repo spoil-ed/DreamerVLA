@@ -45,7 +45,7 @@ training:
   log_every: 10
   eval_every: 250
   checkpoint_every_epochs: 1
-  topk_k: 0
+  final_selection_metric: window_f1
   thresh_min: 0.05
   thresh_max: 0.95
   thresh_steps: 19
@@ -53,6 +53,13 @@ training:
   episode_eval_min_steps: 0
   episode_eval_stride: 1
   episode_eval_batch: 32
+
+checkpoint:
+  topk:
+    monitor_key: f1
+    metric_name: f1
+    mode: max
+    k: 3
 
 runner:
   logger:

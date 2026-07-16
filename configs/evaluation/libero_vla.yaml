@@ -36,6 +36,9 @@ init:
   encoder_state_ckpt: null
 
 eval:
+  # Standalone torchrun evaluation opts in per experiment. Inline training
+  # evaluation retains its historical rank-0-only behavior.
+  distributed: false
   ckpt_path: ${task.openvla_oft.ckpt_path}
   ckpt_kind: vla
   # Optional generic fail-closed load contract. The pre-mainline proof enables
@@ -141,10 +144,10 @@ optim:
     weight_decay: 0.0
 
 checkpoint:
-  save_last_ckpt: false
   save_last_snapshot: false
+  save_hf_encoder: true
   topk:
     monitor_key: eval_success_rate
+    metric_name: accuracy
     mode: max
     k: 1
-    format_str: eval_success_rate={eval_success_rate:.4f}.ckpt

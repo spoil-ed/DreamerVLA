@@ -305,7 +305,7 @@ def test_classifier_resume_keeps_jsonl(tmp_path: Path) -> None:
     assert runner._log_path.read_text(encoding="utf-8") == '{"event":"before"}\n'
 
 
-def test_classifier_final_save_writes_warmup_and_latest(tmp_path: Path) -> None:
+def test_classifier_final_save_writes_only_flat_latest(tmp_path: Path) -> None:
     runner = object.__new__(SuccessClassifierTrainingRunner)
     runner.cfg = OmegaConf.create({"training": {"topk_k": 0}, "classifier": {"latent_dim": 2}})
     runner.config = runner.cfg
@@ -322,18 +322,17 @@ def test_classifier_final_save_writes_warmup_and_latest(tmp_path: Path) -> None:
 
     runner._save_final_checkpoint()
 
-    warmup = tmp_path / "checkpoints" / "classifier_warmup.ckpt"
     latest = tmp_path / "checkpoints" / "latest.ckpt"
-    assert warmup.is_file()
-    assert latest.samefile(warmup)
+    assert latest.is_file()
+    assert not (tmp_path / "checkpoints" / "classifier_warmup.ckpt").exists()
 
 
 @pytest.mark.parametrize(
     ("num_epochs", "cadence", "start_epoch", "expected_saves", "expected_loader_epochs"),
     [
-        (2, 1, 0, [("latest", 1, 2), ("classifier_warmup", 2, 4)], [0, 1]),
-        (1, 0, 0, [("classifier_warmup", 1, 2)], [0]),
-        (4, 1, 3, [("classifier_warmup", 4, 2)], [3]),
+        (2, 1, 0, [("latest", 1, 2), ("latest_final", 2, 4)], [0, 1]),
+        (1, 0, 0, [("latest_final", 1, 2)], [0]),
+        (4, 1, 3, [("latest_final", 4, 2)], [3]),
     ],
 )
 def test_classifier_latest_checkpoint_is_saved_only_after_epoch_boundary(
@@ -391,7 +390,7 @@ def test_classifier_latest_checkpoint_is_saved_only_after_epoch_boundary(
         saves.append((str(tag), int(runner.epoch), int(runner.global_step))) or ""
     )
     runner._save_final_checkpoint = lambda: (
-        saves.append(("classifier_warmup", int(runner.epoch), int(runner.global_step))) or ""
+        saves.append(("latest_final", int(runner.epoch), int(runner.global_step))) or ""
     )
 
     runner.run()
@@ -536,37 +535,67 @@ def test_classifier_runner_marks_iterable_train_dataset_for_rank_sharding() -> N
     assert dataset.distributed_world_size == 2
 
 
-def test_named_classifier_checkpoint_saves_unwrapped_model_state_dict(tmp_path: Path) -> None:
+def test_named_classifier_checkpoint_saves_full_flat_payload_once(tmp_path: Path) -> None:
     inner = torch.nn.Linear(2, 1)
     wrapper = torch.nn.Module()
     wrapper.module = inner
     runner = object.__new__(SuccessClassifierTrainingRunner)
     runner._output_dir = str(tmp_path)
-    runner.cfg = OmegaConf.create({"classifier": {"latent_dim": 2}})
+    runner.cfg = OmegaConf.create(
+        {
+            "classifier": {"latent_dim": 2},
+            "checkpoint": {
+                "topk": {
+                    "monitor_key": "f1",
+                    "metric_name": "f1",
+                    "mode": "max",
+                    "k": 1,
+                }
+            },
+        }
+    )
     runner.config = runner.cfg
     runner.model = wrapper
     runner.distributed = _FakeDistributed()
     runner.global_step = 12
+    runner.epoch = 2
     runner.best_window_ckpt_path = None
     runner.best_episode_ckpt_path = None
     runner._log = lambda _payload: None
 
     runner._save_named("best_window_f10.5000_th0.50", extra={"val_window": {"best_f1": 0.5}})
 
-    payload = torch.load(
-        tmp_path / "checkpoints" / "warmup_topk" / "best_window_f10.5000_th0.50.ckpt",
-        map_location="cpu",
-    )
-    assert sorted(payload["model"].keys()) == ["bias", "weight"]
+    latest = tmp_path / "checkpoints" / "latest.ckpt"
+    metric = tmp_path / "checkpoints" / "epoch=0002-f1=0.500000.ckpt"
+    payload = torch.load(metric, map_location="cpu", weights_only=False)
+
+    assert latest.is_file()
+    assert metric.is_file()
+    assert latest.read_bytes() == metric.read_bytes()
+    assert sorted(payload["state_dicts"]["model"].keys()) == ["bias", "weight"]
+    assert payload["classifier_threshold"] == 0.5
 
 
 def test_named_classifier_checkpoint_is_rank_zero_only(tmp_path: Path) -> None:
     runner = object.__new__(SuccessClassifierTrainingRunner)
     runner._output_dir = str(tmp_path)
-    runner.cfg = OmegaConf.create({"classifier": {"latent_dim": 1}})
+    runner.cfg = OmegaConf.create(
+        {
+            "classifier": {"latent_dim": 1},
+            "checkpoint": {
+                "topk": {
+                    "monitor_key": "f1",
+                    "metric_name": "f1",
+                    "mode": "max",
+                    "k": 1,
+                }
+            },
+        }
+    )
     runner.config = runner.cfg
     runner.model = torch.nn.Linear(1, 1)
     runner.global_step = 0
+    runner.epoch = 1
     runner.best_window_ckpt_path = None
     runner.best_episode_ckpt_path = None
     runner._log = lambda _payload: None
@@ -576,7 +605,8 @@ def test_named_classifier_checkpoint_is_rank_zero_only(tmp_path: Path) -> None:
 
     runner._save_named("not_rank_zero")
 
-    assert not (tmp_path / "checkpoints" / "not_rank_zero.ckpt").exists()
+    assert not (tmp_path / "checkpoints" / "latest.ckpt").exists()
+    assert not (tmp_path / "checkpoints" / "epoch=0001-f1=0.000000.ckpt").exists()
 
 
 def test_configured_final_selection_materializes_window_best_checkpoint() -> None:
@@ -596,13 +626,36 @@ def test_configured_final_selection_materializes_window_best_checkpoint() -> Non
     runner.best_episode_ckpt_path = None
     runner._evaluate_window_level = lambda: {"best_f1": 0.4, "best_thresh": 0.3}
     saved: list[tuple[str, dict]] = []
-    runner._save_named = lambda name, extra=None: saved.append((name, extra))
+    runner._maybe_save_named = lambda name, extra=None: saved.append((name, extra))
 
     metrics = runner._finalize_validation_checkpoints()
 
     assert metrics["window"]["best_f1"] == 0.4
     assert runner.best_window_f1 == 0.4
     assert saved[-1][0] == "best_window_f10.4000_th0.30"
+
+
+def test_final_selection_always_offers_current_metric_to_topk() -> None:
+    runner = object.__new__(SuccessClassifierTrainingRunner)
+    runner.cfg = OmegaConf.create(
+        {
+            "training": {
+                "episode_eval_enabled": False,
+                "final_selection_metric": "window_f1",
+                "topk_k": 1,
+            }
+        }
+    )
+    runner.best_window_f1 = 0.9
+    runner.best_episode_f1 = -1.0
+    runner._evaluate_window_level = lambda: {"best_f1": 0.4, "best_thresh": 0.3}
+    saved: list[tuple[str, dict]] = []
+    runner._maybe_save_named = lambda name, extra=None: saved.append((name, extra))
+
+    runner._finalize_validation_checkpoints()
+
+    assert runner.best_window_f1 == 0.9
+    assert saved[-1][1]["val_window"]["best_f1"] == 0.4
 
 
 class _StreamingEpisodeDataset:

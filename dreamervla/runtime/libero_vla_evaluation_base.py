@@ -1210,17 +1210,17 @@ class LIBEROVLAEvaluationBase(BaseRunner):
                     self.log_metrics(step_log, step=self.global_step)
 
                     if (self.epoch % cfg.training.checkpoint_every) == 0:
-                        if cfg.checkpoint.save_last_ckpt:
-                            self.save_checkpoint()
-                        metric_dict = {
-                            key.replace("/", "_"): value for key, value in step_log.items()
-                        }
+                        checkpoint_metrics = {"epoch": int(self.epoch) + 1, **step_log}
                         topk_ckpt_path = None
-                        if self.distributed.is_main_process:
-                            topk_ckpt_path = topk_manager.get_ckpt_path(metric_dict)
+                        if (
+                            self.distributed.is_main_process
+                            and topk_manager.monitor_key in checkpoint_metrics
+                        ):
+                            topk_ckpt_path = topk_manager.get_ckpt_path(checkpoint_metrics)
                         topk_ckpt_path = self.distributed.broadcast_object(topk_ckpt_path)
-                        if topk_ckpt_path is not None:
-                            self.save_checkpoint(path=topk_ckpt_path)
+                        self.save_checkpoint(
+                            extra_paths=(() if topk_ckpt_path is None else (topk_ckpt_path,))
+                        )
 
                     self.global_step += 1
                     self.epoch += 1

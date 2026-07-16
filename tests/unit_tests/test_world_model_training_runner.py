@@ -1487,9 +1487,7 @@ def _make_orchestration_runner(
     return runner
 
 
-def test_run_orchestrates_seed_warmup_and_split_checkpoints(tmp_path, monkeypatch, capsys):
-    import os
-
+def test_run_orchestrates_seed_warmup_and_flat_latest_checkpoint(tmp_path, monkeypatch, capsys):
     calls: list[str] = []
     runner = _make_orchestration_runner(tmp_path, monkeypatch, calls)
 
@@ -1501,17 +1499,18 @@ def test_run_orchestrates_seed_warmup_and_split_checkpoints(tmp_path, monkeypatc
     assert "[pipeline][replay] loaded complete episodes=1" in out
     assert "[pipeline][warmup] resolved replay warmup" in out
     assert calls == ["build", "seed", "wm_warmup", "save_wm", "cls_warmup", "save_cls"]
-    assert os.path.exists(os.path.join(str(tmp_path), "checkpoints", "wm_warmup.ckpt"))
-    assert os.path.exists(os.path.join(str(tmp_path), "checkpoints", "classifier_warmup.ckpt"))
+    latest = tmp_path / "checkpoints" / "latest.ckpt"
+    assert latest.is_file()
+    assert not (tmp_path / "checkpoints" / "wm_warmup.ckpt").exists()
+    assert not (tmp_path / "checkpoints" / "classifier_warmup.ckpt").exists()
     wm_payload = torch.load(
-        tmp_path / "checkpoints" / "wm_warmup.ckpt",
+        latest,
         map_location="cpu",
         weights_only=False,
     )
-    assert wm_payload["warmup_step"] == 2
-    assert wm_payload["warmup_epoch"] == 1
+    assert wm_payload["component"] == "classifier"
     assert wm_payload["complete"] is True
-    assert {"world_model", "world_model_optimizer"}.issubset(wm_payload["state_dicts"])
+    assert {"classifier", "classifier_optimizer"}.issubset(wm_payload["state_dicts"])
 
 
 def test_run_passes_replay_capacity_mode_and_seed_cap_from_hydra(tmp_path, monkeypatch):
@@ -1812,7 +1811,7 @@ def test_wm_warmup_checkpoint_atomically_overwrites_canonical_path(tmp_path):
         total_steps=20,
     )
 
-    assert first == second == tmp_path / "checkpoints" / "wm_warmup.ckpt"
+    assert first == second == tmp_path / "checkpoints" / "latest.ckpt"
     assert not (tmp_path / "checkpoints" / "warmup_progress").exists()
     payload = torch.load(second, map_location="cpu", weights_only=False)
     assert payload["format_version"] == 2
@@ -1926,7 +1925,7 @@ def test_classifier_warmup_checkpoint_atomically_overwrites_canonical_path(tmp_p
         total_steps=10,
     )
 
-    assert first == second == tmp_path / "checkpoints" / "classifier_warmup.ckpt"
+    assert first == second == tmp_path / "checkpoints" / "latest.ckpt"
     assert not (tmp_path / "checkpoints" / "warmup_progress").exists()
     payload = torch.load(second, map_location="cpu", weights_only=False)
     assert payload["format_version"] == 2
@@ -1996,14 +1995,12 @@ def test_warmup_topk_checkpoint_keeps_best_metric_values(tmp_path):
             total_steps=10,
         )
 
-    names = sorted(
-        p.name for p in (tmp_path / "checkpoints" / "warmup_topk" / "classifier").glob("*.ckpt")
-    )
+    names = sorted(p.name for p in (tmp_path / "checkpoints").glob("epoch=*-f1=*.ckpt"))
     assert len(names) == 2
-    assert any("step=00000002" in name and "f1=0.700000" in name for name in names)
-    assert any("step=00000004" in name and "f1=0.900000" in name for name in names)
-    assert not any("step=00000001" in name for name in names)
-    assert not any("step=00000003" in name for name in names)
+    assert "epoch=0002-f1=0.700000.ckpt" in names
+    assert "epoch=0004-f1=0.900000.ckpt" in names
+    assert not any("epoch=0001-" in name for name in names)
+    assert not any("epoch=0003-" in name for name in names)
 
     resumed = runner._make_warmup_topk_manager(component="classifier", k=2)
     runner._save_cls_warmup_checkpoint(
@@ -2015,7 +2012,7 @@ def test_warmup_topk_checkpoint_keeps_best_metric_values(tmp_path):
         steps_per_epoch=1,
         total_steps=10,
     )
-    resumed_names = list((tmp_path / "checkpoints" / "warmup_topk" / "classifier").glob("*.ckpt"))
+    resumed_names = list((tmp_path / "checkpoints").glob("epoch=*-f1=*.ckpt"))
     assert len(resumed_names) == 2
     assert any("f1=0.950000" in path.name for path in resumed_names)
 

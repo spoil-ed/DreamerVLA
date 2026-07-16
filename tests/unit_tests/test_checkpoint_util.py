@@ -82,3 +82,27 @@ def test_topk_manager_uses_flat_metric_names_and_preserves_latest(tmp_path: Path
     assert not Path(first).exists()
     assert Path(second).is_file()
     assert latest.read_bytes() == b"latest"
+
+
+def test_topk_manager_restores_and_prunes_matching_flat_checkpoints(tmp_path: Path) -> None:
+    latest = tmp_path / "latest.ckpt"
+    latest.write_bytes(b"latest")
+    best = tmp_path / "epoch=0001-loss=0.200000.ckpt"
+    middle = tmp_path / "epoch=0002-loss=0.300000.ckpt"
+    worst = tmp_path / "epoch=0003-loss=0.400000.ckpt"
+    unrelated = tmp_path / "epoch=0004-accuracy=0.900000.ckpt"
+    for path in (best, middle, worst, unrelated):
+        path.write_bytes(path.name.encode())
+
+    manager = TopKCheckpointManager(
+        save_dir=tmp_path,
+        monitor_key="eval/loss",
+        metric_name="loss",
+        mode="min",
+        k=2,
+    )
+
+    assert manager.path_value_map == {str(best): 0.2, str(middle): 0.3}
+    assert not worst.exists()
+    assert unrelated.is_file()
+    assert latest.read_bytes() == b"latest"

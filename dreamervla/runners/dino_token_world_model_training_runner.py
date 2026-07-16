@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import itertools
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 import hydra
@@ -13,6 +14,7 @@ from omegaconf import DictConfig, OmegaConf
 from dreamervla.models.embodiment.world_model import DinoTokenWorldModel
 from dreamervla.runtime.distributed import unwrap_module
 from dreamervla.runtime.world_model_training_base import WorldModelTrainingBase
+from dreamervla.utils.checkpoint_util import TopKCheckpointManager
 from dreamervla.utils.torch_utils import precision_dtype
 
 
@@ -214,13 +216,25 @@ class DinoTokenWorldModelTrainingRunner(WorldModelTrainingBase):
             for name, total in totals.items()
         }
 
-    def _save_epoch_checkpoint(self) -> None:
-        checkpoint = self.get_global_step_checkpoint_dir(self.global_step) / "model.ckpt"
-        latest = self.get_checkpoint_path()
-        warmup = self.get_checkpoint_dir() / "wm_warmup.ckpt"
+    def _make_checkpoint_manager(self) -> TopKCheckpointManager:
+        topk_cfg = OmegaConf.to_container(self.cfg.checkpoint.topk, resolve=True)
+        return TopKCheckpointManager(
+            save_dir=self.get_checkpoint_dir(),
+            **dict(topk_cfg),
+        )
+
+    def _save_epoch_checkpoint(
+        self,
+        metrics: Mapping[str, float | str | int],
+        topk_manager: TopKCheckpointManager,
+    ) -> None:
+        topk_path = None
+        if self.is_main_process and topk_manager.monitor_key in metrics:
+            topk_path = topk_manager.get_ckpt_path(dict(metrics))
+        topk_path = self.distributed.broadcast_object(topk_path)
         self.save_checkpoint(
-            path=checkpoint,
-            extra_paths=(latest, warmup),
+            path=self.get_checkpoint_path(),
+            extra_paths=(() if topk_path is None else (Path(topk_path),)),
         )
 
     def run(self) -> list[dict[str, float | str | int]]:
@@ -285,6 +299,7 @@ class DinoTokenWorldModelTrainingRunner(WorldModelTrainingBase):
         max_steps = int(OmegaConf.select(cfg, "training.max_steps", default=0) or 0)
         eval_every = int(OmegaConf.select(cfg, "training.eval_every", default=1))
         checkpoint_every = int(OmegaConf.select(cfg, "training.checkpoint_every", default=1))
+        topk_manager = self._make_checkpoint_manager()
         try:
             stop = False
             for epoch in range(int(self.epoch) + 1, num_epochs + 1):
@@ -351,7 +366,7 @@ class DinoTokenWorldModelTrainingRunner(WorldModelTrainingBase):
                         flush=True,
                     )
                 if checkpoint_every > 0 and epoch % checkpoint_every == 0:
-                    self._save_epoch_checkpoint()
+                    self._save_epoch_checkpoint(epoch_metrics, topk_manager)
                 if stop:
                     break
         finally:

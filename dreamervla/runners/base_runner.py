@@ -812,6 +812,7 @@ class BaseRunner(ABC):
             "pickles": {},
             "rng_by_rank": rng_by_rank,
         }
+        payload.update(self._checkpoint_metadata())
 
         # State dicts
         for key, value in self.__dict__.items():
@@ -877,6 +878,11 @@ class BaseRunner(ABC):
 
     def _save_checkpoint_sidecars(self, path: pathlib.Path, payload: dict[str, Any]) -> None:
         return None
+
+    def _checkpoint_metadata(self) -> dict[str, Any]:
+        """Return small runner-specific values stored at the payload top level."""
+
+        return {}
 
     def load_payload(
         self,

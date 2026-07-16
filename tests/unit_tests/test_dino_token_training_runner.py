@@ -20,6 +20,14 @@ def _runner_config(tmp_path):
                 "enable_activation_checkpointing": False,
                 "resume": False,
             },
+            "checkpoint": {
+                "topk": {
+                    "monitor_key": "eval/loss",
+                    "metric_name": "loss",
+                    "mode": "min",
+                    "k": 2,
+                }
+            },
             "optim": {
                 "param_precision": "fp32",
                 "precision": "fp32",
@@ -121,16 +129,17 @@ def test_dino_runner_requires_fp32_master_parameters(tmp_path) -> None:
         runner._build_model_and_optimizers(runner.cfg)
 
 
-def test_dino_epoch_checkpoint_writes_canonical_warmup_alias(tmp_path) -> None:
+def test_dino_epoch_checkpoint_writes_flat_latest_and_metric_copy(tmp_path) -> None:
     runner = DinoTokenWorldModelTrainingRunner(_runner_config(tmp_path))
     runner.global_step = 12
+    runner.epoch = 3
     captured: dict[str, object] = {}
     runner.save_checkpoint = lambda **kwargs: captured.update(kwargs) or ""
 
-    runner._save_epoch_checkpoint()
-
-    assert captured["path"] == tmp_path / "checkpoints" / "global_step_12" / "model.ckpt"
-    assert captured["extra_paths"] == (
-        tmp_path / "checkpoints" / "latest.ckpt",
-        tmp_path / "checkpoints" / "wm_warmup.ckpt",
+    runner._save_epoch_checkpoint(
+        {"epoch": 3, "eval/loss": 0.25},
+        runner._make_checkpoint_manager(),
     )
+
+    assert captured["path"] == tmp_path / "checkpoints" / "latest.ckpt"
+    assert captured["extra_paths"] == (tmp_path / "checkpoints" / "epoch=0003-loss=0.250000.ckpt",)

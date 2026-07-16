@@ -51,6 +51,13 @@ training:
     gradient_as_bucket_view: true
   classifier_batch_size: 1
 
+checkpoint:
+  topk:
+    monitor_key: loss
+    metric_name: loss
+    mode: min
+    k: ${training.warmup_topk_k}
+
 offline_warmup:
   data_dir: ${task.collected_reward_dir}
   hidden_dir: ${task.collected_hidden_token_dir}

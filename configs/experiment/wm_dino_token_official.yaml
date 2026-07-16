@@ -44,6 +44,13 @@ training:
   eval_every: 1
   checkpoint_every: 1
 
+checkpoint:
+  topk:
+    monitor_key: eval/loss
+    metric_name: loss
+    mode: min
+    k: 3
+
 dino_wm:
   frameskip: 5
   train_fraction: 0.9

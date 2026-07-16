@@ -5,6 +5,13 @@ import re
 _UNSAFE_METRIC_CHARS_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
+def _sanitize_metric_name(metric_name: str) -> str:
+    safe_name = _UNSAFE_METRIC_CHARS_RE.sub("_", str(metric_name)).strip("._-")
+    if not safe_name:
+        raise ValueError("checkpoint metric name must not be empty")
+    return safe_name
+
+
 def format_metric_checkpoint_name(
     *,
     epoch: int,
@@ -19,9 +26,7 @@ def format_metric_checkpoint_name(
     value = float(metric_value)
     if not math.isfinite(value):
         raise ValueError("checkpoint metric value must be finite")
-    safe_name = _UNSAFE_METRIC_CHARS_RE.sub("_", str(metric_name)).strip("._-")
-    if not safe_name:
-        raise ValueError("checkpoint metric name must not be empty")
+    safe_name = _sanitize_metric_name(metric_name)
     return f"epoch={completed_epoch:04d}-{safe_name}={value:.6f}.ckpt"
 
 
@@ -43,6 +48,28 @@ class TopKCheckpointManager:
         self.mode = mode
         self.k = k
         self.path_value_map = dict()
+        self._restore_existing_checkpoints()
+
+    def _restore_existing_checkpoints(self) -> None:
+        """Rebuild top-k state from canonical files in an existing run."""
+
+        if self.k == 0 or not os.path.isdir(self.save_dir):
+            return
+        safe_name = re.escape(_sanitize_metric_name(self.metric_name))
+        pattern = re.compile(rf"^epoch=\d{{4,}}-{safe_name}=(-?\d+\.\d{{6}})\.ckpt$")
+        candidates: list[tuple[str, float]] = []
+        for filename in os.listdir(self.save_dir):
+            match = pattern.fullmatch(filename)
+            if match is None:
+                continue
+            candidates.append(
+                (os.path.join(os.fspath(self.save_dir), filename), float(match.group(1)))
+            )
+        candidates.sort(key=lambda item: (item[1], item[0]), reverse=self.mode == "max")
+        retained = candidates[: self.k]
+        self.path_value_map = dict(retained)
+        for path, _ in candidates[self.k :]:
+            os.remove(path)
 
     def get_ckpt_path(self, data: dict[str, float]) -> str | None:
         if self.k == 0:

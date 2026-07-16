@@ -23,7 +23,7 @@ from omegaconf import OmegaConf
 
 from dreamervla.algorithms.dreamervla import world_model_pretrain_step
 from dreamervla.constants import CHECKPOINT_FORMAT_VERSION
-from dreamervla.runners.base_runner import _atomic_torch_save
+from dreamervla.runners.base_runner import _atomic_torch_save, _materialize_checkpoint_copy
 from dreamervla.runners.success_classifier_training_runner import _success_probabilities_from_logits
 from dreamervla.runtime.classifier_metrics import sweep_threshold_metrics
 from dreamervla.runtime.classifier_update import online_classifier_update_step
@@ -911,40 +911,55 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
 
     # ------------------------------------------------------------ split ckpts
     def _wm_warmup_ckpt(self) -> str:
-        return str(self.get_checkpoint_dir() / "wm_warmup.ckpt")
+        return str(self.get_checkpoint_path())
 
     def _cls_warmup_ckpt(self) -> str:
-        return str(self.get_checkpoint_dir() / "classifier_warmup.ckpt")
+        return str(self.get_checkpoint_path())
 
     def _wm_warmup_hf_dir(self) -> str:
-        return str(self.get_checkpoint_dir() / "wm_warmup_hf")
+        return str(self.get_hf_checkpoint_path())
 
     def _cls_warmup_hf_dir(self) -> str:
-        return str(self.get_checkpoint_dir() / "classifier_warmup_hf")
+        return str(self.get_hf_checkpoint_path())
 
     def _warmup_progress_dir(self) -> Path:
         return self.get_checkpoint_dir() / "warmup_progress"
 
     def _warmup_topk_dir(self, component: str) -> Path:
-        return self.get_checkpoint_dir() / "warmup_topk" / str(component)
+        del component
+        return self.get_checkpoint_dir()
 
     def _warmup_checkpoint_candidates(self, name: str) -> tuple[Path, ...]:
         return (
+            self.get_checkpoint_path(),
             self.get_checkpoint_dir() / str(name),
             self.get_compat_checkpoint_dir() / str(name),
         )
 
     def _existing_warmup_checkpoint(self, name: str) -> Path | None:
-        return next(
-            (path for path in self._warmup_checkpoint_candidates(name) if path.is_file()),
-            None,
-        )
+        expected_component = "wm" if str(name).startswith("wm_") else "classifier"
+        for path in self._warmup_checkpoint_candidates(name):
+            if not path.is_file():
+                continue
+            if path == self.get_checkpoint_path():
+                payload = load_runner_payload(path)
+                component = payload.get("component")
+                if component is None:
+                    state_dicts = payload.get("state_dicts", payload)
+                    component_key = "world_model" if expected_component == "wm" else "classifier"
+                    if not isinstance(state_dicts, Mapping) or component_key not in state_dicts:
+                        continue
+                elif str(component) != expected_component:
+                    continue
+            return path
+        return None
 
     def _existing_warmup_hf_dir(self, name: str) -> Path | None:
-        return next(
-            (path for path in self._warmup_checkpoint_candidates(name) if path.is_dir()),
-            None,
+        candidates = (
+            self.get_hf_checkpoint_path(),
+            *self._warmup_checkpoint_candidates(name),
         )
+        return next((path for path in candidates if path.is_dir()), None)
 
     def _latest_warmup_progress_path(self, component: str) -> Path | None:
         latest_step = -1
@@ -969,31 +984,39 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
     def _make_warmup_topk_manager(
         self, *, component: str, k: int | None = None
     ) -> TopKCheckpointManager | None:
+        topk_cfg = OmegaConf.select(self.cfg, "checkpoint.topk", default=None)
+        configured_k = (
+            OmegaConf.select(topk_cfg, "k", default=None) if topk_cfg is not None else None
+        )
         k_value = (
             int(k)
             if k is not None
-            else int(OmegaConf.select(self.cfg, "training.warmup_topk_k", default=0) or 0)
+            else int(
+                configured_k or OmegaConf.select(self.cfg, "training.warmup_topk_k", default=0) or 0
+            )
         )
         if k_value <= 0:
             return None
         if component == "wm":
-            manager = TopKCheckpointManager(
-                save_dir=str(self._warmup_topk_dir("wm")),
-                monitor_key="loss",
-                mode="min",
-                k=k_value,
-                format_str="wm_step={step:08d}-loss={loss:.6f}.ckpt",
-            )
+            defaults = {"monitor_key": "loss", "metric_name": "loss", "mode": "min"}
         elif component == "classifier":
-            manager = TopKCheckpointManager(
-                save_dir=str(self._warmup_topk_dir("classifier")),
-                monitor_key="f1",
-                mode="max",
-                k=k_value,
-                format_str="classifier_step={step:08d}-f1={f1:.6f}.ckpt",
-            )
+            defaults = {"monitor_key": "f1", "metric_name": "f1", "mode": "max"}
         else:
             raise ValueError(f"unknown warmup component: {component}")
+        if topk_cfg is not None:
+            configured = dict(OmegaConf.to_container(topk_cfg, resolve=True))
+            defaults.update(
+                {
+                    key: configured[key]
+                    for key in ("monitor_key", "metric_name", "mode")
+                    if key in configured
+                }
+            )
+        manager = TopKCheckpointManager(
+            save_dir=str(self.get_checkpoint_dir()),
+            k=k_value,
+            **defaults,
+        )
         self._restore_warmup_topk_manager(manager)
         return manager
 
@@ -1004,7 +1027,10 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             return
         candidates: list[tuple[Path, float]] = []
         invalid: list[Path] = []
-        for path in sorted(save_dir.glob("*.ckpt")):
+        metric_marker = f"-{manager.metric_name}="
+        for path in sorted(save_dir.glob("epoch=*.ckpt")):
+            if metric_marker not in path.name:
+                continue
             payload = load_runner_payload(path)
             metrics = payload.get("metrics", {})
             value = metrics.get(manager.monitor_key) if isinstance(metrics, dict) else None
@@ -1022,19 +1048,21 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
 
     @staticmethod
     def _save_warmup_topk(
-        payload: dict[str, Any],
+        latest_path: Path,
         *,
         metrics: dict[str, float],
-        step: int,
+        epoch: int,
         topk_manager: TopKCheckpointManager | None,
     ) -> None:
         if topk_manager is None:
             return
-        data = {"step": int(step)}
+        if topk_manager.monitor_key not in metrics:
+            return
+        data = {"epoch": int(epoch)}
         data.update({key: float(value) for key, value in metrics.items()})
         path = topk_manager.get_ckpt_path(data)
         if path is not None:
-            _atomic_torch_save(payload, Path(path))
+            _materialize_checkpoint_copy(latest_path, Path(path))
 
     def _gather_checkpoint_rng(self) -> list[dict[str, Any]]:
         local_state = capture_rng_state()
@@ -1075,7 +1103,10 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         if self.is_main_process:
             _atomic_torch_save(payload, path)
             self._save_warmup_topk(
-                payload, metrics=metrics, step=int(step), topk_manager=topk_manager
+                path,
+                metrics=metrics,
+                epoch=int(epoch),
+                topk_manager=topk_manager,
             )
         return path
 
@@ -1115,7 +1146,10 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         if self.is_main_process:
             _atomic_torch_save(payload, path)
             self._save_warmup_topk(
-                payload, metrics=metrics, step=int(step), topk_manager=topk_manager
+                path,
+                metrics=metrics,
+                epoch=int(epoch),
+                topk_manager=topk_manager,
             )
         return path
 

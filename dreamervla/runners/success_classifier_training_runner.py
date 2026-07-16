@@ -55,6 +55,7 @@ from dreamervla.preprocess.sidecar_schema import validate_hidden_token_sidecar_d
 from dreamervla.runners.base_runner import BaseRunner
 from dreamervla.runtime.classifier_metrics import sweep_threshold_metrics as _sweep_metrics
 from dreamervla.runtime.distributed import NopretokenizeSFTDistributedHelper
+from dreamervla.utils.checkpoint_util import TopKCheckpointManager
 from dreamervla.utils.torch_utils import autocast_context
 from dreamervla.utils.update_timing import GradientUpdateTimer
 
@@ -164,6 +165,9 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         "best_episode_f1",
         "best_window_ckpt_path",
         "best_episode_ckpt_path",
+        "best_window_threshold",
+        "best_episode_threshold",
+        "classifier_threshold",
     )
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
@@ -217,6 +221,9 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         self.best_episode_f1: float = -1.0
         self.best_window_ckpt_path: str | None = None
         self.best_episode_ckpt_path: str | None = None
+        self.best_window_threshold = 0.5
+        self.best_episode_threshold = 0.5
+        self.classifier_threshold = 0.5
         self._log_path: pathlib.Path | None = None
         self._pending_setup_logs: list[dict[str, Any]] = []
 
@@ -283,6 +290,13 @@ class SuccessClassifierTrainingRunner(BaseRunner):
             self.distributed.unwrap_module(value).load_state_dict(state_dict, **kwargs)
             return
         super()._load_state_dict_from_checkpoint(key, value, state_dict, **kwargs)
+
+    def _checkpoint_metadata(self) -> dict[str, Any]:
+        return {
+            "classifier_threshold": float(getattr(self, "classifier_threshold", 0.5)),
+            "best_window_f1": float(getattr(self, "best_window_f1", -1.0)),
+            "best_episode_f1": float(getattr(self, "best_episode_f1", -1.0)),
+        }
 
     def load_payload(
         self,
@@ -635,12 +649,12 @@ class SuccessClassifierTrainingRunner(BaseRunner):
             metrics = self._evaluate_window_level()
             if float(metrics["best_f1"]) > float(self.best_window_f1):
                 self.best_window_f1 = float(metrics["best_f1"])
-                self._maybe_save_named(
-                    "best_window_"
-                    f"f1{float(metrics['best_f1']):.4f}_"
-                    f"th{float(metrics['best_thresh']):.2f}",
-                    extra={"val_window": metrics},
-                )
+            self._maybe_save_named(
+                "best_window_"
+                f"f1{float(metrics['best_f1']):.4f}_"
+                f"th{float(metrics['best_thresh']):.2f}",
+                extra={"val_window": metrics},
+            )
             return {"window": metrics}
         if selection == "episode_f1":
             if not bool(
@@ -656,12 +670,12 @@ class SuccessClassifierTrainingRunner(BaseRunner):
             metrics = self._evaluate_episode_level()
             if float(metrics["best_f1"]) > float(self.best_episode_f1):
                 self.best_episode_f1 = float(metrics["best_f1"])
-                self._maybe_save_named(
-                    "best_episode_"
-                    f"f1{float(metrics['best_f1']):.4f}_"
-                    f"th{float(metrics['best_thresh']):.2f}",
-                    extra={"val_episode": metrics},
-                )
+            self._maybe_save_named(
+                "best_episode_"
+                f"f1{float(metrics['best_f1']):.4f}_"
+                f"th{float(metrics['best_thresh']):.2f}",
+                extra={"val_episode": metrics},
+            )
             return {"episode": metrics}
         raise ValueError(
             "training.final_selection_metric must be one of: none, window_f1, episode_f1"
@@ -808,10 +822,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                     self._log({"event": "val_window", "step": self.global_step, **w_metrics})
                     if w_metrics["best_f1"] > self.best_window_f1:
                         self.best_window_f1 = float(w_metrics["best_f1"])
-                        self._maybe_save_named(
-                            f"best_window_f1{w_metrics['best_f1']:.4f}_th{w_metrics['best_thresh']:.2f}",
-                            extra={"val_window": w_metrics},
-                        )
+                        self.best_window_threshold = float(w_metrics["best_thresh"])
 
                     if bool(OmegaConf.select(tr, "episode_eval_enabled") or False):
                         e_metrics = self._evaluate_episode_level()
@@ -824,10 +835,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                         )
                         if e_metrics["best_f1"] > self.best_episode_f1:
                             self.best_episode_f1 = float(e_metrics["best_f1"])
-                            self._maybe_save_named(
-                                f"best_episode_f1{e_metrics['best_f1']:.4f}_th{e_metrics['best_thresh']:.2f}",
-                                extra={"val_episode": e_metrics},
-                            )
+                            self.best_episode_threshold = float(e_metrics["best_thresh"])
                     maintenance_metrics["time/classifier_eval_s"] = (
                         time.perf_counter() - eval_started_at
                     )
@@ -1055,38 +1063,45 @@ class SuccessClassifierTrainingRunner(BaseRunner):
 
     def _maybe_save_named(self, name: str, *, extra: dict | None = None) -> None:
         """Write a metric-named snapshot only when top-k is explicitly enabled."""
-        if int(OmegaConf.select(self.cfg, "training.topk_k", default=0) or 0) <= 0:
+        if self._classifier_topk_manager() is None:
             return
         self._save_named(name, extra=extra)
 
     def _save_final_checkpoint(self) -> str:
-        """Write one canonical classifier artifact plus the latest pointer."""
-        checkpoint_dir = self.get_checkpoint_dir()
-        return self.save_checkpoint(
-            path=checkpoint_dir / "classifier_warmup.ckpt",
-            extra_paths=(checkpoint_dir / "latest.ckpt",),
+        """Write the canonical resumable classifier checkpoint."""
+        return self.save_checkpoint(path=self.get_checkpoint_path())
+
+    def _classifier_topk_manager(self) -> TopKCheckpointManager | None:
+        cached = getattr(self, "_topk_checkpoint_manager", None)
+        if cached is not None:
+            return cached
+        topk_cfg = OmegaConf.select(self.cfg, "checkpoint.topk", default=None)
+        if topk_cfg is None:
+            k = int(OmegaConf.select(self.cfg, "training.topk_k", default=0) or 0)
+            values = {
+                "monitor_key": "f1",
+                "metric_name": "f1",
+                "mode": "max",
+                "k": k,
+            }
+        else:
+            values = dict(OmegaConf.to_container(topk_cfg, resolve=True))
+        if int(values.get("k", 0) or 0) <= 0:
+            return None
+        manager = TopKCheckpointManager(
+            save_dir=self.get_checkpoint_dir(),
+            **values,
         )
+        self._topk_checkpoint_manager = manager
+        return manager
 
     def _save_named(self, name: str, *, extra: dict | None = None) -> None:
-        """Save in the format consumed by the online LUMOS training script.
+        """Save latest and a full metric-selected payload from one serialization."""
 
-        Schema (matches the old v2/v3 trainer + LUMOS predict_success consumer):
-            model      : nn.Module.state_dict()
-            threshold  : float — best operating point from the val sweep
-            f1         : float — F1 at that threshold
-            step       : int   — global_step at save time
-            config     : { classifier: {…LatentSuccessClassifierConfig…} }
-            extra      : the originating sweep dict (kept for offline analysis)
-        """
-        if not self.is_main_process:
-            return
-        ckpt_dir = self.get_checkpoint_dir()
-        ckpt_dir.mkdir(parents=True, exist_ok=True)
-        path = ckpt_dir / "warmup_topk" / f"{name}.ckpt"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # pick best F1/threshold out of the sweep dict that called us
+        del name
         f1 = 0.0
         threshold = 0.5
+        selection = "window"
         if isinstance(extra, dict):
             for k in ("val_episode", "val_window"):
                 v = extra.get(k)
@@ -1094,22 +1109,33 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                     f1 = float(v.get("best_f1", f1))
                     threshold = float(v.get("best_thresh", threshold))
                     if k == "val_episode":
-                        self.best_episode_ckpt_path = str(path)
+                        selection = "episode"
                     else:
-                        self.best_window_ckpt_path = str(path)
+                        selection = "window"
                     break
-        torch.save(
-            {
-                "model": self._classifier_module().state_dict(),
-                "threshold": threshold,
-                "f1": f1,
-                "step": int(self.global_step),
-                "config": {
-                    "classifier": OmegaConf.to_container(self.cfg.classifier, resolve=True),
-                },
-                "extra": extra or {},
-            },
-            path,
+        manager = self._classifier_topk_manager()
+        if manager is None:
+            return
+        path = None
+        if self.is_main_process:
+            path = manager.get_ckpt_path(
+                {
+                    "epoch": int(self.epoch),
+                    manager.monitor_key: f1,
+                }
+            )
+        if path is None:
+            return
+        self.classifier_threshold = threshold
+        if selection == "episode":
+            self.best_episode_ckpt_path = str(path)
+            self.best_episode_threshold = threshold
+        else:
+            self.best_window_ckpt_path = str(path)
+            self.best_window_threshold = threshold
+        self.save_checkpoint(
+            path=self.get_checkpoint_path(),
+            extra_paths=(path,),
         )
         self._log({"event": "ckpt_named", "path": str(path), "f1": f1, "threshold": threshold})
 
