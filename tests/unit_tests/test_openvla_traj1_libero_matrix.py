@@ -223,7 +223,10 @@ def test_cotrain_components_are_selected_from_worldmodel_and_classifier_groups()
     assert cfg.manual_cotrain.initial_condition_selector == "failed_episode_start"
     assert cfg.manual_cotrain.learner_updates_enabled is False
     assert cfg.manual_cotrain.staged_policy_update is False
-    assert cfg.manual_cotrain.keep_last_checkpoints == 2
+    assert cfg.checkpoint.topk.monitor_key == "eval/success_rate"
+    assert cfg.checkpoint.topk.metric_name == "accuracy"
+    assert cfg.checkpoint.topk.mode == "max"
+    assert cfg.checkpoint.topk.k == 3
     assert cfg.actor.train_cfg.global_batch_size == 16384
     assert cfg.actor.train_cfg.micro_batch_size == 8
     assert cfg.env.wm.cfg.initial_condition_selector == "failed_episode_start"
@@ -266,9 +269,9 @@ def test_openvla_onetraj_cotrain_aligns_world_model_full_dataset_recipe() -> Non
     cfg = _compose(["experiment=openvla_onetraj_libero_cotrain"])
     wm = cfg.ray_components.world_model.kwargs
 
-    assert cfg.ray_data.replay_capacity == 160000
+    assert cfg.ray_data.replay_capacity == 80000
     assert cfg.ray_data.sequence_length == 36
-    assert cfg.replay.cfg.capacity == 160000
+    assert cfg.replay.cfg.capacity == 80000
     assert cfg.replay.cfg.sequence_length == 36
     assert cfg.learner.train_cfg.batch_size == 16
     assert cfg.learner.train_cfg.optimizers.world_model.lr == 3.0e-5
