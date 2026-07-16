@@ -37,6 +37,16 @@ def test_dreamer_runner_places_frozen_learner_on_cpu() -> None:
     assert plan.learner_spec.gpu_ids == []
 
 
+def test_dreamer_checkpoint_topk_uses_evaluation_accuracy() -> None:
+    cfg = _compose_experiment("openvla_libero")
+
+    assert cfg.checkpoint.topk.monitor_key == "eval/success_rate"
+    assert cfg.checkpoint.topk.metric_name == "accuracy"
+    assert cfg.checkpoint.topk.mode == "max"
+    assert cfg.checkpoint.topk.k > 0
+    assert OmegaConf.select(cfg, "manual_cotrain.keep_last_checkpoints") is None
+
+
 def test_dreamer_runner_uses_25_one_slot_osmesa_real_workers() -> None:
     cfg = _compose_experiment("openvla_libero")
     runner = DreamerRunner(cfg)

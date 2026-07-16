@@ -263,7 +263,7 @@ def test_cotrain_launcher_resume_reuses_original_run_root(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run_dir = tmp_path / "openvla_libero" / "20260714_120000"
-    checkpoint = run_dir / "checkpoints" / "global_step_10" / "manual_cotrain.ckpt"
+    checkpoint = run_dir / "checkpoints" / "latest.ckpt"
     checkpoint.parent.mkdir(parents=True)
     checkpoint.touch()
     monkeypatch.delenv("WORLD_MODEL_CKPT", raising=False)

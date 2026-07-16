@@ -259,10 +259,11 @@ sync:
   weight_sync_every: 1
 
 checkpoint:
-  save_interval: 20
-  save_final: true
-  filename: learner.ckpt
-  latest_name: latest.ckpt
+  topk:
+    monitor_key: eval/success_rate
+    metric_name: accuracy
+    mode: max
+    k: 3
 
 training:
   max_steps: 1000

@@ -23,7 +23,6 @@ manual_cotrain:
   ngpu: 8
   global_steps: 20000
   checkpoint_every: 10
-  keep_last_checkpoints: 2
   real_env_enabled: true
   real_env_workers: 25
   real_envs_per_worker: 1

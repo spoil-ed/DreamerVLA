@@ -35,7 +35,6 @@ manual_cotrain:
   # One 1024x512 rollout step can exceed ten minutes. 5400s still catches an
   # actual stuck handshake without killing a progressing production step.
   env_rollout_timeout_s: 5400
-  keep_last_checkpoints: 2
   sync_every: 1
   requires_bootstrap_value: false
   wm_env_write_replay: false

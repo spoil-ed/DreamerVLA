@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import threading
 import time
 import uuid
@@ -25,7 +24,11 @@ import torch
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
 from dreamervla.constants import CHECKPOINT_FORMAT_VERSION
-from dreamervla.runners.base_runner import BaseRunner
+from dreamervla.runners.base_runner import (
+    BaseRunner,
+    _atomic_torch_save,
+    _materialize_checkpoint_copy,
+)
 from dreamervla.runtime.render_device import (
     cuda_visible_devices_from_env,
     parse_device_ids,
@@ -37,9 +40,11 @@ from dreamervla.scheduler.placement import (
     ResourceMapPlacementStrategy,
 )
 from dreamervla.scheduler.worker_group import WorkerGroup
+from dreamervla.utils.checkpoint_util import TopKCheckpointManager
 from dreamervla.utils.component_checkpoint import load_component_checkpoint, state_dict_sha256
 from dreamervla.utils.egl_device import _ZERO_GPU_EGL_ERROR
 from dreamervla.utils.hf_checkpoint import load_runner_payload
+from dreamervla.utils.run_paths import resolve_resume_checkpoint
 from dreamervla.utils.seed import capture_rng_state, restore_rng_state
 from dreamervla.workers.actor.embodied_fsdp_actor import EmbodiedFSDPActor
 from dreamervla.workers.actor.learner_worker import LearnerWorker
@@ -157,8 +162,17 @@ class CotrainRunner(BaseRunner):
                 metrics.update(initial_eval)
                 self.log_metrics(initial_eval, step=0)
             for global_step in range(resume_step + 1, target_step + 1):
+                global_step_start = time.perf_counter()
                 step_metrics = self._run_global_step(groups, global_step)
                 step_metrics.update(self._maybe_evaluate_resident_policy(groups, global_step))
+                checkpoint_start = time.perf_counter()
+                self._maybe_save_manual_checkpoint(groups, global_step, step_metrics)
+                step_metrics["time/manual_cotrain/checkpoint_and_metrics_s"] = float(
+                    time.perf_counter() - checkpoint_start
+                )
+                step_metrics["time/manual_cotrain/global_step_s"] = float(
+                    time.perf_counter() - global_step_start
+                )
                 metrics.update(step_metrics)
                 self.log_metrics(step_metrics, step=global_step)
                 self._report_global_step_progress(
@@ -590,7 +604,6 @@ class CotrainRunner(BaseRunner):
     ) -> dict[str, float]:
         """Run one causally ordered real-SFT/WM+CLS/imagined-PPO step."""
 
-        global_step_start = time.perf_counter()
         actor = groups["ActorGroup"]
         rollout = groups["RolloutGroup"]
         learner = groups.get("LearnerGroup")
@@ -724,7 +737,6 @@ class CotrainRunner(BaseRunner):
                 return self._finish_no_failure_imagination_step(
                     groups=groups,
                     global_step=global_step,
-                    global_step_start=global_step_start,
                     real_env_metrics=real_env_metrics,
                     real_rollout_metrics=real_rollout_metrics,
                     real_reset_metrics=real_reset_metrics,
@@ -1061,14 +1073,6 @@ class CotrainRunner(BaseRunner):
         if global_step == 1:
             metrics.update(groups.get("replay_seed_metrics", {}))
         metrics = _with_train_learner_aliases(metrics)
-        checkpoint_start = time.perf_counter()
-        self._maybe_save_manual_checkpoint(groups, global_step, metrics)
-        metrics["time/manual_cotrain/checkpoint_and_metrics_s"] = float(
-            time.perf_counter() - checkpoint_start
-        )
-        metrics["time/manual_cotrain/global_step_s"] = float(
-            time.perf_counter() - global_step_start
-        )
         return metrics
 
     def _finish_no_failure_imagination_step(
@@ -1076,7 +1080,6 @@ class CotrainRunner(BaseRunner):
         *,
         groups: dict[str, Any],
         global_step: int,
-        global_step_start: float,
         real_env_metrics: dict[str, float],
         real_rollout_metrics: dict[str, float],
         real_reset_metrics: dict[str, float],
@@ -1127,14 +1130,6 @@ class CotrainRunner(BaseRunner):
         }
         if global_step == 1:
             metrics.update(groups.get("replay_seed_metrics", {}))
-        checkpoint_start = time.perf_counter()
-        self._maybe_save_manual_checkpoint(groups, global_step, metrics)
-        metrics["time/manual_cotrain/checkpoint_and_metrics_s"] = float(
-            time.perf_counter() - checkpoint_start
-        )
-        metrics["time/manual_cotrain/global_step_s"] = float(
-            time.perf_counter() - global_step_start
-        )
         return metrics
 
     @staticmethod
@@ -2669,8 +2664,6 @@ class CotrainRunner(BaseRunner):
         )
         if not force and (interval <= 0 or int(global_step) % interval != 0):
             return None
-        ckpt_dir = self.get_global_step_checkpoint_dir(int(global_step))
-        ckpt_dir.mkdir(parents=True, exist_ok=True)
         actor_state = _first_nonempty_mapping(groups["ActorGroup"].state_dict().wait())
         self._policy_final_hash = state_dict_sha256(actor_state)
         if not self._policy_initial_hash:
@@ -2682,7 +2675,6 @@ class CotrainRunner(BaseRunner):
         if not isinstance(raw_learner_states, dict):
             raise TypeError("LearnerGroup.state_dicts() must return a mapping")
         learner_states: dict[str, Any] = raw_learner_states
-        ckpt_path = ckpt_dir / "manual_cotrain.ckpt"
         state_dicts = {"policy": dict(actor_state)}
         optimizer_state = _first_nonempty_mapping(
             groups["ActorGroup"].optimizer_state_dict().wait()
@@ -2725,6 +2717,7 @@ class CotrainRunner(BaseRunner):
         payload = {
             "format_version": CHECKPOINT_FORMAT_VERSION,
             "global_step": int(global_step),
+            "epoch": int(global_step),
             "cfg": _plain(self.cfg),
             "metrics": dict(metrics),
             "state_dicts": state_dicts,
@@ -2737,60 +2730,37 @@ class CotrainRunner(BaseRunner):
         }
         if classifier_threshold is not None:
             payload["classifier_threshold"] = classifier_threshold
-        torch.save(
-            payload,
-            ckpt_path,
-        )
-        _atomic_link_or_copy(ckpt_path, self.get_checkpoint_path())
-        run_metadata = self._manual_checkpoint_run_metadata(ckpt_dir)
-        manifest = _manual_checkpoint_manifest(
-            global_step=int(global_step),
-            metrics=metrics,
-            ckpt_name=ckpt_path.name,
-            state_dicts={
-                name: state
-                for name, state in state_dicts.items()
-                if not name.endswith("_optimizer")
-            },
-            run=run_metadata,
-        )
-        _atomic_write_json(ckpt_dir / "manual_cotrain_manifest.json", manifest)
-        self._prune_manual_checkpoints()
+        metric_path = None
+        topk_manager = self._manual_topk_manager()
+        if topk_manager is not None and topk_manager.monitor_key in metrics:
+            metric_path = topk_manager.get_ckpt_path(
+                {
+                    "epoch": int(global_step),
+                    topk_manager.monitor_key: float(metrics[topk_manager.monitor_key]),
+                }
+            )
+        ckpt_path = self.get_checkpoint_path()
+        _atomic_torch_save(payload, ckpt_path)
+        if metric_path is not None:
+            _materialize_checkpoint_copy(ckpt_path, Path(metric_path))
         return ckpt_path
 
-    def _prune_manual_checkpoints(self) -> None:
-        keep = int(
-            OmegaConf.select(
-                self.cfg,
-                "manual_cotrain.keep_last_checkpoints",
-                default=2,
-            )
+    def _manual_topk_manager(self) -> TopKCheckpointManager | None:
+        cached = getattr(self, "_topk_checkpoint_manager", None)
+        if cached is not None:
+            return cached
+        topk_cfg = OmegaConf.select(self.cfg, "checkpoint.topk", default=None)
+        if topk_cfg is None:
+            return None
+        values = dict(OmegaConf.to_container(topk_cfg, resolve=True))
+        if int(values.get("k", 0) or 0) <= 0:
+            return None
+        manager = TopKCheckpointManager(
+            save_dir=self.get_checkpoint_dir(),
+            **values,
         )
-        checkpoint_dir = self.get_checkpoint_dir()
-        step_dirs: list[tuple[int, Path]] = []
-        for path in checkpoint_dir.glob("global_step_*"):
-            if not path.is_dir():
-                continue
-            try:
-                step = int(path.name.removeprefix("global_step_"))
-            except ValueError:
-                continue
-            step_dirs.append((step, path))
-        for _step, path in sorted(step_dirs)[:-keep]:
-            shutil.rmtree(path)
-
-    def _manual_checkpoint_run_metadata(self, manifest_dir: Path) -> dict[str, str]:
-        return {
-            "root": _relative_path(self.get_run_dir(), manifest_dir),
-            "hydra_config": _relative_path(
-                self.get_artifact_dir(".hydra", "config.yaml"),
-                manifest_dir,
-            ),
-            "run_manifest": _relative_path(
-                self.get_run_manifest_path(),
-                manifest_dir,
-            ),
-        }
+        self._topk_checkpoint_manager = manager
+        return manager
 
     @staticmethod
     def _placement_for(gpu_ids: list[int]) -> NodePlacementStrategy | ResourceMapPlacementStrategy:
@@ -3589,78 +3559,15 @@ def _learner_progress_status(payload: dict[str, Any]) -> str | None:
     return " ".join(parts)
 
 
-def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    tmp_path = path.with_name(f".{path.name}.tmp")
-    tmp_path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    tmp_path.replace(path)
-
-
-def _atomic_link_or_copy(source: Path, destination: Path) -> None:
-    """Atomically refresh a latest pointer without serializing twice."""
-
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        try:
-            os.link(source, temporary)
-        except OSError:
-            shutil.copy2(source, temporary)
-        os.replace(temporary, destination)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def _manual_checkpoint_manifest(
-    *,
-    global_step: int,
-    metrics: dict[str, float],
-    ckpt_name: str,
-    state_dicts: dict[str, dict[str, Any]],
-    run: dict[str, str] | None = None,
-) -> dict[str, Any]:
-    policy_version = int(metrics.get("sync/policy_version", global_step))
-    rollout_policy_version = int(metrics.get("sync/rollout_policy_version", policy_version))
-    world_model_version = int(metrics.get("sync/world_model_version", global_step))
-    classifier_version = int(metrics.get("sync/classifier_version", global_step))
-    versions = {
-        "global_step": int(global_step),
-        "policy_version": policy_version,
-        "world_model_version": world_model_version,
-        "classifier_version": classifier_version,
-        "actor_policy_version": policy_version,
-        "rollout_policy_version": rollout_policy_version,
-        "wm_version": world_model_version,
-    }
-    return {
-        "schema_version": 1,
-        "global_step": int(global_step),
-        "versions": versions,
-        "components": {
-            name: {
-                "path": str(ckpt_name),
-                "state_dict_key": name,
-                "tensors": len(state),
-            }
-            for name, state in sorted(state_dicts.items())
-        },
-        "run": dict(run or {}),
-        "metrics_keys": sorted(str(key) for key in metrics),
-    }
-
-
-def _relative_path(target: Path, start: Path) -> str:
-    return Path(os.path.relpath(target, start)).as_posix()
-
-
 def _checkpoint_payload_path(path: Path) -> Path:
     if path.is_dir():
         manifest_path = path / "manual_cotrain_manifest.json"
         if manifest_path.is_file():
             return _checkpoint_payload_path(manifest_path)
-        return path / "manual_cotrain.ckpt"
+        legacy_payload = path / "manual_cotrain.ckpt"
+        if legacy_payload.is_file():
+            return legacy_payload
+        return resolve_resume_checkpoint(path)
     if path.name == "manual_cotrain_manifest.json":
         manifest = json.loads(path.read_text(encoding="utf-8"))
         components = manifest.get("components", {})
@@ -3675,7 +3582,12 @@ def _load_manual_resume_payload(
     *,
     required: bool,
 ) -> dict[str, Any] | None:
-    path = _checkpoint_payload_path(Path(ckpt_path).expanduser())
+    try:
+        path = _checkpoint_payload_path(Path(ckpt_path).expanduser())
+    except FileNotFoundError:
+        if required:
+            raise
+        return None
     if not path.is_file():
         if required:
             raise FileNotFoundError(f"manual cotrain resume checkpoint not found: {path}")
@@ -3734,6 +3646,8 @@ def _nonnegative_int(value: Any, field: str) -> int:
 
 def _load_component_state_dict(ckpt_path: str, component: str) -> dict[str, Any]:
     path = Path(ckpt_path).expanduser()
+    if path.is_dir():
+        path = resolve_resume_checkpoint(path)
     if not path.is_file():
         raise FileNotFoundError(f"Ray init checkpoint not found: {path}")
     payload = torch.load(path, map_location="cpu", weights_only=False)

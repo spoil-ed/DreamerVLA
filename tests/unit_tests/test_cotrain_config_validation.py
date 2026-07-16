@@ -97,6 +97,27 @@ def test_manual_cotrain_rejects_negative_checkpoint_interval() -> None:
         validate_cfg(cfg)
 
 
+def test_manual_cotrain_rejects_removed_checkpoint_retention_key() -> None:
+    cfg = _cfg(keep_last_checkpoints=2)
+    with pytest.raises(ValueError, match="keep_last_checkpoints.*removed"):
+        validate_cfg(cfg)
+
+
+@pytest.mark.parametrize(
+    ("topk", "match"),
+    (
+        ({"k": 1, "mode": "median", "monitor_key": "eval/x"}, "checkpoint.topk.mode"),
+        ({"k": 1, "mode": "max", "monitor_key": ""}, "checkpoint.topk.monitor_key"),
+    ),
+)
+def test_manual_cotrain_rejects_invalid_topk_contract(topk, match) -> None:
+    cfg = _cfg()
+    cfg.checkpoint = {"topk": topk}
+
+    with pytest.raises(ValueError, match=match):
+        validate_cfg(cfg)
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     (

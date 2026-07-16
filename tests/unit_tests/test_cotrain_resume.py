@@ -3,7 +3,6 @@ optimizer state + scalar attributes round-trip, and exclude_keys keeps frozen
 modules out of the payload.
 """
 
-import json
 import pathlib
 import random
 import threading
@@ -351,14 +350,21 @@ class _LearnerGroup:
         return _Ready(self.rng_states)
 
 
-def _make_manual_checkpoint_runner(tmp_path, *, keep_last: int = 2):
+def _make_manual_checkpoint_runner(tmp_path, *, topk_k: int = 2):
     runner = object.__new__(CotrainRunner)
     runner.cfg = OmegaConf.create(
         {
             "training": {"out_dir": str(tmp_path)},
             "manual_cotrain": {
                 "checkpoint_every": 1,
-                "keep_last_checkpoints": keep_last,
+            },
+            "checkpoint": {
+                "topk": {
+                    "monitor_key": "eval/success_rate",
+                    "metric_name": "accuracy",
+                    "mode": "max",
+                    "k": topk_k,
+                }
             },
             "actor": {"train_cfg": {"optimizers": {"encoder": None}}},
         }
@@ -371,7 +377,7 @@ def _make_manual_checkpoint_runner(tmp_path, *, keep_last: int = 2):
     return runner
 
 
-def test_cotrain_checkpoint_uses_one_canonical_step_dir_and_latest(tmp_path):
+def test_cotrain_checkpoint_writes_flat_latest_and_metric_topk(tmp_path):
     runner = _make_manual_checkpoint_runner(tmp_path)
 
     actor_group = _ActorGroup()
@@ -379,19 +385,22 @@ def test_cotrain_checkpoint_uses_one_canonical_step_dir_and_latest(tmp_path):
     path = runner._maybe_save_manual_checkpoint(
         {"ActorGroup": actor_group, "LearnerGroup": learner_group},
         global_step=3,
-        metrics={"sync/policy_version": 3.0},
+        metrics={"sync/policy_version": 3.0, "eval/success_rate": 0.75},
     )
 
-    assert path == tmp_path / "checkpoints" / "global_step_3" / "manual_cotrain.ckpt"
-    assert (tmp_path / "checkpoints" / "latest.ckpt").is_file()
-    assert not (tmp_path / "checkpoints" / "manual_cotrain_step_3").exists()
-    manifest = json.loads(
-        (path.parent / "manual_cotrain_manifest.json").read_text(encoding="utf-8")
-    )
-    assert manifest["run"]["hydra_config"] == "../../.hydra/config.yaml"
-    assert "resolved_config" not in manifest["run"]
+    checkpoint_dir = tmp_path / "checkpoints"
+    metric_path = checkpoint_dir / "epoch=0003-accuracy=0.750000.ckpt"
+    assert path == checkpoint_dir / "latest.ckpt"
+    assert metric_path.is_file()
+    assert path.read_bytes() == metric_path.read_bytes()
+    assert {child.name for child in checkpoint_dir.iterdir()} == {
+        "latest.ckpt",
+        "epoch=0003-accuracy=0.750000.ckpt",
+    }
+    assert all(child.is_file() for child in checkpoint_dir.iterdir())
     payload = torch.load(path, map_location="cpu", weights_only=False)
     assert payload["format_version"] == CHECKPOINT_FORMAT_VERSION
+    assert payload["epoch"] == 3
     assert set(payload["rng"]) == {"python", "numpy", "torch", "cuda"}
     _assert_nested_state_equal(payload["actor_rng_by_rank"], actor_group.rng_states)
     _assert_nested_state_equal(payload["learner_rng_by_rank"], learner_group.rng_states)
@@ -410,16 +419,30 @@ def test_cotrain_checkpoint_has_no_replay_state(tmp_path):
     assert "replay_sampling_state" not in payload
 
 
-def test_cotrain_checkpoint_retention_keeps_latest_two_steps(tmp_path):
-    runner = _make_manual_checkpoint_runner(tmp_path, keep_last=2)
+def test_cotrain_checkpoint_without_monitor_metric_writes_latest_only(tmp_path):
+    runner = _make_manual_checkpoint_runner(tmp_path)
     groups = {"ActorGroup": _ActorGroup(), "LearnerGroup": _LearnerGroup()}
     for step in (1, 2, 3):
         runner._maybe_save_manual_checkpoint(groups, step, {})
 
     checkpoint_dir = tmp_path / "checkpoints"
-    assert sorted(path.name for path in checkpoint_dir.glob("global_step_*")) == [
-        "global_step_2",
-        "global_step_3",
+    assert [path.name for path in checkpoint_dir.iterdir()] == ["latest.ckpt"]
+
+
+def test_cotrain_checkpoint_keeps_best_flat_metric_files(tmp_path):
+    runner = _make_manual_checkpoint_runner(tmp_path, topk_k=2)
+    groups = {"ActorGroup": _ActorGroup(), "LearnerGroup": _LearnerGroup()}
+    for step, accuracy in ((1, 0.1), (2, 0.3), (3, 0.2)):
+        runner._maybe_save_manual_checkpoint(
+            groups,
+            step,
+            {"eval/success_rate": accuracy},
+        )
+
+    assert sorted(path.name for path in (tmp_path / "checkpoints").iterdir()) == [
+        "epoch=0002-accuracy=0.300000.ckpt",
+        "epoch=0003-accuracy=0.200000.ckpt",
+        "latest.ckpt",
     ]
 
 
@@ -556,6 +579,41 @@ def test_cotrain_common_resume_path_loads_manual_payload(tmp_path):
     assert payload["global_step"] == 7
 
 
+def test_cotrain_run_root_resume_loads_flat_latest(tmp_path):
+    checkpoint = tmp_path / "run" / "checkpoints" / "latest.ckpt"
+    checkpoint.parent.mkdir(parents=True)
+    torch.save({"global_step": 7, "state_dicts": {}}, checkpoint)
+    runner = object.__new__(CotrainRunner)
+    runner.cfg = OmegaConf.create(
+        {
+            "training": {"resume": True, "resume_path": str(tmp_path / "run")},
+            "manual_cotrain": {"resume_ckpt": None},
+        }
+    )
+
+    payload = runner._manual_resume_payload()
+
+    assert payload is not None
+    assert payload["global_step"] == 7
+
+
+def test_cotrain_component_init_accepts_run_root(tmp_path):
+    checkpoint = tmp_path / "wm_run" / "checkpoints" / "latest.ckpt"
+    checkpoint.parent.mkdir(parents=True)
+    torch.save(
+        {"state_dicts": {"world_model": {"weight": torch.ones(1)}}},
+        checkpoint,
+    )
+    runner = object.__new__(CotrainRunner)
+    runner.cfg = OmegaConf.create(
+        {"learner": {"init_ckpt": {"world_model": str(tmp_path / "wm_run")}}}
+    )
+
+    state = runner._load_init_ckpt("learner.init_ckpt")
+
+    torch.testing.assert_close(state["world_model"]["weight"], torch.ones(1))
+
+
 def test_cotrain_run_sets_resume_global_step_before_metric_logger(monkeypatch):
     import dreamervla.runners.cotrain_runner as cotrain_runner_module
 
@@ -600,6 +658,49 @@ def test_cotrain_run_sets_resume_global_step_before_metric_logger(monkeypatch):
     assert runner._metric_logger is None
     assert runner._metric_resume_step == 7
     assert resume_setter_calls == [7]
+
+
+def test_cotrain_run_saves_after_evaluation_metrics(monkeypatch):
+    import dreamervla.runners.cotrain_runner as cotrain_runner_module
+
+    class _Cluster:
+        def __init__(self, _cfg):
+            pass
+
+        def require_single_node(self):
+            return None
+
+        def shutdown(self):
+            return None
+
+    runner = object.__new__(CotrainRunner)
+    runner.cfg = OmegaConf.create({"cluster": {}, "training": {"resume": False}})
+    runner.config = runner.cfg
+    runner.global_step = 0
+    runner._pending_manual_resume_payload = None
+    runner._manual_resume_payload = lambda: None
+    runner._build_groups = lambda _cluster: {}
+    runner._target_group_names = lambda: []
+    runner._global_steps = lambda: 1
+    runner._eval_initial_global_step = lambda: False
+    runner._print_training_summary = lambda: None
+    runner._run_global_step = lambda _groups, _step: {"train/loss": 1.0}
+    runner._maybe_evaluate_resident_policy = lambda _groups, _step: {"eval/success_rate": 0.75}
+    saved_metrics: list[dict[str, float]] = []
+    runner._maybe_save_manual_checkpoint = lambda _groups, _step, metrics: saved_metrics.append(
+        dict(metrics)
+    )
+    runner.log_metrics = lambda _metrics, step: None
+    runner._report_global_step_progress = lambda **_kwargs: None
+    monkeypatch.setattr(cotrain_runner_module, "Cluster", _Cluster)
+
+    runner.run()
+
+    assert saved_metrics[0]["eval/success_rate"] == 0.75
+
+
+def test_optional_cotrain_resume_ignores_missing_path(tmp_path):
+    assert _load_manual_resume_payload(str(tmp_path / "missing"), required=False) is None
 
 
 def test_cotrain_manual_loader_rejects_future_format_version(tmp_path):

@@ -1059,7 +1059,21 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
     _require_non_negative_int_if_present(cfg, "manual_cotrain.task_id")
     _require_non_negative_if_present(cfg, "manual_cotrain.env_rollout_timeout_s")
     _require_non_negative_int_if_present(cfg, "manual_cotrain.checkpoint_every")
-    _require_positive_if_present(cfg, "manual_cotrain.keep_last_checkpoints")
+    if OmegaConf.select(cfg, "manual_cotrain.keep_last_checkpoints", default=None) is not None:
+        raise ValueError(
+            "manual_cotrain.keep_last_checkpoints was removed; configure checkpoint.topk.k"
+        )
+    _require_non_negative_int_if_present(cfg, "checkpoint.topk.k")
+    topk_k = int(OmegaConf.select(cfg, "checkpoint.topk.k", default=0) or 0)
+    if topk_k > 0:
+        topk_mode = str(OmegaConf.select(cfg, "checkpoint.topk.mode", default=""))
+        if topk_mode not in {"min", "max"}:
+            raise ValueError("checkpoint.topk.mode must be one of: min, max")
+        monitor_key = str(
+            OmegaConf.select(cfg, "checkpoint.topk.monitor_key", default="") or ""
+        ).strip()
+        if not monitor_key:
+            raise ValueError("checkpoint.topk.monitor_key must be non-empty when top-k is enabled")
     _require_positive_if_present(cfg, "manual_cotrain.global_steps")
     _require_positive_if_present(cfg, "manual_cotrain.learner_update_step")
     _require_positive_if_present(
