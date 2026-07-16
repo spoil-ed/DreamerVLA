@@ -1,0 +1,48 @@
+# @package _global_
+name: reproduce_train_dreamer
+mode: train_dreamer
+data_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}
+dry_run: false
+
+profile:
+  id: cu124-h100-libero-goal-v1
+  task: libero_goal
+  num_gpus: 8
+  gpus: 0,1,2,3,4,5,6,7
+
+asset_manifest_path: ${data_root}/reproduction/manifests/assets.json
+state_path: ${data_root}/reproduction/manifests/training_state.json
+output_root: ${data_root}/outputs/reproduction/libero_goal
+
+stages:
+  world_model:
+    launcher: scripts/experiments/world_model_training/train.sh
+    experiment: dreamer-wm
+    run_root: ${output_root}/world_model
+    budget_key: training.warmup_replay_epochs
+    budget: 30
+    selection:
+      metric_name: loss
+      mode: min
+  classifier:
+    launcher: scripts/experiments/classifier_training/train.sh
+    experiment: classifier_official_upper_bound
+    run_root: ${output_root}/classifier
+    budget_key: training.num_epochs
+    budget: 8
+    selection:
+      metric_name: f1
+      mode: max
+  dreamer:
+    launcher: scripts/experiments/cotrain/train.sh
+    experiment: openvla_libero
+    run_root: ${output_root}/dreamer
+    budget_key: manual_cotrain.global_steps
+    budget: 20000
+
+frozen_assertions:
+  _target_: dreamervla.runners.DreamerRunner
+  manual_cotrain:
+    training_mode: failure_imagined_rl
+    learner_updates_enabled: false
+

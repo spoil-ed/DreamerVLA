@@ -167,7 +167,8 @@ pass.
 Validation proves that reward and hidden directories have the same files, demos, and
 trajectory lengths; every sidecar is complete; and `preprocess_config.json` matches
 the task contract. The external observation sidecar is `hidden_token [T,256,4096]`
-with history 1 and action chunk size 8. Decoder action slots are not accepted as an
+with history 1 and storage stride (`preprocess_config.chunk_size`) 1. The downstream
+task action chunk size remains 8. Decoder action slots are not accepted as an
 observation sidecar.
 
 After all stages pass, the workflow writes

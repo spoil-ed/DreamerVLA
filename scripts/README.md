@@ -64,6 +64,11 @@ The workflow implementation steps are:
 
 ## Experiment entrypoints
 
+Docker reproduction:
+
+- `reproduce/01_prepare_assets.sh`
+- `reproduce/02_train_dreamer.sh`
+
 Mainline rollout collection:
 
 - `experiments/collect_rollouts/train.sh`

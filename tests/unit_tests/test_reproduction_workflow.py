@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 
 import pytest
+from hydra import compose, initialize_config_dir
+from omegaconf import OmegaConf
 
 from dreamervla.runtime.reproduction import (
     ReproductionError,
@@ -13,6 +15,18 @@ from dreamervla.runtime.reproduction import (
     select_metric_checkpoint,
     sha256_file,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _compose_reproduction(name: str):
+    with initialize_config_dir(
+        config_dir=str(PROJECT_ROOT / "configs" / "scripts"),
+        version_base=None,
+    ):
+        cfg = compose(config_name=f"reproduce/{name}")
+    OmegaConf.resolve(cfg)
+    return cfg
 
 
 def test_sha256_file_hashes_file_content(tmp_path: Path) -> None:
@@ -150,3 +164,118 @@ def test_decide_stage_rejects_completed_state_mismatch(
             run_root=tmp_path / "run",
             budget=30,
         )
+
+
+def test_prepare_reproduction_config_pins_public_assets_and_hardware() -> None:
+    cfg = _compose_reproduction("prepare_assets")
+
+    assert cfg.profile.task == "libero_goal"
+    assert cfg.profile.num_gpus == 8
+    assert cfg.profile.gpu_name == "NVIDIA H100 80GB HBM3"
+    assert cfg.assets.openvla.repo == "Haozhan72/Openvla-oft-SFT-libero-goal-traj1"
+    assert cfg.assets.openvla.revision == "d20e1d447dfd87c0daa121b0739e2a379f7fe334"
+    assert cfg.assets.libero.repo == "yifengzhu-hf/LIBERO-datasets"
+    assert cfg.preprocess.ngpu == 8
+    assert str(cfg.preprocess.gpus) == "0,1,2,3,4,5,6,7"
+
+
+def test_train_reproduction_config_has_release_budgets_and_selection() -> None:
+    cfg = _compose_reproduction("train_dreamer")
+
+    assert cfg.profile.task == "libero_goal"
+    assert cfg.stages.world_model.budget == 30
+    assert cfg.stages.world_model.budget_key == "training.warmup_replay_epochs"
+    assert cfg.stages.world_model.selection.metric_name == "loss"
+    assert cfg.stages.world_model.selection.mode == "min"
+    assert cfg.stages.classifier.budget == 8
+    assert cfg.stages.classifier.selection.metric_name == "f1"
+    assert cfg.stages.classifier.selection.mode == "max"
+    assert cfg.stages.dreamer.budget == 20000
+    assert cfg.stages.dreamer.experiment == "openvla_libero"
+    assert cfg.frozen_assertions.manual_cotrain.learner_updates_enabled is False
+    assert cfg.frozen_assertions.manual_cotrain.training_mode == "failure_imagined_rl"
+
+
+def test_reproduction_shell_scripts_are_thin_python_entrypoints() -> None:
+    scripts = PROJECT_ROOT / "scripts" / "reproduce"
+
+    for name, config in (
+        ("01_prepare_assets.sh", "reproduce/prepare_assets"),
+        ("02_train_dreamer.sh", "reproduce/train_dreamer"),
+    ):
+        text = (scripts / name).read_text(encoding="utf-8")
+        assert "exec python -m dreamervla.launchers.reproduce" in text
+        assert f"--config-name {config}" in text
+        assert "for " not in text
+        assert "case " not in text
+
+
+def test_build_workflow_accepts_hydra_overrides() -> None:
+    from dreamervla.launchers.reproduce import build_workflow
+
+    workflow = build_workflow(
+        [
+            "--config-name",
+            "reproduce/train_dreamer",
+            "dry_run=true",
+            "profile.num_gpus=4",
+        ]
+    )
+
+    assert workflow.config_name == "reproduce/train_dreamer"
+    assert workflow.dry_run is True
+    assert workflow.cfg.profile.num_gpus == 4
+
+
+def test_build_stage_command_constructs_fresh_wm_command(tmp_path: Path) -> None:
+    from dreamervla.launchers.reproduce import build_stage_command
+
+    cfg = _compose_reproduction("train_dreamer")
+    cfg.output_root = str(tmp_path / "outputs")
+    cfg.stages.world_model.run_root = str(tmp_path / "outputs" / "world_model")
+
+    command = build_stage_command(
+        cfg,
+        "world_model",
+        action="fresh",
+        selected_checkpoints={},
+    )
+
+    assert command[:4] == (
+        "bash",
+        str(PROJECT_ROOT / "scripts/experiments/world_model_training/train.sh"),
+        "--config",
+        "dreamer-wm",
+    )
+    assert "training.warmup_replay_epochs=30" in command
+    assert f"training.out_dir={tmp_path / 'outputs' / 'world_model'}" in command
+    assert "ngpu=8" in command
+    assert "gpus=0,1,2,3,4,5,6,7" in command
+
+
+def test_build_stage_command_constructs_resumable_frozen_dreamer(tmp_path: Path) -> None:
+    from dreamervla.launchers.reproduce import build_stage_command
+
+    cfg = _compose_reproduction("train_dreamer")
+    run_root = tmp_path / "dreamer"
+    cfg.stages.dreamer.run_root = str(run_root)
+    wm = tmp_path / "wm.ckpt"
+    classifier = tmp_path / "classifier.ckpt"
+    wm.touch()
+    classifier.touch()
+
+    command = build_stage_command(
+        cfg,
+        "dreamer",
+        action="resume",
+        selected_checkpoints={"world_model": wm, "classifier": classifier},
+    )
+
+    assert "--resume" in command
+    assert str(run_root) in command
+    assert "--wm_ckpt" in command
+    assert str(wm) in command
+    assert "--cls_ckpt" in command
+    assert str(classifier) in command
+    assert "manual_cotrain.global_steps=20000" in command
+    assert not any(item.startswith("training.out_dir=") for item in command)

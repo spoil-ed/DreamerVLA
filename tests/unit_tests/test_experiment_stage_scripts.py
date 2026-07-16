@@ -76,6 +76,7 @@ def test_world_model_training_entrypoint_defers_model_choice_to_hydra() -> None:
         "download",
         "install",
         "preprocess",
+        "reproduce",
     }
     assert (root / "configs" / "experiment" / "dino-wm.yaml").is_file()
     assert (root / "configs" / "experiment" / "dreamer-wm.yaml").is_file()
