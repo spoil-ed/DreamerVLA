@@ -9,7 +9,6 @@ This directory is organized by document lifetime and reader intent.
 - [`install.md`](install.md): installation and environment setup.
 - [`repository_structure.md`](repository_structure.md): repository layout.
 - [`data_layout.md`](data_layout.md): runtime data and artifact layout.
-- [`debug_log.md`](debug_log.md): local debug log kept at the docs root for active editing.
 - [`reference/routes.md`](reference/routes.md): experiment/runner route matrix.
 
 ## Directories
@@ -19,5 +18,4 @@ This directory is organized by document lifetime and reader intent.
 - [`reference/`](reference/): structured references such as metrics and model/dataset
   notes.
 - [`tutorials/experiments/`](tutorials/experiments/): runnable experiment recipes.
-- [`reports/`](reports/): audits and review records.
 - [`papers/`](papers/): LaTeX paper workspaces, kept as self-contained projects.

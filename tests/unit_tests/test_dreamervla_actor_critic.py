@@ -1,16 +1,16 @@
 import torch
 from omegaconf import OmegaConf
 
+from dreamervla.algorithms.critic.twohot_critic import (
+    ReturnPercentileTracker,
+    TwohotCritic,
+    symexp,
+)
 from dreamervla.algorithms.dreamervla import (
     _actor_action_for_world_model,
     _actor_action_to_env_scale,
     compute_replay_lambda_returns,
     normalize_returns_for_actor_critic,
-)
-from dreamervla.algorithms.critic.twohot_critic import (
-    ReturnPercentileTracker,
-    TwohotCritic,
-    symexp,
 )
 
 

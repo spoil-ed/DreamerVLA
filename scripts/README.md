@@ -4,18 +4,17 @@ Shell files in this directory are entrypoints, not configuration sources. Traini
 evaluation defaults live in `configs/`; pass changes as Hydra `key=value` overrides.
 Repository data paths are described in `docs/data_layout.md`.
 
-Upload one completed offline W&B run after authenticating once:
+On a networked CPU host that can read the GPU host's shared run directory, stream an
+active offline W&B run after authenticating once:
 
 ```bash
 wandb login
-bash scripts/utils/wandb_sync.sh /path/to/run_root/wandb
+wandb beta sync --live /path/to/run_root/wandb
 ```
 
-For noninteractive authentication, provide `WANDB_API_KEY` instead. No entity or
-project argument is required because the uploader reads that metadata from the
-offline run.
-
-- `utils/wandb_sync.sh`
+For noninteractive authentication, provide `WANDB_API_KEY` instead. Use W&B 0.24.1
+or newer and start the command after `wandb/offline-run-*` exists. No repository
+wrapper is provided; W&B reads entity, project, and run identity from the stream.
 
 Training and evaluation entries under `scripts/experiments/` select recipes directly
 from `configs/experiment/`. The only configs under `configs/scripts/` are grouped as

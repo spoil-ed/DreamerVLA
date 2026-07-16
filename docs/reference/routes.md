@@ -10,7 +10,7 @@ source of truth; this table is a reader index.
 | collect | `experiment=collect_rollouts` | `RolloutCollectionRunner` | current; Ray backend |
 | world-model warmup | `experiment=dreamer-wm` or `dino-wm` | WM runner selected by recipe | current |
 | classifier warmup | `experiment=classifier_official_upper_bound` | `SuccessClassifierTrainingRunner` | current |
-| cotrain | `experiment=openvla_libero` | `CotrainRunner` | current; Ray backend |
+| cotrain | `experiment=openvla_libero` | `DreamerRunner` | current; frozen WM/CLS; Ray backend |
 | eval | `experiment=eval_cotrain` | `LIBEROVLAEvaluationRunner` | current |
 
 Collection:
@@ -27,6 +27,7 @@ The reduced shell surface uses `scripts/experiments/cotrain/train.sh` and
 
 | Family | Experiments | Runner |
 | --- | --- | --- |
+| full staged cotrain | `openvla_onetraj_libero_cotrain` | `CotrainRunner` |
 | world model | `wm_full_dataset_train` | `WorldModelTrainingRunner` |
 | eval | `eval_libero_vla` | `LIBEROVLAEvaluationRunner` |
 

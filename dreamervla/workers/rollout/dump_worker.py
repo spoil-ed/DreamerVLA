@@ -8,8 +8,10 @@ from typing import Any
 
 from dreamervla.dataset.collection_manifest import (
     append_episode_index_record,
-    read_online_rollout_manifest,
     record_online_rollout_episode,
+)
+from dreamervla.dataset.collection_manifest import (
+    read_online_rollout_manifest as read_online_rollout_manifest,
 )
 from dreamervla.dataset.rollout_dump_writer import (
     RolloutDumpWriter,

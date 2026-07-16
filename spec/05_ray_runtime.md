@@ -11,7 +11,7 @@ learner 分成可并行调度的 runtime group。
 | `ActorGroup` | `EmbodiedFSDPActor` | 训练 VLA policy；FSDP、PPO、optimizer 在这里。 |
 | `RolloutGroup` | `MultiStepRolloutWorker` / inference worker | no-grad policy inference，生成 action chunk 和 forward inputs。 |
 | `EnvGroup` | `RealEnvWorker` / `WMEnvWorker` | 真实环境或 WMEnv step，组装 trajectory。 |
-| `ReplayGroup` | `ReplayWorker` | 可选数据服务，用于 replay、warmup、resume、bootstrap。 |
+| `ReplayGroup` | `ReplayWorker` | 可选临时数据服务，用于 replay、warmup 和 bootstrap；不参与 cotrain resume。 |
 
 ## Placement
 

@@ -23,7 +23,10 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_full_record_exposes_libero_schema_fields():
-    from dreamervla.envs.libero.libero_env import DreamerVLAOnlineTrainEnv, DreamerVLAOnlineTrainEnvConfig
+    from dreamervla.envs.libero.libero_env import (
+        DreamerVLAOnlineTrainEnv,
+        DreamerVLAOnlineTrainEnvConfig,
+    )
 
     cfg = DreamerVLAOnlineTrainEnvConfig(
         task_suite_name="libero_goal", task_id=0, resolution=256, full_record=True

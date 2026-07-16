@@ -6,19 +6,22 @@ checkpoints under `data/checkpoints/`, or call `python -m dreamervla.train` with
 mainline route YAML — and they are expected to take minutes rather than
 seconds.
 
-Layout per the project guide ([../../CLAUDE.md](../../CLAUDE.md)):
+The current suite uses a flat, stage-prefixed layout:
 
 ```text
 e2e_tests/
-  vla/         # VLA SFT end-to-end
-  wm/          # World model end-to-end
-  dreamervla/  # Joint DreamerVLA end-to-end
-  oft/         # OpenVLA-OFT end-to-end
-  classifier/  # LatentSuccessClassifier end-to-end
-  <route>/*.yaml  # e2e Hydra configs, one folder per route
+  test_s1*.py                 # Ray cluster, worker-group, and channel checks
+  test_s2*.py                 # env/replay integration
+  test_s3*.py                 # inference-worker integration
+  test_s4*.py                 # learner and weight-sync integration
+  test_s5*.py                 # learner parity
+  test_s6*.py                 # cold-start and real OpenVLA-OFT collection
+  test_cotrain_smoke.py       # cotrain subprocess smoke
+  test_scheduler_ray_smoke.py # scheduler smoke
+  test_world_model_env_ray_smoke.py
 ```
 
-This directory is currently empty — all 28 existing test files were classified
-as `unit_tests/` during the 2026-05-27 sweep (no full-route execution detected,
-all use synthetic tensors / mocks / tmp_path). Add e2e tests here when a
-regression genuinely requires real env or real ckpts to catch.
+These tests are opt-in and may require Ray, CUDA, LIBERO, real checkpoints, or
+explicit environment gates. Keep dependency-free synthetic coverage under
+`tests/unit_tests/`; add coverage here when a regression requires a real process,
+distributed backend, environment, or checkpoint boundary to catch.

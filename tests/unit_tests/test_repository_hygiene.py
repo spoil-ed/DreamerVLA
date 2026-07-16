@@ -556,6 +556,29 @@ def test_claude_brief_delegates_to_current_agent_guidance() -> None:
     assert "one top-level YAML per training route" not in claude_text
 
 
+def test_offline_wandb_uses_official_live_sync() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+
+    for relative in (
+        "dreamervla/launchers/wandb_sync.py",
+        "scripts/utils/wandb_sync.sh",
+        "tests/unit_tests/test_wandb_sync_launcher.py",
+    ):
+        assert not (project_root / relative).exists()
+
+    active_docs = (
+        "README.md",
+        "README.zh-CN.md",
+        "configs/README.md",
+        "scripts/README.md",
+        "docs/tutorials/experiments/EXPLAINED.md",
+    )
+    for relative in active_docs:
+        text = (project_root / relative).read_text(encoding="utf-8")
+        assert "wandb beta sync --live" in text, relative
+        assert "scripts/utils/wandb_sync.sh" not in text, relative
+
+
 def test_active_sources_do_not_reference_removed_action_head_variant() -> None:
     project_root = Path(__file__).resolve().parents[2]
     removed_variant = "pi0" + "_query"

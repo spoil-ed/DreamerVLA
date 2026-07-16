@@ -1,7 +1,6 @@
 """The classifier builder requires config-selected Hydra construction."""
 
 import pytest
-
 from omegaconf import OmegaConf
 
 from dreamervla.algorithms.critic import LatentSuccessClassifier, build_classifier

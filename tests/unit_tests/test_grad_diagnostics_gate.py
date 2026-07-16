@@ -18,8 +18,8 @@ from omegaconf import OmegaConf
 from torch import nn
 
 import dreamervla.algorithms.dreamervla as dvla
-from dreamervla.algorithms.dreamervla import imagine_actor_critic_step
 from dreamervla.algorithms.critic.twohot_critic import ReturnPercentileTracker, TwohotCritic
+from dreamervla.algorithms.dreamervla import imagine_actor_critic_step
 
 D_LAT = 4  # world-model latent / actor-critic feature dim
 A_DIM = 3  # action dim

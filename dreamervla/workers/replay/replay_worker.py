@@ -184,12 +184,12 @@ class ReplayWorker(Worker):
         )
 
     def sampling_state_dict(self) -> dict[str, int]:
-        """Return cursor-only replay state suitable for small checkpoints."""
+        """Return cursor-only replay state for transfer or diagnostics."""
 
         return self._replay().sampling_state_dict()
 
     def load_sampling_state_dict(self, state: dict[str, Any]) -> None:
-        """Restore cursor-only replay state after deterministic offline seeding."""
+        """Load cursor-only replay state after deterministic offline seeding."""
 
         self._replay().load_sampling_state_dict(state)
 

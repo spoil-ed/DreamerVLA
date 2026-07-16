@@ -17,35 +17,25 @@ collect -> seed replay + warmup world model/classifier -> online cotrain -> eval
 | 采集 | `collect_rollouts` | `RolloutCollectionRunner` |
 | WM warmup | `dreamer-wm` / `dino-wm` | `WorldModelTrainingRunner` / `DinoTokenWorldModelTrainingRunner` |
 | classifier warmup | `classifier_official_upper_bound` | `SuccessClassifierTrainingRunner` |
-| cotrain | `openvla_libero` | `CotrainRunner` |
+| cotrain | `openvla_libero` | `DreamerRunner` |
 | 评估 | `eval_cotrain` | `LIBEROVLAEvaluationRunner` |
 
 启动流程见 [`04_complete_loop.md`](04_complete_loop.md) 与 [`05_ray_runtime.md`](05_ray_runtime.md)；
 操作配方见 [`../docs/tutorials/experiments/OpenVLA_Onetraj_LIBERO.md`](../docs/tutorials/experiments/OpenVLA_Onetraj_LIBERO.md)。
 
-`openvla_onetraj_libero_cotrain` 的 dreamervla config 用 `defaults` 复用基座
-`openvla_onetraj_libero_cotrain_base`；二者都是 canonical `CotrainRunner` 配置层，
-不是 Ray/non-Ray 两条公开路线。
-
-## 预主线因果测试（不是主线）
-
-`python -m dreamervla.launchers.frozen_model_pre_mainline` 执行一条独立门禁：
-
-```
-official LIBERO -> WM upper bound + classifier upper bound
-                -> freeze WM/CLS -> policy-only imagined RL -> matched real eval
-```
-
-对应 experiments 是 `wm_official_upper_bound`、
-`classifier_official_upper_bound` 和 `dreamervla_frozen_models_rl`；最后仍由
-`eval_libero_vla` 对原始 VLA 与 RL checkpoint 做相同协议的真实环境评估。只有
-success rate 严格提升、policy 确实更新且 WM/CLS 完全不变时通过。该测试用于证明
-冻结上限模型提供的 imagined-RL 信号有效，不改变上面的唯一正式主线。完整契约见
-[`09_frozen_model_pre_mainline.md`](09_frozen_model_pre_mainline.md)。
+`DreamerRunner` 是冻结 WM/CLS、只更新 actor 的 failure-conditioned imagined-RL
+特化；它复用 `CotrainRunner` 的 Ray loop，不维护第二套 backend。
 
 ## 支线（非主线，config 保留为可选项 / 工具，勿当主线）
 
 这些 config 仍可用，但**不在主线数据流里**：
+
+| 路线 | experiment | runner |
+| --- | --- | --- |
+| 完整 staged cotrain | `openvla_onetraj_libero_cotrain` | `CotrainRunner` |
+
+该 staged 路线包含 encoder SFT、WM/classifier learner update、imagined rollout 和
+actor update；它与主线共享 Ray group 实现，但不是 `openvla_libero` 的别名。
 
 **OpenVLA-OFT 阶段工具**——训练主线消费的 OFT VLA/WM/classifier，本身不是 cotrain 流程：
 

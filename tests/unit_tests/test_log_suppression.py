@@ -13,10 +13,9 @@ def test_sitecustomize_suppresses_gym_deprecation_notice() -> None:
 
     proc = subprocess.run(
         [sys.executable, "-c", "import gym; print('imports_ok')"],
+        capture_output=True,
         check=True,
         env=env,
-        stderr=subprocess.PIPE,
-        stdout=subprocess.PIPE,
         text=True,
     )
 

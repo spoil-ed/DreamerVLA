@@ -250,9 +250,9 @@ def test_base_runner_checkpoint_uses_state_dict_hooks(tmp_path: Path) -> None:
 
 
 def test_vla_family_runners_inherit_shared_base_helpers() -> None:
-    from dreamervla.runtime.world_model_training_base import WorldModelTrainingBase
     from dreamervla.runners.libero_vla_evaluation_runner import LIBEROVLAEvaluationRunner
     from dreamervla.runtime.libero_vla_evaluation_base import LIBEROVLAEvaluationBase
+    from dreamervla.runtime.world_model_training_base import WorldModelTrainingBase
 
     for cls in (
         LIBEROVLAEvaluationBase,

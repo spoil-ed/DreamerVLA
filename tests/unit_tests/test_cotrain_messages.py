@@ -5,7 +5,6 @@ import pytest
 import torch
 
 from dreamervla.workers.cotrain.messages import (
-    ObservationMsg,
     RolloutResultMsg,
     StopMsg,
     TrajectoryShard,

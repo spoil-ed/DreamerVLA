@@ -24,7 +24,7 @@ bash scripts/download_assets.sh only=[20_libero_dataset] env.LIBERO_SUITES=liber
 
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   bash scripts/experiments/cotrain/train.sh \
-  --config openvla_onetraj_libero_cotrain \
+  --config openvla_libero \
   --wm_ckpt /path/to/wm_warmup.ckpt \
   --cls_ckpt /path/to/classifier_warmup.ckpt
 
@@ -44,33 +44,13 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   bash scripts/experiments/classifier_training/train.sh
 ```
 
-## Pre-Mainline Frozen-Model Feasibility Test
-
-Before entering the main cotrain workflow, the isolated causal test trains WM
-and classifier upper bounds from official LIBERO data, freezes both modules, and
-trains only the DreamerVLA policy through imagined LUMOS rollouts. This first
-proof route is intentionally `libero_goal`-only:
-
-```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-  python -m dreamervla.launchers.frozen_model_pre_mainline task=goal ngpu=8
-```
-
-It then evaluates the unmodified one-trajectory OpenVLA-OFT checkpoint and the
-learned policy with identical real-LIBERO metadata. The gate passes only for a
-strict success-rate improvement, an updated policy hash, at least one applied
-policy step, unchanged WM/CLS hashes, and exact evaluated-checkpoint hash
-binding. Use `stage=wm|classifier|rl|eval` to resume by stage or `dry_run=true`
-to inspect commands. This test does not replace the
-`collect -> warmup -> online cotrain` mainline.
-
 ## Reproduction Route
 
 1. Install the environment with `scripts/install_env.sh`.
 2. Download OpenVLA-OFT one-trajectory checkpoints and LIBERO data with
    `scripts/download_assets.sh`.
 3. Train with `scripts/experiments/cotrain/train.sh --config
-   openvla_onetraj_libero_cotrain`, explicitly supplying the warmup WM and
+   openvla_libero`, explicitly supplying the warmup WM and
    classifier checkpoints.
 4. Evaluate an explicit policy checkpoint with
    `scripts/experiments/cotrain/eval.sh`.
@@ -97,7 +77,6 @@ docs/               documentation index, references, tutorials, reports, papers
 | Full WM/CLS cotrain | `bash scripts/experiments/cotrain/train.sh --config openvla_onetraj_libero_cotrain --wm_ckpt <wm-ckpt> --cls_ckpt <cls-ckpt>` |
 | Frozen WM/CLS imagined RL | `bash scripts/experiments/cotrain/train.sh --config openvla_libero --wm_ckpt <wm-ckpt> --cls_ckpt <cls-ckpt>` |
 | Full-dataset WM warmup | `bash scripts/experiments/world_model_training/train.sh` |
-| Pre-mainline frozen WM/CLS policy test | `python -m dreamervla.launchers.frozen_model_pre_mainline task=goal ngpu=8` |
 | Cotrain eval | `bash scripts/experiments/cotrain/eval.sh eval.ckpt_path=<ckpt>` |
 
 Common overrides:
@@ -105,7 +84,7 @@ Common overrides:
 ```bash
 DVLA_DATA_ROOT=data
 bash scripts/experiments/cotrain/train.sh \
-  --config openvla_onetraj_libero_cotrain \
+  --config openvla_libero \
   --wm_ckpt /path/to/wm_warmup.ckpt \
   --cls_ckpt /path/to/classifier_warmup.ckpt \
   manual_cotrain.global_steps=20000
@@ -122,11 +101,16 @@ changes. `configs/scripts/` is reserved for install, download, and preprocess.
 Use `profile=debug` or `profile=smoke` for declared reduced budgets; Runner code
 never rewrites production budgets at runtime.
 
-Upload one completed offline W&B run with:
+On a networked CPU host that can read the GPU host's shared run directory, stream an
+active offline W&B run with the official W&B CLI:
 
 ```bash
-bash scripts/utils/wandb_sync.sh /path/to/run_root/wandb
+wandb login
+wandb beta sync --live /path/to/run_root/wandb
 ```
+
+Start the command after the GPU process has created `wandb/offline-run-*`. Use W&B
+0.24.1 or newer; see the experiment tutorial for crash recovery and legacy layouts.
 
 ## Config Fields
 

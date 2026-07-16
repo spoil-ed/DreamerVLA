@@ -9,8 +9,8 @@ from dreamervla.diagnostics.benchmark_manual_workers import (
     build_synthetic_observation,
     main,
     run_pair_direct_benchmark,
-    run_wm_env_interact_benchmark,
     run_wm_env_direct_benchmark,
+    run_wm_env_interact_benchmark,
 )
 from dreamervla.workers.cotrain.messages import ObservationMsg, RolloutResultMsg
 from dreamervla.workers.rollout.multistep_rollout_worker import MultiStepRolloutWorker

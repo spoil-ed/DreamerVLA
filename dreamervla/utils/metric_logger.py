@@ -171,9 +171,9 @@ class MetricLogger:
                 "reinit": True,
             }
             # W&B cannot resume an offline binary stream in place. Reusing the
-            # ID makes each process a segment of the same logical run; sync the
-            # later segments with `wandb sync --append`. Online mode resumes
-            # directly against the server.
+            # ID makes each process a segment of the same logical run; the
+            # official W&B sync command consumes those segments. Online mode
+            # resumes directly against the server.
             if self.resume and existing_run and self.wandb_mode == "online":
                 if (
                     self.resume_step is not None

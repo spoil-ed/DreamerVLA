@@ -32,7 +32,8 @@ bash scripts/experiments/cotrain/eval.sh eval.ckpt_path=/path/to/checkpoint
 当前仓库导出的关键 Runner 包括：
 
 - `RolloutCollectionRunner`：Ray-backed collection。
-- `CotrainRunner`：当前 staged cotrain 主线。
+- `DreamerRunner`：当前冻结 WM/CLS 的 failure-conditioned imagined-RL 主线。
+- `CotrainRunner`：完整 staged cotrain 支持路线。
 - `WorldModelTrainingRunner`：world model 单组件训练。
 - `SuccessClassifierTrainingRunner`：classifier 单组件训练。
 - `LIBEROVLAEvaluationRunner`：VLA / DreamerVLA 统一评估入口。

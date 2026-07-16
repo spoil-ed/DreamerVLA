@@ -41,14 +41,29 @@ python_files = ["test_*.py"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-# Vendored verbatim from RLinf (Apache-2.0); kept faithful to upstream, not reformatted.
-extend-exclude = ["dreamervla/envs/rlinf_venv.py", "third_party"]
+# Third-party source is read-only and linted upstream.
+extend-exclude = ["third_party"]
 # Apply the exclude even when the file is passed explicitly (e.g. pre-commit hooks).
 force-exclude = true
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# The first part of this module is vendored verbatim from RLinf (Apache-2.0).
+# Keep correctness and import checks active while exempting upstream annotation
+# modernization and abstract-method style.
+"dreamervla/envs/libero/venv.py" = [
+    "B027",
+    "B905",
+    "UP004",
+    "UP006",
+    "UP007",
+    "UP035",
+    "UP037",
+    "UP045",
+]
 
 [tool.ruff.format]
 quote-style = "double"

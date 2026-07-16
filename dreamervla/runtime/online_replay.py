@@ -72,7 +72,7 @@ class OnlineReplay:
         self._classifier_pending_key: tuple[Any, ...] | None = None
 
     def state_dict(self) -> dict[str, Any]:
-        """Return mutable replay contents and cursors for checkpoint resume."""
+        """Return replay contents and cursors for transfer or diagnostics."""
         return {
             "format_version": 1,
             "config": {
@@ -116,7 +116,7 @@ class OnlineReplay:
         }
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
-        """Restore replay contents and cursors from :meth:`state_dict` output."""
+        """Load a replay snapshot produced by :meth:`state_dict`."""
         if not isinstance(state, Mapping):
             raise TypeError("OnlineReplay state must be a mapping")
         episodes_by_task = state.get("episodes_by_task", {})
@@ -223,7 +223,7 @@ class OnlineReplay:
         self._task_sample_cursor = resolved
 
     def sampling_state_dict(self) -> dict[str, int]:
-        """Return only deterministic replay-sampler cursors, without episodes."""
+        """Return deterministic sampler cursors without episode contents."""
 
         return {
             "task_sample_cursor": int(self._task_sample_cursor),
@@ -231,7 +231,7 @@ class OnlineReplay:
         }
 
     def load_sampling_state_dict(self, state: Mapping[str, Any]) -> None:
-        """Restore lightweight sampler cursors after deterministic replay seeding."""
+        """Load sampler cursors after deterministic replay seeding."""
 
         task_cursor = int(state.get("task_sample_cursor", 0))
         initial_cursor = int(state.get("initial_condition_cursor", 0))

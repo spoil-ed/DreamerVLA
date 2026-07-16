@@ -1133,6 +1133,13 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         self.distributed.barrier()
         self.distributed.cleanup()
 
+    def teardown_after_setup_failure(self) -> None:
+        """Clean up a partial setup without entering a cross-rank barrier."""
+        try:
+            BaseRunner.teardown(self)
+        finally:
+            self.distributed.cleanup()
+
     # ----------------------- BaseRunner exclusions ------------------
 
     # Datasets carry the in-memory demo cache (multi-GB); keep them out of

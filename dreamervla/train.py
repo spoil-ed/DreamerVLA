@@ -1,6 +1,7 @@
 # ruff: noqa: E402
 from __future__ import annotations
 
+import logging
 import os
 
 import hydra
@@ -11,6 +12,8 @@ from dreamervla.config_resolvers import register_dreamervla_resolvers
 from dreamervla.runners.base_runner import BaseRunner
 
 register_dreamervla_resolvers()
+
+logger = logging.getLogger(__name__)
 
 
 def _auto_apply_distributed(cfg: DictConfig) -> None:
@@ -39,7 +42,14 @@ def run(cfg: DictConfig) -> None:
     cfg = validate_cfg(cfg)
     runner_cls = hydra.utils.get_class(cfg._target_)
     runner: BaseRunner = runner_cls(cfg)
-    runner.setup()
+    try:
+        runner.setup()
+    except BaseException:
+        try:
+            runner.teardown_after_setup_failure()
+        except BaseException:
+            logger.exception("Runner cleanup failed after setup error")
+        raise
     try:
         runner.execute()
     finally:

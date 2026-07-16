@@ -16,7 +16,7 @@
 | `EmbodiedFSDPActor` | ActorGroup 内的 FSDP actor worker。 |
 | `LearnerGroup` | world model 与 classifier/reward model training。 |
 | `LearnerWorker` | LearnerGroup 内部 worker。 |
-| `ReplayGroup` / `ReplayWorker` | 可选 replay service，用于数据、warmup、resume、bootstrap。 |
+| `ReplayGroup` / `ReplayWorker` | 可选临时 replay service，用于数据、warmup 和 bootstrap；不参与 cotrain resume。 |
 
 ## Package Roles
 

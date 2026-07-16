@@ -6,7 +6,6 @@ import os
 import subprocess
 import sys
 import textwrap
-from types import SimpleNamespace
 from typing import Any
 
 import pytest

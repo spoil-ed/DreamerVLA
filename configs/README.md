@@ -48,10 +48,11 @@ event file in the same `tensorboard/` directory and purges the abandoned tail at
 the restored step. W&B persists its stable ID in `wandb/run_id.txt`; online mode
 resumes that run directly and, on SDKs with `resume_from`, truncates its abandoned
 tail at the restored step. Offline mode writes one local `offline-run-*` segment per
-process with the same ID. Upload every segment for one logical run with one command:
+process with the same ID. On a networked CPU host that shares the run directory,
+stream the active logical run with the official W&B CLI:
 
 ```bash
-bash scripts/utils/wandb_sync.sh /path/to/run_root/wandb
+wandb beta sync --live /path/to/run_root/wandb
 ```
 
 ## Entry Points

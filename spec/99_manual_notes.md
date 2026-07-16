@@ -206,8 +206,12 @@ checkpoints/  wandb/  tensorboard/  logs/  video/  diagnostics/  .hydra/
 - 新 checkpoint 统一写入 `checkpoints/`；可以兼容读取历史 `ckpt/`，但不能继续产生新的
   legacy 布局。
 - checkpoint 必须保存该路线继续训练所需的模型、optimizer、global step/epoch、best metric、
-  classifier threshold、replay/sampling state 等实际存在的状态。只加载模型权重然后从第 0 步
-  重开不属于 resume。
+  classifier threshold 和 RNG 等持久状态。只加载模型权重然后从第 0 步重开不属于 resume。
+- Replay 是临时运行态，不得写入 cotrain checkpoint，也不恢复 replay sampling cursor；历史
+  checkpoint 中的 replay 字段一律忽略。Cotrain 只支持在完整 global-step 边界 resume，恢复后
+  创建新的内存 replay，并按当前 Hydra 实验的数据流从新一轮真实轨迹开始积累或替换。
+- `failure_imagined_rl` resume 后不保留历史 failure anchors；如果新一轮真实轨迹没有失败样本，
+  按现有语义跳过该步 imagined policy update。
 - cotrain checkpoint 使用 `checkpoints/global_step_<N>/manual_cotrain.ckpt`，并维护规范的
   `checkpoints/latest.ckpt` 指针或副本。
 

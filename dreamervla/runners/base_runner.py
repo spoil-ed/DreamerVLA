@@ -1031,6 +1031,16 @@ class BaseRunner(ABC):
                 rep.close()
         self.finish_metric_logger()
 
+    def teardown_after_setup_failure(self) -> None:
+        """Release partially initialized local and distributed resources."""
+        try:
+            self.teardown()
+        finally:
+            distributed = getattr(self, "distributed", None)
+            cleanup = getattr(distributed, "cleanup", None)
+            if callable(cleanup):
+                cleanup()
+
     def _console_state_get(self) -> dict:
         # Lazily build + cache the console state. All knobs are Hydra overrides
         # (no config file required; read via OmegaConf.select with defaults):

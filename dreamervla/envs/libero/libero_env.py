@@ -20,11 +20,25 @@ from __future__ import annotations
 
 import copy
 import os
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, replace
+from typing import Any, Literal
 
 import numpy as np
+from libero.libero import benchmark as libero_benchmark
+from PIL import Image
 
-from dreamervla.envs.libero.utils import get_libero_image, quat2axisangle
+from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
+from dreamervla.envs.libero.utils import (
+    TASK_MAX_STEPS,
+    get_libero_dummy_action,
+    get_libero_env,
+    get_libero_image,
+    quat2axisangle,
+    resize_hwc_uint8,
+)
 from dreamervla.envs.libero.venv import ReconfigureSubprocEnv
+from dreamervla.utils.episode_end import resolve_episode_end
 
 
 def _make_offscreen_env_fn(bddl_file_name, camera_heights, camera_widths, seed):
@@ -491,25 +505,6 @@ class LiberoEnv:
         except Exception:
             pass
         return False
-
-
-from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, replace
-from typing import Any, Literal
-
-import numpy as np
-from libero.libero import benchmark as libero_benchmark
-from PIL import Image
-
-from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
-from dreamervla.envs.libero.utils import resize_hwc_uint8
-from dreamervla.envs.libero.utils import (
-    TASK_MAX_STEPS,
-    get_libero_dummy_action,
-    get_libero_env,
-    quat2axisangle,
-)
-from dreamervla.utils.episode_end import resolve_episode_end
 
 ACTION_LOW = np.array(
     [-0.9375, -0.9375, -0.9375, -0.24214286, -0.375, -0.36428571, -1.0],

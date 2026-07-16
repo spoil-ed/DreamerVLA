@@ -110,11 +110,50 @@ TensorBoard events: `${training.out_dir}/tensorboard`; W&B run files:
 ```bash
 tensorboard --logdir "${OUT_DIR}/tensorboard" --host 0.0.0.0 --port 6006
 ssh -L 6006:localhost:6006 user@host        # remote: forward then open localhost:6006
-bash scripts/utils/wandb_sync.sh "${OUT_DIR}/wandb"
 ```
 
-The uploader discovers every offline segment below that W&B directory, verifies
-that they share one run ID, and appends only segments that were not synced yet.
+### Live-sync an offline GPU run from a CPU host
+
+Use this route when the GPU host cannot reach W&B, but a networked CPU host can read
+the same `${OUT_DIR}` through a shared filesystem. Keep the GPU training process in
+offline mode:
+
+```bash
+logger=tensorboard_wandb runner.logger.wandb_mode=offline
+```
+
+After the GPU process creates `${OUT_DIR}/wandb/offline-run-*`, authenticate once on
+the CPU host and run W&B's official live sync command:
+
+```bash
+wandb login
+wandb beta sync --live "${OUT_DIR}/wandb"
+```
+
+`--live` tails the growing `.wandb` stream and normally exits after the GPU writer
+finishes cleanly. It is a long-running command, not a periodic one-shot upload. The
+CPU host must use W&B 0.24.1 or newer; do not use the yanked 0.24.0 release. For
+noninteractive authentication, set `WANDB_API_KEY` on the CPU host instead of
+running `wandb login`.
+
+If the GPU process crashes without closing the stream, the beta live command may
+continue waiting. Stop it and upload the available data without live tailing:
+
+```bash
+wandb beta sync "${OUT_DIR}/wandb"
+```
+
+The current canonical directory contains one logical run. Some legacy outputs use
+`log/wandb/wandb/` and may contain unrelated run IDs; for those, pass the exact
+active directory instead of their shared parent:
+
+```bash
+wandb beta sync --live \
+  "/path/to/log/wandb/wandb/offline-run-YYYYMMDD_HHMMSS-RUN_ID"
+```
+
+The command is currently a beta W&B interface and may change between SDK releases.
+Check `wandb beta sync --help` after upgrading W&B.
 
 "TensorFlow logging" in these recipes means the TensorBoard event writer, not a
 separate TensorFlow backend.

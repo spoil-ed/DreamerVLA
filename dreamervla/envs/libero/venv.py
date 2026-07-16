@@ -24,18 +24,22 @@
 
 from __future__ import annotations
 
-import cloudpickle
 import ctypes
-import gym
-import numpy as np
+import multiprocessing
+import os
 import time
-
 from abc import ABC, abstractmethod
 from collections import OrderedDict
+from collections.abc import Iterable, Sequence
 from multiprocessing import Array, Pipe, connection
 from multiprocessing.context import Process
 from typing import Any, Callable, List, Optional, Tuple, Union
 
+import cloudpickle
+import gym
+import numpy as np
+
+from dreamervla.utils.egl_device import apply_egl_device_regime
 
 gym_old_venv_step_type = Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
 gym_new_venv_step_type = Tuple[
@@ -967,11 +971,6 @@ class SubprocVectorEnv(BaseVectorEnv):
         return obs
 
 # DreamerVLA LIBERO-specific vector env adapters.
-import multiprocessing
-import os
-from collections.abc import Iterable, Sequence
-
-from dreamervla.utils.egl_device import apply_egl_device_regime
 
 def _reconfigure_worker(
     parent: connection.Connection,

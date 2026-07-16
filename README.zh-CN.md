@@ -27,7 +27,7 @@ bash scripts/download_assets.sh only=[20_libero_dataset] env.LIBERO_SUITES=liber
 
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   bash scripts/experiments/cotrain/train.sh \
-  --config openvla_onetraj_libero_cotrain \
+  --config openvla_libero \
   --wm_ckpt /path/to/wm_warmup.ckpt \
   --cls_ckpt /path/to/classifier_warmup.ckpt
 
@@ -47,33 +47,13 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   bash scripts/experiments/classifier_training/train.sh
 ```
 
-## 主线前冻结模型可行性测试
-
-这条路线先用官方 LIBERO reward HDF5 和
-`hidden_token [256,4096]` sidecar 分别训练 WM 与 classifier 上限，
-随后彻底冻结两者，只通过想象 rollout 训练 DreamerVLA policy。第一版证明路线
-明确只支持 `libero_goal`：
-
-```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-  python -m dreamervla.launchers.frozen_model_pre_mainline task=goal ngpu=8
-```
-
-RL 阶段不创建真实环境，也不存在 WM/CLS optimizer。最后以完全相同的 suite、
-task IDs、初始状态、seed、episode 数、action steps 和最大步数，分别评估原始
-one-trajectory OpenVLA-OFT 与 RL policy。只有真实 LIBERO success rate 严格提升、
-policy hash 改变、至少执行一次 policy optimizer step、WM/CLS hash 全程不变，且
-实际评测 checkpoint 的三类状态 hash 与训练摘要完全绑定时才通过。可用
-`stage=wm|classifier|rl|eval` 分阶段续跑，或用 `dry_run=true`
-查看命令。这是进入正式 cotrain 主线前的因果测试，不替代现有主线。
-
 ## 复现路线
 
 1. `scripts/install_env.sh` 安装环境。
 2. `scripts/download_assets.sh` 下载 OpenVLA-OFT one-trajectory checkpoint 和
    LIBERO 数据。
 3. 使用 `scripts/experiments/cotrain/train.sh --config
-   openvla_onetraj_libero_cotrain` 训练，并显式传入 warmup WM 和 classifier
+   openvla_libero` 训练，并显式传入 warmup WM 和 classifier
    checkpoint。
 4. 使用 `scripts/experiments/cotrain/eval.sh` 评估显式指定的 policy
    checkpoint。
@@ -97,10 +77,15 @@ install、download、preprocess 三类工作流。
 缩短预算时使用 `profile=debug` 或 `profile=smoke`；Runner 不会在运行时改写
 生产配置。冻结 WM/CLS 的 imagined-RL 支持路线仍为 `--config openvla_libero`。
 
-离线 W&B 运行上传到 online 只需：
+在能够读取 GPU 共享运行目录且可以联网的 CPU 节点上，使用 W&B 官方命令持续上传
+活跃的 offline run：
 
 ```bash
-bash scripts/utils/wandb_sync.sh /path/to/run_root/wandb
+wandb login
+wandb beta sync --live /path/to/run_root/wandb
 ```
+
+应在 GPU 进程创建 `wandb/offline-run-*` 后启动，并使用 W&B 0.24.1 或更新版本。
+异常退出恢复和旧目录说明见实验教程。
 
 完整流程见 [SETUP.md](SETUP.md)，路径约定见 [docs/data_layout.md](docs/data_layout.md)。

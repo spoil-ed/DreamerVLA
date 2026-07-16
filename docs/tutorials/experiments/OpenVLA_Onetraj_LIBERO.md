@@ -91,7 +91,7 @@ bash scripts/experiments/cotrain/train.sh \
 ```
 
 该入口选择 `experiment=openvla_libero` 和 public
-`dreamervla.runners.CotrainRunner`。内部仍使用 Ray 的 `LearnerGroup`、`ActorGroup`、
+`dreamervla.runners.DreamerRunner`。内部仍使用 Ray 的 `LearnerGroup`、`ActorGroup`、
 `RolloutGroup` 与 `EnvGroup`，但这些是 backend contract，不是公开路线名称。
 
 Hydra override 可以直接追加到命令后，例如：
@@ -124,7 +124,8 @@ bash scripts/experiments/cotrain/eval.sh \
 | `configs/experiment/dreamer-wm.yaml` / `dino-wm.yaml` | WM recipe 选择 |
 | `configs/classifier/dreamer-cls.yaml` | classifier 角色与结构 |
 | `configs/task/*.yaml` 的 `task.classifier` | classifier model、dataset、输入契约 |
-| `configs/experiment/openvla_libero.yaml` | 完整 cotrain recipe |
+| `configs/experiment/openvla_libero.yaml` | 冻结 WM/CLS 的 failure-conditioned imagined-RL recipe |
+| `configs/experiment/openvla_onetraj_libero_cotrain.yaml` | 完整 staged cotrain recipe |
 | `configs/experiment/eval_cotrain.yaml` | cotrain checkpoint 评估协议 |
 
 参数只在 Hydra 中维护；shell 脚本保持单命令入口，不复制 batch size、learning rate、
