@@ -14,6 +14,22 @@ LIBERO rollouts
 
 ## Quick Start
 
+For the pinned 8xH100 Docker reproduction, see
+[Docker Reproduction](docs/docker_reproduction.md):
+
+```bash
+docker pull spoil/dreamervla:cu124-h100-v1
+docker run --rm --gpus all --ipc=host --network=host --shm-size=100g \
+  -v "$PWD/dreamervla-data:/data" spoil/dreamervla:cu124-h100-v1 \
+  bash scripts/reproduce/01_prepare_assets.sh
+docker run --rm --gpus all --ipc=host --network=host --shm-size=100g \
+  -v "$PWD/dreamervla-data:/data" spoil/dreamervla:cu124-h100-v1 \
+  bash scripts/reproduce/02_train_dreamer.sh
+```
+
+The image contains the source and pinned third-party environment; weights, datasets,
+and outputs stay in the mounted `/data` directory.
+
 ```bash
 git clone <repo> && cd DreamerVLA
 export DVLA_DATA_ROOT=data
@@ -71,6 +87,8 @@ docs/               documentation index, references, tutorials, reports, papers
 
 | Stage | Command |
 | --- | --- |
+| Docker asset preparation | `bash scripts/reproduce/01_prepare_assets.sh` |
+| Docker WM/CLS/Dreamer reproduction | `bash scripts/reproduce/02_train_dreamer.sh` |
 | Install | `bash scripts/install_env.sh` |
 | Download OpenVLA-OFT one-trajectory | `bash scripts/download_assets.sh download.openvla_one_traj=true only=[10_openvla_oft_one_trajectory]` |
 | Download LIBERO | `bash scripts/download_assets.sh only=[20_libero_dataset] env.LIBERO_SUITES=libero_goal` |

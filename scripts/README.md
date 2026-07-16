@@ -17,8 +17,8 @@ or newer and start the command after `wandb/offline-run-*` exists. No repository
 wrapper is provided; W&B reads entity, project, and run identity from the stream.
 
 Training and evaluation entries under `scripts/experiments/` select recipes directly
-from `configs/experiment/`. The only configs under `configs/scripts/` are grouped as
-`install/`, `download/`, and `preprocess/` workflows.
+from `configs/experiment/`. Configs under `configs/scripts/` are grouped as `install/`,
+`download/`, `preprocess/`, and `reproduce/` workflows.
 
 ## Frozen bootstrap surface
 
@@ -68,6 +68,11 @@ Docker reproduction:
 
 - `reproduce/01_prepare_assets.sh`
 - `reproduce/02_train_dreamer.sh`
+
+Both are intended for `spoil/dreamervla:cu124-h100-v1`; see
+`docs/docker_reproduction.md`. The first prepares and validates public assets. The
+second runs WM 30 epochs, CLS 8 epochs, then frozen-WM/CLS Dreamer for 20,000 global
+steps with automatic resume.
 
 Mainline rollout collection:
 

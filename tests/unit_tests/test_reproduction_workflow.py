@@ -307,3 +307,31 @@ def test_dockerignore_excludes_runtime_state_but_keeps_source() -> None:
     assert "third_party" in entries
     assert "dreamervla" not in entries
     assert "configs" not in entries
+
+
+def test_public_docs_register_docker_reproduction_commands() -> None:
+    guide = (PROJECT_ROOT / "docs" / "docker_reproduction.md").read_text(encoding="utf-8")
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    readme_zh = (PROJECT_ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
+
+    for text in (guide, readme, readme_zh):
+        assert "spoil/dreamervla:cu124-h100-v1" in text
+        assert "scripts/reproduce/01_prepare_assets.sh" in text
+        assert "scripts/reproduce/02_train_dreamer.sh" in text
+    assert "WM 30" in guide
+    assert "CLS 8" in guide
+    assert "20,000" in guide
+    assert "third_party" in guide
+    assert "自动续训" in guide
+
+
+def test_docker_publish_workflow_uses_secrets_and_release_tags() -> None:
+    text = (PROJECT_ROOT / ".github/workflows/docker-publish.yml").read_text(encoding="utf-8")
+
+    assert "docker/login-action" in text
+    assert "secrets.DOCKERHUB_USERNAME" in text
+    assert "secrets.DOCKERHUB_TOKEN" in text
+    assert "spoil/dreamervla" not in text
+    assert "cu124-h100-v1" in text
+    assert "sha-" in text
+    assert "push:" in text

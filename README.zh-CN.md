@@ -17,6 +17,22 @@ OpenVLA-OFT 主线的 world-model 观测固定为当前帧 projected
 
 ## 快速开始
 
+固定的 8xH100 Docker 复现流程见
+[Docker 复现文档](docs/docker_reproduction.md)：
+
+```bash
+docker pull spoil/dreamervla:cu124-h100-v1
+docker run --rm --gpus all --ipc=host --network=host --shm-size=100g \
+  -v "$PWD/dreamervla-data:/data" spoil/dreamervla:cu124-h100-v1 \
+  bash scripts/reproduce/01_prepare_assets.sh
+docker run --rm --gpus all --ipc=host --network=host --shm-size=100g \
+  -v "$PWD/dreamervla-data:/data" spoil/dreamervla:cu124-h100-v1 \
+  bash scripts/reproduce/02_train_dreamer.sh
+```
+
+镜像包含源码和固定 revision 的完整 third_party 环境；权重、数据和输出保存在
+挂载的 `/data` 中。训练中断后重新执行第二条命令会自动续训。
+
 ```bash
 git clone <repo> && cd DreamerVLA
 export DVLA_DATA_ROOT=data
@@ -76,8 +92,8 @@ docs/               文档索引、参考、教程、报告和论文草稿
 文件；显式开启 HF 导出后，才会创建同级 `checkpoint_hf/`。评估产物写入
 `outputs/eval/<任务名>/`，输入可以是具体 checkpoint、`checkpoints/` 或训练 run root。
 实验 shell 不保存训练或评估默认参数；入口和默认值由 `configs/experiment/` 中的
-Hydra 配置提供，修改时使用 `key=value` override。`configs/scripts/` 只保留
-install、download、preprocess 三类工作流。
+Hydra 配置提供，修改时使用 `key=value` override。`configs/scripts/` 保留
+install、download、preprocess 和 reproduce 工作流。
 缩短预算时使用 `profile=debug` 或 `profile=smoke`；Runner 不会在运行时改写
 生产配置。冻结 WM/CLS 的 imagined-RL 支持路线仍为 `--config openvla_libero`。
 

@@ -19,8 +19,9 @@ configs/
 └── logger/
 ```
 
-`configs/scripts/` is intentionally separate and contains only `install/`,
-`download/`, and `preprocess/`. Training/evaluation shell entries select
+`configs/scripts/` is intentionally separate and contains `install/`, `download/`,
+`preprocess/`, and the public `reproduce/` orchestration configs. Ordinary
+training/evaluation shell entries select
 `configs/experiment/` recipes directly; experiment `launch` blocks own local
 torchrun/GPU metadata.
 
@@ -59,6 +60,8 @@ wandb beta sync --live /path/to/run_root/wandb
 
 | Stage | Script | Default Config |
 | --- | --- | --- |
+| Docker asset preparation | `scripts/reproduce/01_prepare_assets.sh` | `scripts/reproduce/prepare_assets` |
+| Docker WM/CLS/Dreamer chain | `scripts/reproduce/02_train_dreamer.sh` | `scripts/reproduce/train_dreamer` |
 | Full online cotrain | `scripts/experiments/cotrain/train.sh --config openvla_onetraj_libero_cotrain --wm_ckpt <wm> --cls_ckpt <cls>` | `openvla_onetraj_libero_cotrain` |
 | Failure-conditioned imagined RL | `scripts/experiments/cotrain/train.sh --config openvla_libero --wm_ckpt <wm> --cls_ckpt <cls>` | `openvla_libero` |
 | Cotrain policy eval | `scripts/experiments/cotrain/eval.sh` | `eval_cotrain` |
