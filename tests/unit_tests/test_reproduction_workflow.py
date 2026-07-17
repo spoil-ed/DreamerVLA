@@ -431,7 +431,7 @@ def test_dockerignore_excludes_runtime_state_but_keeps_source() -> None:
     assert "configs" not in entries
 
 
-def test_public_docs_register_docker_reproduction_commands() -> None:
+def test_public_docs_register_reproduction_commands() -> None:
     guide = (PROJECT_ROOT / "docs" / "docker_reproduction.md").read_text(encoding="utf-8")
     readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
     readme_zh = (PROJECT_ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
@@ -440,6 +440,19 @@ def test_public_docs_register_docker_reproduction_commands() -> None:
         assert "spoil/dreamervla:cu124-h100-v1" in text
         assert "scripts/reproduce/01_prepare_assets.sh" in text
         assert "scripts/reproduce/02_train_dreamer.sh" in text
+
+    assert "[中文](README.zh-CN.md)" in readme
+    assert "[English](README.md)" in readme_zh
+    for text in (readme, readme_zh):
+        assert "scripts/install_env.sh" in text
+        assert "scripts/install/60_verify.sh" in text
+        assert "DVLA_DATA_ROOT" in text
+        assert "WM: 30 epochs" in text
+        assert "CLS: 8 epochs" in text
+        assert "Dreamer: 20,000 steps" in text
+    assert "automatically resumes" in readme
+    assert "自动续训" in readme_zh
+
     assert "WM 30" in guide
     assert "CLS 8" in guide
     assert "20,000" in guide

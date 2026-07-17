@@ -1,111 +1,134 @@
 # DreamerVLA
 
-DreamerVLA 是面向 LIBERO 的单机多 GPU 训练框架，用于 rollout 采集、world
-model warmup、success classifier warmup 和 OpenVLA-OFT cotrain。
+[English](README.md)
 
-```text
-LIBERO rollouts
-  -> reward + hidden-token HDF5 shards
-  -> world model + success classifier warmup
-  -> OpenVLA-OFT cotrain
-  -> LIBERO rollout eval
-```
+本文说明如何复现发布的 `libero_goal` baseline。推荐使用 Docker，因为镜像中已经
+包含 DreamerVLA 源码、Python/CUDA 环境和固定版本的 `third_party` 仓库。
 
-OpenVLA-OFT 主线的 world-model 观测固定为当前帧 projected
-`hidden_token [256,4096]`。动作解码器内部的 action slots 不写入
-观测 sidecar。
+流程固定按以下顺序运行：
 
-## 快速开始
+1. 下载并检查 OpenVLA-OFT 权重和 LIBERO 数据，然后完成预处理。
+2. 训练 WM: 30 epochs，保存 loss 最低的 checkpoint。
+3. 训练 CLS: 8 epochs，保存验证集 F1 最高的 checkpoint。
+4. 冻结 WM 和 CLS，再训练 Dreamer: 20,000 steps。
 
-固定的 8xH100 Docker 复现流程见
-[Docker 复现文档](docs/docker_reproduction.md)：
+## 运行要求
+
+完整发布配置需要：
+
+- Ubuntu、8 张 NVIDIA H100 80 GB GPU，以及至少 300 GiB 可用磁盘空间。
+- 准备阶段能够访问 Docker Hub、GitHub 和 Hugging Face。
+- Docker 方案：安装 Docker 和 NVIDIA Container Toolkit。
+- 非 Docker 方案：安装 Conda，并使用兼容 CUDA 12.4 的 NVIDIA 驱动。
+
+## 方案 A：Docker（推荐）
+
+### 1. 拉取镜像
 
 ```bash
 docker pull spoil/dreamervla:cu124-h100-v1
+mkdir -p dreamervla-data
+```
+
+### 2. 下载、检查并预处理数据和权重
+
+```bash
 docker run --rm --gpus all --ipc=host --network=host --shm-size=100g \
-  -v "$PWD/dreamervla-data:/data" spoil/dreamervla:cu124-h100-v1 \
+  --ulimit memlock=-1 \
+  --volume "$PWD/dreamervla-data:/data" \
+  spoil/dreamervla:cu124-h100-v1 \
   bash scripts/reproduce/01_prepare_assets.sh
+```
+
+### 3. 训练 WM、CLS 和 Dreamer
+
+```bash
 docker run --rm --gpus all --ipc=host --network=host --shm-size=100g \
-  -v "$PWD/dreamervla-data:/data" spoil/dreamervla:cu124-h100-v1 \
+  --ulimit memlock=-1 \
+  --volume "$PWD/dreamervla-data:/data" \
+  spoil/dreamervla:cu124-h100-v1 \
   bash scripts/reproduce/02_train_dreamer.sh
 ```
 
-镜像包含源码和固定 revision 的完整 third_party 环境；权重、数据和输出保存在
-挂载的 `/data` 中。训练中断后重新执行第二条命令会自动续训。
+当前终端会直接显示日志。也可以在另一个终端使用 `docker ps`、
+`docker logs -f <container-id>` 或 `docker stop <container-id>`。由于 `/data`
+来自宿主机挂载目录，停止或删除容器不会删除 checkpoint。
+
+## 方案 B：不使用 Docker
+
+### 1. 克隆源码并设置数据目录
 
 ```bash
-git clone <repo> && cd DreamerVLA
-export DVLA_DATA_ROOT=data
+git clone https://github.com/spoil-ed/DreamerVLA.git
+cd DreamerVLA
+export DVLA_ROOT="$(pwd -P)"
+export DVLA_DATA_ROOT="$DVLA_ROOT/dreamervla-data"
+mkdir -p "$DVLA_DATA_ROOT"
+```
+
+后续如果打开新终端，需要重新设置 `DVLA_ROOT` 和 `DVLA_DATA_ROOT`。
+
+### 2. 安装并检查完整环境
+
+```bash
 bash scripts/install_env.sh
+source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate dreamervla
-bash scripts/download_assets.sh download.openvla_one_traj=true only=[10_openvla_oft_one_trajectory]
-bash scripts/download_assets.sh only=[20_libero_dataset] env.LIBERO_SUITES=libero_goal
-
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-  bash scripts/experiments/cotrain/train.sh \
-  --config openvla_libero \
-  --wm_ckpt /path/to/wm-run/checkpoints/latest.ckpt \
-  --cls_ckpt /path/to/classifier-run/checkpoints/latest.ckpt
-
-bash scripts/experiments/cotrain/eval.sh \
-  eval.ckpt_path=/path/to/cotrain-run
+bash scripts/install/60_verify.sh
 ```
 
-两个独立的官方数据上限训练入口：
+安装脚本会创建 Python 3.11 环境，并安装固定版本的 OpenVLA-OFT fork 和全部
+`third_party` 依赖。
+
+### 3. 下载、检查并预处理数据和权重
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-  DVLA_DATA_ROOT=/path/to/data \
-  bash scripts/experiments/world_model_training/train.sh
-
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-  DVLA_DATA_ROOT=/path/to/data \
-  bash scripts/experiments/classifier_training/train.sh
+bash scripts/reproduce/01_prepare_assets.sh
 ```
 
-## 复现路线
+### 4. 训练 WM、CLS 和 Dreamer
 
-1. `scripts/install_env.sh` 安装环境。
-2. `scripts/download_assets.sh` 下载 OpenVLA-OFT one-trajectory checkpoint 和
-   LIBERO 数据。
-3. 使用 `scripts/experiments/cotrain/train.sh --config
-   openvla_libero` 训练，并显式传入 warmup WM 和 classifier
-   checkpoint。
-4. 使用 `scripts/experiments/cotrain/eval.sh` 评估显式指定的 policy
-   checkpoint。
+```bash
+bash scripts/reproduce/02_train_dreamer.sh
+```
 
-## 仓库结构
+## 中断后续训
+
+再次执行同一条训练命令：
+
+```bash
+bash scripts/reproduce/02_train_dreamer.sh
+```
+
+Docker 方案则使用同一个 `dreamervla-data` 挂载目录，再次执行方案 A 的训练命令。
+工作流会从 `checkpoints/latest.ckpt` 自动续训未完成阶段，并在检查后跳过已经完成的
+阶段。
+
+## 输出位置
+
+数据都保存在 Docker 镜像之外。宿主机上的结果目录为：
 
 ```text
-dreamervla/        Python 包：runner、model、dataset、algorithm、env
-configs/            Hydra recipe 和 LIBERO task 配置
-scripts/            install、download、preprocess、train、eval 的 shell 入口
-tests/              单元测试和 smoke 测试
-third_party/        被 ignore 的只读上游运行时依赖
-data/               未设置 DVLA_DATA_ROOT 时使用的相对数据目录
-docs/               文档索引、参考、教程、报告和论文草稿
+dreamervla-data/outputs/reproduction/libero_goal/world_model/
+dreamervla-data/outputs/reproduction/libero_goal/classifier/
+dreamervla-data/outputs/reproduction/libero_goal/dreamer/
 ```
 
-`DVLA_DATA_ROOT` 和 `DVLA_ROOT` 相互独立；数据可以放在仓库之外的磁盘或共享存储。
-训练产物统一写入 `outputs/<实验名>/<时间戳>/`。其中平铺的 `checkpoints/`
-只包含 `latest.ckpt` 和可选的 `epoch=<epoch>-<metric>=<value>.ckpt` top-k
-文件；显式开启 HF 导出后，才会创建同级 `checkpoint_hf/`。评估产物写入
-`outputs/eval/<任务名>/`，输入可以是具体 checkpoint、`checkpoints/` 或训练 run root。
-实验 shell 不保存训练或评估默认参数；入口和默认值由 `configs/experiment/` 中的
-Hydra 配置提供，修改时使用 `key=value` override。`configs/scripts/` 保留
-install、download、preprocess 和 reproduce 工作流。
-缩短预算时使用 `profile=debug` 或 `profile=smoke`；Runner 不会在运行时改写
-生产配置。冻结 WM/CLS 的 imagined-RL 支持路线仍为 `--config openvla_libero`。
+技术上可以把权重复制进 Docker 镜像，但本镜像有意将权重、数据集和输出放在挂载的
+数据目录中。这样镜像更小，而且下载检查结果、checkpoint 和续训状态不会随容器删除。
 
-在能够读取 GPU 共享运行目录且可以联网的 CPU 节点上，使用 W&B 官方命令持续上传
-活跃的 offline run：
+## 直接入口与 W&B
+
+复现脚本内部调用公开 cotrain 入口 `scripts/experiments/cotrain/train.sh`，评估入口为
+`scripts/experiments/cotrain/eval.sh`。完整参数见
+[`scripts/README.md`](scripts/README.md)。
+
+训练默认使用离线 W&B。在能够读取数据目录的联网机器上，可实时同步 Dreamer 任务：
 
 ```bash
-wandb login
-wandb beta sync --live /path/to/run_root/wandb
+wandb beta sync --live dreamervla-data/outputs/reproduction/libero_goal/dreamer/wandb
 ```
 
-应在 GPU 进程创建 `wandb/offline-run-*` 后启动，并使用 W&B 0.24.1 或更新版本。
-异常退出恢复和旧目录说明见实验教程。
-
-完整流程见 [SETUP.md](SETUP.md)，路径约定见 [docs/data_layout.md](docs/data_layout.md)。
+固定版本、产物检查和排错说明见
+[Docker 复现细节](docs/docker_reproduction.md)，所有运行目录见
+[数据布局](docs/data_layout.md)。

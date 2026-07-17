@@ -1,157 +1,140 @@
 # DreamerVLA
 
-DreamerVLA is a single-machine multi-GPU research stack for LIBERO VLA
-rollout collection, world-model warmup, success-classifier warmup, and online
-cotrain.
+[中文](README.zh-CN.md)
 
-```text
-LIBERO rollouts
-  -> reward + hidden HDF5 shards
-  -> world model + success classifier warmup
-  -> OpenVLA-OFT cotrain
-  -> LIBERO rollout evaluation
-```
+This guide reproduces the published `libero_goal` baseline. Docker is recommended
+because it already contains the DreamerVLA source code, Python/CUDA packages, and
+the pinned `third_party` repositories.
 
-## Quick Start
+The workflow always runs in this order:
 
-For the pinned 8xH100 Docker reproduction, see
-[Docker Reproduction](docs/docker_reproduction.md):
+1. Download and check the OpenVLA-OFT weights and LIBERO data, then preprocess them.
+2. Train WM: 30 epochs and save the checkpoint with the lowest loss.
+3. Train CLS: 8 epochs and save the checkpoint with the highest validation F1.
+4. Freeze WM and CLS, then train Dreamer: 20,000 steps.
+
+## Requirements
+
+The full published profile requires:
+
+- Ubuntu, 8 NVIDIA H100 80 GB GPUs, and at least 300 GiB of free disk space.
+- Internet access to Docker Hub, GitHub, and Hugging Face during preparation.
+- For Docker: Docker with the NVIDIA Container Toolkit.
+- Without Docker: Conda and an NVIDIA driver compatible with CUDA 12.4.
+
+## Option A: Docker (recommended)
+
+### 1. Pull the image
 
 ```bash
 docker pull spoil/dreamervla:cu124-h100-v1
+mkdir -p dreamervla-data
+```
+
+### 2. Download, check, and preprocess assets
+
+```bash
 docker run --rm --gpus all --ipc=host --network=host --shm-size=100g \
-  -v "$PWD/dreamervla-data:/data" spoil/dreamervla:cu124-h100-v1 \
+  --ulimit memlock=-1 \
+  --volume "$PWD/dreamervla-data:/data" \
+  spoil/dreamervla:cu124-h100-v1 \
   bash scripts/reproduce/01_prepare_assets.sh
+```
+
+### 3. Train WM, CLS, and Dreamer
+
+```bash
 docker run --rm --gpus all --ipc=host --network=host --shm-size=100g \
-  -v "$PWD/dreamervla-data:/data" spoil/dreamervla:cu124-h100-v1 \
+  --ulimit memlock=-1 \
+  --volume "$PWD/dreamervla-data:/data" \
+  spoil/dreamervla:cu124-h100-v1 \
   bash scripts/reproduce/02_train_dreamer.sh
 ```
 
-The image contains the source and pinned third-party environment; weights, datasets,
-and outputs stay in the mounted `/data` directory.
+The command prints logs in the current terminal. From another terminal, use
+`docker ps`, `docker logs -f <container-id>`, or `docker stop <container-id>`.
+Stopping the container does not delete checkpoints because `/data` is mounted from
+the host.
+
+## Option B: Without Docker
+
+### 1. Clone the source and choose the data directory
 
 ```bash
-git clone <repo> && cd DreamerVLA
-export DVLA_DATA_ROOT=data
+git clone https://github.com/spoil-ed/DreamerVLA.git
+cd DreamerVLA
+export DVLA_ROOT="$(pwd -P)"
+export DVLA_DATA_ROOT="$DVLA_ROOT/dreamervla-data"
+mkdir -p "$DVLA_DATA_ROOT"
+```
+
+Keep `DVLA_ROOT` and `DVLA_DATA_ROOT` set in every new terminal used for this run.
+
+### 2. Install and verify the complete environment
+
+```bash
 bash scripts/install_env.sh
+source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate dreamervla
-bash scripts/download_assets.sh download.openvla_one_traj=true only=[10_openvla_oft_one_trajectory]
-bash scripts/download_assets.sh only=[20_libero_dataset] env.LIBERO_SUITES=libero_goal
-
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-  bash scripts/experiments/cotrain/train.sh \
-  --config openvla_libero \
-  --wm_ckpt /path/to/wm-run/checkpoints/latest.ckpt \
-  --cls_ckpt /path/to/classifier-run/checkpoints/latest.ckpt
-
-bash scripts/experiments/cotrain/eval.sh \
-  eval.ckpt_path=/path/to/cotrain-run
+bash scripts/install/60_verify.sh
 ```
 
-For the independent official-data upper-bound jobs:
+The installer creates the Python 3.11 environment and installs the pinned
+OpenVLA-OFT fork and all other `third_party` dependencies.
+
+### 3. Download, check, and preprocess assets
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-  DVLA_DATA_ROOT=/path/to/data \
-  bash scripts/experiments/world_model_training/train.sh
-
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-  DVLA_DATA_ROOT=/path/to/data \
-  bash scripts/experiments/classifier_training/train.sh
+bash scripts/reproduce/01_prepare_assets.sh
 ```
 
-## Reproduction Route
+### 4. Train WM, CLS, and Dreamer
 
-1. Install the environment with `scripts/install_env.sh`.
-2. Download OpenVLA-OFT one-trajectory checkpoints and LIBERO data with
-   `scripts/download_assets.sh`.
-3. Train with `scripts/experiments/cotrain/train.sh --config
-   openvla_libero`, explicitly supplying the warmup WM and
-   classifier checkpoints.
-4. Evaluate an explicit policy checkpoint with
-   `scripts/experiments/cotrain/eval.sh`.
+```bash
+bash scripts/reproduce/02_train_dreamer.sh
+```
 
-## Repository Layout
+## Resume after an interruption
+
+Run the same training command again:
+
+```bash
+bash scripts/reproduce/02_train_dreamer.sh
+```
+
+For Docker, run the Docker command from Option A again with the same
+`dreamervla-data` mount. The workflow automatically resumes an unfinished stage
+from `checkpoints/latest.ckpt` and checks then skips completed stages.
+
+## Outputs
+
+All data remains outside the Docker image. On the host, results are written to:
 
 ```text
-dreamervla/        Python package: runners, models, datasets, algorithms, envs
-configs/            Hydra recipes and LIBERO task configs
-scripts/            shell launchers for install, download, preprocess, train, eval
-tests/              unit and smoke tests
-third_party/        ignored, read-only upstream runtime dependencies
-data/               relative default runtime data root
-docs/               documentation index, references, tutorials, reports, papers
+dreamervla-data/outputs/reproduction/libero_goal/world_model/
+dreamervla-data/outputs/reproduction/libero_goal/classifier/
+dreamervla-data/outputs/reproduction/libero_goal/dreamer/
 ```
 
-## Entry Points
+Weights could technically be copied into a Docker image, but this image deliberately
+keeps weights, datasets, and outputs in the mounted data directory. This keeps the
+image smaller and lets downloads, checks, checkpoints, and resume state persist
+independently of a container.
 
-| Stage | Command |
-| --- | --- |
-| Docker asset preparation | `bash scripts/reproduce/01_prepare_assets.sh` |
-| Docker WM/CLS/Dreamer reproduction | `bash scripts/reproduce/02_train_dreamer.sh` |
-| Install | `bash scripts/install_env.sh` |
-| Download OpenVLA-OFT one-trajectory | `bash scripts/download_assets.sh download.openvla_one_traj=true only=[10_openvla_oft_one_trajectory]` |
-| Download LIBERO | `bash scripts/download_assets.sh only=[20_libero_dataset] env.LIBERO_SUITES=libero_goal` |
-| Full WM/CLS cotrain | `bash scripts/experiments/cotrain/train.sh --config openvla_onetraj_libero_cotrain --wm_ckpt <wm-ckpt> --cls_ckpt <cls-ckpt>` |
-| Frozen WM/CLS imagined RL | `bash scripts/experiments/cotrain/train.sh --config openvla_libero --wm_ckpt <wm-ckpt> --cls_ckpt <cls-ckpt>` |
-| Full-dataset WM warmup | `bash scripts/experiments/world_model_training/train.sh` |
-| Cotrain eval | `bash scripts/experiments/cotrain/eval.sh eval.ckpt_path=<ckpt>` |
+## Direct entry points and W&B
 
-Common overrides:
+The reproduction script calls the public cotrain entry point
+`scripts/experiments/cotrain/train.sh`. Evaluation uses
+`scripts/experiments/cotrain/eval.sh`. Their full parameters are documented in
+[`scripts/README.md`](scripts/README.md).
+
+Runs use offline W&B by default. From a networked machine that can read the data
+directory, stream the Dreamer run with:
 
 ```bash
-DVLA_DATA_ROOT=data
-bash scripts/experiments/cotrain/train.sh \
-  --config openvla_libero \
-  --wm_ckpt /path/to/wm-run/checkpoints/latest.ckpt \
-  --cls_ckpt /path/to/classifier-run/checkpoints/latest.ckpt \
-  manual_cotrain.global_steps=20000
-bash scripts/experiments/world_model_training/train.sh \
-  training.out_dir="${DVLA_DATA_ROOT}/outputs/wm_full_dataset_train/run"
+wandb beta sync --live dreamervla-data/outputs/reproduction/libero_goal/dreamer/wandb
 ```
 
-`DVLA_DATA_ROOT` is independent of `DVLA_ROOT`; use a separate disk or shared
-storage path when that is more convenient.
-
-Training artifacts live at `outputs/<experiment>/<timestamp>/`. Its flat
-`checkpoints/` contains `latest.ckpt` and optional
-`epoch=<epoch>-<metric>=<value>.ckpt` top-k files. Explicit HF export writes the
-sibling `checkpoint_hf/`. Evaluation writes to `outputs/eval/<task-suite>/` and
-accepts a concrete checkpoint, `checkpoints/`, or a training run root.
-
-Shell entrypoints do not define training or evaluation defaults. They select complete
-recipes directly under `configs/experiment/`; use Hydra `key=value` overrides for
-changes. `configs/scripts/` is reserved for install, download, and preprocess.
-Use `profile=debug` or `profile=smoke` for declared reduced budgets; Runner code
-never rewrites production budgets at runtime.
-
-On a networked CPU host that can read the GPU host's shared run directory, stream an
-active offline W&B run with the official W&B CLI:
-
-```bash
-wandb login
-wandb beta sync --live /path/to/run_root/wandb
-```
-
-Start the command after the GPU process has created `wandb/offline-run-*`. Use W&B
-0.24.1 or newer; see the experiment tutorial for crash recovery and legacy layouts.
-
-## Config Fields
-
-- `offline_warmup.data_dir`: collected reward-HDF5 replay directory.
-- `offline_warmup.hidden_dir`: collected hidden-sidecar directory.
-- `task.openvla_oft.hidden_token.*`: projected hidden-token dimensions and sidecar contract.
-- `training.wm_warmup_steps`: world-model warmup update budget.
-- `training.classifier_warmup_steps`: success-classifier warmup update budget.
-- `dataloader.batch_size`: per-rank replay batch size.
-- `online_rollout.sequence_length`: replay window length.
-- `manual_cotrain.global_steps`: Ray online-cotrain update budget.
-
-## Verify
-
-```bash
-python -m pytest tests/unit_tests -q
-```
-
-See [SETUP.md](SETUP.md) for the full workflow and
-[docs/data_layout.md](docs/data_layout.md) for path conventions.
+For detailed troubleshooting, pinned revisions, and artifact checks, see
+[Docker reproduction details](docs/docker_reproduction.md). See
+[the data layout](docs/data_layout.md) for every runtime path.
