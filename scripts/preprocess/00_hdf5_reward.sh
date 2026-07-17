@@ -47,7 +47,8 @@ fi
 marked_hdf5="$(find "${MARKED_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -quit 2>/dev/null || true)"
 if [[ "${OVERWRITE}" != "1" && -n "${marked_hdf5}" ]]; then
   if python -m dreamervla.preprocess.check_artifacts command=metainfo path="${META_JSON}" && \
-     python -m dreamervla.preprocess.check_artifacts command=hdf5-dir dir="${MARKED_DIR}"; then
+     python -m dreamervla.preprocess.check_artifacts command=hdf5-dir \
+       dir="${MARKED_DIR}" reference_dir="${RAW_LIBERO_DIR}"; then
     echo "[00_hdf5_reward] skip mark: ${MARKED_DIR}"
   else
     echo "[00_hdf5_reward] existing marked stage is incomplete; resuming ${MARKED_DIR}" >&2
@@ -72,7 +73,8 @@ else
 fi
 
 python -m dreamervla.preprocess.check_artifacts command=metainfo path="${META_JSON}"
-python -m dreamervla.preprocess.check_artifacts command=hdf5-dir dir="${MARKED_DIR}"
+python -m dreamervla.preprocess.check_artifacts command=hdf5-dir \
+  dir="${MARKED_DIR}" reference_dir="${RAW_LIBERO_DIR}"
 
 marked_hdf5="$(find "${MARKED_DIR}" -maxdepth 1 -type f -name '*.hdf5' -print -quit 2>/dev/null || true)"
 if [[ -z "${marked_hdf5}" ]]; then

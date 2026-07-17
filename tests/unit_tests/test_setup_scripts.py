@@ -852,7 +852,7 @@ def test_hdf5_reward_repairs_incomplete_reward_stage_without_full_overwrite(
     assert not any("regenerate_libero_dataset_filter_no_op" in call for call in calls)
 
 
-def test_hdf5_reward_marked_validation_allows_failed_replays_to_drop_demos() -> None:
+def test_hdf5_reward_marked_validation_matches_source_files_but_allows_dropped_demos() -> None:
     root = _project_root()
     reward_text = (root / "scripts" / "preprocess" / "00_hdf5_reward.sh").read_text(
         encoding="utf-8"
@@ -867,7 +867,7 @@ def test_hdf5_reward_marked_validation_allows_failed_replays_to_drop_demos() -> 
     )[0]
 
     assert 'dir="${MARKED_DIR}"' in marked_check
-    assert 'reference_dir="${RAW_LIBERO_DIR}"' not in marked_check
+    assert 'reference_dir="${RAW_LIBERO_DIR}"' in marked_check
     assert "match_reference_demos=true" not in marked_check
 
 
