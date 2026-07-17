@@ -388,6 +388,8 @@ def test_dockerfile_pins_runtime_source_and_complete_third_party_install() -> No
     assert "nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04" in text
     assert "WORKDIR /opt/dreamervla" in text
     assert "DVLA_DATA_ROOT=/data" in text
+    assert "LIBERO_CONFIG_PATH=/tmp/dreamervla-libero" in text
+    assert "LIBERO_CONFIG_PATH=/data/.libero" not in text
     assert "bash scripts/install_env.sh" in text
     assert "INSTALL_OPENVLA_OFT_THIRD_PARTY=true" in text
     assert "python -m dreamervla.diagnostics.verify_install" in text
