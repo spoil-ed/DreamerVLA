@@ -397,6 +397,31 @@ def test_dockerfile_pins_runtime_source_and_complete_third_party_install() -> No
     assert 'CMD ["/bin/bash"]' in text
 
 
+def test_dockerfile_caches_dependencies_before_copying_full_source() -> None:
+    text = (PROJECT_ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    install_index = text.index("bash scripts/install_env.sh")
+    full_copy_index = text.index("COPY . /opt/dreamervla")
+    dependency_prefix = text[:install_index]
+
+    for required in (
+        "COPY pyproject.toml requirements.txt",
+        "COPY scripts/install_env.sh",
+        "COPY scripts/install/",
+        "COPY configs/scripts/install/",
+        "COPY dreamervla/__init__.py dreamervla/config_resolvers.py",
+        "COPY dreamervla/launchers/__init__.py dreamervla/launchers/workflow.py",
+        "COPY dreamervla/diagnostics/__init__.py dreamervla/diagnostics/verify_install.py",
+    ):
+        assert required in dependency_prefix
+    assert "COPY README.md" not in dependency_prefix
+    assert full_copy_index > install_index
+    assert text.count("COPY . /opt/dreamervla") == 1
+    for dynamic_arg in ("DVLA_GIT_COMMIT", "DVLA_IMAGE_VERSION", "DVLA_BUILD_TIME"):
+        assert text.index(f"ARG {dynamic_arg}") > full_copy_index
+    assert text.index("org.opencontainers.image.revision") > full_copy_index
+    assert text.rindex("python -m dreamervla.diagnostics.verify_install") > full_copy_index
+
+
 def test_dockerfile_uses_cpu_rendering_for_build_time_import_checks() -> None:
     text = (PROJECT_ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
 
@@ -470,3 +495,5 @@ def test_docker_publish_workflow_uses_secrets_and_release_tags() -> None:
     assert "cu124-h100-v1" in text
     assert "sha-" in text
     assert "push:" in text
+    assert "cache-from: type=gha" in text
+    assert "cache-to: type=gha,mode=max" in text

@@ -43,6 +43,8 @@ jobs:
           context: .
           file: docker/Dockerfile
           push: ${{ github.event_name != 'pull_request' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           build-args: |
             DVLA_GIT_COMMIT=${{ github.sha }}
             DVLA_IMAGE_VERSION=cu124-h100-v1
@@ -51,4 +53,3 @@ jobs:
             ${{ steps.image.outputs.name }}:cu124-h100-v1
             ${{ steps.image.outputs.name }}:v1
             ${{ steps.image.outputs.name }}:sha-${{ steps.image.outputs.short_sha }}
-
