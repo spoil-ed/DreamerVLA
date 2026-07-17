@@ -54,16 +54,14 @@ class ObjectStoreWeightSyncer(WeightSyncer):
 
     @staticmethod
     def _get_or_create_store(name: str) -> Any:
-        try:
-            return ray.get_actor(name, namespace="DreamerVLA")
-        except ValueError:
-            actor = _WeightStore.options(
-                name=name,
-                namespace="DreamerVLA",
-                lifetime="detached",
-            ).remote()
-            ray.get(actor.get.remote("__ready__"))
-            return actor
+        actor = _WeightStore.options(
+            name=name,
+            namespace="DreamerVLA",
+            lifetime="detached",
+            get_if_exists=True,
+        ).remote()
+        ray.get(actor.get.remote("__ready__"))
+        return actor
 
 
 def _independent_cpu(tensor: torch.Tensor) -> torch.Tensor:

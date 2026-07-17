@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -281,6 +282,106 @@ def test_build_stage_command_constructs_resumable_frozen_dreamer(tmp_path: Path)
     assert not any(item.startswith("training.out_dir=") for item in command)
 
 
+def test_libero_download_command_pins_repository_revision_and_target() -> None:
+    from dreamervla.launchers.reproduce import build_libero_download_command
+
+    cfg = _compose_reproduction("prepare_assets")
+
+    command = build_libero_download_command(cfg)
+
+    assert command[:3] == ("python", "-m", "dreamervla.preprocess.download_libero")
+    assert command[command.index("--repo") + 1] == cfg.assets.libero.repo
+    assert command[command.index("--revision") + 1] == cfg.assets.libero.revision
+    assert command[command.index("--suite") + 1] == "libero_goal"
+    assert command[command.index("--target") + 1] == str(Path(cfg.assets.libero.target).resolve())
+
+
+def test_openvla_validation_rejects_a_different_git_revision(tmp_path: Path) -> None:
+    from dreamervla.launchers.reproduce import _valid_openvla
+
+    model_root = tmp_path / "model"
+    model_root.mkdir()
+    subprocess.run(["git", "init", "-q", str(model_root)], check=True)
+    subprocess.run(
+        ["git", "-C", str(model_root), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(model_root), "config", "user.name", "DreamerVLA Test"],
+        check=True,
+    )
+    for name in ("config.json", "dataset_statistics.json", "tokenizer_config.json"):
+        (model_root / name).write_text("{}\n", encoding="utf-8")
+    (model_root / "model.safetensors.index.json").write_text("{}\n", encoding="utf-8")
+    (model_root / "model-00001-of-00001.safetensors").write_bytes(b"weights")
+    subprocess.run(["git", "-C", str(model_root), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(model_root), "commit", "-qm", "fixture"], check=True)
+    revision = subprocess.run(
+        ["git", "-C", str(model_root), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    cfg = OmegaConf.create(
+        {
+            "assets": {
+                "openvla": {
+                    "target": str(model_root),
+                    "revision": revision,
+                    "required_files": [
+                        "config.json",
+                        "dataset_statistics.json",
+                        "tokenizer_config.json",
+                    ],
+                }
+            }
+        }
+    )
+
+    assert _valid_openvla(cfg)
+    cfg.assets.openvla.revision = "0" * 40
+    assert not _valid_openvla(cfg)
+
+
+def test_download_libero_persists_the_pinned_source_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dreamervla.preprocess import download_libero as module
+
+    target = tmp_path / "libero_goal"
+    calls: list[dict[str, object]] = []
+
+    def fake_snapshot_download(**kwargs):
+        calls.append(kwargs)
+        target.mkdir(parents=True)
+        (target / "demo.hdf5").write_bytes(b"hdf5")
+        return str(tmp_path)
+
+    monkeypatch.setattr(module, "snapshot_download", fake_snapshot_download)
+
+    module.download_libero(
+        repo="owner/libero",
+        revision="a" * 40,
+        suite="libero_goal",
+        target=target,
+    )
+
+    assert calls == [
+        {
+            "repo_id": "owner/libero",
+            "repo_type": "dataset",
+            "revision": "a" * 40,
+            "local_dir": str(tmp_path),
+            "allow_patterns": "libero_goal/*",
+        }
+    ]
+    assert json.loads((target / ".dreamervla-source.json").read_text(encoding="utf-8")) == {
+        "repo": "owner/libero",
+        "revision": "a" * 40,
+        "suite": "libero_goal",
+    }
+
+
 def test_dockerfile_pins_runtime_source_and_complete_third_party_install() -> None:
     text = (PROJECT_ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
 
@@ -299,6 +400,18 @@ def test_dockerfile_uses_cpu_rendering_for_build_time_import_checks() -> None:
 
     assert "MUJOCO_GL=osmesa" in text
     assert "PYOPENGL_PLATFORM=osmesa" in text
+
+
+def test_container_install_pins_third_party_runtime_compatibility() -> None:
+    requirements = (PROJECT_ROOT / "requirements.txt").read_text(encoding="utf-8")
+    third_party_install = (PROJECT_ROOT / "scripts" / "install" / "40_third_party.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "mujoco==3.8.0" in requirements
+    assert "protobuf==4.25.9" in requirements
+    assert "jsonlines==4.0.0" in third_party_install
+    assert "tensorflow_metadata==1.17.3" in third_party_install
 
 
 def test_dockerignore_excludes_runtime_state_but_keeps_source() -> None:

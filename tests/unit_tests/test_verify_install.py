@@ -7,19 +7,24 @@ from dreamervla.diagnostics import verify_install
 EXPECTED_CRITICAL_VERSIONS = {
     "diffusers": "0.33.0",
     "draccus": "0.8.0",
+    "jsonlines": "4.0.0",
+    "mujoco": "3.8.0",
     "numpy": "1.26.4",
     "peft": "0.11.0",
+    "protobuf": "4.25.9",
     "ray": "2.55.1",
     "sentencepiece": "0.1.99",
     "tensorflow": "2.15.0",
     "tensorflow-datasets": "4.9.3",
     "tensorflow-graphics": "2021.12.3",
+    "tensorflow-metadata": "1.17.3",
     "timm": "0.9.10",
     "tokenizers": "0.19.1",
     "torch": "2.5.1",
     "torchaudio": "2.5.1",
     "torchvision": "0.20.1",
     "transformers": "4.40.1",
+    "wandb": "0.26.1",
 }
 
 

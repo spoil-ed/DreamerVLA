@@ -221,12 +221,49 @@ def _valid_openvla(cfg: DictConfig) -> bool:
         with path.open("rb") as handle:
             if handle.read(80).startswith(b"version https://git-lfs.github.com/spec"):
                 return False
+    try:
+        actual_revision = _git_revision(root)
+    except (ReproductionError, subprocess.CalledProcessError):
+        return False
+    if actual_revision != str(cfg.assets.openvla.revision):
+        return False
     return True
 
 
 def _libero_hdf5_files(cfg: DictConfig) -> list[Path]:
     root = _stage_path(cfg.assets.libero.target)
     return sorted(path for path in root.rglob("*.hdf5") if path.is_file()) if root.is_dir() else []
+
+
+def _valid_libero(cfg: DictConfig) -> bool:
+    root = _stage_path(cfg.assets.libero.target)
+    marker_path = root / ".dreamervla-source.json"
+    marker = _load_json(marker_path)
+    if marker != {
+        "repo": str(cfg.assets.libero.repo),
+        "revision": str(cfg.assets.libero.revision),
+        "suite": str(cfg.profile.task),
+    }:
+        return False
+    return len(_libero_hdf5_files(cfg)) >= int(cfg.assets.libero.minimum_hdf5_files)
+
+
+def build_libero_download_command(cfg: DictConfig) -> tuple[str, ...]:
+    """Build the immutable LIBERO dataset download command."""
+
+    return (
+        "python",
+        "-m",
+        "dreamervla.preprocess.download_libero",
+        "--repo",
+        str(cfg.assets.libero.repo),
+        "--revision",
+        str(cfg.assets.libero.revision),
+        "--suite",
+        str(cfg.profile.task),
+        "--target",
+        str(_stage_path(cfg.assets.libero.target)),
+    )
 
 
 def _asset_file_records(paths: Sequence[Path], root: Path) -> list[dict[str, Any]]:
@@ -276,20 +313,13 @@ def _prepare_assets(workflow: ReproductionWorkflow) -> None:
         )
         _run(("git", "-C", str(model_root), "lfs", "pull"), env=env, dry_run=workflow.dry_run)
 
-    dataset_files = _libero_hdf5_files(cfg)
-    if len(dataset_files) < int(cfg.assets.libero.minimum_hdf5_files):
+    if not _valid_libero(cfg):
         dataset_root = _stage_path(cfg.assets.libero.target)
         if dataset_root.exists() and any(dataset_root.iterdir()):
             raise ReproductionError(
                 f"LIBERO target exists but is incomplete; move it aside and rerun: {dataset_root}"
             )
-        download_dataset = (
-            "bash",
-            str(PROJECT_ROOT / "scripts/download_assets.sh"),
-            "only=[20_libero_dataset]",
-            "env.LIBERO_SUITES=[libero_goal]",
-        )
-        _run(download_dataset, env=env, dry_run=workflow.dry_run)
+        _run(build_libero_download_command(cfg), env=env, dry_run=workflow.dry_run)
 
     preprocess = (
         "bash",
@@ -305,10 +335,12 @@ def _prepare_assets(workflow: ReproductionWorkflow) -> None:
     if not _valid_openvla(cfg):
         raise ReproductionError(f"OpenVLA validation failed after download: {model_root}")
     dataset_files = _libero_hdf5_files(cfg)
-    if len(dataset_files) < int(cfg.assets.libero.minimum_hdf5_files):
+    if not _valid_libero(cfg):
         raise ReproductionError(
-            f"LIBERO validation failed: expected at least {cfg.assets.libero.minimum_hdf5_files} "
-            f"HDF5 files, got {len(dataset_files)}"
+            "LIBERO validation failed for pinned source: "
+            f"repo={cfg.assets.libero.repo} revision={cfg.assets.libero.revision} "
+            f"expected at least {cfg.assets.libero.minimum_hdf5_files} HDF5 files, "
+            f"got {len(dataset_files)}"
         )
     validate_hdf5_dir(
         cfg.preprocess.hidden_dir,
@@ -509,4 +541,10 @@ if __name__ == "__main__":
     raise SystemExit(main())
 
 
-__all__ = ["ReproductionWorkflow", "build_stage_command", "build_workflow", "main"]
+__all__ = [
+    "ReproductionWorkflow",
+    "build_libero_download_command",
+    "build_stage_command",
+    "build_workflow",
+    "main",
+]
