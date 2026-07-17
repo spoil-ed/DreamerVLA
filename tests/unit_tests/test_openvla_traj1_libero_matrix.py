@@ -155,11 +155,11 @@ def test_wmpo_token_h1_classifier_experiment_composes() -> None:
     assert cfg.classifier._target_ == "dreamervla.algorithms.critic.LatentSuccessClassifier"
     assert (
         cfg.task.classifier.dataset.train._target_
-        == "dreamervla.dataset.LumosAlignedLatentTrainDataset"
+        == "dreamervla.dataset.lumos_aligned_latent_dataset.LumosAlignedLatentTrainDataset"
     )
     assert (
         cfg.task.classifier.dataset.validation._target_
-        == "dreamervla.dataset.LumosAlignedLatentValDataset"
+        == "dreamervla.dataset.lumos_aligned_latent_dataset.LumosAlignedLatentValDataset"
     )
     assert cfg.classifier.granularity == "chunk"
     assert cfg.classifier.output_dim == 1
@@ -189,10 +189,10 @@ def test_dreamer_classifier_model_and_dataset_are_hydra_selected() -> None:
         "dreamervla.algorithms.critic.LatentSuccessClassifier"
     )
     assert cfg.task.classifier.dataset.train._target_ == (
-        "dreamervla.dataset.LumosAlignedLatentTrainDataset"
+        "dreamervla.dataset.lumos_aligned_latent_dataset.LumosAlignedLatentTrainDataset"
     )
     assert cfg.task.classifier.dataset.validation._target_ == (
-        "dreamervla.dataset.LumosAlignedLatentValDataset"
+        "dreamervla.dataset.lumos_aligned_latent_dataset.LumosAlignedLatentValDataset"
     )
     assert "classifier_target" not in cfg.task.openvla_oft
 

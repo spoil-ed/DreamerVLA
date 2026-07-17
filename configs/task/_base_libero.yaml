@@ -15,9 +15,9 @@ classifier:
     _target_: dreamervla.algorithms.critic.LatentSuccessClassifier
   dataset:
     train:
-      _target_: dreamervla.dataset.LumosAlignedLatentTrainDataset
+      _target_: dreamervla.dataset.lumos_aligned_latent_dataset.LumosAlignedLatentTrainDataset
     validation:
-      _target_: dreamervla.dataset.LumosAlignedLatentValDataset
+      _target_: dreamervla.dataset.lumos_aligned_latent_dataset.LumosAlignedLatentValDataset
   input:
     latent_dim: ${task.openvla_oft.hidden_token.classifier_latent_dim}
     action_dim: ${task.action_dim}

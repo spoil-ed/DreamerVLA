@@ -78,3 +78,15 @@ def test_configs_use_importable_dreamervla_dataset_targets() -> None:
                 if target is not None:
                     assert str(target).startswith("dreamervla.dataset.")
                     get_class(str(target))
+
+
+def test_task_classifier_dataset_targets_are_importable() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        cfg = compose(
+            config_name="train",
+            overrides=["experiment=classifier_official_upper_bound"],
+        )
+
+    get_class(str(cfg.task.classifier.dataset.train._target_))
+    get_class(str(cfg.task.classifier.dataset.validation._target_))

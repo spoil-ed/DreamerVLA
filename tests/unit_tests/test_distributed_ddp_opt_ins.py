@@ -184,3 +184,13 @@ def test_initialize_omits_timeout_by_default(monkeypatch):
 
     assert captured.get("backend") == "nccl"
     assert "timeout" not in captured
+
+
+def test_initialize_treats_single_process_strategy_as_unwrapped_ddp(monkeypatch):
+    monkeypatch.setenv("WORLD_SIZE", "1")
+
+    helper = NopretokenizeSFTDistributedHelper.initialize(strategy="single")
+
+    assert helper.strategy == "ddp"
+    assert helper.world_size == 1
+    assert helper.is_distributed is False

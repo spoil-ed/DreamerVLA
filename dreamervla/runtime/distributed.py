@@ -64,6 +64,8 @@ class NopretokenizeSFTDistributedHelper:
         nccl_timeout_seconds: int | None = None,
     ) -> NopretokenizeSFTDistributedHelper:
         normalized_strategy = str(strategy).lower()
+        if normalized_strategy == "single":
+            normalized_strategy = "ddp"
         if normalized_strategy not in {"ddp", "fsdp"}:
             raise ValueError(f"Unsupported distributed strategy: {strategy}")
 
