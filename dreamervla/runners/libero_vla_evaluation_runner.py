@@ -1742,6 +1742,8 @@ class LIBEROVLAEvaluationRunner(
                 action_chunk_raw = action_chunk_raw.reshape(1, -1)
             else:
                 action_chunk_raw = action_chunk_raw.reshape(-1, action_chunk_raw.shape[-1])
+            if action_chunk_raw.shape[0] == 0:
+                raise RuntimeError("generate_action_head returned no actions")
             action_chunk_env = self._unnorm_actions(action_chunk_raw)
 
             self._write_policy_trace(
@@ -1756,15 +1758,7 @@ class LIBEROVLAEvaluationRunner(
                 for i in range(min(len(action_chunk_env), int(action_steps)))
             ]
         except Exception as exc:
-            print(f"  [Eval] generate_action_head failed: {exc}", flush=True)
-            return super()._generate_actions(
-                backbone,
-                item_processor,
-                frame_history,
-                state,
-                task_description,
-                action_steps,
-            )
+            raise RuntimeError(f"generate_action_head failed: {exc}") from exc
 
     def _generate_actions(
         self,

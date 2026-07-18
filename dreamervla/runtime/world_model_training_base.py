@@ -1022,7 +1022,9 @@ class WorldModelTrainingBase(BaseRunner):
         if not getattr(wm, "spatial_codec", False):
             return
         if self.encoder is None:
-            return
+            raise RuntimeError(
+                "spatial-codec world model requires an encoder to attach image-token mapping"
+            )
         try:
             lm_head = self.encoder.backbone.lm_head
             vocab_mapping = self.encoder.backbone.model.vocabulary_mapping
@@ -1044,8 +1046,7 @@ class WorldModelTrainingBase(BaseRunner):
                     f"(image_vocab={image_token_bpe_ids.numel()}, full_vocab={full_vocab_size})"
                 )
         except Exception as exc:
-            if self.distributed.is_main_process:
-                print(f"[wm] attach_lm_head failed — token-mode WM will crash: {exc}")
+            raise RuntimeError("failed to attach image-token mapping to world model") from exc
 
     # ──────────────────────────────────────────────────────────────────────
     # Checkpoint helpers
