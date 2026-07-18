@@ -299,6 +299,7 @@ def _cfg(reward_model: str = "sparse_outcome"):
             "ppo_update_epochs": 1,
             "kl_coef": 0.0,
             "actor_bc_to_ref_scale": 0.0,
+            "rssm_action_scale": "policy",
             "clip_ratio_low": 0.2,
             "clip_ratio_high": 0.28,
             "advantage_eps": 1.0e-6,

@@ -34,6 +34,7 @@ dense per-step state-reward from the WM hidden at every imagined env-step.
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Mapping
 from typing import Any
 
@@ -66,6 +67,7 @@ from dreamervla.algorithms.ppo.grpo import (
     _slice_latent,
     masked_mean_ratio_chunk_term,
 )
+from dreamervla.algorithms.validation import validate_ppo_hyperparameters
 from dreamervla.utils.torch_utils import move_mapping_to_device
 
 
@@ -91,8 +93,23 @@ def build_valid_chunk_count(
         [B] long tensor, each value in [1, num_chunks].
     """
     K = int(chunk_size)
-    counts = (finish_step // K) + 1
-    return counts.long().clamp_(min=1, max=int(num_chunks))
+    num_chunks = int(num_chunks)
+    if K <= 0:
+        raise ValueError(f"chunk_size must be > 0, got {chunk_size!r}")
+    if num_chunks <= 0:
+        raise ValueError(f"num_chunks must be > 0, got {num_chunks!r}")
+    if finish_step.ndim != 1:
+        raise ValueError(f"finish_step must be a 1D tensor, got {tuple(finish_step.shape)}")
+    if finish_step.numel() == 0:
+        raise ValueError("finish_step must be non-empty")
+    if finish_step.dtype == torch.bool or finish_step.is_floating_point():
+        raise ValueError(f"finish_step must use an integer dtype, got {finish_step.dtype}")
+    max_step = K * num_chunks
+    if bool(((finish_step < 0) | (finish_step >= max_step)).any()):
+        raise ValueError(
+            f"finish_step values must be in [0, {max_step}), got {finish_step.tolist()}"
+        )
+    return (finish_step // K).long() + 1
 
 
 def _build_reward_tensor(
@@ -154,15 +171,31 @@ def _validate_reward_inputs(
     if int(chunk_size) <= 0:
         raise ValueError(f"chunk_size must be > 0, got {chunk_size!r}")
     for name, value in (("finish_step", finish_step), ("complete", complete)):
-        if not isinstance(value, torch.Tensor) or int(value.numel()) != int(batch):
+        if not isinstance(value, torch.Tensor) or tuple(value.shape) != (int(batch),):
             count = int(value.numel()) if isinstance(value, torch.Tensor) else None
-            raise ValueError(f"{name} must contain batch={batch} values, got {count}")
+            raise ValueError(
+                f"{name} must be [B] with batch={batch}, got "
+                f"{tuple(value.shape) if isinstance(value, torch.Tensor) else count}"
+            )
     for name, value in (("score", score), ("score_step", score_step)):
         if value is not None and (
-            not isinstance(value, torch.Tensor) or int(value.numel()) != int(batch)
+            not isinstance(value, torch.Tensor) or tuple(value.shape) != (int(batch),)
         ):
             count = int(value.numel()) if isinstance(value, torch.Tensor) else None
-            raise ValueError(f"{name} must contain batch={batch} values, got {count}")
+            raise ValueError(
+                f"{name} must be [B] with batch={batch}, got "
+                f"{tuple(value.shape) if isinstance(value, torch.Tensor) else count}"
+            )
+    if finish_step.dtype == torch.bool or finish_step.is_floating_point():
+        raise ValueError(f"finish_step must use an integer dtype, got {finish_step.dtype}")
+    if complete.dtype != torch.bool:
+        raise ValueError(f"complete must use bool dtype, got {complete.dtype}")
+    if score is not None and not score.is_floating_point():
+        raise ValueError(f"score must use a floating dtype, got {score.dtype}")
+    if score_step is not None and (
+        score_step.dtype == torch.bool or score_step.is_floating_point()
+    ):
+        raise ValueError(f"score_step must use an integer dtype, got {score_step.dtype}")
     if score is not None and not bool(torch.isfinite(score).all()):
         raise ValueError("score must contain only finite values")
 
@@ -188,7 +221,7 @@ def _resolve_reward_tensor(
 
     name = str(lumos_cfg.get("reward_model", "sparse_outcome"))
     model = reward_pkg.get_reward_model(name)
-    return model.build_reward(
+    reward = model.build_reward(
         batch=batch,
         max_steps=max_steps,
         chunk_size=chunk_size,
@@ -198,6 +231,20 @@ def _resolve_reward_tensor(
         score=score,
         score_step=score_step,
     )
+    if not isinstance(reward, torch.Tensor):
+        raise TypeError(f"reward model {name!r} must return a Tensor, got {type(reward).__name__}")
+    expected_shape = (int(batch), int(max_steps))
+    if tuple(reward.shape) != expected_shape:
+        raise ValueError(
+            f"reward model {name!r} returned shape {tuple(reward.shape)}, expected {expected_shape}"
+        )
+    if not bool(torch.isfinite(reward).all()):
+        raise ValueError(f"reward model {name!r} returned non-finite values")
+    if reward.device != device:
+        raise ValueError(
+            f"reward model {name!r} returned device {reward.device}, expected {device}"
+        )
+    return reward
 
 
 def _adaptive_group_advantage_and_mask(
@@ -218,6 +265,19 @@ def _adaptive_group_advantage_and_mask(
     masked out. ``returns`` may include KL shaping for the advantage values, but the
     keep/skip decision must come from classifier signal rather than KL alone.
     """
+    group_size_min = int(group_size_min)
+    group_size_max = int(group_size_max)
+    if group_size_min <= 0 or group_size_max < group_size_min:
+        raise ValueError(
+            "group_size bounds must satisfy 1 <= group_size_min <= group_size_max, "
+            f"got {group_size_min} and {group_size_max}"
+        )
+    if not math.isfinite(float(eps)) or float(eps) <= 0.0:
+        raise ValueError(f"eps must be finite and > 0, got {eps!r}")
+    if returns.ndim != 1 or returns.numel() == 0:
+        raise ValueError(f"returns must be a non-empty 1D tensor, got {tuple(returns.shape)}")
+    if not bool(torch.isfinite(returns).all()):
+        raise ValueError("returns must contain only finite values")
     if int(returns.numel()) % int(group_size_max) != 0:
         raise ValueError(
             "adaptive GRPO grouping requires returns to be divisible by "
@@ -225,11 +285,13 @@ def _adaptive_group_advantage_and_mask(
         )
     if variance_signal is None:
         variance_signal = returns
-    if int(variance_signal.numel()) != int(returns.numel()):
+    if not bool(torch.isfinite(variance_signal).all()):
+        raise ValueError("variance_signal must contain only finite values")
+    if variance_signal.shape != returns.shape:
         raise ValueError(
             "adaptive GRPO grouping requires variance_signal and returns to have "
-            f"the same size, got {int(variance_signal.numel())} and "
-            f"{int(returns.numel())}"
+            f"the same shape, got {tuple(variance_signal.shape)} and "
+            f"{tuple(returns.shape)}"
         )
     groups = returns.reshape(-1, int(group_size_max))
     signal_groups = variance_signal.reshape(-1, int(group_size_max))
@@ -568,6 +630,7 @@ def dino_lumos_step(
         group_size = algorithm_cfg.ppo_rollouts_per_start
         B_eff   = B * group_size
     """
+    validate_ppo_hyperparameters(algorithm_cfg, prefix="algorithm_cfg")
     lumos_cfg = algorithm_cfg.get("lumos", {})
     K = int(lumos_cfg.get("chunk_size", 5))
     T_max = int(lumos_cfg.get("episode_max_steps", 300))
@@ -599,7 +662,7 @@ def dino_lumos_step(
             f"1 <= min <= max, got min={group_size_min} max={group_size_max}"
         )
     group_size = int(group_size_max)
-    update_epochs = max(1, int(algorithm_cfg.get("ppo_update_epochs", 1)))
+    update_epochs = int(algorithm_cfg.get("ppo_update_epochs", 1))
     clip_low = float(algorithm_cfg.get("clip_ratio_low", 0.2))
     clip_high = float(algorithm_cfg.get("clip_ratio_high", 0.28))
     clip_ratio_c = algorithm_cfg.get("clip_ratio_c", None)

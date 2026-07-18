@@ -55,7 +55,9 @@ class TDMPCMPCResult:
 
 def _repeat_latent(value: Any, repeats: int) -> Any:
     repeats = int(repeats)
-    if repeats <= 1:
+    if repeats <= 0:
+        raise ValueError(f"repeats must be > 0, got {repeats}")
+    if repeats == 1:
         return value
     if isinstance(value, torch.Tensor):
         return value.repeat_interleave(repeats, dim=0)
@@ -97,6 +99,30 @@ def _world_model_reward(world_model: nn.Module, latent: Any) -> torch.Tensor:
     return reward.reshape(reward.shape[0], -1).mean(dim=-1)
 
 
+def _prepare_policy_action(
+    action: torch.Tensor,
+    *,
+    batch_size: int,
+    action_dim: int,
+    context: str,
+    clamp: bool = True,
+) -> torch.Tensor:
+    if not isinstance(action, torch.Tensor):
+        raise TypeError(f"{context} must return an action tensor")
+    if action.ndim != 2:
+        raise ValueError(f"{context} action must be [B,A], got {tuple(action.shape)}")
+    if action.shape[0] != int(batch_size):
+        raise ValueError(f"{context} action batch is {action.shape[0]}, expected {batch_size}")
+    if action.shape[1] < int(action_dim):
+        raise ValueError(
+            f"{context} action width {action.shape[1]} is smaller than action_dim={action_dim}"
+        )
+    action = action[:, : int(action_dim)].float()
+    if not bool(torch.isfinite(action).all()):
+        raise ValueError(f"{context} action must contain only finite values")
+    return action.clamp(-1.0, 1.0) if clamp else action
+
+
 def _critic_hidden(
     world_model: nn.Module,
     latent: Any,
@@ -113,10 +139,13 @@ def _critic_hidden(
         raise ValueError(f"Unsupported TD-MPC MPC value_mode: {value_mode!r}")
     if action is None:
         raise ValueError("TD-MPC MPC state_action value mode requires an action.")
-    action = action.float()
-    if action.ndim != 2:
-        action = action.reshape(action.shape[0], -1)
-    action = action[..., : int(action_dim)].to(device=feat.device, dtype=feat.dtype)
+    action = _prepare_policy_action(
+        action,
+        batch_size=feat.shape[0],
+        action_dim=action_dim,
+        context="TD-MPC critic",
+        clamp=False,
+    ).to(device=feat.device, dtype=feat.dtype)
     return torch.cat([feat, action], dim=-1)
 
 
@@ -181,7 +210,12 @@ class TDMPCMPCPlanner:
                 and bool(self.cfg.eval_mode)
             ):
                 action = extra["mean"]
-            action = action[:, : int(self.cfg.action_dim)].float().clamp(-1.0, 1.0)
+            action = _prepare_policy_action(
+                action,
+                batch_size=feat.shape[0],
+                action_dim=int(self.cfg.action_dim),
+                context="TD-MPC policy trajectory",
+            )
             actions.append(action)
             wm_action = action_transform(action)
             z = world_model({"mode": "predict_next", "latent": z, "actions": wm_action})
@@ -231,7 +265,12 @@ class TDMPCMPCPlanner:
                 ):
                     terminal_action = extra["mean"]
                 terminal_action = action_transform(
-                    terminal_action[:, : int(self.cfg.action_dim)].float().clamp(-1.0, 1.0)
+                    _prepare_policy_action(
+                        terminal_action,
+                        batch_size=feat.shape[0],
+                        action_dim=int(self.cfg.action_dim),
+                        context="TD-MPC terminal policy",
+                    )
                 )
             critic_feat = _critic_hidden(
                 world_model,
@@ -302,7 +341,12 @@ class TDMPCMPCPlanner:
                 actions=actions,
                 action_transform=action_transform,
                 target_critic=target_critic,
-            ).nan_to_num(0.0)
+            )
+            if not bool(torch.isfinite(value).all()):
+                raise ValueError(
+                    "TD-MPC planner received non-finite objective values from the "
+                    "world model or target critic"
+                )
             elite_idxs = torch.topk(value, k=num_elites, dim=0).indices
             elite_values = value[elite_idxs]
             elite_actions = actions[:, elite_idxs]

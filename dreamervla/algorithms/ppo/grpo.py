@@ -15,10 +15,13 @@ def _repeat_latent(value: Any, repeats: int) -> Any:
     starting frame; this duplicates the latent so that each rollout sees the
     same initial state.
     """
-    if int(repeats) <= 1:
+    repeats = int(repeats)
+    if repeats <= 0:
+        raise ValueError(f"repeats must be > 0, got {repeats!r}")
+    if repeats == 1:
         return value
     if isinstance(value, torch.Tensor):
-        return value.repeat_interleave(int(repeats), dim=0)
+        return value.repeat_interleave(repeats, dim=0)
     if isinstance(value, dict):
         return {key: _repeat_latent(item, repeats) for key, item in value.items()}
     raise TypeError(f"Unsupported latent type for repeat: {type(value).__name__}")
@@ -32,8 +35,15 @@ def _slice_latent(value: Any, lo: int, hi: int) -> Any:
     whole imagination on GPU. Slice boundaries must be multiples of group_size so
     each slice holds whole GRPO groups (the advantage is group-relative).
     """
+    lo = int(lo)
+    hi = int(hi)
     if isinstance(value, torch.Tensor):
-        return value[int(lo) : int(hi)]
+        batch = int(value.shape[0]) if value.ndim > 0 else 0
+        if lo < 0 or hi <= lo or hi > batch:
+            raise ValueError(
+                f"slice bounds must satisfy 0 <= lo < hi <= batch ({batch}), got [{lo}:{hi}]"
+            )
+        return value[lo:hi]
     if isinstance(value, dict):
         return {key: _slice_latent(item, lo, hi) for key, item in value.items()}
     raise TypeError(f"Unsupported latent type for slice: {type(value).__name__}")
@@ -44,7 +54,10 @@ def _entropy_coef(algorithm_cfg: Any) -> float:
 
     Reads ``actent`` first, then ``entropy_coef`` (compatibility alias), default 0.
     """
-    return float(algorithm_cfg.get("actent", algorithm_cfg.get("entropy_coef", 0.0)))
+    value = float(algorithm_cfg.get("actent", algorithm_cfg.get("entropy_coef", 0.0)))
+    if not math.isfinite(value) or value < 0.0:
+        raise ValueError(f"entropy coefficient must be finite and >= 0, got {value!r}")
+    return value
 
 
 def masked_mean_ratio_chunk_term(
@@ -65,6 +78,25 @@ def masked_mean_ratio_chunk_term(
     Computed per chunk so the caller can keep backpropagating chunk-by-chunk
     (the outcome route holds one chunk's graph at a time to bound memory).
     """
+    if int(b_eff) <= 0:
+        raise ValueError(f"b_eff must be > 0, got {b_eff!r}")
+    if (
+        value_vec.ndim != 1
+        or mask_c.shape != value_vec.shape
+        or per_rollout_count.shape != value_vec.shape
+    ):
+        raise ValueError(
+            "value_vec, mask_c, and per_rollout_count must have matching 1D shapes, got "
+            f"{tuple(value_vec.shape)}, {tuple(mask_c.shape)}, {tuple(per_rollout_count.shape)}"
+        )
+    if int(value_vec.shape[0]) > int(b_eff):
+        raise ValueError(
+            f"vector length {int(value_vec.shape[0])} cannot exceed global b_eff={int(b_eff)}"
+        )
+    if not bool(torch.isfinite(value_vec).all()) or not bool(torch.isfinite(mask_c).all()):
+        raise ValueError("value_vec and mask_c must contain only finite values")
+    if not bool(torch.isfinite(per_rollout_count).all()) or bool((per_rollout_count <= 0).any()):
+        raise ValueError("per_rollout_count must contain only finite positive values")
     return ((value_vec * mask_c) / per_rollout_count).sum() / float(b_eff)
 
 
@@ -80,6 +112,13 @@ def _ppo_ratio(
     ``exp`` for numerical stability (matches RLinf's log-ratio clamp); it is
     especially relevant here because callers sum log-probs over a trajectory.
     """
+    if log_prob.shape != old_log_prob.shape:
+        raise ValueError(
+            "log_prob and old_log_prob must have matching shapes, got "
+            f"{tuple(log_prob.shape)} and {tuple(old_log_prob.shape)}"
+        )
+    if not bool(torch.isfinite(log_prob).all()) or not bool(torch.isfinite(old_log_prob).all()):
+        raise ValueError("log_prob and old_log_prob must contain only finite values")
     if clip_log_ratio is not None and (
         not math.isfinite(float(clip_log_ratio)) or float(clip_log_ratio) <= 0.0
     ):
@@ -107,6 +146,23 @@ def _ppo_clip_term(
     ``clip_ratio_c * |adv|`` (PPO dual-clip), bounding the negative-advantage /
     exploded-ratio case. The caller applies its own reduction.
     """
+    broadcastable_advantage = (
+        ratio.ndim == advantage.ndim
+        and ratio.ndim > 0
+        and int(ratio.shape[0]) == int(advantage.shape[0])
+        and all(
+            int(advantage_dim) in {1, int(ratio_dim)}
+            for ratio_dim, advantage_dim in zip(ratio.shape[1:], advantage.shape[1:], strict=True)
+        )
+    )
+    if not broadcastable_advantage:
+        raise ValueError(
+            "ratio and advantage must have matching shapes or explicit singleton "
+            "advantage axes, got "
+            f"{tuple(ratio.shape)} and {tuple(advantage.shape)}"
+        )
+    if not bool(torch.isfinite(ratio).all()) or not bool(torch.isfinite(advantage).all()):
+        raise ValueError("ratio and advantage must contain only finite values")
     if not math.isfinite(float(clip_low)) or not 0.0 <= float(clip_low) < 1.0:
         raise ValueError(f"clip_low must be finite and in [0, 1), got {clip_low!r}")
     if not math.isfinite(float(clip_high)) or float(clip_high) < 0.0:

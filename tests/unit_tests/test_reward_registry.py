@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 from dreamervla.algorithms.reward.protocol import RewardModel
@@ -71,3 +72,13 @@ def test_get_unknown_raises():
         assert "Unknown reward model" in str(exc)
     else:
         raise AssertionError("expected ValueError")
+
+
+def test_register_rejects_object_without_reward_protocol() -> None:
+    from dreamervla.algorithms.reward.registry import register_reward_model
+
+    class _Invalid:
+        name = "invalid_reward_protocol"
+
+    with pytest.raises(TypeError, match="RewardModel"):
+        register_reward_model(_Invalid())  # type: ignore[arg-type]

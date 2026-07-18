@@ -64,6 +64,7 @@ from dreamervla.algorithms.ppo.grpo import (
     _ppo_ratio,
     _repeat_latent,
 )
+from dreamervla.algorithms.validation import validate_ppo_hyperparameters
 from dreamervla.utils.torch_utils import move_mapping_to_device
 
 
@@ -82,6 +83,7 @@ def dino_lumos_dense_chunk_step(
     critic_optimizer: torch.optim.Optimizer | None = None,
 ) -> dict[str, float]:
     """One PPO/GRPO update using chunk-WM imagined trajectories + dense state-reward."""
+    validate_ppo_hyperparameters(algorithm_cfg, prefix="algorithm_cfg")
     if (
         real_relabel_batch is not None
         and float((algorithm_cfg.get("real_rollout_relabel", {}) or {}).get("loss_scale", 0.0))
@@ -106,7 +108,7 @@ def dino_lumos_dense_chunk_step(
         raise ValueError(f"horizon={horizon}, K={K}; both must be >= 1")
     imag_last = int(algorithm_cfg.get("imag_last", 4))
     group_size = int(algorithm_cfg.get("ppo_rollouts_per_start", 4))
-    update_epochs = max(1, int(algorithm_cfg.get("ppo_update_epochs", 1)))
+    update_epochs = int(algorithm_cfg.get("ppo_update_epochs", 1))
     clip_low = float(algorithm_cfg.get("clip_ratio_low", 0.2))
     clip_high = float(algorithm_cfg.get("clip_ratio_high", 0.28))
     clip_ratio_c = algorithm_cfg.get("clip_ratio_c", None)

@@ -21,6 +21,7 @@ imagination rollout trains the actor and value head:
 
 from __future__ import annotations
 
+import math
 import os
 from collections.abc import Mapping
 from contextlib import contextmanager
@@ -34,6 +35,7 @@ from torch import nn
 from torch.distributions import Normal
 
 from dreamervla.algorithms.critic.twohot_critic import ReturnPercentileTracker
+from dreamervla.algorithms.validation import validate_ppo_hyperparameters
 from dreamervla.utils.polyak import soft_update
 from dreamervla.utils.torch_utils import autocast_context, move_mapping_to_device
 from dreamervla.utils.update_timing import GradientUpdateTimer
@@ -145,6 +147,12 @@ def world_model_pretrain_step(
     resolved_metrics_mode = str(metrics_mode).lower()
     if resolved_metrics_mode not in {"full", "loss_only", "loss_tensor"}:
         raise ValueError("metrics_mode must be one of: full, loss_only, loss_tensor")
+    try:
+        grad_clip_norm = float(optim_cfg.get("grad_clip_norm", 1.0))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("optim_cfg.grad_clip_norm must be a finite number > 0") from exc
+    if not math.isfinite(grad_clip_norm) or grad_clip_norm <= 0.0:
+        raise ValueError(f"optim_cfg.grad_clip_norm must be finite and > 0, got {grad_clip_norm!r}")
     timer = GradientUpdateTimer(device, enabled=profile_timings is not None)
     flat_batch: dict[str, Any] = {}
     with timer.device_stage("h2d"):
@@ -185,16 +193,27 @@ def world_model_pretrain_step(
     with timer.device_stage("forward"):
         with _manual_autocast_context(optim_cfg, device):
             losses = world_model(flat_batch)
+    if not isinstance(losses, Mapping):
+        raise TypeError(
+            "world_model output must be a mapping containing Tensor key 'loss' or '_loss'"
+        )
     loss_tensor = losses.get("_loss", losses.get("loss"))
     if not isinstance(loss_tensor, torch.Tensor):
         raise KeyError("world_model output must contain Tensor key 'loss' or '_loss'")
+    if loss_tensor.numel() != 1:
+        raise ValueError(
+            f"world_model loss must be a scalar tensor, got shape {tuple(loss_tensor.shape)}"
+        )
+    if not bool(torch.isfinite(loss_tensor.detach()).all()):
+        raise ValueError("world_model loss must be finite before backward")
 
     with timer.device_stage("backward"):
         loss_tensor.backward()
     with timer.device_stage("grad_clip"):
         grad_norm = torch.nn.utils.clip_grad_norm_(
             world_model.parameters(),
-            max_norm=float(optim_cfg.get("grad_clip_norm", 1.0)),
+            max_norm=grad_clip_norm,
+            error_if_nonfinite=True,
         )
     with timer.device_stage("optimizer"):
         optimizer.step()
@@ -434,9 +453,15 @@ def _flatten_strided_steps(value: Any, num_starts: int, min_start: int = 0) -> A
     Same start count (=> same effective batch / memory), better state coverage.
     """
     T = _latent_time_dim(value)
-    lo = max(0, min(int(min_start), T - 1))
+    num_starts = int(num_starts)
+    min_start = int(min_start)
+    if num_starts <= 0:
+        raise ValueError(f"num_starts must be > 0, got {num_starts!r}")
+    if min_start < 0 or min_start >= T:
+        raise ValueError(f"min_start must be in [0, {T}), got {min_start!r}")
+    lo = min_start
     avail = T - lo
-    n = max(1, min(int(num_starts), avail))
+    n = min(num_starts, avail)
     if n >= avail:
         idx = torch.arange(lo, T)
     else:
@@ -517,6 +542,20 @@ def _actor_action_to_env_scale(
         device=action.device,
         dtype=action.dtype,
     )
+    if low.ndim != 1 or high.ndim != 1 or low.shape != high.shape:
+        raise ValueError(
+            "rssm_action_low and rssm_action_high must be matching 1D vectors, got "
+            f"{tuple(low.shape)} and {tuple(high.shape)}"
+        )
+    if not bool(torch.isfinite(low).all()) or not bool(torch.isfinite(high).all()):
+        raise ValueError("RSSM action bounds must contain only finite values")
+    if bool((low >= high).any()):
+        raise ValueError("rssm_action_low must be elementwise smaller than rssm_action_high")
+    if action.ndim < 1 or int(action.shape[-1]) != int(low.numel()):
+        width = int(action.shape[-1]) if action.ndim >= 1 else 0
+        raise ValueError(f"action width must match RSSM bounds ({width} != {int(low.numel())})")
+    if not bool(torch.isfinite(action).all()):
+        raise ValueError("action must contain only finite values")
     mapped = (action + 1.0) * 0.5 * (high - low) + low
     do_clip = bool(algorithm_cfg.get("rssm_action_clip", True)) if clip is None else bool(clip)
     if do_clip:
@@ -584,6 +623,14 @@ def compute_lambda_returns(
             "lambda_return expects equal [B,H+1] shapes, got "
             f"{tuple(rewards.shape)}, {tuple(continues.shape)}, {tuple(boot.shape)}"
         )
+    if rewards.ndim != 2:
+        raise ValueError(f"lambda_return expects [B,H+1] tensors, got {tuple(rewards.shape)}")
+    if rewards.shape[0] <= 0 or rewards.shape[1] < 2:
+        raise ValueError("lambda_return requires a non-empty batch and at least two time positions")
+    if not math.isfinite(float(disc)) or not 0.0 <= float(disc) <= 1.0:
+        raise ValueError(f"disc must be finite and in [0, 1], got {disc!r}")
+    if not math.isfinite(float(lam)) or not 0.0 <= float(lam) <= 1.0:
+        raise ValueError(f"lam must be finite and in [0, 1], got {lam!r}")
     live = continues[:, 1:] * float(disc)
     cont = torch.full_like(live, float(lam))
     return _lambda_return_recurrence(live, cont, rewards, boot)
@@ -609,6 +656,16 @@ def compute_replay_lambda_returns(
             f"{tuple(last.shape)}, {tuple(terminal.shape)}, "
             f"{tuple(rewards.shape)}, {tuple(boot.shape)}"
         )
+    if rewards.ndim != 2:
+        raise ValueError(f"replay lambda_return expects [B,T] tensors, got {tuple(rewards.shape)}")
+    if rewards.shape[0] <= 0 or rewards.shape[1] < 2:
+        raise ValueError(
+            "replay lambda_return requires a non-empty batch and at least two time positions"
+        )
+    if not math.isfinite(float(disc)) or not 0.0 <= float(disc) <= 1.0:
+        raise ValueError(f"disc must be finite and in [0, 1], got {disc!r}")
+    if not math.isfinite(float(lam)) or not 0.0 <= float(lam) <= 1.0:
+        raise ValueError(f"lam must be finite and in [0, 1], got {lam!r}")
     live = (1.0 - terminal.float())[:, 1:] * float(disc)
     cont = (1.0 - last.float())[:, 1:] * float(lam)
     return _lambda_return_recurrence(live, cont, rewards, boot)
@@ -629,6 +686,14 @@ def normalize_returns_for_actor_critic(
     values: torch.Tensor,
     algorithm_cfg: DictConfig,
 ) -> ReturnNormalizationOutput:
+    validate_ppo_hyperparameters(algorithm_cfg, prefix="algorithm_cfg")
+    if returns.shape != values.shape or returns.numel() == 0:
+        raise ValueError(
+            "returns and values must be non-empty tensors with matching shapes, got "
+            f"{tuple(returns.shape)} and {tuple(values.shape)}"
+        )
+    if not bool(torch.isfinite(returns).all()) or not bool(torch.isfinite(values).all()):
+        raise ValueError("returns and values must contain only finite values")
     norm_cfg = algorithm_cfg.get("return_normalization", None)
     mode = "none" if norm_cfg is None else str(norm_cfg.get("mode", "none")).lower()
     if mode in {"none", "identity", "off", "false", "0"}:
@@ -681,6 +746,7 @@ def imagine_actor_critic_step(
     Expects `critic` and `target_critic` to be `TwohotCritic` instances exposing
     `forward(feat) -> expected_value` and `log_prob_of(feat, target_values)`.
     """
+    validate_ppo_hyperparameters(algorithm_cfg, prefix="algorithm_cfg")
     horizon = int(algorithm_cfg.imagination_horizon)
     actor_input_mode = str(algorithm_cfg.get("actor_input_mode", "pooled")).lower()
     if actor_input_mode not in {"pooled", "sequence"}:
@@ -1095,16 +1161,13 @@ def imagine_actor_critic_step(
                 # components can be compared element-wise (norms, cosines).
                 if not loss_t.requires_grad or loss_t.grad_fn is None:
                     return None
-                try:
-                    grads = torch.autograd.grad(
-                        loss_t,
-                        actor_params,
-                        retain_graph=True,
-                        allow_unused=True,
-                        create_graph=False,
-                    )
-                except RuntimeError:
-                    return None
+                grads = torch.autograd.grad(
+                    loss_t,
+                    actor_params,
+                    retain_graph=True,
+                    allow_unused=True,
+                    create_graph=False,
+                )
                 pieces = []
                 has_any = False
                 for g, p in zip(grads, actor_params, strict=True):
@@ -1193,15 +1256,20 @@ def imagine_actor_critic_step(
         def _sequence_field(*keys: str) -> torch.Tensor | None:
             for key in keys:
                 value = obs.get(key)
-                if isinstance(value, torch.Tensor):
-                    tensor = value
-                    if tensor.ndim == 3 and tensor.shape[-1] == 1:
-                        tensor = tensor.squeeze(-1)
-                    if tensor.ndim != 2:
-                        raise ValueError(
-                            f"obs.{key} must be [B,T] for replay value loss, got {tuple(value.shape)}"
-                        )
-                    return tensor[:, -starts:].to(device=device, dtype=returns.dtype)
+                if value is None:
+                    continue
+                if not isinstance(value, torch.Tensor):
+                    raise TypeError(
+                        f"obs.{key} must be a Tensor when provided, got {type(value).__name__}"
+                    )
+                tensor = value
+                if tensor.ndim == 3 and tensor.shape[-1] == 1:
+                    tensor = tensor.squeeze(-1)
+                if tensor.ndim != 2:
+                    raise ValueError(
+                        f"obs.{key} must be [B,T] for replay value loss, got {tuple(value.shape)}"
+                    )
+                return tensor[:, -starts:].to(device=device, dtype=returns.dtype)
             return None
 
         replay_rewards = _sequence_field("rewards", "reward")

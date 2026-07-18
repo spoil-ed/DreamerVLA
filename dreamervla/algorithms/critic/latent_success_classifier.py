@@ -7,6 +7,7 @@ earliest window with p(success) >= threshold defines finish_step.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import torch
@@ -78,6 +79,7 @@ class LatentSuccessClassifier(nn.Module):
         super().__init__()
         if cfg is None:
             cfg = LatentSuccessClassifierConfig(**kwargs)
+        head_type = str(getattr(cfg, "head_type", "transformer"))
         configured_token_count = int(getattr(cfg, "token_count", 0) or 0)
         configured_token_dim = int(getattr(cfg, "token_dim", 0) or 0)
         configured_latent_dim = int(getattr(cfg, "latent_dim", 0) or 0)
@@ -87,9 +89,41 @@ class LatentSuccessClassifier(nn.Module):
             raise ValueError(
                 "the removed 56x1024 observation interface is closed; use hidden_token [256,4096]"
             )
+        if cfg.latent_dim is not None and int(cfg.latent_dim) <= 0:
+            raise ValueError(f"latent_dim must be > 0, got {cfg.latent_dim!r}")
+        if configured_token_dim <= 0:
+            raise ValueError(f"token_dim must be > 0, got {cfg.token_dim!r}")
+        if int(cfg.window) <= 0:
+            raise ValueError(f"window must be > 0, got {cfg.window!r}")
+        if int(cfg.action_dim) <= 0:
+            raise ValueError(f"action_dim must be > 0, got {cfg.action_dim!r}")
+        if int(cfg.time_horizon) <= 0:
+            raise ValueError(f"time_horizon must be > 0, got {cfg.time_horizon!r}")
+        if int(cfg.hidden_dim) <= 0:
+            raise ValueError(f"hidden_dim must be > 0, got {cfg.hidden_dim!r}")
+        dropout = float(cfg.dropout)
+        if not math.isfinite(dropout) or not 0.0 <= dropout < 1.0:
+            raise ValueError(f"dropout must be finite and in [0, 1), got {cfg.dropout!r}")
+        if head_type in {"spatial_tf", "transformer"}:
+            if int(cfg.num_layers) <= 0:
+                raise ValueError(f"num_layers must be > 0, got {cfg.num_layers!r}")
+            if int(cfg.num_heads) <= 0:
+                raise ValueError(f"num_heads must be > 0, got {cfg.num_heads!r}")
+            if int(cfg.hidden_dim) % int(cfg.num_heads) != 0:
+                raise ValueError(
+                    "hidden_dim must be divisible by num_heads, got "
+                    f"{int(cfg.hidden_dim)} % {int(cfg.num_heads)} != 0"
+                )
+            mlp_ratio = float(cfg.mlp_ratio)
+            if not math.isfinite(mlp_ratio) or mlp_ratio <= 0.0:
+                raise ValueError(f"mlp_ratio must be finite and > 0, got {cfg.mlp_ratio!r}")
+            if int(int(cfg.hidden_dim) * mlp_ratio) <= 0:
+                raise ValueError("hidden_dim * mlp_ratio must produce a positive MLP width")
         self.proprio_dim = int(getattr(cfg, "proprio_dim", 0) or 0)
         self.proprio_emb_dim = int(getattr(cfg, "proprio_emb_dim", 0) or 0)
-        self.num_proprio_repeat = int(getattr(cfg, "num_proprio_repeat", 1) or 1)
+        self.num_proprio_repeat = int(getattr(cfg, "num_proprio_repeat", 1))
+        if self.proprio_dim < 0:
+            raise ValueError(f"proprio_dim must be >= 0, got {self.proprio_dim}")
         if self.proprio_emb_dim < 0:
             raise ValueError(f"proprio_emb_dim must be >= 0, got {self.proprio_emb_dim}")
         if self.num_proprio_repeat < 1:
@@ -100,7 +134,9 @@ class LatentSuccessClassifier(nn.Module):
 
         self.lang_dim = int(getattr(cfg, "lang_dim", 0) or 0)
         self.lang_emb_dim = int(getattr(cfg, "lang_emb_dim", 0) or 0)
-        self.num_lang_repeat = int(getattr(cfg, "num_lang_repeat", 1) or 1)
+        self.num_lang_repeat = int(getattr(cfg, "num_lang_repeat", 1))
+        if self.lang_dim < 0:
+            raise ValueError(f"lang_dim must be >= 0, got {self.lang_dim}")
         if self.lang_emb_dim < 0:
             raise ValueError(f"lang_emb_dim must be >= 0, got {self.lang_emb_dim}")
         if self.num_lang_repeat < 1:
@@ -135,7 +171,7 @@ class LatentSuccessClassifier(nn.Module):
                 f"num_lang_repeat={self.num_lang_repeat}"
             )
         self.cfg = cfg
-        self.output_dim = int(getattr(cfg, "output_dim", 2) or 2)
+        self.output_dim = int(getattr(cfg, "output_dim", 2))
         if self.output_dim not in (1, 2):
             raise ValueError(f"output_dim must be 1 or 2, got {self.output_dim}")
         gran = str(getattr(cfg, "granularity", "action"))
@@ -183,7 +219,7 @@ class LatentSuccessClassifier(nn.Module):
             self.task_embedding = nn.Embedding(num_tasks, int(cfg.latent_dim))
         else:
             self.task_embedding = None
-        ht = str(getattr(cfg, "head_type", "transformer"))
+        ht = head_type
         if ht == "spatial_tf":
             token_count = int(getattr(cfg, "token_count", 0) or 0)
             if token_count < 1:
@@ -442,8 +478,23 @@ class LatentSuccessClassifier(nn.Module):
         lang_emb: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """latent_window: [B, W, latent_dim] or token grid -> logits [B, output_dim]."""
+        if latent_window.ndim < 3:
+            raise ValueError(f"latent_window must be [B,W,...], got {tuple(latent_window.shape)}")
+        batch_size = int(latent_window.shape[0])
+        if batch_size <= 0:
+            raise ValueError("latent_window batch must be non-empty")
         if latent_window.shape[1] != self.cfg.window:
             raise ValueError(f"expected window={self.cfg.window}, got {latent_window.shape[1]}")
+        if proprio is not None and (proprio.ndim == 0 or int(proprio.shape[0]) != batch_size):
+            raise ValueError(
+                f"proprio batch shape {tuple(proprio.shape)} does not match "
+                f"latent batch {batch_size}"
+            )
+        if lang_emb is not None and (lang_emb.ndim == 0 or int(lang_emb.shape[0]) != batch_size):
+            raise ValueError(
+                f"lang_emb batch shape {tuple(lang_emb.shape)} does not match "
+                f"latent batch {batch_size}"
+            )
         ht = str(getattr(self.cfg, "head_type", "transformer"))
         if ht == "spatial_tf":
             if self.task_conditioning_enabled:
@@ -465,6 +516,20 @@ class LatentSuccessClassifier(nn.Module):
                 )
             if self.task_embedding is None:
                 raise RuntimeError("task conditioning is enabled without an embedding")
+            if task_ids.ndim != 1 or int(task_ids.shape[0]) != batch_size:
+                raise ValueError(f"task_ids must be [B={batch_size}], got {tuple(task_ids.shape)}")
+            if task_ids.dtype not in {
+                torch.int8,
+                torch.int16,
+                torch.int32,
+                torch.int64,
+                torch.uint8,
+            }:
+                raise ValueError(f"task_ids must have integer dtype, got {task_ids.dtype}")
+            if bool(((task_ids < 0) | (task_ids >= self.task_embedding.num_embeddings)).any()):
+                raise ValueError(
+                    f"task_ids must be within [0, {self.task_embedding.num_embeddings - 1}]"
+                )
             task_emb = self.task_embedding(task_ids.to(latent_window.device).long())
             latent_window = latent_window + task_emb[:, None, :].to(latent_window.dtype)
         if ht == "transformer":
@@ -548,6 +613,12 @@ class LatentSuccessClassifier(nn.Module):
         """
         if latent_video.ndim < 3:
             raise ValueError(f"latent_video must be [B,T,...], got {tuple(latent_video.shape)}")
+        if int(stride) <= 0:
+            raise ValueError(f"stride must be > 0, got {stride!r}")
+        if int(min_steps) < 0:
+            raise ValueError(f"min_steps must be >= 0, got {min_steps!r}")
+        if not math.isfinite(float(threshold)):
+            raise ValueError(f"threshold must be finite, got {threshold!r}")
         B, T = int(latent_video.shape[0]), int(latent_video.shape[1])
         W = self.cfg.window
         device = latent_video.device
@@ -576,6 +647,10 @@ class LatentSuccessClassifier(nn.Module):
             )
 
         T_scan = scan_video.shape[1]
+        if int(T_scan) < int(W):
+            raise ValueError(
+                f"latent video length {int(T_scan)} is shorter than classifier window {int(W)}"
+            )
         complete = torch.zeros(B, dtype=torch.bool, device=device)
         finish_step = torch.full((B,), T_scan - 1, dtype=torch.long, device=device)
         score = torch.zeros(B, dtype=torch.float32, device=device)

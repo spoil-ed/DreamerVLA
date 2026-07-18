@@ -101,6 +101,7 @@ def _cfg(micro_batch_starts, update_epochs=1):
             "ppo_update_epochs": update_epochs,
             "kl_coef": 0.0,
             "actor_bc_to_ref_scale": 0.0,
+            "rssm_action_scale": "policy",
             "clip_ratio_low": 0.2,
             "clip_ratio_high": 0.28,
             "advantage_eps": 1.0e-6,

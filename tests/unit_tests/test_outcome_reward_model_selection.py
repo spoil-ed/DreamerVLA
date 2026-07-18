@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 import dreamervla.algorithms.reward as reward_pkg
@@ -74,3 +75,35 @@ def test_outcome_default_reward_model_is_sparse_outcome(monkeypatch):
         device=torch.device("cpu"),
     )
     assert captured["name"] == "sparse_outcome"
+
+
+@pytest.mark.parametrize(
+    "bad_output",
+    [
+        [0.0],
+        torch.zeros(2, 3),
+        torch.full((2, 4), float("nan")),
+    ],
+)
+def test_outcome_rejects_invalid_reward_model_output(monkeypatch, bad_output):
+    class _BadReward:
+        name = "bad"
+
+        def build_reward(self, **kwargs):
+            del kwargs
+            return bad_output
+
+    monkeypatch.setattr(reward_pkg, "get_reward_model", lambda _name: _BadReward())
+
+    from dreamervla.algorithms.ppo.outcome import _resolve_reward_tensor
+
+    with pytest.raises((TypeError, ValueError), match="reward model"):
+        _resolve_reward_tensor(
+            lumos_cfg={"reward_model": "bad"},
+            batch=2,
+            max_steps=4,
+            chunk_size=2,
+            finish_step=torch.tensor([0, 1]),
+            complete=torch.tensor([True, False]),
+            device=torch.device("cpu"),
+        )

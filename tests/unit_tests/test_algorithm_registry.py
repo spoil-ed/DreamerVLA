@@ -8,8 +8,10 @@ from dreamervla.algorithms.ppo import (
     dino_lumos_step,
 )
 from dreamervla.algorithms.registry import (
+    ActorUpdateRoute,
     actor_update_names,
     get_actor_update_route,
+    register_actor_update_route,
 )
 
 
@@ -41,3 +43,23 @@ def test_actor_update_registry_reports_available_names() -> None:
 
     with pytest.raises(ValueError, match="Unknown actor update route"):
         get_actor_update_route("not_a_route")
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        ActorUpdateRoute(
+            name="invalid_step_route",
+            step_fn=None,  # type: ignore[arg-type]
+            world_model_arg="world_model",
+        ),
+        ActorUpdateRoute(
+            name="invalid_world_model_arg_route",
+            step_fn=lambda: {},
+            world_model_arg="invalid",  # type: ignore[arg-type]
+        ),
+    ],
+)
+def test_actor_update_registry_rejects_invalid_route_contract(route: ActorUpdateRoute) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        register_actor_update_route(route)

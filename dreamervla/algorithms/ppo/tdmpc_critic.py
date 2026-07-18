@@ -26,7 +26,11 @@ def _sequence_field(
 ) -> torch.Tensor | None:
     """Pull a 2D ``[B, T]`` sequence from ``obs`` by trying each candidate key."""
     for key in keys:
-        value = obs.get(key)
+        if key not in obs or obs[key] is None:
+            continue
+        value = obs[key]
+        if not isinstance(value, torch.Tensor):
+            raise TypeError(f"obs.{key} must be a Tensor, got {type(value).__name__}")
         if isinstance(value, torch.Tensor):
             tensor = value
             if tensor.ndim == 3 and tensor.shape[-1] == 1:
@@ -49,22 +53,28 @@ def _tdmpc_value_mode(tdmpc_ac_cfg: Mapping[str, Any]) -> str:
 
 
 def _tdmpc_action_dim(tdmpc_ac_cfg: Mapping[str, Any], fallback: int) -> int:
-    return int(tdmpc_ac_cfg.get("action_dim", fallback))
+    action_dim = int(tdmpc_ac_cfg.get("action_dim", fallback))
+    if action_dim <= 0:
+        raise ValueError(f"TD-MPC action_dim must be > 0, got {action_dim!r}")
+    return action_dim
 
 
 def _tdmpc_prepare_action(action: torch.Tensor, action_dim: int) -> torch.Tensor:
+    action_dim = int(action_dim)
+    if action_dim <= 0:
+        raise ValueError(f"TD-MPC action_dim must be > 0, got {action_dim!r}")
     action = action.float()
-    if action.ndim > 3:
-        action = action.reshape(action.shape[0], -1)
+    if not bool(torch.isfinite(action).all()):
+        raise ValueError("TD-MPC action must contain only finite values")
     if action.ndim not in {2, 3}:
         raise ValueError(
             f"TD-MPC state-action critic expects action [B,A] or [B,T,A], got {tuple(action.shape)}"
         )
-    if int(action.shape[-1]) < int(action_dim):
+    if int(action.shape[-1]) < action_dim:
         raise ValueError(
             f"TD-MPC state-action critic action dim {action.shape[-1]} < configured {action_dim}"
         )
-    return action[..., : int(action_dim)]
+    return action[..., :action_dim]
 
 
 def _tdmpc_critic_hidden(

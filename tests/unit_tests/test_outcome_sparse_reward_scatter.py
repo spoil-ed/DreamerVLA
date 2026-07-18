@@ -7,6 +7,7 @@ the vectorized output must equal the original loop's output with atol=0
 (``torch.equal``) across boundary / clamp / incomplete-row cases.
 """
 
+import pytest
 import torch
 
 from dreamervla.algorithms.ppo.outcome import _build_reward_tensor
@@ -84,12 +85,12 @@ def test_scatter_all_incomplete_is_zero():
     assert torch.equal(out, torch.zeros((batch, max_steps), dtype=torch.float32))
 
 
-def test_scatter_zero_max_steps_early_return():
-    out = _build_reward_tensor(
-        batch=3,
-        max_steps=0,
-        chunk_size=1,
-        finish_step=torch.tensor([0, 0, 0]),
-        complete=torch.tensor([True, True, True]),
-    )
-    assert out.shape == (3, 0) and out.dtype == torch.float32
+def test_scatter_rejects_zero_max_steps():
+    with pytest.raises(ValueError, match="max_steps"):
+        _build_reward_tensor(
+            batch=3,
+            max_steps=0,
+            chunk_size=1,
+            finish_step=torch.tensor([0, 0, 0]),
+            complete=torch.tensor([True, True, True]),
+        )

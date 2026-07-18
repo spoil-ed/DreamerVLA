@@ -63,6 +63,7 @@ from dreamervla.algorithms.ppo.tdmpc_critic import (
     _tdmpc_critic_hidden,
     _tdmpc_value_mode,
 )
+from dreamervla.algorithms.validation import validate_ppo_hyperparameters
 from dreamervla.utils.polyak import soft_update
 from dreamervla.utils.torch_utils import move_mapping_to_device
 
@@ -257,10 +258,11 @@ def dino_lumos_dense_step(
     The world model is used as a frozen imagination environment for this RL
     update.  It may still be trained by the separate supervised WM phase.
     """
+    validate_ppo_hyperparameters(algorithm_cfg, prefix="algorithm_cfg")
     horizon = int(algorithm_cfg.get("imagination_horizon", 5))
     imag_last = int(algorithm_cfg.get("imag_last", 4))
     group_size = int(algorithm_cfg.get("ppo_rollouts_per_start", 4))
-    update_epochs = max(1, int(algorithm_cfg.get("ppo_update_epochs", 1)))
+    update_epochs = int(algorithm_cfg.get("ppo_update_epochs", 1))
     clip_low = float(algorithm_cfg.get("clip_ratio_low", 0.2))
     clip_high = float(algorithm_cfg.get("clip_ratio_high", 0.28))
     clip_ratio_c = algorithm_cfg.get("clip_ratio_c", None)

@@ -129,6 +129,8 @@ def _base_cfg(micro_batch_starts, update_epochs, *, bc_scale=0.0):
             "ppo_gamma": 0.99,
             "actor_bc_to_ref_scale": bc_scale,
             "rssm_action_scale": "policy",
+            "rssm_action_low": [-1.0],
+            "rssm_action_high": [1.0],
         }
     )
 

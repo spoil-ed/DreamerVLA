@@ -16,6 +16,7 @@ import torch.nn.functional as F
 from omegaconf import OmegaConf
 from torch import nn
 
+from dreamervla.algorithms.validation import validate_ppo_hyperparameters
 from dreamervla.hybrid_engines.fsdp import FSDPModelManager
 from dreamervla.hybrid_engines.fsdp.strategy import dtype_from_precision
 from dreamervla.hybrid_engines.weight_syncer import BucketWeightSyncer
@@ -637,10 +638,14 @@ class EmbodiedFSDPActor(Worker):
         policy = self._policy()
         optimizer = self._optimizer()
         algorithm_cfg = _as_plain_dict(self.train_cfg.get("algorithm_cfg", {}))
+        validate_ppo_hyperparameters(
+            algorithm_cfg,
+            prefix="actor.train_cfg.algorithm_cfg",
+        )
         optim_cfg = _as_plain_dict(
             _as_plain_dict(self.train_cfg.get("optimizers", {})).get("policy", {})
         )
-        update_epochs = max(1, int(algorithm_cfg.get("ppo_update_epochs", 1)))
+        update_epochs = int(algorithm_cfg.get("ppo_update_epochs", 1))
         clip_low = float(algorithm_cfg.get("clip_ratio_low", 0.2))
         clip_high = float(algorithm_cfg.get("clip_ratio_high", 0.28))
         clip_ratio_c_value = algorithm_cfg.get("clip_ratio_c")

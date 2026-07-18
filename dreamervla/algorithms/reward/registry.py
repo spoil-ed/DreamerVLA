@@ -19,6 +19,9 @@ def _normalise_name(name: str) -> str:
 def register_reward_model(model: RewardModel, *, aliases: Iterable[str] = ()) -> RewardModel:
     """Register a reward model and aliases."""
 
+    if not isinstance(model, RewardModel):
+        raise TypeError(f"model must satisfy RewardModel, got {type(model).__name__}")
+
     keys = [_normalise_name(model.name), *(_normalise_name(a) for a in aliases)]
     for key in keys:
         existing = _REWARD_MODELS.get(key)

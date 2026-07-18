@@ -50,6 +50,16 @@ def register_actor_update_route(
 ) -> ActorUpdateRoute:
     """Register an actor-update route and aliases."""
 
+    if not isinstance(route, ActorUpdateRoute):
+        raise TypeError(f"route must be an ActorUpdateRoute, got {type(route).__name__}")
+    if not callable(route.step_fn):
+        raise TypeError(f"Actor update route {route.name!r} step_fn must be callable")
+    if route.world_model_arg not in {"world_model", "chunk_world_model"}:
+        raise ValueError(
+            "Actor update route world_model_arg must be 'world_model' or "
+            f"'chunk_world_model', got {route.world_model_arg!r}"
+        )
+
     keys = [_normalise_name(route.name), *(_normalise_name(alias) for alias in aliases)]
     for key in keys:
         existing = _ACTOR_UPDATE_ROUTES.get(key)

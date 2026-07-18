@@ -24,8 +24,14 @@ class FixedBatchReplay:
             for key, value in batch.items()
         }
 
-    def sample(self, batch_size: int) -> dict:
-        del batch_size
+    def sample(
+        self,
+        batch_size: int,
+        *,
+        staleness_threshold: int | None = None,
+        include_images: bool = True,
+    ) -> dict:
+        del batch_size, staleness_threshold, include_images
         return {
             key: (value.clone() if torch.is_tensor(value) else value)
             for key, value in self._batch.items()

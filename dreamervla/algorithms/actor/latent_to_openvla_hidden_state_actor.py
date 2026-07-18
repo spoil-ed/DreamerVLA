@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 from typing import Any
 
@@ -56,7 +57,7 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
                 "flat hidden_dim observations are removed; pass tokenized hidden_token [B,256,4096]"
             )
         super().__init__()
-        self.source_token_count = int(source_token_count or 256)
+        self.source_token_count = 256 if source_token_count is None else int(source_token_count)
         self.source_token_dim = int(source_token_dim)
         if self.source_token_count != 256 or self.source_token_dim != 4096:
             raise ValueError(
@@ -82,6 +83,10 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
         self.adapter_type = str(adapter_type).lower()
         self.head_type = str(head_type).lower()
         self.bridge_hidden_dim = int(bridge_hidden_dim)
+        num_bridge_layers = int(num_bridge_layers)
+        num_bridge_heads = int(num_bridge_heads)
+        bridge_dropout = float(bridge_dropout)
+        adapter_hidden_dim = int(adapter_hidden_dim)
         if self.head_type != "oft_discrete_token":
             raise ValueError(
                 "LatentToOpenVLAHiddenStateActor requires head_type='oft_discrete_token'."
@@ -90,10 +95,26 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
             raise ValueError("adapter_type must be one of {'identity', 'mlp', 'residual_mlp'}")
         if self.action_token_bins < 2:
             raise ValueError("action_token_bins must be >= 2")
-        if self.bridge_hidden_dim % int(num_bridge_heads) != 0:
+        if self.bridge_hidden_dim <= 0:
+            raise ValueError(f"bridge_hidden_dim must be > 0, got {self.bridge_hidden_dim}")
+        if num_bridge_layers <= 0:
+            raise ValueError(f"num_bridge_layers must be > 0, got {num_bridge_layers}")
+        if num_bridge_heads <= 0:
+            raise ValueError(f"num_bridge_heads must be > 0, got {num_bridge_heads}")
+        if not math.isfinite(bridge_dropout) or not 0.0 <= bridge_dropout < 1.0:
+            raise ValueError(f"bridge_dropout must be finite and in [0, 1), got {bridge_dropout!r}")
+        if adapter_hidden_dim <= 0:
+            raise ValueError(f"adapter_hidden_dim must be > 0, got {adapter_hidden_dim}")
+        if not math.isfinite(self.min_action) or not math.isfinite(self.max_action):
+            raise ValueError("min_action and max_action must be finite")
+        if self.min_action >= self.max_action:
+            raise ValueError(
+                f"min_action must be < max_action, got {self.min_action} >= {self.max_action}"
+            )
+        if self.bridge_hidden_dim % num_bridge_heads != 0:
             raise ValueError(
                 "bridge_hidden_dim must be divisible by num_bridge_heads: "
-                f"{self.bridge_hidden_dim} % {int(num_bridge_heads)} != 0"
+                f"{self.bridge_hidden_dim} % {num_bridge_heads} != 0"
             )
 
         self.action_token_count = self.time_horizon * self.action_dim
@@ -104,7 +125,13 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
         )
         weight = lm_head_state.get("weight")
         action_weight = None
-        if weight is not None:
+        if init_lm_head_ckpt and not isinstance(weight, torch.Tensor):
+            raise KeyError(f"checkpoint {init_lm_head_ckpt!r} does not contain an LM-head weight")
+        if isinstance(weight, torch.Tensor):
+            if weight.ndim != 2:
+                raise ValueError(
+                    f"OpenVLA LM-head weight must be rank 2, got shape {tuple(weight.shape)}"
+                )
             loaded_rows = int(weight.shape[0])
             if loaded_rows > self.action_token_bins:
                 vocab_size = loaded_rows
@@ -137,16 +164,16 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
         )
         decoder_layer = nn.TransformerDecoderLayer(
             d_model=self.bridge_hidden_dim,
-            nhead=int(num_bridge_heads),
+            nhead=num_bridge_heads,
             dim_feedforward=self.bridge_hidden_dim * 4,
-            dropout=float(bridge_dropout),
+            dropout=bridge_dropout,
             batch_first=True,
             activation="gelu",
             norm_first=True,
         )
         self.bridge = nn.TransformerDecoder(
             decoder_layer,
-            num_layers=int(num_bridge_layers),
+            num_layers=num_bridge_layers,
             norm=nn.LayerNorm(self.bridge_hidden_dim),
         )
         self.hidden_state_proj = (
@@ -160,9 +187,9 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
         else:
             self.adapter = nn.Sequential(
                 nn.LayerNorm(self.hidden_state_dim),
-                nn.Linear(self.hidden_state_dim, int(adapter_hidden_dim)),
+                nn.Linear(self.hidden_state_dim, adapter_hidden_dim),
                 nn.GELU(),
-                nn.Linear(int(adapter_hidden_dim), self.hidden_state_dim),
+                nn.Linear(adapter_hidden_dim, self.hidden_state_dim),
             )
             if self.adapter_type == "residual_mlp":
                 final_linear = self.adapter[-1]
@@ -321,8 +348,10 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
 
     def _token_ids_to_classes(self, token_ids: torch.Tensor) -> torch.Tensor:
         start = self.vocab_size - self.action_token_bins
-        classes = token_ids.long() - int(start)
-        return classes.clamp(min=0, max=self.action_token_bins - 1)
+        token_ids = token_ids.long()
+        if not bool(((token_ids >= start) & (token_ids < self.vocab_size)).all()):
+            raise ValueError(f"action_token_ids must be within [{start}, {self.vocab_size - 1}]")
+        return token_ids - int(start)
 
     def _actions_to_classes(self, actions: torch.Tensor) -> torch.Tensor:
         clipped = actions.float().clamp(self.min_action, self.max_action)
@@ -391,31 +420,57 @@ class LatentToOpenVLAHiddenStateActor(BaseActor):
 
         if mode == "evaluate":
             action = batch["action"]
+            if not isinstance(action, torch.Tensor):
+                raise TypeError("action must be a Tensor")
+            if not bool(torch.isfinite(action).all()):
+                raise ValueError("action must contain only finite values")
+            batch_size = int(logits.shape[0])
+            if action.ndim == 2:
+                expected_shape = (batch_size, self.action_dim)
+                target_count = self.action_dim
+            elif action.ndim == 3:
+                expected_shape = (batch_size, self.time_horizon, self.action_dim)
+                target_count = self.action_token_count
+            else:
+                raise ValueError(f"action must be [B,A] or [B,T,A], got {tuple(action.shape)}")
+            if tuple(action.shape) != expected_shape:
+                raise ValueError(
+                    f"action shape mismatch: got {tuple(action.shape)}, expected {expected_shape}"
+                )
             logprob_type = str(batch.get("logprob_type", "sequence")).lower()
             if logprob_type not in {"sequence", "token_level"}:
                 raise ValueError(
                     f"logprob_type must be 'sequence' or 'token_level', got {logprob_type!r}"
                 )
             action_token_ids = batch.get("action_token_ids")
-            if action_token_ids is not None:
-                classes = self._token_ids_to_classes(action_token_ids.to(logits.device))
-                if classes.ndim == 3:
-                    classes = classes.reshape(classes.shape[0], -1)
-                elif classes.ndim != 2:
-                    raise ValueError(
-                        f"action_token_ids must be [B,N] or [B,T,A], got {tuple(classes.shape)}"
-                    )
-            else:
-                classes = self._actions_to_classes(action.to(logits.device))
-                if classes.ndim == 3:
-                    classes = classes.reshape(classes.shape[0], -1)
-                elif classes.ndim == 2:
-                    classes = classes.reshape(classes.shape[0], -1)
-                else:
-                    raise ValueError(f"action must be [B,A] or [B,T,A], got {tuple(action.shape)}")
+            if action_token_ids is None:
+                raise KeyError("action_token_ids are required for exact discrete-policy evaluation")
+            if not isinstance(action_token_ids, torch.Tensor):
+                raise TypeError("action_token_ids must be a Tensor when provided")
+            classes = self._token_ids_to_classes(action_token_ids.to(logits.device))
+            if classes.ndim == 3:
+                classes = classes.reshape(classes.shape[0], -1)
+            elif classes.ndim != 2:
+                raise ValueError(
+                    f"action_token_ids must be [B,N] or [B,T,A], got {tuple(classes.shape)}"
+                )
+            if int(classes.shape[0]) != batch_size:
+                raise ValueError(
+                    "action_token_ids batch mismatch: "
+                    f"got {classes.shape[0]}, expected {batch_size}"
+                )
+            provided_count = int(classes.shape[1])
+            if action.ndim == 2 and provided_count == self.action_token_count:
+                classes = classes[:, :target_count]
+            elif provided_count != target_count:
+                raise ValueError(
+                    "action_token_ids token count mismatch: "
+                    f"got {provided_count}, expected {target_count}"
+                )
 
-            token_log_prob = dist.log_prob(classes)
-            token_entropy = dist.entropy()
+            eval_dist = Categorical(logits=logits[:, :target_count])
+            token_log_prob = eval_dist.log_prob(classes)
+            token_entropy = eval_dist.entropy()
             if logprob_type == "token_level" and action.ndim == 3:
                 log_prob = token_log_prob.reshape(
                     token_log_prob.shape[0], self.time_horizon, self.action_dim

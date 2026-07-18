@@ -31,18 +31,47 @@ def _real_relabel_anchor_loss(
     clip_log_ratio: float | None = None,
     clip_ratio_c: float | None = None,
 ) -> tuple[torch.Tensor | None, dict[str, float]]:
-    if not real_relabel_batch:
+    if real_relabel_batch is None:
         return None, dict(_ZERO_METRICS)
-    hidden = real_relabel_batch.get("hidden")
-    action = real_relabel_batch.get("action")
-    old_log_prob = real_relabel_batch.get("old_log_prob")
-    advantage = real_relabel_batch.get("advantage")
-    weight = real_relabel_batch.get("weight")
-    if not all(
-        isinstance(x, torch.Tensor) for x in (hidden, action, old_log_prob, advantage, weight)
-    ):
-        return None, dict(_ZERO_METRICS)
-    if hidden.numel() == 0:
+    fields: dict[str, torch.Tensor] = {}
+    for key in ("hidden", "action", "old_log_prob", "advantage", "weight"):
+        if key not in real_relabel_batch:
+            raise KeyError(f"real_relabel_batch is missing required field {key!r}")
+        value = real_relabel_batch[key]
+        if not isinstance(value, torch.Tensor):
+            raise TypeError(
+                f"real_relabel_batch.{key} must be a Tensor, got {type(value).__name__}"
+            )
+        if not bool(torch.isfinite(value).all()):
+            raise ValueError(f"real_relabel_batch.{key} must contain only finite values")
+        fields[key] = value
+
+    hidden = fields["hidden"]
+    action = fields["action"]
+    if hidden.ndim < 2 or hidden.shape[0] <= 0:
+        raise ValueError(
+            f"real_relabel_batch.hidden must be non-empty [B,...], got {tuple(hidden.shape)}"
+        )
+    batch = int(hidden.shape[0])
+    if action.ndim < 2 or int(action.shape[0]) != batch:
+        raise ValueError(
+            f"real_relabel_batch.action must have batch={batch}, got {tuple(action.shape)}"
+        )
+    scalars: dict[str, torch.Tensor] = {}
+    for key in ("old_log_prob", "advantage", "weight"):
+        value = fields[key]
+        if value.numel() != batch:
+            raise ValueError(
+                f"real_relabel_batch.{key} must contain batch={batch} values, "
+                f"got shape {tuple(value.shape)}"
+            )
+        scalars[key] = value.reshape(batch)
+    old_log_prob = scalars["old_log_prob"]
+    advantage = scalars["advantage"]
+    weight = scalars["weight"]
+    if bool((weight < 0).any()):
+        raise ValueError("real_relabel_batch.weight must be non-negative")
+    if not bool((weight > 0).any()):
         return None, dict(_ZERO_METRICS)
 
     log_prob, _entropy, _extra = policy(
@@ -52,12 +81,18 @@ def _real_relabel_anchor_loss(
             "action": action.float(),
         }
     )
+    if not isinstance(log_prob, torch.Tensor) or log_prob.numel() != batch:
+        shape = tuple(log_prob.shape) if isinstance(log_prob, torch.Tensor) else None
+        raise ValueError(f"policy evaluate log_prob must contain batch={batch} values, got {shape}")
+    log_prob = log_prob.reshape(batch)
+    if not bool(torch.isfinite(log_prob).all()):
+        raise ValueError("policy evaluate log_prob must contain only finite values")
     advantage = advantage.to(device=log_prob.device, dtype=log_prob.dtype)
     old_log_prob = old_log_prob.to(device=log_prob.device, dtype=log_prob.dtype)
-    weight = weight.to(device=log_prob.device, dtype=log_prob.dtype).clamp_min(0.0)
+    weight = weight.to(device=log_prob.device, dtype=log_prob.dtype)
     ratio = _ppo_ratio(log_prob, old_log_prob, clip_log_ratio=clip_log_ratio)
     per_item = _ppo_clip_term(ratio, advantage, clip_low, clip_high, clip_ratio_c=clip_ratio_c)
-    denom = weight.sum().clamp_min(1.0)
+    denom = weight.sum()
     loss = (per_item * weight).sum() / denom
     clipfrac = (
         ((ratio.detach() < 1.0 - clip_low) | (ratio.detach() > 1.0 + clip_high)).float().mean()

@@ -557,7 +557,11 @@ class WorldModelTrainingBase(BaseRunner):
             or float(OmegaConf.select(relabel_cfg, "loss_scale", default=0.0)) <= 0.0
         ):
             return None
-        batch_size = max(1, int(OmegaConf.select(relabel_cfg, "batch_size", default=64)))
+        batch_size = int(OmegaConf.select(relabel_cfg, "batch_size", default=64))
+        if batch_size <= 0:
+            raise ValueError(
+                f"algorithm.real_rollout_relabel.batch_size must be > 0, got {batch_size}"
+            )
         replace = len(steps) < batch_size
         if replace:
             chosen = [

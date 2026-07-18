@@ -12,6 +12,8 @@ This matches Hafner et al., "Mastering Diverse Domains through World Models"
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -23,6 +25,10 @@ from dreamervla.utils.polyak import soft_update
 class RMSNorm(nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6) -> None:
         super().__init__()
+        if int(dim) <= 0:
+            raise ValueError(f"dim must be > 0, got {dim!r}")
+        if not math.isfinite(float(eps)) or float(eps) <= 0.0:
+            raise ValueError(f"eps must be finite and > 0, got {eps!r}")
         self.weight = nn.Parameter(torch.ones(dim))
         self.eps = float(eps)
 
@@ -89,6 +95,8 @@ class TwohotCritic(nn.Module):
             raise ValueError(f"bin_min must be < bin_max, got {bin_min!r} >= {bin_max!r}")
         if int(critic_layers) < 0:
             raise ValueError(f"critic_layers must be >= 0, got {critic_layers!r}")
+        if not math.isfinite(float(outscale)):
+            raise ValueError(f"outscale must be finite, got {outscale!r}")
         self.num_bins = int(num_bins)
         modules: list[nn.Module] = []
         cur_dim = int(hidden_dim)
@@ -141,6 +149,8 @@ class TwohotCritic(nn.Module):
         return self._expected_value(hidden)
 
     def twohot_targets(self, values: Tensor) -> Tensor:
+        if not bool(torch.isfinite(values).all()):
+            raise ValueError("values must contain only finite values")
         bins = self.bins.to(values.dtype).to(values.device)
         sym_values = symlog(values).clamp(min=bins[0], max=bins[-1])
         idx_upper = torch.bucketize(sym_values.contiguous(), bins)
@@ -228,16 +238,27 @@ class ReturnPercentileTracker:
             "high_ema": self._high_ema,
         }
 
-    def load_state_dict(self, state: dict) -> None:
-        self.decay = float(state.get("decay", self.decay))
-        self.low = float(state.get("low", self.low))
-        self.high = float(state.get("high", self.high))
-        self._low_ema = state.get("low_ema")
-        self._high_ema = state.get("high_ema")
-        self._validate_geometry()
-        for name, value in (("low_ema", self._low_ema), ("high_ema", self._high_ema)):
+    def load_state_dict(self, state: Mapping[str, Any]) -> None:
+        if not isinstance(state, Mapping):
+            raise TypeError(f"tracker state must be a mapping, got {type(state).__name__}")
+        decay = float(state.get("decay", self.decay))
+        low = float(state.get("low", self.low))
+        high = float(state.get("high", self.high))
+        low_ema = state.get("low_ema")
+        high_ema = state.get("high_ema")
+        candidate = ReturnPercentileTracker(decay=decay, low=low, high=high)
+        for name, value in (("low_ema", low_ema), ("high_ema", high_ema)):
             if value is not None and not math.isfinite(float(value)):
                 raise ValueError(f"{name} must be finite when present, got {value!r}")
+        if (low_ema is None) != (high_ema is None):
+            raise ValueError("low_ema and high_ema must either both be present or both be absent")
+        if low_ema is not None and float(low_ema) > float(high_ema):
+            raise ValueError(f"low_ema must be <= high_ema, got {low_ema!r} > {high_ema!r}")
+        self.decay = candidate.decay
+        self.low = candidate.low
+        self.high = candidate.high
+        self._low_ema = None if low_ema is None else float(low_ema)
+        self._high_ema = None if high_ema is None else float(high_ema)
 
 
 # soft_update now lives in dreamervla.utils.polyak (generic, model-independent);
