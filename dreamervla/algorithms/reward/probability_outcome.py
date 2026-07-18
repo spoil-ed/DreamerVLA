@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import torch
 
+from dreamervla.algorithms.ppo.outcome import _validate_reward_inputs
 from dreamervla.algorithms.reward.registry import register_reward_model
 
 
@@ -31,10 +32,17 @@ class ProbabilityOutcomeReward:
         score: torch.Tensor | None = None,
         score_step: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        _validate_reward_inputs(
+            batch=batch,
+            max_steps=max_steps,
+            chunk_size=chunk_size,
+            finish_step=finish_step,
+            complete=complete,
+            score=score,
+            score_step=score_step,
+        )
         del chunk_size, finish_step
         reward = torch.zeros((batch, max_steps), dtype=torch.float32, device=device)
-        if max_steps <= 0:
-            return reward
 
         if score is None:
             values = complete.detach().float().to(device)

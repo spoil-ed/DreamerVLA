@@ -8,11 +8,13 @@ loaded policy, world model, and optional target critic.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, fields, is_dataclass, replace
+from dataclasses import asdict, dataclass, fields, is_dataclass, replace
 from typing import Any
 
 import torch
 from torch import nn
+
+from dreamervla.algorithms.validation import validate_tdmpc_hyperparameters
 
 ActionTransform = Callable[[torch.Tensor], torch.Tensor]
 
@@ -36,6 +38,9 @@ class TDMPCMPCConfig:
     eval_mode: bool = True
     warm_start: bool = True
     seed: int = 0
+
+    def __post_init__(self) -> None:
+        validate_tdmpc_hyperparameters(asdict(self), prefix="TDMPCMPCConfig")
 
 
 @dataclass
@@ -255,12 +260,12 @@ class TDMPCMPCPlanner:
         action_transform: ActionTransform | None = None,
     ) -> TDMPCMPCResult:
         cfg = self.cfg
-        horizon = max(1, int(cfg.horizon))
-        action_dim = max(1, int(cfg.action_dim))
-        num_samples = max(1, int(cfg.num_samples))
-        num_pi_trajs = min(max(0, int(cfg.num_pi_trajs)), num_samples)
+        horizon = int(cfg.horizon)
+        action_dim = int(cfg.action_dim)
+        num_samples = int(cfg.num_samples)
+        num_pi_trajs = int(cfg.num_pi_trajs)
         num_random = num_samples - num_pi_trajs
-        num_elites = min(max(1, int(cfg.num_elites)), num_samples)
+        num_elites = int(cfg.num_elites)
         action_transform = action_transform or (lambda x: x)
         generator = self._generator_for(device)
 
@@ -285,7 +290,7 @@ class TDMPCMPCPlanner:
         value = torch.zeros(num_samples, device=device)
         elite_values = value
         elite_actions = actions[:, :num_elites]
-        for _ in range(max(1, int(cfg.iterations))):
+        for _ in range(int(cfg.iterations)):
             if num_random > 0:
                 actions[:, num_pi_trajs:] = self._sample_random_actions(
                     mean, std, num_random, generator
@@ -312,7 +317,7 @@ class TDMPCMPCPlanner:
 
         best_idx = torch.argmax(elite_values)
         best_actions = elite_actions[:, best_idx]
-        execute_steps = min(max(1, int(cfg.execute_steps)), horizon)
+        execute_steps = int(cfg.execute_steps)
         if bool(cfg.warm_start):
             self._prev_mean = mean.detach()
         return TDMPCMPCResult(

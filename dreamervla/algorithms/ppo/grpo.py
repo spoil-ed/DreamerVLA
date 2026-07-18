@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import torch
@@ -79,6 +80,12 @@ def _ppo_ratio(
     ``exp`` for numerical stability (matches RLinf's log-ratio clamp); it is
     especially relevant here because callers sum log-probs over a trajectory.
     """
+    if clip_log_ratio is not None and (
+        not math.isfinite(float(clip_log_ratio)) or float(clip_log_ratio) <= 0.0
+    ):
+        raise ValueError(
+            f"clip_log_ratio must be finite and > 0 when configured, got {clip_log_ratio!r}"
+        )
     log_ratio = log_prob - old_log_prob
     if clip_log_ratio is not None:
         log_ratio = log_ratio.clamp(-float(clip_log_ratio), float(clip_log_ratio))
@@ -100,6 +107,14 @@ def _ppo_clip_term(
     ``clip_ratio_c * |adv|`` (PPO dual-clip), bounding the negative-advantage /
     exploded-ratio case. The caller applies its own reduction.
     """
+    if not math.isfinite(float(clip_low)) or not 0.0 <= float(clip_low) < 1.0:
+        raise ValueError(f"clip_low must be finite and in [0, 1), got {clip_low!r}")
+    if not math.isfinite(float(clip_high)) or float(clip_high) < 0.0:
+        raise ValueError(f"clip_high must be finite and >= 0, got {clip_high!r}")
+    if clip_ratio_c is not None and (
+        not math.isfinite(float(clip_ratio_c)) or float(clip_ratio_c) <= 1.0
+    ):
+        raise ValueError(f"clip_ratio_c must be finite and > 1, got {clip_ratio_c!r}")
     ratio_clipped = ratio.clamp(1.0 - clip_low, 1.0 + clip_high)
     term = torch.maximum(-advantage * ratio, -advantage * ratio_clipped)
     if clip_ratio_c is not None:
@@ -123,6 +138,12 @@ def _group_advantage(score: torch.Tensor, group_size: int, eps: float) -> torch.
     """
     g = int(group_size)
     n = int(score.numel())
+    if n == 0:
+        raise ValueError("_group_advantage: score must be non-empty")
+    if not bool(torch.isfinite(score).all()):
+        raise ValueError("_group_advantage: score must contain only finite values")
+    if not math.isfinite(float(eps)) or float(eps) <= 0.0:
+        raise ValueError(f"_group_advantage: eps must be finite and > 0, got {eps!r}")
     if g <= 1:
         return (score - score.mean()) / score.std(unbiased=False).clamp_min(float(eps))
     if n < g or n % g != 0:
@@ -149,6 +170,12 @@ def group_variance_mask(score: torch.Tensor, group_size: int, eps: float) -> tor
     """
     g = int(group_size)
     n = int(score.numel())
+    if n == 0:
+        raise ValueError("group_variance_mask: score must be non-empty")
+    if not bool(torch.isfinite(score).all()):
+        raise ValueError("group_variance_mask: score must contain only finite values")
+    if not math.isfinite(float(eps)) or float(eps) < 0.0:
+        raise ValueError(f"group_variance_mask: eps must be finite and >= 0, got {eps!r}")
     if g <= 1:
         return torch.ones_like(score)
     if n < g or n % g != 0:

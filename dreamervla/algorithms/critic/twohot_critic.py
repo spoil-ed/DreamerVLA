@@ -11,6 +11,8 @@ This matches Hafner et al., "Mastering Diverse Domains through World Models"
 
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
@@ -75,6 +77,18 @@ class TwohotCritic(nn.Module):
         outscale: float = 1.0,
     ) -> None:
         super().__init__()
+        if int(hidden_dim) <= 0:
+            raise ValueError(f"hidden_dim must be > 0, got {hidden_dim!r}")
+        if int(critic_hidden_dim) <= 0:
+            raise ValueError(f"critic_hidden_dim must be > 0, got {critic_hidden_dim!r}")
+        if int(num_bins) < 2:
+            raise ValueError(f"num_bins must be >= 2, got {num_bins!r}")
+        if not math.isfinite(float(bin_min)) or not math.isfinite(float(bin_max)):
+            raise ValueError("bin_min and bin_max must be finite")
+        if float(bin_min) >= float(bin_max):
+            raise ValueError(f"bin_min must be < bin_max, got {bin_min!r} >= {bin_max!r}")
+        if int(critic_layers) < 0:
+            raise ValueError(f"critic_layers must be >= 0, got {critic_layers!r}")
         self.num_bins = int(num_bins)
         modules: list[nn.Module] = []
         cur_dim = int(hidden_dim)
@@ -164,10 +178,25 @@ class ReturnPercentileTracker:
         self.high = float(high)
         self._low_ema: float | None = None
         self._high_ema: float | None = None
+        self._validate_geometry()
+
+    def _validate_geometry(self) -> None:
+        if not math.isfinite(self.decay) or not 0.0 <= self.decay <= 1.0:
+            raise ValueError(f"decay must be finite and in [0, 1], got {self.decay!r}")
+        if not math.isfinite(self.low) or not 0.0 <= self.low <= 1.0:
+            raise ValueError(f"low must be finite and in [0, 1], got {self.low!r}")
+        if not math.isfinite(self.high) or not 0.0 <= self.high <= 1.0:
+            raise ValueError(f"high must be finite and in [0, 1], got {self.high!r}")
+        if self.low > self.high:
+            raise ValueError(f"low must be <= high, got {self.low!r} > {self.high!r}")
 
     @torch.no_grad()
     def update(self, returns: Tensor) -> tuple[float, float]:
         flat = returns.detach().float().flatten()
+        if flat.numel() == 0:
+            raise ValueError("returns must be non-empty")
+        if not bool(torch.isfinite(flat).all()):
+            raise ValueError("returns must contain only finite values")
         low_q = float(torch.quantile(flat, self.low).item())
         high_q = float(torch.quantile(flat, self.high).item())
         if self._low_ema is None:
@@ -205,6 +234,10 @@ class ReturnPercentileTracker:
         self.high = float(state.get("high", self.high))
         self._low_ema = state.get("low_ema")
         self._high_ema = state.get("high_ema")
+        self._validate_geometry()
+        for name, value in (("low_ema", self._low_ema), ("high_ema", self._high_ema)):
+            if value is not None and not math.isfinite(float(value)):
+                raise ValueError(f"{name} must be finite when present, got {value!r}")
 
 
 # soft_update now lives in dreamervla.utils.polyak (generic, model-independent);

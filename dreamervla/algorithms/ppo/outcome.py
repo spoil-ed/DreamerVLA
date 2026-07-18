@@ -116,10 +116,15 @@ def _build_reward_tensor(
     Returns:
         [B, T_max] float32 tensor on CPU. Caller moves to device.
     """
+    _validate_reward_inputs(
+        batch=batch,
+        max_steps=max_steps,
+        chunk_size=chunk_size,
+        finish_step=finish_step,
+        complete=complete,
+    )
     del chunk_size  # placement uses env-step index directly
     reward = torch.zeros((batch, max_steps), dtype=torch.float32)
-    if max_steps <= 0:
-        return reward
     finish = finish_step.detach().cpu().long().clamp(min=0, max=max_steps - 1)
     comp = complete.detach().cpu().bool()
     # Vectorized sparse placement: write float(complete) at the finish column of
@@ -128,6 +133,38 @@ def _build_reward_tensor(
     # identical to the prior ``if comp[i]: reward[i, finish[i]] = 1.0`` loop.
     reward.scatter_(1, finish.unsqueeze(1), comp.float().unsqueeze(1))
     return reward
+
+
+def _validate_reward_inputs(
+    *,
+    batch: int,
+    max_steps: int,
+    chunk_size: int,
+    finish_step: torch.Tensor,
+    complete: torch.Tensor,
+    score: torch.Tensor | None = None,
+    score_step: torch.Tensor | None = None,
+) -> None:
+    """Validate the shared verifier-to-reward tensor contract."""
+
+    if int(batch) <= 0:
+        raise ValueError(f"batch must be > 0, got {batch!r}")
+    if int(max_steps) <= 0:
+        raise ValueError(f"max_steps must be > 0, got {max_steps!r}")
+    if int(chunk_size) <= 0:
+        raise ValueError(f"chunk_size must be > 0, got {chunk_size!r}")
+    for name, value in (("finish_step", finish_step), ("complete", complete)):
+        if not isinstance(value, torch.Tensor) or int(value.numel()) != int(batch):
+            count = int(value.numel()) if isinstance(value, torch.Tensor) else None
+            raise ValueError(f"{name} must contain batch={batch} values, got {count}")
+    for name, value in (("score", score), ("score_step", score_step)):
+        if value is not None and (
+            not isinstance(value, torch.Tensor) or int(value.numel()) != int(batch)
+        ):
+            count = int(value.numel()) if isinstance(value, torch.Tensor) else None
+            raise ValueError(f"{name} must contain batch={batch} values, got {count}")
+    if score is not None and not bool(torch.isfinite(score).all()):
+        raise ValueError("score must contain only finite values")
 
 
 def _resolve_reward_tensor(
