@@ -18,6 +18,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from dreamervla.config_resolvers import register_dreamervla_resolvers
 from dreamervla.launchers.contracts import DefaultLaunchContract, LaunchContract
+from dreamervla.launchers.task_cli import normalize_task_flag
 from dreamervla.utils.run_paths import infer_run_root, resolve_resume_checkpoint
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -324,12 +325,14 @@ def _command(
 def build_launch(argv: Sequence[str]) -> ExperimentLaunch:
     """Resolve one generic or contract-specialized training launch."""
 
-    raw_argv = list(argv)
+    raw_argv, task_override = normalize_task_flag(argv, hydra_key="task")
     discovered_experiment = _experiment_from_argv(raw_argv)
     discovery_cfg = _compose(discovered_experiment, [])
     contract = _build_contract(discovery_cfg)
     normalized_argv = contract.normalize_argv(raw_argv)
     experiment, launcher, overrides = _parse_args(normalized_argv)
+    if task_override is not None:
+        overrides.append(task_override)
     cfg = _compose(experiment, overrides)
 
     alias_overrides = _target_overrides(launcher, overrides)

@@ -18,6 +18,7 @@ if [[ "${ARTIFACT_NAME}" == "${TASK_NAME}" && "${TASK_NAME}" != "${LIBERO_SUITE}
   ARTIFACT_NAME="${TASK_NAME}_${LIBERO_SUITE}"
 fi
 OVERWRITE="${OVERWRITE:-0}"
+LIBERO_REPLAY_WORKERS="${LIBERO_REPLAY_WORKERS:-1}"
 cd "${DVLA_ROOT}"
 
 PROCESSED_DATA_ROOT="${DVLA_DATA_ROOT}/processed_data/${ARTIFACT_NAME}"
@@ -59,7 +60,8 @@ if [[ "${OVERWRITE}" != "1" && -n "${marked_hdf5}" ]]; then
       image_resolution=256 \
       keep_noops=true \
       metainfo_json_out="${META_JSON}" \
-      resume=true
+      resume=true \
+      num_workers="${LIBERO_REPLAY_WORKERS}"
   fi
 else
   [[ "${OVERWRITE}" == "1" ]] && rm -rf "${MARKED_DIR}"
@@ -69,7 +71,8 @@ else
     libero_target_dir="${MARKED_DIR}" \
     image_resolution=256 \
     keep_noops=true \
-    metainfo_json_out="${META_JSON}"
+    metainfo_json_out="${META_JSON}" \
+    num_workers="${LIBERO_REPLAY_WORKERS}"
 fi
 
 python -m dreamervla.preprocess.check_artifacts command=metainfo path="${META_JSON}"

@@ -3,6 +3,7 @@ name: reproduce_train_dreamer
 mode: train_dreamer
 data_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}
 dry_run: false
+supported_tasks: [libero_goal]
 
 profile:
   id: cu124-h100-libero-goal-v1

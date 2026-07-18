@@ -18,6 +18,7 @@ from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 
 from dreamervla.config_resolvers import register_dreamervla_resolvers
+from dreamervla.launchers.task_cli import normalize_task_flag
 from dreamervla.preprocess.check_artifacts import validate_hdf5_dir
 from dreamervla.runtime.reproduction import (
     ReproductionError,
@@ -66,9 +67,19 @@ def build_workflow(argv: Sequence[str]) -> ReproductionWorkflow:
 
     register_dreamervla_resolvers()
     config_name, overrides = _parse_args(argv)
+    overrides, task_override = normalize_task_flag(overrides, hydra_key="profile.task")
+    if task_override is not None:
+        overrides.append(task_override)
     with initialize_config_dir(config_dir=str(CONFIG_DIR), job_name="reproduce", version_base=None):
         cfg = compose(config_name=config_name, overrides=list(overrides))
     OmegaConf.resolve(cfg)
+    supported_tasks = {str(value) for value in cfg.get("supported_tasks", [cfg.profile.task])}
+    if str(cfg.profile.task) not in supported_tasks:
+        valid = ", ".join(sorted(supported_tasks))
+        raise SystemExit(
+            f"reproduction config {config_name!r} does not support task "
+            f"{cfg.profile.task!r}; valid: {valid}"
+        )
     return ReproductionWorkflow(
         config_name=config_name,
         cfg=cfg,
@@ -340,7 +351,7 @@ def _prepare_assets(workflow: ReproductionWorkflow) -> None:
     preprocess = (
         "bash",
         str(PROJECT_ROOT / "scripts/preprocess/prepare_libero_data.sh"),
-        "task=libero_goal",
+        f"task={cfg.profile.task}",
         f"artifact_name={cfg.preprocess.artifact_name}",
         f"ngpu={int(cfg.preprocess.ngpu)}",
         f"gpus={cfg.preprocess.gpus}",

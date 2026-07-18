@@ -27,6 +27,7 @@ from dreamervla.diagnostics.openvla_oft_obs_action_policy import (
     ensure_openvla_oft_importable,
     set_runtime_env,
 )
+from dreamervla.launchers.task_cli import normalize_task_flag
 
 TASK_SUITES = ("libero_spatial", "libero_object", "libero_goal", "libero_10", "libero_90")
 SUITE_ALIASES = {
@@ -215,15 +216,20 @@ def _config_from_mapping(cfg: Mapping[str, Any]) -> EvalOpenVLAOFTConfig:
 
 
 def _parse_hydra_like_argv(argv: Sequence[str]) -> tuple[str, list[str]]:
+    values, task_override = normalize_task_flag(
+        argv,
+        hydra_key="suite",
+        valid_tasks=TASK_SUITES,
+    )
     config_name = "eval"
     overrides: list[str] = []
     i = 0
-    while i < len(argv):
-        item = argv[i]
+    while i < len(values):
+        item = values[i]
         if item == "--config-name":
-            if i + 1 >= len(argv):
+            if i + 1 >= len(values):
                 raise SystemExit("--config-name requires a value")
-            config_name = argv[i + 1]
+            config_name = values[i + 1]
             i += 2
             continue
         if item.startswith("--config-name="):
@@ -237,6 +243,8 @@ def _parse_hydra_like_argv(argv: Sequence[str]) -> tuple[str, list[str]]:
             )
         overrides.append(item)
         i += 1
+    if task_override is not None:
+        overrides.append(task_override)
     return config_name, overrides
 
 

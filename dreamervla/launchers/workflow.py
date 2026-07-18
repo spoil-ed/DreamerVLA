@@ -12,9 +12,18 @@ from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
 from dreamervla.config_resolvers import register_dreamervla_resolvers
+from dreamervla.launchers.task_cli import normalize_task_flag
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = PROJECT_ROOT / "configs" / "scripts"
+
+_TASK_OVERRIDE_ROUTES: dict[str, tuple[str, bool]] = {
+    "download/config": ("env.LIBERO_SUITES", True),
+    "preprocess/preprocess_all": ("tasks", True),
+    "preprocess/preprocess_libero": ("tasks", True),
+    "preprocess/preprocess_suite": ("task", False),
+    "preprocess/validate_libero_data": ("tasks", True),
+}
 
 
 def _parse_hydra_like_args(argv: Sequence[str]) -> tuple[str, list[str]]:
@@ -145,6 +154,19 @@ def _run_one_step(
 def main(argv: Sequence[str] | None = None) -> int:
     register_dreamervla_resolvers()
     config_name, overrides = _parse_hydra_like_args(list(sys.argv[1:] if argv is None else argv))
+    selected_task: str | None = None
+    task_route = _TASK_OVERRIDE_ROUTES.get(config_name)
+    if task_route is not None:
+        overrides, task_override = normalize_task_flag(
+            overrides,
+            hydra_key=task_route[0],
+            as_list=task_route[1],
+        )
+        if task_override is not None:
+            overrides.append(task_override)
+            selected_task = task_override.split("=", 1)[1].strip("[]")
+    elif any(item == "--task" or item.startswith("--task=") for item in overrides):
+        raise SystemExit(f"--task is not supported by workflow config {config_name!r}")
     with initialize_config_dir(config_dir=str(CONFIG_DIR), job_name="workflow", version_base=None):
         cfg_obj = compose(config_name=config_name, overrides=overrides)
     cfg: dict[str, Any] = OmegaConf.to_container(cfg_obj, resolve=True)  # type: ignore[assignment]
@@ -153,6 +175,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(
         f"[workflow:{cfg.get('name')}] root={PROJECT_ROOT} "
         f"data_root={cfg.get('data_root')} config={config_name}"
+        f"{f' task={selected_task}' if selected_task else ''}"
     )
     for raw_step in list(cfg.get("steps", [])):
         step = dict(raw_step)

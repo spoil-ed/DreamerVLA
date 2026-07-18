@@ -24,6 +24,7 @@ env:
   OFT_HISTORY: null
   OFT_IMAGE_KEYS: null
   OFT_HIDDEN_TOKEN_GPUS: ${ngpu}
+  LIBERO_REPLAY_WORKERS: ${num_procs}
   GPUS: ${gpus}
 steps:
   - id: 00_hdf5_reward

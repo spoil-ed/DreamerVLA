@@ -6,3 +6,4 @@ image_resolution: null
 keep_noops: false
 metainfo_json_out: null
 resume: false
+num_workers: 1
