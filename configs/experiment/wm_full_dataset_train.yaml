@@ -90,5 +90,5 @@ optim:
 runner:
   logger:
     logger_backends: [tensorboard, wandb]
-    wandb_mode: offline
+    wandb_mode: online
     wandb_proxy: null

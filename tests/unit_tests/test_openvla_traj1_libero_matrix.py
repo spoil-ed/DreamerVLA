@@ -175,7 +175,8 @@ def test_wmpo_token_h1_classifier_experiment_composes() -> None:
     assert cfg.data.failure_dir_raw is None
     assert cfg.data.failure_dir_hidden is None
     assert cfg.data.lang_emb_dir == "__source_hidden__"
-    assert list(cfg.runner.logger.logger_backends) == ["tensorboard"]
+    assert list(cfg.runner.logger.logger_backends) == ["tensorboard", "wandb"]
+    assert cfg.runner.logger.wandb_mode == "online"
 
 
 def test_dreamer_classifier_model_and_dataset_are_hydra_selected() -> None:

@@ -64,7 +64,7 @@ checkpoint:
 runner:
   logger:
     project_name: dreamervla
-    logger_backends: [tensorboard]
+    logger_backends: [tensorboard, wandb]
     log_path: ${training.out_dir}
 
 data:

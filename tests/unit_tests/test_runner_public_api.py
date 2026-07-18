@@ -288,6 +288,20 @@ def test_train_config_exposes_tensorboard_and_wandb_logger_routes() -> None:
     assert wandb_cfg.runner.logger.wandb_mode == "online"
 
 
+def test_active_experiments_default_to_online_wandb() -> None:
+    """Every public stage must publish metrics through the default W&B route."""
+
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    experiment_dir = config_dir / "experiment"
+    experiments = sorted(path.stem for path in experiment_dir.glob("*.yaml"))
+
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        for experiment in experiments:
+            cfg = _compose_experiment(experiment)
+            assert "wandb" in cfg.runner.logger.logger_backends, experiment
+            assert cfg.runner.logger.wandb_mode == "online", experiment
+
+
 def test_train_config_requires_explicit_experiment() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
 
