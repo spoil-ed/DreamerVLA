@@ -490,6 +490,7 @@ def test_dockerfile_caches_dependencies_before_copying_full_source() -> None:
         "COPY configs/scripts/install/",
         "COPY dreamervla/__init__.py dreamervla/config_resolvers.py",
         "COPY dreamervla/launchers/__init__.py dreamervla/launchers/workflow.py",
+        "dreamervla/launchers/task_cli.py",
         "COPY dreamervla/diagnostics/__init__.py dreamervla/diagnostics/verify_install.py",
     ):
         assert required in dependency_prefix

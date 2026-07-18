@@ -47,7 +47,7 @@ COPY scripts/install_env.sh /opt/dreamervla/scripts/install_env.sh
 COPY scripts/install/ /opt/dreamervla/scripts/install/
 COPY configs/scripts/install/ /opt/dreamervla/configs/scripts/install/
 COPY dreamervla/__init__.py dreamervla/config_resolvers.py /opt/dreamervla/dreamervla/
-COPY dreamervla/launchers/__init__.py dreamervla/launchers/workflow.py /opt/dreamervla/dreamervla/launchers/
+COPY dreamervla/launchers/__init__.py dreamervla/launchers/workflow.py dreamervla/launchers/task_cli.py /opt/dreamervla/dreamervla/launchers/
 COPY dreamervla/diagnostics/__init__.py dreamervla/diagnostics/verify_install.py /opt/dreamervla/dreamervla/diagnostics/
 RUN touch README.md
 
