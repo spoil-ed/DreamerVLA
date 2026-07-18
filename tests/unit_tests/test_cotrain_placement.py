@@ -13,7 +13,7 @@ def test_manual_cotrain_placement_supports_zero_to_five_gpus(ngpu: int) -> None:
     plan = build_manual_cotrain_placement(ngpu)
     assert plan.ngpu == ngpu
     assert plan.real_env_ranks == [0]
-    assert len(plan.env_specs) == max(1, ngpu)
+    assert len(plan.env_specs) == (2 if ngpu == 0 else ngpu)
     assert plan.learner_spec.kind == "learner"
     assert plan.rollout_specs
     assert plan.actor_specs
@@ -148,11 +148,14 @@ def test_manual_cotrain_placement_rejects_rollout_component_that_misses_env_rank
 def test_zero_gpu_placement_is_cpu_target_topology() -> None:
     plan = build_manual_cotrain_placement(0)
 
-    assert plan.env_specs[0].role == "real_env"
-    assert plan.env_specs[0].gpu_ids == []
+    assert [spec.role for spec in plan.env_specs] == ["real_env", "wm_env"]
+    assert [spec.gpu_ids for spec in plan.env_specs] == [[], []]
+    assert plan.real_env_ranks == [0]
+    assert plan.wm_env_ranks == [1]
     assert plan.learner_spec.gpu_ids == []
     assert plan.actor_specs[0].gpu_ids == []
-    assert plan.rollout_specs[0].gpu_ids == []
+    assert [spec.rank for spec in plan.rollout_specs] == [0, 1]
+    assert [spec.gpu_ids for spec in plan.rollout_specs] == [[], []]
     assert plan.actor_fsdp_strategy == "none"
 
 

@@ -124,6 +124,7 @@ def build_stage_command(
             f"gpus={cfg.profile.gpus}",
         ]
     )
+    command.extend(str(value) for value in stage.get("overrides", []))
     return tuple(command)
 
 
@@ -172,13 +173,20 @@ def _verify_third_party(cfg: DictConfig) -> dict[str, str]:
         "openvla_oft": "openvla-oft",
         "egl_probe": "egl_probe",
     }
+    source_root = _stage_path(
+        OmegaConf.select(
+            cfg,
+            "third_party_root",
+            default=PROJECT_ROOT / "third_party",
+        )
+    )
     revisions: dict[str, str] = {}
     for key, directory in directories.items():
         expected = str(cfg.third_party[key])
-        actual = _git_revision(PROJECT_ROOT / "third_party" / directory)
+        actual = _git_revision(source_root / directory)
         if not actual.startswith(expected):
             raise ReproductionError(
-                f"third_party/{directory} revision mismatch: expected={expected} actual={actual}"
+                f"{source_root / directory} revision mismatch: expected={expected} actual={actual}"
             )
         revisions[key] = actual
     return revisions
@@ -280,9 +288,17 @@ def _asset_file_records(paths: Sequence[Path], root: Path) -> list[dict[str, Any
 def _prepare_assets(workflow: ReproductionWorkflow) -> None:
     cfg = workflow.cfg
     data_root = _stage_path(cfg.data_root)
+    third_party_root = _stage_path(cfg.third_party_root)
     data_root.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
-    env.update({"DVLA_ROOT": str(PROJECT_ROOT), "DVLA_DATA_ROOT": str(data_root)})
+    env.update(
+        {
+            "DVLA_ROOT": str(PROJECT_ROOT),
+            "DVLA_DATA_ROOT": str(data_root),
+            "DVLA_THIRD_PARTY_ROOT": str(third_party_root),
+            "OPENVLA_OFT_ROOT": str(third_party_root / "openvla-oft"),
+        }
+    )
     if workflow.dry_run:
         third_party_revisions = {key: str(value) for key, value in cfg.third_party.items()}
     else:

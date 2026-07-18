@@ -21,6 +21,7 @@ stages:
     run_root: ${output_root}/world_model
     budget_key: training.warmup_replay_epochs
     budget: 30
+    overrides: []
     selection:
       metric_name: loss
       mode: min
@@ -30,6 +31,7 @@ stages:
     run_root: ${output_root}/classifier
     budget_key: training.num_epochs
     budget: 8
+    overrides: []
     selection:
       metric_name: f1
       mode: max
@@ -39,10 +41,10 @@ stages:
     run_root: ${output_root}/dreamer
     budget_key: manual_cotrain.global_steps
     budget: 20000
+    overrides: []
 
 frozen_assertions:
   _target_: dreamervla.runners.DreamerRunner
   manual_cotrain:
     training_mode: failure_imagined_rl
     learner_updates_enabled: false
-

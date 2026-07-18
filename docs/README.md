@@ -7,6 +7,8 @@ This directory is organized by document lifetime and reader intent.
 - [`HISTORY.md`](HISTORY.md): shipped work ledger.
 - [`PARAMETERS.md`](PARAMETERS.md): parameter reference.
 - [`install.md`](install.md): installation and environment setup.
+- [`native_environment_reproduction.md`](native_environment_reproduction.md):
+  executed `dreamervla-2` native install, asset, and bounded-training record.
 - [`docker_reproduction.md`](docker_reproduction.md): public 8xH100 Docker pull,
   asset preparation, WM/CLS warmup, and frozen Dreamer reproduction.
 - [`repository_structure.md`](repository_structure.md): repository layout.

@@ -15,6 +15,20 @@ bash scripts/install_env.sh
 conda activate dreamervla
 ```
 
+To create a separate environment without changing the repository default, pass
+the Hydra-owned environment name to the installer and repeat it for direct step
+scripts:
+
+```bash
+bash scripts/install_env.sh env.CONDA_ENV_NAME=dreamervla-2
+conda activate dreamervla-2
+CONDA_ENV_NAME=dreamervla-2 bash scripts/install/60_verify.sh
+```
+
+The direct `scripts/install/*.sh` entrypoints read shell variables rather than
+Hydra overrides, which is why the verification command uses
+`CONDA_ENV_NAME=dreamervla-2` before `bash`.
+
 Run one install step when debugging:
 
 ```bash
@@ -57,3 +71,6 @@ bash scripts/install/60_verify.sh
 python -m pytest tests/unit_tests -q
 ruff check dreamervla tests
 ```
+
+The fully executed native reproduction record for the separate environment is
+in [`native_environment_reproduction.md`](native_environment_reproduction.md).

@@ -34,8 +34,9 @@ def test_cotrain_tiny_completes_full_global_step(tmp_path: Path) -> None:
     output = f"{result.stdout}\n{result.stderr}"
 
     assert result.returncode == 0, output
-    assert "[manual-cotrain] groups=LearnerGroup,ActorGroup,RolloutGroup,EnvGroup" in output
+    assert "[cotrain] groups=LearnerGroup,ActorGroup,RolloutGroup,EnvGroup" in output
     assert (out_dir / "run_manifest.json").is_file()
+    assert (out_dir / "checkpoints" / "latest.ckpt").is_file()
     hydra_dir = out_dir / ".hydra"
     for name in ("config.yaml", "overrides.yaml", "hydra.yaml"):
         assert (hydra_dir / name).is_file()

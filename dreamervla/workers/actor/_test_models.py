@@ -82,6 +82,66 @@ class TinyLumosPolicy(nn.Module):
         raise ValueError(f"unknown TinyLumosPolicy mode {mode!r}")
 
 
+class TinyStagedLumosPolicy(TinyLumosPolicy):
+    """Tiny LUMOS policy with the raw-encoder boundary used by staged cotrain."""
+
+    def __init__(
+        self,
+        hidden_dim: int = 4,
+        action_dim: int = 7,
+        chunk_size: int = 1,
+    ) -> None:
+        super().__init__(
+            hidden_dim=hidden_dim,
+            action_dim=action_dim,
+            chunk_size=chunk_size,
+        )
+        self.encoder = nn.Linear(1, self.hidden_dim)
+        nn.init.constant_(self.encoder.weight, 0.25)
+        nn.init.zeros_(self.encoder.bias)
+
+    def encoder_parameter_names(self) -> tuple[str, ...]:
+        """Return the tiny raw encoder parameters used by staged cotrain."""
+
+        return tuple(name for name, _ in self.named_parameters() if name.startswith("encoder."))
+
+    def prepare_raw_batch(self, transitions: list[dict]) -> dict[str, torch.Tensor]:
+        """Convert tiny image observations into the production raw-batch keys."""
+
+        values = [float(torch.as_tensor(item["image"]).float().mean()) for item in transitions]
+        batch_size = len(values)
+        return {
+            "pixel_values": torch.tensor(values, dtype=torch.float32).reshape(-1, 1),
+            "input_ids": torch.ones(batch_size, 1, dtype=torch.long),
+            "attention_mask": torch.ones(batch_size, 1, dtype=torch.long),
+        }
+
+    def forward(self, batch):  # type: ignore[override]
+        mode = str(batch.get("mode", "sample")) if isinstance(batch, dict) else "sample"
+        if mode not in {"encoder_sft", "encode_raw"}:
+            return super().forward(batch)
+        hidden = self.encoder(batch["pixel_values"].float())
+        encoded = hidden.unsqueeze(1)
+        extras = {
+            "hidden": encoded,
+            "lang_emb": torch.zeros(hidden.shape[0], 1, device=hidden.device),
+        }
+        if mode == "encode_raw":
+            return encoded, torch.zeros((), device=hidden.device), extras
+        logits = self.linear(hidden).unsqueeze(1).expand(-1, self.chunk_size, -1)
+        labels = batch["action_token_ids"].long().reshape(hidden.shape[0], -1)
+        if int(labels.shape[1]) != self.chunk_size:
+            raise ValueError(
+                "TinyStagedLumosPolicy action-token count must match its configured chunk size"
+            )
+        loss = F.cross_entropy(logits.reshape(-1, logits.shape[-1]), labels.reshape(-1))
+        extras["action_label_logprobs"] = (
+            torch.log_softmax(logits, dim=-1).gather(-1, labels.unsqueeze(-1)).squeeze(-1)
+        )
+        extras["action_logits"] = logits
+        return loss, torch.zeros((), device=hidden.device), extras
+
+
 class TinyStagedVLAPolicy(nn.Module):
     """Tiny raw-encoder/native-actor policy for staged cotrain unit tests."""
 
@@ -272,7 +332,8 @@ class TinySuccessClassifier(nn.Module):
         if windows.ndim == 2:
             hidden = windows.float()
         else:
-            hidden = windows.float().mean(dim=1)
+            temporal_dims = tuple(range(1, windows.ndim - 1))
+            hidden = windows.float().mean(dim=temporal_dims)
         return self.linear(hidden)
 
     def predict_success(

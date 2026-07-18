@@ -62,17 +62,30 @@ def build_manual_cotrain_placement(
     if count == 0:
         if component_gpu_groups:
             raise ValueError("component_gpu_groups require ngpu > 0")
+        env_specs = [
+            RolePlacement(
+                kind="env",
+                role="real_env",
+                rank=rank,
+                gpu_ids=[],
+            )
+            for rank in range(real_workers)
+        ]
+        env_specs.append(
+            RolePlacement(
+                kind="env",
+                role="wm_env",
+                rank=len(env_specs),
+                gpu_ids=[],
+            )
+        )
         return ManualCotrainPlacementPlan(
             ngpu=0,
-            env_specs=[
-                RolePlacement(
-                    kind="env",
-                    role="real_env" if real_workers else "wm_env",
-                    rank=0,
-                    gpu_ids=[],
-                )
+            env_specs=env_specs,
+            rollout_specs=[
+                RolePlacement(kind="rollout", role="rollout", rank=rank, gpu_ids=[])
+                for rank in range(len(env_specs))
             ],
-            rollout_specs=[RolePlacement(kind="rollout", role="rollout", rank=0, gpu_ids=[])],
             actor_specs=[RolePlacement(kind="actor", role="actor", rank=0, gpu_ids=[])],
             learner_spec=(
                 RolePlacement(kind="learner", role="learner", rank=0, gpu_ids=[])

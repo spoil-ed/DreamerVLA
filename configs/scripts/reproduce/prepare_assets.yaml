@@ -2,6 +2,7 @@
 name: reproduce_prepare_assets
 mode: prepare_assets
 data_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}
+third_party_root: ${oc.env:DVLA_THIRD_PARTY_ROOT,${oc.env:DVLA_ROOT,.}/third_party}
 dry_run: false
 
 profile:

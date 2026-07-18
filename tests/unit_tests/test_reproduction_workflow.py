@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from hydra import compose, initialize_config_dir
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, open_dict
 
 from dreamervla.runtime.reproduction import (
     ReproductionError,
@@ -180,6 +180,62 @@ def test_prepare_reproduction_config_pins_public_assets_and_hardware() -> None:
     assert str(cfg.preprocess.gpus) == "0,1,2,3,4,5,6,7"
 
 
+def test_verify_third_party_honors_configured_source_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dreamervla.launchers import reproduce as module
+
+    cfg = _compose_reproduction("prepare_assets")
+    cfg.third_party_root = str(tmp_path)
+    for key in cfg.third_party:
+        cfg.third_party[key] = "a"
+    visited: list[Path] = []
+
+    def fake_git_revision(path: Path) -> str:
+        visited.append(path)
+        return "a" * 40
+
+    monkeypatch.setattr(module, "_git_revision", fake_git_revision)
+
+    revisions = module._verify_third_party(cfg)
+
+    assert set(revisions) == set(cfg.third_party)
+    assert visited
+    assert all(path.parent == tmp_path for path in visited)
+
+
+def test_prepare_assets_runs_commands_with_verified_openvla_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dreamervla.launchers import reproduce as module
+
+    cfg = _compose_reproduction("prepare_assets")
+    cfg.data_root = str(tmp_path / "data")
+    cfg.third_party_root = str(tmp_path / "sources")
+    cfg.assets.openvla.target = str(tmp_path / "model")
+    cfg.assets.libero.target = str(tmp_path / "dataset")
+    captured_envs: list[dict[str, str]] = []
+
+    def fake_run(command, *, env, dry_run):
+        captured_envs.append(dict(env))
+
+    monkeypatch.setattr(module, "_run", fake_run)
+
+    module._prepare_assets(
+        module.ReproductionWorkflow(
+            config_name="reproduce/prepare_assets",
+            cfg=cfg,
+            dry_run=True,
+        )
+    )
+
+    assert captured_envs
+    assert all(
+        env["OPENVLA_OFT_ROOT"] == str((tmp_path / "sources" / "openvla-oft").resolve())
+        for env in captured_envs
+    )
+
+
 def test_train_reproduction_config_has_release_budgets_and_selection() -> None:
     cfg = _compose_reproduction("train_dreamer")
 
@@ -252,6 +308,30 @@ def test_build_stage_command_constructs_fresh_wm_command(tmp_path: Path) -> None
     assert f"training.out_dir={tmp_path / 'outputs' / 'world_model'}" in command
     assert "ngpu=8" in command
     assert "gpus=0,1,2,3,4,5,6,7" in command
+
+
+def test_build_stage_command_appends_stage_specific_hydra_overrides(tmp_path: Path) -> None:
+    from dreamervla.launchers.reproduce import build_stage_command
+
+    cfg = _compose_reproduction("train_dreamer")
+    cfg.stages.world_model.run_root = str(tmp_path / "world_model")
+    with open_dict(cfg.stages.world_model):
+        cfg.stages.world_model.overrides = [
+            "profile=smoke",
+            "training.warmup_replay_max_steps=1",
+        ]
+
+    command = build_stage_command(
+        cfg,
+        "world_model",
+        action="fresh",
+        selected_checkpoints={},
+    )
+
+    assert command[-2:] == (
+        "profile=smoke",
+        "training.warmup_replay_max_steps=1",
+    )
 
 
 def test_build_stage_command_constructs_resumable_frozen_dreamer(tmp_path: Path) -> None:
@@ -458,6 +538,8 @@ def test_dockerignore_excludes_runtime_state_but_keeps_source() -> None:
 
 def test_public_docs_register_reproduction_commands() -> None:
     guide = (PROJECT_ROOT / "docs" / "docker_reproduction.md").read_text(encoding="utf-8")
+    install = (PROJECT_ROOT / "docs" / "install.md").read_text(encoding="utf-8")
+    docs_index = (PROJECT_ROOT / "docs" / "README.md").read_text(encoding="utf-8")
     readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
     readme_zh = (PROJECT_ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
 
@@ -468,6 +550,9 @@ def test_public_docs_register_reproduction_commands() -> None:
 
     assert "[中文](README.zh-CN.md)" in readme
     assert "[English](README.md)" in readme_zh
+    assert "env.CONDA_ENV_NAME=dreamervla-2" in install
+    assert "CONDA_ENV_NAME=dreamervla-2 bash scripts/install/60_verify.sh" in install
+    assert "native_environment_reproduction.md" in docs_index
     for text in (readme, readme_zh):
         assert "scripts/install_env.sh" in text
         assert "scripts/install/60_verify.sh" in text

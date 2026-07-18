@@ -576,6 +576,48 @@ def test_named_classifier_checkpoint_saves_full_flat_payload_once(tmp_path: Path
     assert payload["classifier_threshold"] == 0.5
 
 
+def test_final_classifier_save_reuses_latest_written_by_named_selection(tmp_path: Path) -> None:
+    runner = object.__new__(SuccessClassifierTrainingRunner)
+    runner._output_dir = str(tmp_path)
+    runner.cfg = OmegaConf.create(
+        {
+            "checkpoint": {
+                "topk": {
+                    "monitor_key": "f1",
+                    "metric_name": "f1",
+                    "mode": "max",
+                    "k": 1,
+                }
+            }
+        }
+    )
+    runner.global_step = 3
+    runner.epoch = 1
+    runner.best_window_ckpt_path = None
+    runner.best_episode_ckpt_path = None
+    runner.distributed = _FakeDistributed()
+    runner._log = lambda _payload: None
+    calls: list[tuple[Path, tuple[Path, ...]]] = []
+
+    def fake_save_checkpoint(*, path, extra_paths=()):
+        canonical = Path(path)
+        canonical.parent.mkdir(parents=True, exist_ok=True)
+        canonical.write_bytes(b"checkpoint")
+        destinations = tuple(Path(item) for item in extra_paths)
+        for destination in destinations:
+            destination.write_bytes(b"checkpoint")
+        calls.append((canonical, destinations))
+        return str(canonical)
+
+    runner.save_checkpoint = fake_save_checkpoint
+
+    runner._save_named("best", extra={"val_window": {"best_f1": 0.5}})
+    final_path = runner._save_final_checkpoint()
+
+    assert final_path == str(tmp_path / "checkpoints" / "latest.ckpt")
+    assert len(calls) == 1
+
+
 def test_named_classifier_checkpoint_is_rank_zero_only(tmp_path: Path) -> None:
     runner = object.__new__(SuccessClassifierTrainingRunner)
     runner._output_dir = str(tmp_path)

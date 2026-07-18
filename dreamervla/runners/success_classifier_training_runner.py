@@ -1069,7 +1069,10 @@ class SuccessClassifierTrainingRunner(BaseRunner):
 
     def _save_final_checkpoint(self) -> str:
         """Write the canonical resumable classifier checkpoint."""
-        return self.save_checkpoint(path=self.get_checkpoint_path())
+        path = self.get_checkpoint_path()
+        if int(getattr(self, "_latest_checkpoint_step", -1)) == int(self.global_step):
+            return str(path)
+        return self.save_checkpoint(path=path)
 
     def _classifier_topk_manager(self) -> TopKCheckpointManager | None:
         cached = getattr(self, "_topk_checkpoint_manager", None)
@@ -1124,6 +1127,9 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                     manager.monitor_key: f1,
                 }
             )
+        broadcast = getattr(self.distributed, "broadcast_object", None)
+        if callable(broadcast):
+            path = broadcast(path)
         if path is None:
             return
         self.classifier_threshold = threshold
@@ -1137,6 +1143,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
             path=self.get_checkpoint_path(),
             extra_paths=(path,),
         )
+        self._latest_checkpoint_step = int(self.global_step)
         self._log({"event": "ckpt_named", "path": str(path), "f1": f1, "threshold": threshold})
 
     def _log(self, payload: dict) -> None:

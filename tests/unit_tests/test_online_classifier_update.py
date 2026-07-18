@@ -6,10 +6,19 @@ from types import SimpleNamespace
 import torch
 
 from dreamervla.runtime.classifier_update import online_classifier_update_step
+from dreamervla.workers.actor._test_models import TinySuccessClassifier
 
 
 def test_classifier_update_has_role_based_module() -> None:
     assert importlib.util.find_spec("dreamervla.runtime.classifier_update") is not None
+
+
+def test_tiny_success_classifier_pools_window_and_chunk_axes() -> None:
+    classifier = TinySuccessClassifier(hidden_dim=4, window=3)
+
+    logits = classifier(torch.ones(2, 3, 2, 4))
+
+    assert logits.shape == (2, 2)
 
 
 class _TinyClassifier(torch.nn.Module):
