@@ -9,6 +9,10 @@ from typing import Any
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
 from dreamervla.algorithms.registry import get_actor_update_route
+from dreamervla.algorithms.validation import (
+    validate_ppo_hyperparameters,
+    validate_tdmpc_hyperparameters,
+)
 from dreamervla.models.registry import validate_model_type
 from dreamervla.preprocess.sidecar_schema import (
     HIDDEN_TOKEN_ACTION_HEAD,
@@ -44,6 +48,7 @@ def validate_cfg(cfg: DictConfig, *, world_size: int | None = None) -> DictConfi
     """
     _validate_logger_backends(cfg)
     _validate_algorithm_routes(cfg)
+    _validate_algorithm_hyperparameters(cfg)
     _validate_training_batch(cfg, world_size=_resolve_world_size(world_size))
     _validate_precision_controls(cfg)
     _validate_resume_paths(cfg)
@@ -96,6 +101,22 @@ def _validate_algorithm_routes(cfg: DictConfig) -> None:
     if update_type in (None, "", "dreamer"):
         return
     get_actor_update_route(str(update_type))
+
+
+def _validate_algorithm_hyperparameters(cfg: DictConfig) -> None:
+    for prefix in (
+        "algorithm",
+        "actor.train_cfg.algorithm_cfg",
+        "learner.train_cfg.algorithm_cfg",
+    ):
+        section = OmegaConf.select(cfg, prefix, default=None)
+        if section is not None:
+            validate_ppo_hyperparameters(section, prefix=prefix)
+
+    tdmpc_prefix = "eval.tdmpc_mpc"
+    tdmpc = OmegaConf.select(cfg, tdmpc_prefix, default=None)
+    if tdmpc is not None and bool(OmegaConf.select(tdmpc, "enabled", default=False)):
+        validate_tdmpc_hyperparameters(tdmpc, prefix=tdmpc_prefix)
 
 
 def _validate_training_batch(cfg: DictConfig, *, world_size: int) -> None:
