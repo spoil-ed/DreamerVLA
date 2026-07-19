@@ -3062,7 +3062,7 @@ class BaseTrajectoryEnvWorker(Worker):
         return 1
 
     def _collect_episode_transitions(self) -> bool:
-        if self.role == "real_env":
+        if self.role in {"real_env", "eval_env"}:
             return True
         if self.dump is not None:
             return True
@@ -3276,7 +3276,7 @@ class BaseTrajectoryEnvWorker(Worker):
                 add_episode(list(episode), source=str(source))
 
     def _push_replay_episode(self, episode: list[dict[str, Any]]) -> None:
-        if self.role == "real_env" and episode:
+        if self.role in {"real_env", "eval_env"} and episode:
             first = episode[0]
             step = int(first.get("global_step", self.global_step))
             success = any(bool(transition.get("success", False)) for transition in episode)

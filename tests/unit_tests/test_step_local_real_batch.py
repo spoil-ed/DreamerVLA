@@ -6,6 +6,7 @@ import numpy as np
 import torch
 
 from dreamervla.workers.cotrain.messages import RolloutResultMsg
+from dreamervla.workers.env.evaluation_env_worker import EvaluationEnvironmentWorker
 from dreamervla.workers.env.trajectory_env_worker import RealEnvWorker
 
 
@@ -110,6 +111,44 @@ def test_real_trajectory_batch_drains_exactly_once_with_raw_and_tokens() -> None
 
     drained_again = worker.drain_real_trajectories(global_step=4)
     assert drained_again.num_trajectories == 0
+
+
+def test_eval_trajectory_batch_drains_once_without_replay_writes() -> None:
+    worker = EvaluationEnvironmentWorker(
+        env_cfg={
+            "target": "dreamervla.workers.env._test_envs:NoSidecarTrainEnv",
+            "kwargs": {"horizon": 1, "image_shape": [4, 4, 3]},
+        },
+        num_slots=1,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=1,
+        num_action_chunks=1,
+        task_ids=(0,),
+    )
+    worker.init()
+    worker.set_global_step(6)
+    worker.bootstrap_obs()
+    result = RolloutResultMsg(
+        env_rank=0,
+        slot_id=0,
+        task_id=0,
+        episode_id=0,
+        step=0,
+        actions=torch.zeros(1, 7),
+        prev_logprobs=torch.zeros(1),
+        prev_values=None,
+        forward_inputs={"hidden": torch.ones(1, 2, 3)},
+        versions={"policy": 6, "global_step": 6},
+    )
+
+    worker.apply_rollout_result(result)
+    batch = worker.drain_real_trajectories(global_step=6)
+
+    assert worker.replay is None
+    assert worker.replay_write_enabled is False
+    assert batch.num_trajectories == 1
+    assert batch.trajectories[0].global_step == 6
+    assert worker.drain_real_trajectories(global_step=6).num_trajectories == 0
 
 
 def test_drain_does_not_return_another_global_steps_trajectories() -> None:

@@ -10,11 +10,14 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
 import torch.nn.functional as F
+
+if TYPE_CHECKING:
+    from dreamervla.workers.cotrain.messages import RealTrajectory
 
 
 @dataclass(frozen=True)
@@ -54,6 +57,61 @@ def _model_dtype(module: torch.nn.Module) -> torch.dtype:
     except StopIteration:
         return torch.float32
     return dtype if dtype.is_floating_point else torch.float32
+
+
+def encoded_eval_trajectory_from_real(
+    trajectory: RealTrajectory,
+) -> EncodedEvalTrajectory:
+    """Convert one fully re-encoded real trajectory into the eval contract."""
+
+    transitions = tuple(trajectory.transitions)
+    if not transitions:
+        raise ValueError("cotrain eval real trajectory must contain transitions")
+    missing_hidden = [
+        index for index, step in enumerate(transitions) if "obs_embedding" not in step
+    ]
+    missing_action = [index for index, step in enumerate(transitions) if "action" not in step]
+    if missing_hidden:
+        raise ValueError(
+            "cotrain eval requires obs_embedding on every transition; "
+            f"missing indices {missing_hidden[:8]}"
+        )
+    if missing_action:
+        raise ValueError(
+            "cotrain eval requires action on every transition; "
+            f"missing indices {missing_action[:8]}"
+        )
+
+    hidden = torch.stack(
+        [torch.as_tensor(step["obs_embedding"]) for step in transitions],
+        dim=0,
+    )
+    actions = torch.stack(
+        [torch.as_tensor(step["action"], dtype=torch.float32).reshape(-1) for step in transitions],
+        dim=0,
+    )
+    proprio_values = [step.get("proprio", step.get("state")) for step in transitions]
+    proprio = None
+    if any(value is not None for value in proprio_values):
+        if not all(value is not None for value in proprio_values):
+            raise ValueError("cotrain eval trajectory proprio must be present on every transition")
+        proprio = torch.stack(
+            [torch.as_tensor(value, dtype=torch.float32).reshape(-1) for value in proprio_values],
+            dim=0,
+        )
+    language = next(
+        (step.get("lang_emb") for step in transitions if step.get("lang_emb") is not None),
+        None,
+    )
+    return EncodedEvalTrajectory(
+        task_id=int(trajectory.task_id),
+        success=bool(trajectory.success),
+        hidden=hidden,
+        actions=actions,
+        proprio=proprio,
+        lang_emb=(None if language is None else torch.as_tensor(language)),
+        reset_state_id=int(trajectory.episode_id),
+    )
 
 
 @torch.no_grad()
@@ -705,6 +763,7 @@ class CotrainEvalObserver:
             "eval/cotrain_expected_trajectories": float(expected_trajectories),
             "eval/wm_closed_loop_mse": float(summary["wm_closed_loop_mse"]),
             "eval/wm_closed_loop_cosine": float(summary["wm_closed_loop_cosine"]),
+            "eval/wm_trajectory_cosine": float(summary["wm_closed_loop_cosine"]),
             "eval/classifier_threshold": float(summary["classifier_threshold"]),
             "eval_cotrain_diagnostics": summary,
         }
@@ -734,6 +793,8 @@ class CotrainEvalObserver:
             metrics[f"eval/classifier_{short_source}_pr_auc_defined"] = float(
                 bool(values["pr_auc_defined"])
             )
+        metrics["eval/cls_trajectory_f1"] = metrics["eval/classifier_real_f1"]
+        metrics["eval/cls_trajectory_accuracy"] = metrics["eval/classifier_real_accuracy"]
         return metrics
 
     @classmethod
@@ -935,5 +996,6 @@ __all__ = [
     "binary_classification_metrics",
     "classifier_trajectory_score",
     "closed_loop_world_model_trajectory",
+    "encoded_eval_trajectory_from_real",
     "evaluate_encoded_cotrain_trajectory",
 ]

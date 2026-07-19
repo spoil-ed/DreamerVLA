@@ -19,22 +19,23 @@ runner:
 manual_cotrain:
   global_steps: 20
   checkpoint_every: 5
-  eval_interval_global_steps: 5
+  eval_interval_global_steps: 1
   eval_initial_global_step: true
   real_rollout_target_trajectories: 64
-  max_policy_kl: 0.03
+  max_policy_kl: 0.05
   eval_protocol:
     num_episodes_per_task: 10
 
 algorithm:
   group_size: 16
   entropy_bonus: 1.0e-3
+  kl_beta: 5.0e-3
 
 ray_actor_optimizer:
-  lr: 1.0e-6
+  lr: 2.0e-6
 
 actor:
   train_cfg:
-    lr: 1.0e-6
+    lr: 2.0e-6
     algorithm_cfg:
       ppo_update_epochs: 2

@@ -21,9 +21,16 @@ from dreamervla.hybrid_engines.weight_syncer.objectstore import (
     ObjectStoreWeightSyncer,
     _independent_cpu,
 )
+from dreamervla.runtime.cotrain_eval import (
+    CotrainEvalObserver,
+    CotrainTransactionAccumulator,
+    encoded_eval_trajectory_from_real,
+    evaluate_encoded_cotrain_trajectory,
+)
 from dreamervla.scheduler.worker import Worker
 from dreamervla.utils.seed import capture_rng_state, restore_rng_state, select_rank_rng_state
 from dreamervla.utils.torch_utils import precision_dtype
+from dreamervla.workers.cotrain.messages import RealTrajectoryBatch
 
 
 class LearnerWorker(Worker):
@@ -284,6 +291,49 @@ class LearnerWorker(Worker):
             for name, optimizer in self.optimizers.items():
                 state_dicts[f"{name}_optimizer"] = _cpu_tree(optimizer.state_dict())
         return state_dicts
+
+    @torch.no_grad()
+    def evaluate_cotrain_trajectories(
+        self,
+        batch: RealTrajectoryBatch,
+    ) -> dict[str, float]:
+        """Evaluate resident WM/CLS on one fixed physical-trajectory batch."""
+
+        if batch.num_trajectories <= 0:
+            raise ValueError("cotrain eval trajectory batch must be non-empty")
+        world_model = self.world_model
+        classifier = self.classifier
+        if world_model is None or classifier is None:
+            raise RuntimeError("cotrain eval requires initialized world_model and classifier")
+        threshold = self._classifier_threshold()
+        accumulator = CotrainTransactionAccumulator(
+            classifier_threshold=threshold,
+            threshold_source="checkpoint",
+        )
+        world_model_training = bool(world_model.training)
+        classifier_training = bool(classifier.training)
+        world_model.eval()
+        classifier.eval()
+        try:
+            for trajectory in batch.trajectories:
+                evaluate_encoded_cotrain_trajectory(
+                    world_model=world_model,
+                    classifier=classifier,
+                    trajectory=encoded_eval_trajectory_from_real(trajectory),
+                    accumulator=accumulator,
+                )
+        finally:
+            world_model.train(world_model_training)
+            classifier.train(classifier_training)
+        metrics = CotrainEvalObserver.metrics_from_rank_states(
+            [accumulator.rank_state()],
+            expected_trajectories=batch.num_trajectories,
+        )
+        return {
+            str(key): float(value)
+            for key, value in metrics.items()
+            if isinstance(value, (int, float))
+        }
 
     def rng_state_dict(self) -> dict[str, Any]:
         """Return this learner rank's Python, NumPy, torch, and CUDA RNG state."""

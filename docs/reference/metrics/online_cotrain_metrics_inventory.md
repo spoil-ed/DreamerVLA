@@ -115,16 +115,36 @@ muddy the cumulative/recent semantics.
    Source: per-group diagnostic payloads. These are structured diagnostics and should
    not be logged as scalar TensorBoard series.
 
-## train/time/eval
+## eval（resident real-LIBERO）
+
+1. `eval/success_rate`, `eval/successes`, `eval/episodes`
+   Source: resident RolloutGroup 在固定真实 LIBERO protocol 上完成的 episodes。
+2. `eval/wm_trajectory_cosine`（alias: `eval/wm_closed_loop_cosine`）,
+   `eval/wm_closed_loop_mse`
+   Source: 同一批真实 eval 轨迹。WM 只用真实 history 初始化，随后全程递归预测；
+   先对每条轨迹的有效 horizon 求均值，再对轨迹等权平均。
+3. `eval/cls_trajectory_f1`, `eval/cls_trajectory_accuracy`（aliases:
+   `eval/classifier_real_f1`, `eval/classifier_real_accuracy`）
+   Source: checkpoint threshold 下，CLS 对完整真实 hidden 轨迹的 success 分类；label
+   是对应真实 episode 的 success。
+4. `eval/classifier_wm_f1`, `eval/classifier_wm_accuracy`
+   Source: 相同 CLS 和 threshold 对 WM 闭环预测 hidden 轨迹的 success 分类，用于区分
+   CLS 本身效果与 WM->CLS 组合效果。
+5. `eval/classifier_{real,wm}_{precision,recall,roc_auc,pr_auc}` 及 confusion counts
+   Source: 同一条 trajectory-level 分类协议的辅助诊断。AUC 只有同时存在正负样本时定义。
+6. `eval/chunk_per_s`, `time/eval_s`, `time/eval_diagnostics_s`
+   Source: 真实环境 rollout throughput、完整 eval 用时和其中 WM/CLS 诊断用时。
+
+这些指标在启用 resident eval 的每个 eval global step 一起写入 logger；eval 轨迹不写
+replay，诊断不做 optimizer step，也不重新校准 classifier threshold。
+
+## train/time
 
 1. `train/<phase>_loss`, `train/rl_loss`
    Source: synthetic or phase-updater learner paths, not the main cotrain loop. Keep
    only for those modes.
 2. `time/*`
    Source: timing diagnostics when present. Keep.
-3. `eval/*`
-   Source: real eval windows when present. Keep; eval success must come from completed
-   real episodes.
 
 ## sync（manual Ray）
 
@@ -162,3 +182,7 @@ The main online cotrain dashboard should prioritize:
 18. `actor/approx_kl`
 19. `actor/clip_fraction`
 20. `actor/grad_norm`
+21. `eval/success_rate`
+22. `eval/wm_trajectory_cosine`
+23. `eval/cls_trajectory_f1`
+24. `eval/cls_trajectory_accuracy`

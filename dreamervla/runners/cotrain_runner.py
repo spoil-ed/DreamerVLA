@@ -1284,8 +1284,38 @@ class CotrainRunner(BaseRunner):
         )
         self._stop_rollout_workers(groups, channel_key="eval_env_channel")
         rollout_result.wait()
-        elapsed = float(time.perf_counter() - started)
+        rollout_elapsed = float(time.perf_counter() - started)
+        diagnostics_started = time.perf_counter()
+        drained = evaluation_env.drain_real_trajectories(global_step).wait()
+        eval_batch = _merge_real_trajectory_batches(
+            drained,
+            global_step=int(global_step),
+        )
         episodes = self._eval_num_episodes()
+        if eval_batch.num_trajectories != episodes:
+            raise RuntimeError(
+                "resident eval did not retain the configured physical-trajectory "
+                f"count: got {eval_batch.num_trajectories}, expected {episodes}"
+            )
+        shared_eval_batch = _share_ray_value(
+            eval_batch,
+            cluster=groups.get("cluster"),
+        )
+        reencoded_results = actor.reencode_real_trajectories(shared_eval_batch).wait()
+        reencoded_batch = _first_real_trajectory_batch(reencoded_results)
+        diagnostic_values = (
+            groups["LearnerGroup"]
+            .evaluate_cotrain_trajectories(
+                _share_ray_value(
+                    reencoded_batch,
+                    cluster=groups.get("cluster"),
+                )
+            )
+            .wait()
+        )
+        diagnostic_metrics = _merge_metric_lists([diagnostic_values])
+        diagnostics_elapsed = float(time.perf_counter() - diagnostics_started)
+        elapsed = float(time.perf_counter() - started)
         successes = min(
             episodes,
             max(
@@ -1314,7 +1344,7 @@ class CotrainRunner(BaseRunner):
             unit="episode",
             status=(
                 f"successes={successes} success_rate={rate:.3f} "
-                f"chunk_per_s={chunk_steps / max(elapsed, 1e-9):.2f}"
+                f"chunk_per_s={chunk_steps / max(rollout_elapsed, 1e-9):.2f}"
             ),
             force=True,
         )
@@ -1322,8 +1352,10 @@ class CotrainRunner(BaseRunner):
             "eval/episodes": float(episodes),
             "eval/successes": float(successes),
             "eval/success_rate": rate,
-            "eval/chunk_per_s": float(chunk_steps / max(elapsed, 1e-9)),
+            "eval/chunk_per_s": float(chunk_steps / max(rollout_elapsed, 1e-9)),
             "time/eval_s": elapsed,
+            "time/eval_diagnostics_s": diagnostics_elapsed,
+            **diagnostic_metrics,
             **sync_metrics,
         }
 

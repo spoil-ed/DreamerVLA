@@ -29,19 +29,20 @@ def test_aggressive_dreamer_experiment_is_explicit_and_isolated() -> None:
     assert aggressive.run.name == "openvla_libero_aggressive"
     assert aggressive.manual_cotrain.global_steps == 20
     assert aggressive.manual_cotrain.checkpoint_every == 5
-    assert aggressive.manual_cotrain.eval_interval_global_steps == 5
+    assert aggressive.manual_cotrain.eval_interval_global_steps == 1
     assert aggressive.manual_cotrain.eval_initial_global_step is True
     assert aggressive.manual_cotrain.eval_protocol.num_episodes_per_task == 10
     assert aggressive.manual_cotrain.real_rollout_target_trajectories == 64
     assert aggressive.manual_cotrain.wm_rollout_target_trajectories == 1024
-    assert aggressive.manual_cotrain.max_policy_kl == 0.03
+    assert aggressive.manual_cotrain.max_policy_kl == 0.05
     assert aggressive.algorithm.group_size == 16
     assert aggressive.algorithm.entropy_bonus == 1.0e-3
+    assert aggressive.algorithm.kl_beta == 0.005
     assert aggressive.actor.train_cfg.algorithm_cfg.group_size == 16
     assert aggressive.actor.train_cfg.algorithm_cfg.entropy_coef == 1.0e-3
     assert aggressive.actor.train_cfg.algorithm_cfg.ppo_update_epochs == 2
-    assert aggressive.actor.train_cfg.lr == 1.0e-6
-    assert aggressive.actor.train_cfg.optimizers.policy.lr == 1.0e-6
+    assert aggressive.actor.train_cfg.lr == 2.0e-6
+    assert aggressive.actor.train_cfg.optimizers.policy.lr == 2.0e-6
     assert aggressive.actor.train_cfg.global_batch_size == 16384
     assert aggressive.actor.train_cfg.micro_batch_size == 8
     assert aggressive.replay.cfg.capacity == 80000

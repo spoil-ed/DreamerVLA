@@ -15,6 +15,8 @@ from dreamervla.runtime.cotrain_eval import (
     binary_classification_metrics,
     closed_loop_world_model_trajectory,
 )
+from dreamervla.workers.actor.learner_worker import LearnerWorker
+from dreamervla.workers.cotrain.messages import RealTrajectory, RealTrajectoryBatch
 
 
 class _RecursiveWorldModel(torch.nn.Module):
@@ -53,6 +55,25 @@ class _RecursiveWorldModel(torch.nn.Module):
         }
 
 
+class _TaskAwareTrajectoryClassifier(torch.nn.Module):
+    supports_task_conditioning = True
+    supports_proprio_conditioning = False
+    supports_language_conditioning = False
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.scale = torch.nn.Parameter(torch.tensor(1.0))
+
+    def predict_success(self, video, *, task_ids, **_kwargs):
+        del video
+        scores = torch.where(
+            task_ids == 0,
+            self.scale.new_tensor(0.9),
+            self.scale.new_tensor(0.1),
+        )
+        return {"score": scores}
+
+
 def _trajectory(values: list[float], *, task_id: int, success: bool):
     hidden = torch.tensor(values, dtype=torch.float32).reshape(-1, 1, 1)
     return EncodedEvalTrajectory(
@@ -61,6 +82,60 @@ def _trajectory(values: list[float], *, task_id: int, success: bool):
         hidden=hidden,
         actions=torch.zeros((len(values), 1), dtype=torch.float32),
     )
+
+
+def _real_trajectory(
+    values: list[float],
+    *,
+    task_id: int,
+    success: bool,
+) -> RealTrajectory:
+    transitions = tuple(
+        {
+            "obs_embedding": np.asarray([[value]], dtype=np.float32),
+            "action": np.zeros((1,), dtype=np.float32),
+        }
+        for value in values
+    )
+    return RealTrajectory(
+        env_rank=0,
+        slot_id=task_id,
+        task_id=task_id,
+        episode_id=task_id,
+        global_step=3,
+        success=success,
+        transitions=transitions,
+    )
+
+
+def test_learner_evaluates_encoded_real_trajectories_without_training() -> None:
+    learner = LearnerWorker({}, {}, {}, replay=None)
+    learner.world_model = _RecursiveWorldModel()
+    learner.classifier = _TaskAwareTrajectoryClassifier()
+    learner.classifier_threshold = 0.5
+    learner.world_model.train()
+    learner.classifier.train()
+    batch = RealTrajectoryBatch(
+        global_step=3,
+        trajectories=(
+            _real_trajectory([1.0, 2.0, 3.0, 4.0, 5.0], task_id=0, success=True),
+            _real_trajectory([1.0, 2.0, 3.0, 4.0, 5.0], task_id=1, success=False),
+        ),
+    )
+
+    metrics = learner.evaluate_cotrain_trajectories(batch)
+
+    assert metrics["eval/cotrain_trajectory_count"] == 2.0
+    assert metrics["eval/wm_closed_loop_cosine"] == pytest.approx(1.0)
+    assert metrics["eval/wm_trajectory_cosine"] == pytest.approx(1.0)
+    assert metrics["eval/classifier_real_f1"] == 1.0
+    assert metrics["eval/classifier_real_accuracy"] == 1.0
+    assert metrics["eval/cls_trajectory_f1"] == 1.0
+    assert metrics["eval/cls_trajectory_accuracy"] == 1.0
+    assert metrics["eval/classifier_wm_f1"] == 1.0
+    assert metrics["eval/classifier_wm_accuracy"] == 1.0
+    assert learner.world_model.training is True
+    assert learner.classifier.training is True
 
 
 def test_closed_loop_world_model_is_autoregressive_across_full_trajectory() -> None:
