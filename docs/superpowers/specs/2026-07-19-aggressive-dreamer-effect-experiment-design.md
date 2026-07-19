@@ -1,33 +1,84 @@
-# Aggressive Dreamer Effect Experiment Design
+# Aggressive Packed-PPO Dreamer Experiment Design
 
 ## Objective
 
-Add an opt-in Hydra experiment for one aggressive, short Dreamer run on eight
-H100 GPUs. The experiment must leave the existing `openvla_libero` recipe
-unchanged and must be selected explicitly at launch time.
-
-The experiment is intended to establish whether a stronger failure-conditioned
-imagined-RL update improves real LIBERO Goal success quickly. It is not intended
-to identify the causal contribution of each changed hyperparameter.
+Add one opt-in, short, aggressive Dreamer experiment for eight H100 GPUs. Improve
+effect and actor efficiency by compacting valid PPO samples before policy forward,
+while leaving the existing `openvla_libero` recipe and dense actor path unchanged.
 
 ## Scope
 
-This change adds configuration, composition tests, and the configuration registry
-entry only. It does not change runner code, PPO implementation, W&B aggregation,
-the existing `openvla_libero` experiment, or shell-launcher behavior.
+The change contains four isolated pieces:
 
-## Configuration Surface
+1. an Actor-local packed-sample planner and packed PPO path;
+2. explicit packed-path metrics and validation;
+3. `configs/experiment/openvla_libero_aggressive_packed.yaml`;
+4. focused unit, config-isolation, and gated distributed tests.
 
-Add `configs/experiment/openvla_libero_aggressive.yaml` as a complete experiment
-recipe. It composes the same task, Dreamer route, world model, classifier, and
-launcher as `openvla_libero.yaml`, then declares only the aggressive experiment's
-own run name and overrides.
+It does not change EnvGroup, RolloutGroup, ReplayGroup, channels, reward production,
+classifier threshold, world-model behavior, checkpoint format, or existing recipes.
 
-The recipe owns these values:
+## Actor Data Flow
+
+The existing trajectory boundary remains unchanged:
+
+```text
+TrajectoryShard
+  -> load batch
+  -> compute returns, group-relative advantages, and loss mask
+  -> build PPO sample plan
+  -> policy forward/backward
+  -> KL transaction
+  -> commit or rollback
+```
+
+The new `valid_only` planner operates after the existing loss mask and advantages
+exist. It performs these steps per actor rank and PPO epoch:
+
+1. flatten chunk samples exactly as the dense path does;
+2. select indices whose current loss mask contains at least one valid token;
+3. deterministically shuffle only those indices;
+4. partition them as evenly as possible across the existing optimizer-step budget;
+5. synchronize the required packed microbatch count across FSDP ranks;
+6. pad only the final packed microbatch where collective alignment requires it;
+7. exclude padding from loss, KL, entropy, clipping, and metric denominators.
+
+All FSDP ranks execute the same number of forward/backward collectives. A rank with
+no local valid sample in a globally active microbatch performs the existing
+zero-connected policy forward, preserving collective safety. A microbatch that is
+globally empty is not executed.
+
+## Loss Semantics
+
+`valid_only` uses the existing token-mean objective, but normalizes by actual valid
+tokens rather than by a count that includes empty microbatches. For each optimizer
+step, local loss numerators and valid-token counts are formed from unpadded samples;
+the global valid-token denominator is reduced across ranks. The local backward loss
+is scaled for FSDP's averaged gradients so the result is the global valid-token mean.
+
+The dense path is not modified. Packing does not change rewards, returns,
+advantages, PPO clipping, KL calculation, entropy calculation, or the configured
+number of optimizer steps when valid samples exist for every planned step. An empty
+planned optimizer step is skipped on every rank and reported explicitly.
+
+## Configuration
+
+Add an opt-in actor field:
+
+```yaml
+actor:
+  train_cfg:
+    ppo_sample_packing: dense  # dense | valid_only
+```
+
+The inherited default is `dense`. Validation rejects unknown modes. Only the new
+experiment selects `valid_only`.
+
+The aggressive experiment owns these values:
 
 | Configuration path | Value |
 |---|---:|
-| `run.name` | `openvla_libero_aggressive` |
+| `run.name` | `openvla_libero_aggressive_packed` |
 | `manual_cotrain.global_steps` | `20` |
 | `manual_cotrain.checkpoint_every` | `5` |
 | `manual_cotrain.eval_interval_global_steps` | `5` |
@@ -40,92 +91,80 @@ The recipe owns these values:
 | `ray_actor_optimizer.lr` | `1.0e-6` |
 | `actor.train_cfg.lr` | `1.0e-6` |
 | `actor.train_cfg.algorithm_cfg.ppo_update_epochs` | `2` |
+| `actor.train_cfg.ppo_sample_packing` | `valid_only` |
 
-The experiment deliberately keeps the following inherited values unchanged:
+Imagined trajectories remain 1,024, global batch remains 16,384, microbatch remains
+8, gradient clip remains 1, and reward/filter/clip/GAE settings remain inherited.
 
-- 1,024 imagined trajectories per global step;
-- global actor batch size 16,384 and microbatch size 8;
-- PPO clip bounds, dual clip, reward coefficient, reward filtering, gamma, GAE,
-  KL coefficient, optimizer gradient clip, replay capacity, task balancing, and
-  per-step policy synchronization;
-- frozen world-model and classifier checkpoints supplied by the launcher.
-
-The duplicated actor learning-rate paths are intentional: the resolved config
-contains a runner-level actor learning rate and a concrete optimizer learning
-rate. Both must agree, and the composition test must prove that they do.
-
-## Launch Contract
-
-Training is selected explicitly without changing the default experiment:
+Training is selected explicitly:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   bash scripts/experiments/cotrain/train.sh \
-  --config openvla_libero_aggressive \
+  --config openvla_libero_aggressive_packed \
   --wm_ckpt /path/to/wm/checkpoints/latest.ckpt \
   --cls_ckpt /path/to/classifier/checkpoints/latest.ckpt
 ```
 
-The launcher must continue to map `--config openvla_libero` to the original
-recipe and `--config openvla_libero_aggressive` to the new recipe. No launcher
-defaults or shell parsing are added.
+The original `--config openvla_libero` continues to resolve to the unmodified dense
+route.
 
-The 100-episode resident evaluations at steps 0, 5, 10, 15, and 20 are screening
-evaluations. A 300-episode confirmation is launched explicitly against a selected
-checkpoint:
+## Metrics
 
-```bash
-bash scripts/experiments/cotrain/eval.sh \
-  eval.ckpt_path=/path/to/aggressive-run \
-  eval.num_episodes_per_task=30
-```
+Both paths retain existing metric names. The packed path additionally emits:
 
-The same task IDs, environment seed schedule, and initial-state protocol must be
-used for the initial-policy baseline and the selected trained checkpoint so that
-episode-level outcomes can be paired outside the training loop.
+- `actor/raw_ppo_samples`;
+- `actor/packed_ppo_samples`;
+- `actor/packing_keep_fraction`;
+- `actor/packing_padding_samples`;
+- `actor/packing_padding_fraction`;
+- `actor/active_micro_batches`;
+- `actor/skipped_empty_optimizer_steps`;
+- `actor/global_valid_token_count`;
+- `actor/active_ratio_mean`;
+- `actor/active_entropy_mean`;
+- `actor/active_clip_fraction`.
 
-## Safety and Interpretation
+Existing `actor/ratio_mean`, entropy, KL, and clip metrics keep their dense-path
+meaning. Packed-path active metrics use only real valid samples and cannot be
+diluted by padding or globally empty microbatches.
 
-`manual_cotrain.max_policy_kl=0.03` is the transactional hard guard. A policy
-update above the limit must use the existing rollback behavior. This configuration
-does not add dynamic learning-rate changes or custom early stopping because those
-would require runner behavior changes and would make the single experiment harder
-to reproduce.
+## Failure Handling
 
-Operational monitoring should stop the run for any NaN/Inf, KL rollback, worker
-crash, discarded trajectory, or actor/rollout policy-version mismatch. The human
-operator should also inspect active-sample density and real-rollout success at
-each five-step checkpoint. Those monitoring rules are runbook guidance, not new
-configuration semantics.
+- Zero global valid samples use the existing skip-update result.
+- Non-finite packed loss or metric values fail before optimizer commit.
+- Rank-asymmetric sample counts are padded only through the synchronized plan.
+- A KL value above `manual_cotrain.max_policy_kl` uses the existing transaction
+  rollback.
+- Unknown packing modes fail configuration validation before workers launch.
 
-The experiment is considered effective only if the paired 300-episode evaluation
-improves overall success by at least eight percentage points with a one-sided
-paired test below 0.05 and no task loses more than ten percentage points. Because
-there is no simultaneous factor or control run, the result establishes the effect
-of the combined aggressive recipe relative to its initial policy, not the causal
-effect of any one hyperparameter.
+## Verification
 
-## Validation
+Tests must prove:
 
-Add a focused Hydra composition test that proves:
+1. deterministic valid-index selection and partitioning;
+2. padding never contributes to the objective or active metrics;
+3. packed and dense objectives agree on an all-valid small batch;
+4. zero-valid input skips without an optimizer step;
+5. rank-asymmetric plans use identical collective counts in a gated two-rank test;
+6. the aggressive experiment resolves every value in the configuration table;
+7. `experiment=openvla_libero` retains its existing run name, budget, group size,
+   learning rate, PPO epoch count, entropy coefficient, real trajectory target,
+   KL limit, and dense packing mode;
+8. both resolved configs pass `validate_cfg`.
 
-1. `experiment=openvla_libero_aggressive` resolves to `DreamerRunner` and all
-   values in the table above;
-2. interpolated group size, entropy coefficient, and optimizer learning rate reach
-   the actor configuration;
-3. the resolved configuration passes `validate_cfg`;
-4. `experiment=openvla_libero` retains its existing run name, 20,000-step budget,
-   group size 8, policy learning rate `5.0e-7`, PPO epoch count 1, entropy
-   coefficient 0, 32 real trajectories, and KL limit 0.1.
+## Evaluation Contract
 
-Update the config registry to list the new recipe as an opt-in aggressive
-effect-validation route. No existing registry row is changed.
+Resident 100-episode evaluations at steps 0, 5, 10, 15, and 20 are screening
+checks. A selected checkpoint is confirmed with 30 episodes per task through the
+existing evaluation launcher. Effectiveness requires at least eight percentage
+points paired improvement, one-sided paired `p < 0.05`, and no task losing more
+than ten percentage points.
 
 ## Non-Goals
 
-- No 2x2 or sweep experiment.
-- No automatic statistical test inside the training runner.
-- No W&B metric-schema or aggregation change.
-- No modification of existing experiment YAML files.
-- No new shell script.
-- No change to checkpoint, replay, resume, or evaluation runner behavior.
+- No 2x2 experiment or sweep.
+- No adaptive classifier threshold or reward reshaping.
+- No async pipeline, streaming actor update, or replay redesign.
+- No change to existing experiment YAML files.
+- No new shell launcher or checkpoint layout.
