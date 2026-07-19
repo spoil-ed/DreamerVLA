@@ -85,6 +85,7 @@ wandb beta sync --live /path/to/run_root/wandb
 | `classifier_official_upper_bound` | pre-mainline classifier training from official data |
 | `wmpo_token_classifier_openvla_onetraj_libero_goal_h1` | token classifier recipe |
 | `openvla_libero` | frozen-WM/CLS failure-conditioned OpenVLA imagined RL (Ray backend) |
+| `openvla_libero_aggressive` | opt-in 20-step aggressive frozen-WM/CLS effect-validation route |
 | `eval_libero_vla` | LIBERO rollout eval |
 
 `profile=production` preserves the selected experiment. `profile=debug` declares
