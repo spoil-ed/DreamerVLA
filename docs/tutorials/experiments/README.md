@@ -13,6 +13,7 @@ Normal changes are Hydra overrides, e.g.
 | Pipeline | Hydra `task=` | Main configs |
 | --- | --- | --- |
 | [2026-07-20 aggressive Dreamer handoff](2026-07-20_Aggressive_Dreamer_LIBERO.md) | `libero_goal` | `reproduce/train_dreamer_aggressive`, `openvla_libero_aggressive` |
+| [2026-07-20 imagined-success SFT signal probe](2026-07-20_Imagined_Success_SFT_Probe_LIBERO.md) | `libero_goal` | `reproduce/train_dreamer_success_sft_probe`, `openvla_libero_success_sft_probe` |
 | [OpenVLA one-traj cold-start cotrain](OpenVLA_Onetraj_LIBERO.md) | `goal\|object\|spatial\|10` launcher shorthand | `collect_rollouts`, `openvla_onetraj_libero_cotrain`, `wm_full_dataset_train`, `eval_libero_vla` |
 | [Ray/manual cotrain backend](../../../spec/04_complete_loop.md) | synthetic / gated real smoke | `manual_cotrain_ray_*`, `openvla_onetraj_libero_cotrain` |
 | [WM single-trajectory overfit probe](../../../scripts/experiments/single_trajectory_overfit/train.sh) | `libero_goal` HDF5 + hidden sidecar | diagnostic script with a check before training |
