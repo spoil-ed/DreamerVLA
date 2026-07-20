@@ -35,6 +35,6 @@ def test_success_sft_probe_is_one_step_frozen_and_self_verifying() -> None:
     assert cfg.manual_cotrain.checkpoint_every == 1
     assert cfg.manual_cotrain.real_rollout_target_trajectories == 1
     assert cfg.manual_cotrain.wm_rollout_target_trajectories == 128
-    assert cfg.manual_cotrain.max_steps_per_rollout_epoch == 64
-    assert cfg.actor.train_cfg.global_batch_size == 1024
+    assert cfg.manual_cotrain.max_steps_per_rollout_epoch == 512
+    assert cfg.actor.train_cfg.global_batch_size == 8192
     assert cfg.actor.train_cfg.success_sft.epochs == 1

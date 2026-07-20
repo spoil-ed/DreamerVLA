@@ -168,7 +168,8 @@ encoder 冻结，但把 selector 改为所有 episode 的首帧。它不改变 `
 和已有 WM/CLS checkpoint，因果顺序固定为：
 
 1. 收集一个 real episode，仅用于向 replay 提供一个 episode-start initial condition；
-2. 冻结 encoder、world model 和 classifier，从该起点生成 128 条短 imagined trajectories；
+2. 冻结 encoder、world model 和 classifier，从该起点生成 128 条最长 512-step 的 imagined
+   trajectories；
 3. 使用 classifier checkpoint 自带的 threshold 选择至少一个时刻达到成功阈值的完整轨迹；
 4. ActorGroup 不计算 advantage、不执行 PPO，只对这些成功轨迹中 `loss_mask` 有效的 action
    decisions 最小化行为 action-token 的负 log-likelihood；

@@ -1,6 +1,6 @@
 # @package _global_
 # Minimal causal signal probe: one real episode seeds frozen WM imagination,
-# classifier-success trajectories supervise exactly one actor SFT update.
+# full-horizon classifier-success trajectories supervise one actor SFT update.
 defaults:
   - /task: openvla_onetraj_libero
   - override /dreamervla: wmcls_cotrain
@@ -34,7 +34,7 @@ manual_cotrain:
   real_rollout_epoch: 1
   real_rollout_target_trajectories: 1
   wm_rollout_target_trajectories: 128
-  max_steps_per_rollout_epoch: 64
+  max_steps_per_rollout_epoch: 512
   wm_envs_per_worker: 16
   max_policy_kl: 0.05
 
@@ -50,7 +50,7 @@ ray_actor_optimizer:
 actor:
   train_cfg:
     lr: 2.0e-6
-    global_batch_size: 1024
+    global_batch_size: 8192
     micro_batch_size: 8
     success_sft:
       epochs: 1

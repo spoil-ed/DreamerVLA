@@ -100,12 +100,12 @@ bash scripts/reproduce/02_train_dreamer.sh \
   --cls_ckpt /path/to/classifier.ckpt
 ```
 
-It collects one real episode as the imagined start, generates 128 short imagined
-trajectories, selects complete trajectories crossing the checkpoint-owned CLS
-threshold, and performs one success-only SFT update. It fails automatically when no
-success is selected, no valid sample or positive gradient exists, the KL transaction
-rolls back, or the policy hash remains unchanged. A saved run can be checked again
-without loading any model:
+It collects one real episode as the imagined start, generates 128 imagined
+trajectories with the standard 512-step maximum horizon, selects complete trajectories
+crossing the checkpoint-owned CLS threshold, and performs one success-only SFT update.
+It fails automatically when no success is selected, no valid sample or positive
+gradient exists, the KL transaction rolls back, or the policy hash remains unchanged.
+A saved run can be checked again without loading any model:
 
 ```bash
 python -m dreamervla.diagnostics.verify_training_signal /path/to/run
