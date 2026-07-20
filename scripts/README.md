@@ -74,6 +74,22 @@ Both are intended for `spoil/dreamervla:cu124-h100-v1`; see
 second runs WM 30 epochs, CLS 8 epochs, then frozen-WM/CLS Dreamer for 20,000 global
 steps with automatic resume.
 
+To reuse existing component checkpoints and run the isolated aggressive Dreamer
+recipe, select its reproduce config explicitly:
+
+```bash
+bash scripts/reproduce/02_train_dreamer.sh \
+  --config reproduce/train_dreamer_aggressive \
+  --wm_ckpt /path/to/wm.ckpt \
+  --cls_ckpt /path/to/classifier.ckpt
+```
+
+The checkpoint flags are atomic: both are required. This config skips WM/CLS
+training, runs `openvla_libero_aggressive` for 20 global steps, imagines from all
+replay episode starts, and evaluates every step. The resident eval logs
+`eval/wm_trajectory_cosine`, `eval/cls_trajectory_f1`, and
+`eval/cls_trajectory_accuracy` to the configured logger backends.
+
 Mainline rollout collection:
 
 - `experiments/collect_rollouts/train.sh`

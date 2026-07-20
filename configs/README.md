@@ -62,6 +62,7 @@ wandb beta sync --live /path/to/run_root/wandb
 | --- | --- | --- |
 | Docker asset preparation | `scripts/reproduce/01_prepare_assets.sh` | `scripts/reproduce/prepare_assets` |
 | Docker WM/CLS/Dreamer chain | `scripts/reproduce/02_train_dreamer.sh` | `scripts/reproduce/train_dreamer` |
+| Aggressive Dreamer from WM/CLS checkpoints | `scripts/reproduce/02_train_dreamer.sh --config reproduce/train_dreamer_aggressive --wm_ckpt <wm> --cls_ckpt <cls>` | `scripts/reproduce/train_dreamer_aggressive` |
 | Full online cotrain | `scripts/experiments/cotrain/train.sh --config openvla_onetraj_libero_cotrain --wm_ckpt <wm> --cls_ckpt <cls>` | `openvla_onetraj_libero_cotrain` |
 | Failure-conditioned imagined RL | `scripts/experiments/cotrain/train.sh --config openvla_libero --wm_ckpt <wm> --cls_ckpt <cls>` | `openvla_libero` |
 | Cotrain policy eval | `scripts/experiments/cotrain/eval.sh` | `eval_cotrain` |
@@ -85,7 +86,7 @@ wandb beta sync --live /path/to/run_root/wandb
 | `classifier_official_upper_bound` | pre-mainline classifier training from official data |
 | `wmpo_token_classifier_openvla_onetraj_libero_goal_h1` | token classifier recipe |
 | `openvla_libero` | frozen-WM/CLS failure-conditioned OpenVLA imagined RL (Ray backend) |
-| `openvla_libero_aggressive` | opt-in 20-step aggressive frozen-WM/CLS route with every-step resident WM/CLS evaluation |
+| `openvla_libero_aggressive` | opt-in 20-step frozen-WM/CLS route that imagines from all replay trajectories and performs every-step resident WM/CLS evaluation |
 | `eval_libero_vla` | LIBERO rollout eval |
 
 `profile=production` preserves the selected experiment. `profile=debug` declares

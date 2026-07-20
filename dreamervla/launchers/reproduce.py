@@ -45,20 +45,60 @@ class ReproductionWorkflow:
 def _parse_args(argv: Sequence[str]) -> tuple[str, list[str]]:
     config_name = "reproduce/prepare_assets"
     overrides: list[str] = []
+    world_model_ckpt: str | None = None
+    classifier_ckpt: str | None = None
     index = 0
     while index < len(argv):
         item = argv[index]
-        if item == "--config-name":
+        if item in {"--config", "--config-name"}:
             if index + 1 >= len(argv):
-                raise SystemExit("--config-name requires a value")
+                raise SystemExit(f"{item} requires a value")
             config_name = argv[index + 1]
             index += 2
             continue
-        if item.startswith("--config-name="):
+        if item.startswith(("--config=", "--config-name=")):
             config_name = item.split("=", 1)[1]
+        elif item in {"--wm_ckpt", "--cls_ckpt"}:
+            if index + 1 >= len(argv):
+                raise SystemExit(f"{item} requires a value")
+            if item == "--wm_ckpt":
+                world_model_ckpt = argv[index + 1]
+            else:
+                classifier_ckpt = argv[index + 1]
+            index += 2
+            continue
+        elif item.startswith("--wm_ckpt="):
+            world_model_ckpt = item.split("=", 1)[1]
+        elif item.startswith("--cls_ckpt="):
+            classifier_ckpt = item.split("=", 1)[1]
         else:
             overrides.append(item)
         index += 1
+    if (world_model_ckpt is None) != (classifier_ckpt is None):
+        raise ValueError("--wm_ckpt and --cls_ckpt must be supplied together")
+    if world_model_ckpt is not None and classifier_ckpt is not None:
+        public_keys = {item.split("=", 1)[0].lstrip("+") for item in overrides if "=" in item}
+        conflicts = public_keys.intersection(
+            {
+                "component_checkpoints.world_model",
+                "component_checkpoints.classifier",
+            }
+        )
+        if conflicts:
+            raise ValueError(
+                "public WM/CLS checkpoint flags cannot be combined with "
+                "component_checkpoints Hydra overrides"
+            )
+        checkpoint_values = {
+            "component_checkpoints.world_model": world_model_ckpt,
+            "component_checkpoints.classifier": classifier_ckpt,
+        }
+        for key, value in checkpoint_values.items():
+            path = Path(value).expanduser().resolve()
+            if not path.exists():
+                flag = "--wm_ckpt" if key.endswith("world_model") else "--cls_ckpt"
+                raise FileNotFoundError(f"{flag} path does not exist: {path}")
+            overrides.append(f"{key}={json.dumps(str(path))}")
     return config_name, overrides
 
 
@@ -89,6 +129,33 @@ def build_workflow(argv: Sequence[str]) -> ReproductionWorkflow:
 
 def _stage_path(value: Any) -> Path:
     return Path(str(value)).expanduser().resolve()
+
+
+def _component_checkpoints(cfg: DictConfig) -> dict[str, Path]:
+    configured = OmegaConf.select(cfg, "component_checkpoints", default=None)
+    required = bool(OmegaConf.select(cfg, "require_component_checkpoints", default=False))
+    if configured is None:
+        if required:
+            raise ReproductionError("this reproduction config requires WM and CLS checkpoints")
+        return {}
+    values = {
+        "world_model": OmegaConf.select(cfg, "component_checkpoints.world_model"),
+        "classifier": OmegaConf.select(cfg, "component_checkpoints.classifier"),
+    }
+    present = {name: value not in (None, "") for name, value in values.items()}
+    if len(set(present.values())) != 1:
+        raise ReproductionError("world-model and classifier checkpoints must be supplied together")
+    if not all(present.values()):
+        if required:
+            raise ReproductionError("this reproduction config requires WM and CLS checkpoints")
+        return {}
+    resolved: dict[str, Path] = {}
+    for name, value in values.items():
+        path = _stage_path(value)
+        if not path.exists():
+            raise ReproductionError(f"configured {name} checkpoint does not exist: {path}")
+        resolved[name] = path
+    return resolved
 
 
 def build_stage_command(
@@ -442,12 +509,19 @@ def _train_dreamer(workflow: ReproductionWorkflow) -> None:
     data_root = _stage_path(cfg.data_root)
     env = os.environ.copy()
     env.update({"DVLA_ROOT": str(PROJECT_ROOT), "DVLA_DATA_ROOT": str(data_root)})
+    selected = _component_checkpoints(cfg)
+    stage_names = ("dreamer",) if selected else tuple(str(name) for name in cfg.stages)
     if workflow.dry_run:
-        selected = {
-            "world_model": _stage_path(cfg.output_root) / "world_model/checkpoints/SELECTED.ckpt",
-            "classifier": _stage_path(cfg.output_root) / "classifier/checkpoints/SELECTED.ckpt",
-        }
-        for name in ("world_model", "classifier", "dreamer"):
+        if not selected:
+            selected = {
+                "world_model": (
+                    _stage_path(cfg.output_root) / "world_model/checkpoints/SELECTED.ckpt"
+                ),
+                "classifier": (
+                    _stage_path(cfg.output_root) / "classifier/checkpoints/SELECTED.ckpt"
+                ),
+            }
+        for name in stage_names:
             command = build_stage_command(
                 cfg,
                 name,
@@ -475,8 +549,7 @@ def _train_dreamer(workflow: ReproductionWorkflow) -> None:
         raise ReproductionError(
             f"training state profile mismatch: {state.get('profile')} != {cfg.profile.id}"
         )
-    selected: dict[str, Path] = {}
-    for name in ("world_model", "classifier", "dreamer"):
+    for name in stage_names:
         stage = cfg.stages[name]
         decision = decide_stage(
             state,

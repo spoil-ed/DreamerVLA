@@ -1210,9 +1210,11 @@ def _validate_manual_cotrain_placement(cfg: DictConfig) -> None:
                 default="",
             )
         ).strip()
-        if selector != "failed_episode_start":
+        allowed_selectors = {"episode_start", "failed_episode_start"}
+        if selector not in allowed_selectors:
             raise ValueError(
-                "failure_imagined_rl requires initial_condition_selector=failed_episode_start"
+                "failure_imagined_rl requires initial_condition_selector to be one of "
+                f"{sorted(allowed_selectors)}"
             )
 
     if bool(

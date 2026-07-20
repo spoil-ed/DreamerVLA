@@ -92,6 +92,22 @@ bash scripts/reproduce/01_prepare_assets.sh
 bash scripts/reproduce/02_train_dreamer.sh
 ```
 
+使用已经训练好的 WM/CLS 启动独立的 20-step 激进 Dreamer 实验：
+
+```bash
+bash scripts/reproduce/02_train_dreamer.sh \
+  --config reproduce/train_dreamer_aggressive \
+  --wm_ckpt /path/to/wm.ckpt \
+  --cls_ckpt /path/to/classifier.ckpt
+```
+
+这条命令不会重新训练 WM/CLS。它从成功与失败的全部 replay 轨迹起点生成
+imagined rollout，每个 global step 都做一次 resident eval。W&B 会记录
+`eval/wm_trajectory_cosine`、`eval/cls_trajectory_f1` 和
+`eval/cls_trajectory_accuracy`。运行状态和输出分别保存在独立的
+`training_state_aggressive.json` 与
+`outputs/reproduction/libero_goal/openvla_libero_aggressive/`，不会续接原始实验。
+
 ## 中断后续训
 
 再次执行同一条训练命令：

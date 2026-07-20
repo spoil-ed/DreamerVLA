@@ -94,6 +94,24 @@ bash scripts/reproduce/01_prepare_assets.sh
 bash scripts/reproduce/02_train_dreamer.sh
 ```
 
+Start an isolated 20-step aggressive Dreamer experiment from existing WM/CLS
+checkpoints with:
+
+```bash
+bash scripts/reproduce/02_train_dreamer.sh \
+  --config reproduce/train_dreamer_aggressive \
+  --wm_ckpt /path/to/wm.ckpt \
+  --cls_ckpt /path/to/classifier.ckpt
+```
+
+This command does not retrain WM/CLS. It imagines from the episode starts of all
+successful and failed replay trajectories and performs resident evaluation every
+global step. W&B records `eval/wm_trajectory_cosine`,
+`eval/cls_trajectory_f1`, and `eval/cls_trajectory_accuracy`. Its state and output
+live under the separate `training_state_aggressive.json` and
+`outputs/reproduction/libero_goal/openvla_libero_aggressive/` paths, so it cannot
+resume the original experiment.
+
 ## Resume after an interruption
 
 Run the same training command again:

@@ -253,6 +253,21 @@ def test_train_reproduction_config_has_release_budgets_and_selection() -> None:
     assert cfg.frozen_assertions.manual_cotrain.training_mode == "failure_imagined_rl"
 
 
+def test_aggressive_reproduction_config_uses_external_components_and_isolated_state() -> None:
+    cfg = _compose_reproduction("train_dreamer_aggressive")
+
+    assert cfg.profile.id == "cu124-h100-libero-goal-aggressive-v1"
+    assert cfg.require_component_checkpoints is True
+    assert cfg.component_checkpoints.world_model is None
+    assert cfg.component_checkpoints.classifier is None
+    assert list(cfg.stages) == ["dreamer"]
+    assert cfg.stages.dreamer.experiment == "openvla_libero_aggressive"
+    assert cfg.stages.dreamer.budget == 20
+    assert str(cfg.state_path).endswith("training_state_aggressive.json")
+    assert str(cfg.output_root).endswith("libero_goal/openvla_libero_aggressive")
+    assert cfg.frozen_assertions.manual_cotrain.initial_condition_selector == "episode_start"
+
+
 def test_reproduction_shell_scripts_are_thin_python_entrypoints() -> None:
     scripts = PROJECT_ROOT / "scripts" / "reproduce"
 
@@ -282,6 +297,90 @@ def test_build_workflow_accepts_hydra_overrides() -> None:
     assert workflow.config_name == "reproduce/train_dreamer"
     assert workflow.dry_run is True
     assert workflow.cfg.profile.num_gpus == 4
+
+
+def test_build_workflow_accepts_public_aggressive_config_and_checkpoint_pair(
+    tmp_path: Path,
+) -> None:
+    from dreamervla.launchers.reproduce import build_workflow
+
+    wm = tmp_path / "wm.ckpt"
+    classifier = tmp_path / "classifier.ckpt"
+    wm.touch()
+    classifier.touch()
+
+    workflow = build_workflow(
+        [
+            "--config",
+            "reproduce/train_dreamer_aggressive",
+            "--wm_ckpt",
+            str(wm),
+            "--cls_ckpt",
+            str(classifier),
+            "dry_run=true",
+        ]
+    )
+
+    assert workflow.config_name == "reproduce/train_dreamer_aggressive"
+    assert Path(workflow.cfg.component_checkpoints.world_model) == wm.resolve()
+    assert Path(workflow.cfg.component_checkpoints.classifier) == classifier.resolve()
+
+
+def test_build_workflow_rejects_partial_component_checkpoint_pair(tmp_path: Path) -> None:
+    from dreamervla.launchers.reproduce import build_workflow
+
+    wm = tmp_path / "wm.ckpt"
+    wm.touch()
+
+    with pytest.raises(ValueError, match="--wm_ckpt and --cls_ckpt must be supplied together"):
+        build_workflow(
+            [
+                "--config",
+                "reproduce/train_dreamer_aggressive",
+                "--wm_ckpt",
+                str(wm),
+            ]
+        )
+
+
+def test_aggressive_reproduction_dry_run_launches_only_dreamer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dreamervla.launchers import reproduce as module
+
+    wm = tmp_path / "wm.ckpt"
+    classifier = tmp_path / "classifier.ckpt"
+    wm.touch()
+    classifier.touch()
+    workflow = module.build_workflow(
+        [
+            "--config",
+            "reproduce/train_dreamer_aggressive",
+            "--wm_ckpt",
+            str(wm),
+            "--cls_ckpt",
+            str(classifier),
+            "dry_run=true",
+        ]
+    )
+    commands: list[tuple[str, ...]] = []
+
+    def capture(command, *, env, dry_run):
+        del env
+        assert dry_run is True
+        commands.append(tuple(command))
+
+    monkeypatch.setattr(module, "_run", capture)
+
+    module._train_dreamer(workflow)
+
+    assert len(commands) == 1
+    command = commands[0]
+    assert command[command.index("--config") + 1] == "openvla_libero_aggressive"
+    assert command[command.index("--wm_ckpt") + 1] == str(wm.resolve())
+    assert command[command.index("--cls_ckpt") + 1] == str(classifier.resolve())
+    assert "manual_cotrain.global_steps=20" in command
 
 
 def test_build_stage_command_constructs_fresh_wm_command(tmp_path: Path) -> None:

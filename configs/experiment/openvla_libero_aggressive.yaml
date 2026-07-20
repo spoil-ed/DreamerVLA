@@ -21,6 +21,7 @@ manual_cotrain:
   checkpoint_every: 5
   eval_interval_global_steps: 1
   eval_initial_global_step: true
+  initial_condition_selector: episode_start
   real_rollout_target_trajectories: 64
   max_policy_kl: 0.05
   eval_protocol:
