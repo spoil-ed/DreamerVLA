@@ -506,6 +506,59 @@ def test_actor_run_training_updates_policy_parameters() -> None:
     assert any(not torch.equal(before[key], after[key]) for key in before)
 
 
+def test_actor_success_sft_updates_only_classifier_success_rollouts() -> None:
+    actor = EmbodiedFSDPActor(**_actor_cfg())
+    actor.init()
+    before = {key: value.clone() for key, value in actor.state_dict().items()}
+
+    actor.load_trajectory_shards([_shard(0.0, 1.0)])
+    metrics = actor.run_success_sft(classifier_threshold=0.5)
+
+    after = actor.state_dict()
+    assert metrics["actor/success_sft_trajectories"] == 1.0
+    assert metrics["actor/success_sft_valid_samples"] == 2.0
+    assert metrics["actor/success_sft_optimizer_steps"] == 1.0
+    assert metrics["actor/success_sft_grad_norm"] > 0.0
+    assert metrics["actor/success_sft_skipped_no_success"] == 0.0
+    assert any(not torch.equal(before[key], after[key]) for key in before)
+
+
+def test_actor_success_sft_skips_when_classifier_selects_nothing() -> None:
+    actor = EmbodiedFSDPActor(**_actor_cfg())
+    actor.init()
+    before = {key: value.clone() for key, value in actor.state_dict().items()}
+
+    actor.load_trajectory_shards([_shard(0.0, 0.0)])
+    metrics = actor.run_success_sft(classifier_threshold=0.5)
+
+    assert metrics["actor/success_sft_trajectories"] == 0.0
+    assert metrics["actor/success_sft_optimizer_steps"] == 0.0
+    assert metrics["actor/success_sft_skipped_no_success"] == 1.0
+    assert all(torch.equal(before[key], actor.state_dict()[key]) for key in before)
+
+
+def test_actor_success_sft_preserves_token_level_logprob_geometry() -> None:
+    cfg = _actor_cfg()
+    cfg["train_cfg"]["algorithm_cfg"]["logprob_type"] = "token_level"
+    actor = EmbodiedFSDPActor(**cfg)
+    actor.init()
+    policy = _TokenLevelPolicy()
+    actor.policy = policy
+    actor.optimizer = torch.optim.SGD(policy.parameters(), lr=1.0e-2)
+    shard = replace(
+        _shard(0.0, 1.0),
+        prev_logprobs=torch.zeros(2, 2, 2, 3),
+    )
+
+    actor.load_trajectory_shards([shard])
+    metrics = actor.run_success_sft(classifier_threshold=0.5)
+
+    assert metrics["actor/success_sft_valid_samples"] == 2.0
+    assert metrics["actor/success_sft_valid_tokens"] == 12.0
+    assert metrics["actor/success_sft_optimizer_steps"] == 1.0
+    assert policy.seen_logprob_types == ["token_level"] * 4
+
+
 def test_actor_training_uses_rlinf_global_and_micro_batches(capsys) -> None:
     cfg = _actor_cfg()
     cfg["train_cfg"].update(

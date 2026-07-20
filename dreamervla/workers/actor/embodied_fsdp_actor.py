@@ -1,4 +1,4 @@
-"""FSDP-capable ActorGroup worker that owns VLA PPO updates."""
+"""FSDP-capable ActorGroup worker that owns VLA policy updates."""
 
 from __future__ import annotations
 
@@ -619,6 +619,234 @@ class EmbodiedFSDPActor(Worker):
             self._release_after_training()
         metrics.update(self._memory_metrics("train_end"))
         return metrics
+
+    def run_success_sft(self, classifier_threshold: float) -> dict[str, float]:
+        """SFT the actor on imagined trajectories accepted by the classifier."""
+
+        self._load_for_training()
+        try:
+            metrics = self._run_success_sft_loaded(float(classifier_threshold))
+        finally:
+            self._release_after_training()
+        metrics.update(self._memory_metrics("train_end"))
+        return metrics
+
+    def _run_success_sft_loaded(self, classifier_threshold: float) -> dict[str, float]:
+        """Minimize action NLL on complete classifier-success imagined rollouts."""
+
+        batch = self._batch()
+        if batch.actions.ndim != 4:
+            raise ValueError(
+                "imagined success SFT expects chunk-level actions with shape "
+                "[time, batch, chunk, action_dim]"
+            )
+        policy = self._policy()
+        optimizer = self._optimizer()
+        algorithm_cfg = _as_plain_dict(self.train_cfg.get("algorithm_cfg", {}))
+        optim_cfg = _as_plain_dict(
+            _as_plain_dict(self.train_cfg.get("optimizers", {})).get("policy", {})
+        )
+        sft_cfg = _as_plain_dict(self.train_cfg.get("success_sft", {}))
+        epochs = max(1, int(sft_cfg.get("epochs", 1)))
+        zero_grad_set_to_none = bool(optim_cfg.get("zero_grad_set_to_none", True))
+        logprob_type = str(algorithm_cfg.get("logprob_type", "")).lower()
+        token_level_logprob = logprob_type == "token_level"
+
+        local_time_steps = int(batch.rewards.shape[0])
+        local_rollouts = int(batch.rewards.shape[1])
+        global_time_steps = _distributed_max_int(local_time_steps, self.torch_device)
+        global_rollouts = _distributed_sum_int(local_rollouts, self.torch_device)
+        min_rollouts = _distributed_min_int(local_rollouts, self.torch_device)
+        max_rollouts = _distributed_max_int(local_rollouts, self.torch_device)
+        if min_rollouts != max_rollouts:
+            raise ValueError(
+                "imagined success SFT requires equal trajectory counts on every "
+                f"Actor rank; observed min={min_rollouts}, max={max_rollouts}"
+            )
+        local_sample_count = global_time_steps * local_rollouts
+        global_sample_count = _distributed_sum_int(local_sample_count, self.torch_device)
+        micro_batch_size = int(self.train_cfg.get("micro_batch_size", max(1, local_rollouts)))
+        if micro_batch_size <= 0 or local_sample_count % micro_batch_size != 0:
+            raise ValueError(
+                "actor.train_cfg.micro_batch_size must divide per-rank flattened "
+                f"success-SFT samples: {local_sample_count} % {micro_batch_size} != 0"
+            )
+
+        loss_mask = batch.loss_mask.to(device="cpu", dtype=torch.bool)
+        decision_mask = loss_mask.reshape(local_time_steps, local_rollouts, -1).any(dim=2)
+        reward_scores = batch.rewards.detach().to(device="cpu", dtype=torch.float32)
+        success_mask = reward_scores.reshape(local_time_steps, local_rollouts, -1).ge(
+            float(classifier_threshold)
+        ).any(dim=(0, 2))
+        selected_mask = decision_mask & success_mask.unsqueeze(0)
+        local_flat_mask = selected_mask.reshape(-1)
+        padded_flat_mask = torch.zeros(local_sample_count, dtype=torch.bool)
+        padded_flat_mask[: int(local_flat_mask.numel())] = local_flat_mask
+        local_successes = int(success_mask.sum().item())
+        global_successes = _distributed_sum_int(local_successes, self.torch_device)
+        local_valid_samples = int(padded_flat_mask.sum().item())
+        global_valid_samples = _distributed_sum_int(local_valid_samples, self.torch_device)
+        tokens_per_sample = (
+            _trailing_numel(batch.prev_logprobs.shape[2:]) if token_level_logprob else 1
+        )
+        global_valid_tokens = _distributed_sum_int(
+            local_valid_samples * tokens_per_sample,
+            self.torch_device,
+        )
+        common_metrics = {
+            "actor/success_sft_threshold": float(classifier_threshold),
+            "actor/success_sft_trajectories": float(global_successes),
+            "actor/success_sft_success_fraction": (
+                float(global_successes) / float(max(1, global_rollouts))
+            ),
+            "actor/success_sft_valid_samples": float(global_valid_samples),
+            "actor/success_sft_valid_tokens": float(global_valid_tokens),
+            "actor/global_rollout_trajectories": float(global_rollouts),
+            "actor/global_batch_size": float(global_sample_count),
+            "actor/per_rank_global_batch_size": float(local_sample_count),
+            "actor/micro_batch_size": float(micro_batch_size),
+        }
+        if global_successes <= 0 or global_valid_tokens <= 0:
+            policy.train(False)
+            return {
+                **common_metrics,
+                "actor/success_sft_optimizer_steps": 0.0,
+                "actor/success_sft_forward_backward_steps": 0.0,
+                "actor/success_sft_loss": 0.0,
+                "actor/loss": 0.0,
+                "actor/success_sft_grad_norm": 0.0,
+                "actor/grad_norm": 0.0,
+                "actor/behavior_kl_mean": 0.0,
+                "actor/success_sft_skipped_no_success": 1.0,
+                "actor/lr": _optimizer_lr(optimizer),
+            }
+
+        sample_ids = torch.arange(local_sample_count, dtype=torch.long)
+        flat_old_logprob = _flatten_time_batch(batch.prev_logprobs)
+        fsdp_policy = _is_fsdp_module(policy)
+        fsdp_accumulation = bool(
+            fsdp_policy
+            and self.fsdp_manager is not None
+            and self.fsdp_manager.enable_gradient_accumulation
+        )
+        micro_batches = local_sample_count // micro_batch_size
+        progress_total = epochs * (micro_batches + 1)
+        progress = ProgressReporter(
+            progress_total,
+            f"cotrain-vla-imagined-success-sft/{int(self.global_step):08d}",
+            enabled=int(self.rank) == 0,
+            min_interval_s=float(self.train_cfg.get("progress_every_s", 5.0)),
+            unit="op",
+        )
+        progress.set(0, force=True)
+        forward_backward_steps = 0
+        grad_norms: list[float] = []
+        local_nll_sum = 0.0
+        policy.train()
+        for epoch in range(epochs):
+            optimizer.zero_grad(set_to_none=zero_grad_set_to_none)
+            for micro_index, start in enumerate(range(0, local_sample_count, micro_batch_size)):
+                padded_indices = sample_ids[start : start + micro_batch_size]
+                source_indices = _local_source_indices(
+                    padded_indices,
+                    local_time_steps=local_time_steps,
+                    local_rollouts=local_rollouts,
+                )
+                sample_mask_cpu = padded_flat_mask.index_select(0, padded_indices)
+                sample_mask = sample_mask_cpu.to(self.torch_device, dtype=torch.bool)
+                eval_batch = self._eval_inputs_for_flat_indices(batch, source_indices)
+                if logprob_type:
+                    eval_batch["logprob_type"] = logprob_type
+                is_last_micro = micro_index == micro_batches - 1
+                backward_context = (
+                    policy.no_sync()
+                    if fsdp_accumulation and not is_last_micro
+                    else nullcontext()
+                )
+                with backward_context:
+                    new_logprob_raw, entropy, _ = policy(eval_batch)
+                    new_logprob = _as_tensor(new_logprob_raw).to(
+                        self.torch_device,
+                        dtype=torch.float32,
+                    )
+                    if not token_level_logprob:
+                        new_logprob = _as_vector(new_logprob)
+                    if bool(sample_mask_cpu.any()):
+                        selected_logprob = new_logprob[sample_mask]
+                        loss = -selected_logprob.sum() * (
+                            float(max(1, int(self.world_size))) / float(global_valid_tokens)
+                        )
+                        local_nll_sum += float(-selected_logprob.detach().sum().cpu().item())
+                    else:
+                        loss = _zero_loss_from_policy_outputs(
+                            new_logprob,
+                            _as_tensor(entropy).to(self.torch_device),
+                        )
+                    loss.backward()
+                forward_backward_steps += 1
+                progress.set(
+                    epoch * (micro_batches + 1) + micro_index + 1,
+                    force=False,
+                )
+            grad_norms.append(float(self._clip_or_measure_grad_norm(optim_cfg)))
+            optimizer.step()
+            progress.set((epoch + 1) * (micro_batches + 1), force=True)
+
+        policy.train(False)
+        local_kl_sum = 0.0
+        with torch.no_grad():
+            for start in range(0, local_sample_count, micro_batch_size):
+                padded_indices = sample_ids[start : start + micro_batch_size]
+                source_indices = _local_source_indices(
+                    padded_indices,
+                    local_time_steps=local_time_steps,
+                    local_rollouts=local_rollouts,
+                )
+                sample_mask_cpu = padded_flat_mask.index_select(0, padded_indices)
+                eval_batch = self._eval_inputs_for_flat_indices(batch, source_indices)
+                if logprob_type:
+                    eval_batch["logprob_type"] = logprob_type
+                new_logprob_raw, _entropy, _ = policy(eval_batch)
+                if not bool(sample_mask_cpu.any()):
+                    continue
+                new_logprob = _as_tensor(new_logprob_raw).to(self.torch_device, dtype=torch.float32)
+                old_logprob = flat_old_logprob.index_select(0, source_indices).to(
+                    self.torch_device,
+                    dtype=torch.float32,
+                )
+                if not token_level_logprob:
+                    new_logprob = _as_vector(new_logprob)
+                    old_logprob = _as_vector(old_logprob)
+                if new_logprob.shape != old_logprob.shape:
+                    raise ValueError(
+                        "success-SFT policy log_prob shape must match prev_logprobs; "
+                        f"got {tuple(new_logprob.shape)} and {tuple(old_logprob.shape)}"
+                    )
+                sample_mask = sample_mask_cpu.to(self.torch_device, dtype=torch.bool)
+                local_kl_sum += float(
+                    _approx_behavior_kl(
+                        new_logprob[sample_mask],
+                        old_logprob[sample_mask],
+                        clip_log_ratio=None,
+                    ).sum().detach().cpu().item()
+                )
+        global_nll_sum = _distributed_sum_float(local_nll_sum, self.torch_device)
+        global_kl_sum = _distributed_sum_float(local_kl_sum, self.torch_device)
+        mean_loss = global_nll_sum / float(global_valid_tokens * epochs)
+        mean_kl = global_kl_sum / float(global_valid_tokens)
+        mean_grad_norm = _mean(grad_norms)
+        return {
+            **common_metrics,
+            "actor/success_sft_optimizer_steps": float(epochs),
+            "actor/success_sft_forward_backward_steps": float(forward_backward_steps),
+            "actor/success_sft_loss": float(mean_loss),
+            "actor/loss": float(mean_loss),
+            "actor/success_sft_grad_norm": float(mean_grad_norm),
+            "actor/grad_norm": float(mean_grad_norm),
+            "actor/behavior_kl_mean": float(mean_kl),
+            "actor/success_sft_skipped_no_success": 0.0,
+            "actor/lr": _optimizer_lr(optimizer),
+        }
 
     def _run_training_loaded(self) -> dict[str, float]:
         """Run PPO with the same batch hierarchy used by RLinf embodied actors.
@@ -1755,6 +1983,16 @@ def _distributed_min_int(value: int, device: torch.device) -> int:
 
 def _distributed_sum_int(value: int, device: torch.device) -> int:
     return _distributed_reduce_int(value, device, torch.distributed.ReduceOp.SUM)
+
+
+def _distributed_sum_float(value: float, device: torch.device) -> float:
+    if not (torch.distributed.is_available() and torch.distributed.is_initialized()):
+        return float(value)
+    backend = str(torch.distributed.get_backend()).lower()
+    tensor_device = device if backend == "nccl" else torch.device("cpu")
+    tensor = torch.tensor([float(value)], dtype=torch.float64, device=tensor_device)
+    torch.distributed.all_reduce(tensor, op=torch.distributed.ReduceOp.SUM)
+    return float(tensor.detach().cpu().item())
 
 
 def _distributed_reduce_int(

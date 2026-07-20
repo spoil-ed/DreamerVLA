@@ -268,6 +268,16 @@ def test_aggressive_reproduction_config_uses_external_components_and_isolated_st
     assert cfg.frozen_assertions.manual_cotrain.initial_condition_selector == "episode_start"
 
 
+def test_success_sft_probe_reproduction_uses_external_components_and_one_step() -> None:
+    cfg = _compose_reproduction("train_dreamer_success_sft_probe")
+
+    assert cfg.require_component_checkpoints is True
+    assert list(cfg.stages) == ["dreamer"]
+    assert cfg.stages.dreamer.experiment == "openvla_libero_success_sft_probe"
+    assert cfg.stages.dreamer.budget == 1
+    assert cfg.frozen_assertions.manual_cotrain.training_mode == "imagined_success_sft"
+
+
 def test_reproduction_shell_scripts_are_thin_python_entrypoints() -> None:
     scripts = PROJECT_ROOT / "scripts" / "reproduce"
 

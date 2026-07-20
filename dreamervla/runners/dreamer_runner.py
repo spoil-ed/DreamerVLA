@@ -1,4 +1,4 @@
-"""Frozen imagined-RL specialization of the shared Ray cotrain runner."""
+"""Frozen-imagination specialization of the shared Ray cotrain runner."""
 
 from __future__ import annotations
 
@@ -23,9 +23,11 @@ class DreamerRunner(CotrainRunner):
     def __init__(self, cfg: dict[str, Any] | DictConfig) -> None:
         config = cfg if isinstance(cfg, DictConfig) else OmegaConf.create(cfg)
         super().__init__(config)
-        if self._training_mode() != "failure_imagined_rl":
+        allowed_modes = {"failure_imagined_rl", "imagined_success_sft"}
+        if self._training_mode() not in allowed_modes:
             raise ValueError(
-                "DreamerRunner requires manual_cotrain.training_mode=failure_imagined_rl"
+                "DreamerRunner requires manual_cotrain.training_mode to be one of "
+                f"{sorted(allowed_modes)}"
             )
 
     def _placement_plan(self) -> ManualCotrainPlacementPlan:

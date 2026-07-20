@@ -1,0 +1,56 @@
+# @package _global_
+# Minimal causal signal probe: one real episode seeds frozen WM imagination,
+# classifier-success trajectories supervise exactly one actor SFT update.
+defaults:
+  - /task: openvla_onetraj_libero
+  - override /dreamervla: wmcls_cotrain
+  - override /worldmodel: dreamer-wm
+  - override /classifier: dreamer-cls
+  - override /launch: cotrain
+  - _self_
+
+run:
+  name: openvla_libero_success_sft_probe
+
+runner:
+  logger:
+    logger_backends: [tensorboard]
+
+training:
+  require_policy_update: true
+
+manual_cotrain:
+  training_mode: imagined_success_sft
+  learner_updates_enabled: false
+  staged_policy_update: false
+  require_training_signal: true
+  global_steps: 1
+  checkpoint_every: 1
+  eval_interval_global_steps: 0
+  eval_initial_global_step: false
+  initial_condition_selector: episode_start
+  real_env_workers: 1
+  real_envs_per_worker: 1
+  real_rollout_epoch: 1
+  real_rollout_target_trajectories: 1
+  wm_rollout_target_trajectories: 128
+  max_steps_per_rollout_epoch: 64
+  wm_envs_per_worker: 16
+  max_policy_kl: 0.05
+
+ray_data:
+  task_ids: [0]
+
+algorithm:
+  group_size: 16
+
+ray_actor_optimizer:
+  lr: 2.0e-6
+
+actor:
+  train_cfg:
+    lr: 2.0e-6
+    global_batch_size: 1024
+    micro_batch_size: 8
+    success_sft:
+      epochs: 1

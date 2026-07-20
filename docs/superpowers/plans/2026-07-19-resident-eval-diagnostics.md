@@ -79,4 +79,3 @@
 - [ ] Commit with `git commit -s -m "feat: add resident wm classifier eval metrics"` and push the current branch to `origin`.
 - [ ] Build `docker/Dockerfile` with the committed SHA and push `spoil/dreamervla:sha-<12>`, `:cu124-h100-v1`, and `:v1`.
 - [ ] Run `docker buildx imagetools inspect` for all three tags and verify they resolve to the pushed digest.
-

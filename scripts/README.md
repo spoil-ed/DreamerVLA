@@ -90,6 +90,27 @@ replay episode starts, and evaluates every step. The resident eval logs
 `eval/wm_trajectory_cosine`, `eval/cls_trajectory_f1`, and
 `eval/cls_trajectory_accuracy` to the configured logger backends.
 
+To test only whether existing WM/CLS checkpoints produce an actor training signal,
+run the one-step imagined-success SFT probe:
+
+```bash
+bash scripts/reproduce/02_train_dreamer.sh \
+  --config reproduce/train_dreamer_success_sft_probe \
+  --wm_ckpt /path/to/wm.ckpt \
+  --cls_ckpt /path/to/classifier.ckpt
+```
+
+It collects one real episode as the imagined start, generates 128 short imagined
+trajectories, selects complete trajectories crossing the checkpoint-owned CLS
+threshold, and performs one success-only SFT update. It fails automatically when no
+success is selected, no valid sample or positive gradient exists, the KL transaction
+rolls back, or the policy hash remains unchanged. A saved run can be checked again
+without loading any model:
+
+```bash
+python -m dreamervla.diagnostics.verify_training_signal /path/to/run
+```
+
 Mainline rollout collection:
 
 - `experiments/collect_rollouts/train.sh`

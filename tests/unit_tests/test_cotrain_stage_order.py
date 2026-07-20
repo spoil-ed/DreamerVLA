@@ -137,6 +137,20 @@ class _Actor:
         self.events.append("ppo")
         return _Ready([{"actor/ppo_updates": 1.0}])
 
+    def run_success_sft(self, classifier_threshold: float):
+        self.events.append("success_sft")
+        assert classifier_threshold == pytest.approx(0.4)
+        return _Ready(
+            [
+                {
+                    "actor/success_sft_trajectories": 1.0,
+                    "actor/success_sft_valid_samples": 1.0,
+                    "actor/success_sft_optimizer_steps": 1.0,
+                    "actor/success_sft_grad_norm": 1.0,
+                }
+            ]
+        )
+
 
 class _Rollout:
     workers = (object(),)
@@ -416,6 +430,46 @@ def test_failure_imagined_rl_skips_encoder_and_learner_updates(
     assert metrics["actor/ppo_updates"] == 1.0
     if runner_cls is DreamerRunner:
         assert rollout.generate_args[0] == ("env", "rollout", 1, "real_env")
+
+
+def test_imagined_success_sft_skips_ppo_encoder_and_learner(monkeypatch) -> None:
+    events: list[str] = []
+    cfg = _cfg(training_mode="imagined_success_sft")
+    cfg.manual_cotrain.staged_policy_update = False
+    cfg.manual_cotrain.learner_updates_enabled = False
+    cfg.manual_cotrain.initial_condition_selector = "episode_start"
+    runner = DreamerRunner(cfg)
+    runner.console_progress = lambda *_args, **_kwargs: None
+    monkeypatch.setattr(
+        "dreamervla.runners.cotrain_runner._share_ray_value",
+        lambda value, *, cluster: value,
+    )
+    groups = {
+        "ActorGroup": _Actor(events),
+        "RolloutGroup": _Rollout(events),
+        "LearnerGroup": _Learner(events),
+        "RealEnvGroup": _Env("real", events),
+        "WMEnvGroup": _Env("wm", events),
+        "ReplayGroup": _Replay(events),
+        "cluster": object(),
+        "env_channel": _Channel(),
+        "actor_channel": _Channel(),
+        "env_channel_name": "env",
+        "rollout_channel_name": "rollout",
+        "actor_channel_name": "actor",
+        "classifier_threshold": 0.4,
+    }
+
+    metrics = runner._run_global_step(groups, global_step=1)
+
+    assert "replay_append" in events
+    assert "wm_refresh" in events
+    assert "success_sft" in events
+    assert "advantages" not in events
+    assert "ppo" not in events
+    assert "encoder_sft" not in events
+    assert "wm_cls_update" not in events
+    assert metrics["actor/success_sft_optimizer_steps"] == 1.0
 
 
 def test_dreamer_shared_real_stop_key_targets_every_rollout_worker() -> None:

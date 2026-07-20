@@ -58,14 +58,15 @@ Shell launchers expose a small set of convenience keys and pass remaining
 
 | Key | Meaning |
 | --- | --- |
-| `manual_cotrain.training_mode` | `staged_full_cotrain` for the release route; `failure_imagined_rl` for frozen Dreamer |
+| `manual_cotrain.training_mode` | `staged_full_cotrain` for the release route; `failure_imagined_rl` for frozen Dreamer; `imagined_success_sft` for the one-step signal probe |
 | `manual_cotrain.global_steps` | Ray online-cotrain update budget |
-| `manual_cotrain.initial_condition_selector` | active selector is `failed_episode_start`; future selectors remain config extensions |
+| `manual_cotrain.initial_condition_selector` | `failed_episode_start` on mainline; explicit aggressive/probe recipes use `episode_start` |
+| `manual_cotrain.require_training_signal` | fail the success-SFT probe unless success samples, positive gradients, a committed update, and changed policy hash are all observed |
 | `manual_cotrain.staged_policy_update` | real-SFT/learner/imagined-PPO barrier switch |
 | `manual_cotrain.learner_updates_enabled` | WM/CLS optimizer switch |
 | `manual_cotrain.real_rollout_target_trajectories` | exact completed real trajectories drained per global step; mainline is `32` |
-| `manual_cotrain.max_policy_kl` | per-step actor PPO trust-region allowance |
-| `manual_cotrain.wm_rollout_target_trajectories` | imagined trajectories used by actor PPO |
+| `manual_cotrain.max_policy_kl` | per-step actor-update trust-region allowance |
+| `manual_cotrain.wm_rollout_target_trajectories` | imagined trajectories used by the selected actor update |
 | `manual_cotrain.wm_env_write_replay` | whether imagined episodes enter replay; mainline keeps this `false` |
 | `manual_cotrain.checkpoint_every` | completed global-step checkpoint cadence |
 | `checkpoint.topk.monitor_key` | metric key used to select top-k checkpoints |

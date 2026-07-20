@@ -50,4 +50,3 @@ Each eval must produce exactly the configured trajectory count. Missing sidecars
 short trajectories, count mismatches, or inconsistent WM/CLS records fail the eval
 instead of silently emitting partial or stale metrics. Eval batches are drained exactly
 once, including the initial step-zero evaluation.
-

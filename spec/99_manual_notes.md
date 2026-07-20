@@ -140,7 +140,7 @@ for rollout_epoch in 16:
 以下规则是已经确认的主线行为。后续实现、重构、进度条调整和实验脚本修改不得在没有
 用户明确指令的情况下改变这些语义。
 
-#### 1. 当前 cotrain 是失败轨迹条件化的 imagined-only RL
+#### 1. 主线 cotrain 是失败轨迹条件化的 imagined-only RL
 
 一次 cotrain `global_step` 的主线顺序是：
 
@@ -152,11 +152,33 @@ for rollout_epoch in 16:
 5. ActorGroup 只使用 imagined trajectories 执行 advantage 和 PPO/actor update；
 6. 按配置执行 evaluation、checkpoint 和 metrics 记录。
 
-当前模式不执行 encoder real-SFT，不重新编码真实轨迹，不更新 world model，不更新
+主线模式不执行 encoder real-SFT，不重新编码真实轨迹，不更新 world model，不更新
 classifier。encoder、world model 和 classifier 均冻结，只有 ActorGroup 的 actor 参数分区
-接受 imagined PPO 更新。当前 selector 是失败 episode 的最开始帧，配置必须为以后增加
+接受 imagined PPO 更新。主线 selector 是失败 episode 的最开始帧，配置必须为以后增加
 endpoint、window 或 classifier-guided selector 保留扩展空间。如果当前和历史 replay 都没有
 失败 episode，本 global step 明确跳过 imagined rollout 和 PPO，不得回退到成功轨迹。
+
+`openvla_libero_aggressive` 是用户明确选择的 opt-in 对照实验：它保持 WM、classifier 和
+encoder 冻结，但把 selector 改为所有 episode 的首帧。它不改变 `openvla_libero` 的上述主线
+语义，也不得成为失败池为空时的隐式 fallback。
+
+#### 1.1 最小 imagined-success SFT 训练信号实验
+
+`openvla_libero_success_sft_probe` 是一次性诊断，不是新的主线训练方案。它只加载基础 VLA
+和已有 WM/CLS checkpoint，因果顺序固定为：
+
+1. 收集一个 real episode，仅用于向 replay 提供一个 episode-start initial condition；
+2. 冻结 encoder、world model 和 classifier，从该起点生成 128 条短 imagined trajectories；
+3. 使用 classifier checkpoint 自带的 threshold 选择至少一个时刻达到成功阈值的完整轨迹；
+4. ActorGroup 不计算 advantage、不执行 PPO，只对这些成功轨迹中 `loss_mask` 有效的 action
+   decisions 最小化行为 action-token 的负 log-likelihood；
+5. 在现有 policy KL transaction 内提交一次 actor optimizer step，并写入完整 checkpoint；
+6. 自动检查成功轨迹数、有效 SFT 样本数、正且有限的梯度范数、已提交 optimizer step，以及
+   policy 初始/最终 hash 确实不同。任一条件不满足时实验以失败退出。
+
+该诊断只回答“现有 WM/CLS 产生的数据能否向 actor 提供可执行的梯度信号”，不能单独证明
+real LIBERO success rate 会提高。CLS 没选出成功轨迹时不得降低 threshold、不得把失败轨迹
+混入 SFT，也不得伪造一次零梯度 optimizer step。
 
 初始 evaluation 可以发生在第一个 `global_step` 之前。各 Group/Worker 可以在 setup 阶段提前
 创建，但“worker 已经创建”不等于“对应阶段正在执行”。因此 real rollout 阶段只显示 real

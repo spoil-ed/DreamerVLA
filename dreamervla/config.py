@@ -1180,13 +1180,17 @@ def _validate_manual_cotrain_placement(cfg: DictConfig) -> None:
             default="staged_full_cotrain",
         )
     ).strip()
-    allowed_training_modes = {"failure_imagined_rl", "staged_full_cotrain"}
+    allowed_training_modes = {
+        "failure_imagined_rl",
+        "imagined_success_sft",
+        "staged_full_cotrain",
+    }
     if training_mode not in allowed_training_modes:
         raise ValueError(
             "manual_cotrain.training_mode must be one of "
             f"{sorted(allowed_training_modes)}, got {training_mode!r}"
         )
-    if training_mode == "failure_imagined_rl":
+    if training_mode in {"failure_imagined_rl", "imagined_success_sft"}:
         if bool(
             OmegaConf.select(
                 cfg,
@@ -1194,7 +1198,7 @@ def _validate_manual_cotrain_placement(cfg: DictConfig) -> None:
                 default=True,
             )
         ):
-            raise ValueError("failure_imagined_rl requires learner_updates_enabled=false")
+            raise ValueError(f"{training_mode} requires learner_updates_enabled=false")
         if bool(
             OmegaConf.select(
                 cfg,
@@ -1202,7 +1206,7 @@ def _validate_manual_cotrain_placement(cfg: DictConfig) -> None:
                 default=False,
             )
         ):
-            raise ValueError("failure_imagined_rl requires staged_policy_update=false")
+            raise ValueError(f"{training_mode} requires staged_policy_update=false")
         selector = str(
             OmegaConf.select(
                 cfg,
@@ -1210,11 +1214,40 @@ def _validate_manual_cotrain_placement(cfg: DictConfig) -> None:
                 default="",
             )
         ).strip()
-        allowed_selectors = {"episode_start", "failed_episode_start"}
+        allowed_selectors = (
+            {"episode_start"}
+            if training_mode == "imagined_success_sft"
+            else {"episode_start", "failed_episode_start"}
+        )
         if selector not in allowed_selectors:
             raise ValueError(
-                "failure_imagined_rl requires initial_condition_selector to be one of "
+                f"{training_mode} requires initial_condition_selector to be one of "
                 f"{sorted(allowed_selectors)}"
+            )
+
+    require_signal = bool(
+        OmegaConf.select(
+            cfg,
+            "manual_cotrain.require_training_signal",
+            default=False,
+        )
+    )
+    if require_signal:
+        if training_mode != "imagined_success_sft":
+            raise ValueError(
+                "manual_cotrain.require_training_signal is only valid for "
+                "training_mode=imagined_success_sft"
+            )
+        checkpoint_every = int(
+            OmegaConf.select(cfg, "manual_cotrain.checkpoint_every", default=0) or 0
+        )
+        global_steps = int(
+            OmegaConf.select(cfg, "manual_cotrain.global_steps", default=0) or 0
+        )
+        if checkpoint_every <= 0 or global_steps % checkpoint_every != 0:
+            raise ValueError(
+                "training-signal verification requires the final global step to write "
+                "a checkpoint"
             )
 
     if bool(

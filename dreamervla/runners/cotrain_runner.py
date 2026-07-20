@@ -1,7 +1,7 @@
 """Target manual-cotrain Ray runner.
 
 This route follows ``spec/99_manual_notes.md``: LearnerGroup owns WM/classifier
-state, ActorGroup owns VLA PPO, RolloutGroup owns no-grad policy inference, and
+state, ActorGroup owns VLA updates, RolloutGroup owns no-grad policy inference, and
 EnvGroup owns real/WM env interaction. The public cotrain recipe updates the world
 model and classifier from real trajectories before staged policy updates.
 """
@@ -33,6 +33,7 @@ from dreamervla.runtime.render_device import (
     cuda_visible_devices_from_env,
     parse_device_ids,
 )
+from dreamervla.runtime.training_signal import evaluate_imagined_success_sft_signal
 from dreamervla.scheduler.channel import Channel
 from dreamervla.scheduler.cluster import Cluster
 from dreamervla.scheduler.placement import (
@@ -79,7 +80,7 @@ class CotrainRunner(BaseRunner):
                 default="staged_full_cotrain",
             )
         ).strip()
-        if training_mode == "failure_imagined_rl":
+        if training_mode in {"failure_imagined_rl", "imagined_success_sft"}:
             required_flags = {
                 "manual_cotrain.real_env_enabled": True,
                 "manual_cotrain.learner_updates_enabled": False,
@@ -94,7 +95,8 @@ class CotrainRunner(BaseRunner):
         else:
             raise ValueError(
                 "manual_cotrain.training_mode must be one of "
-                "['failure_imagined_rl', 'staged_full_cotrain'], "
+                "['failure_imagined_rl', 'imagined_success_sft', "
+                "'staged_full_cotrain'], "
                 f"got {training_mode!r}"
             )
         disabled = [
@@ -167,6 +169,18 @@ class CotrainRunner(BaseRunner):
                 step_metrics.update(self._maybe_evaluate_resident_policy(groups, global_step))
                 checkpoint_start = time.perf_counter()
                 self._maybe_save_manual_checkpoint(groups, global_step, step_metrics)
+                signal_result = None
+                if self._require_training_signal() and global_step == target_step:
+                    signal_result = evaluate_imagined_success_sft_signal(
+                        step_metrics,
+                        training_mode=self._training_mode(),
+                        policy_initial_hash=self._policy_initial_hash,
+                        policy_final_hash=self._policy_final_hash,
+                        applied_policy_steps=self._applied_policy_steps,
+                    )
+                    step_metrics["train/training_signal_passed"] = float(
+                        signal_result.passed
+                    )
                 step_metrics["time/manual_cotrain/checkpoint_and_metrics_s"] = float(
                     time.perf_counter() - checkpoint_start
                 )
@@ -180,6 +194,11 @@ class CotrainRunner(BaseRunner):
                     total_steps=target_step,
                     metrics=step_metrics,
                 )
+                if signal_result is not None and not signal_result.passed:
+                    raise RuntimeError(
+                        "imagined-success SFT training-signal probe failed: "
+                        + "; ".join(signal_result.failures)
+                    )
                 last_step = int(global_step)
             metrics["global_step"] = int(last_step)
             return metrics
@@ -249,6 +268,20 @@ class CotrainRunner(BaseRunner):
                 "actor_recv_trajectories",
                 "actor_compute_advantages_and_returns",
                 "actor_run_training",
+                "checkpoint_and_metrics",
+            ]
+        if self._training_mode() == "imagined_success_sft":
+            return [
+                "set_global_step",
+                "sync_step_start_policy",
+                "collect_real_trajectories",
+                "drain_real_trajectories",
+                "append_real_replay",
+                "select_episode_starts",
+                "refresh_wm_initial_conditions",
+                "collect_imagined_trajectories",
+                "actor_recv_trajectories",
+                "actor_run_success_sft",
                 "checkpoint_and_metrics",
             ]
         return [
@@ -488,6 +521,12 @@ class CotrainRunner(BaseRunner):
                 shared_component_states,
                 0,
             ).wait()
+        if (
+            self._training_mode() == "imagined_success_sft"
+            and "classifier_threshold" not in initial_states
+        ):
+            raise ValueError("LearnerGroup checkpoint state must include classifier_threshold")
+        classifier_threshold = initial_states.get("classifier_threshold")
         _hs_trace("[build_groups] all groups launched")
 
         return {
@@ -515,6 +554,9 @@ class CotrainRunner(BaseRunner):
             "eval_rollout_channel_name": eval_rollout_channel_name,
             "eval_actor_channel_name": eval_actor_channel_name,
             "placement": plan,
+            "classifier_threshold": (
+                None if classifier_threshold is None else float(classifier_threshold)
+            ),
         }
 
     def _learner_init_checkpoint(self) -> dict[str, Any]:
@@ -602,7 +644,7 @@ class CotrainRunner(BaseRunner):
         groups: dict[str, Any],
         global_step: int,
     ) -> dict[str, float]:
-        """Run one causally ordered real-SFT/WM+CLS/imagined-PPO step."""
+        """Run one causally ordered real/learner/imagination/actor-update step."""
 
         actor = groups["ActorGroup"]
         rollout = groups["RolloutGroup"]
@@ -720,31 +762,37 @@ class CotrainRunner(BaseRunner):
         learner_metrics: dict[str, float] = {}
         refresh_metrics: dict[str, float] = {}
         encoder_kl_effective = 0.0
-        failure_imagined_rl = self._training_mode() == "failure_imagined_rl"
+        training_mode = self._training_mode()
+        failure_imagined_rl = training_mode == "failure_imagined_rl"
+        frozen_imagination = training_mode in {
+            "failure_imagined_rl",
+            "imagined_success_sft",
+        }
         shared_real_batch = _share_ray_value(
             real_batch,
             cluster=groups.get("cluster"),
         )
-        if failure_imagined_rl:
+        if frozen_imagination:
             replay_metrics = _merge_metric_lists(
                 [replay_group.append_real_trajectories(shared_real_batch).wait()]
             )
             stage_start = mark_stage("append_real_replay", stage_start)
-            selector = self._initial_condition_selector()
-            eligible = int(replay_group.eligible_initial_condition_count(selector).wait()[0])
-            replay_metrics["replay_buffer/eligible_failure_anchors"] = float(eligible)
-            if eligible <= 0:
-                return self._finish_no_failure_imagination_step(
-                    groups=groups,
-                    global_step=global_step,
-                    real_env_metrics=real_env_metrics,
-                    real_rollout_metrics=real_rollout_metrics,
-                    real_reset_metrics=real_reset_metrics,
-                    real_batch_metrics=real_batch_metrics,
-                    replay_metrics=replay_metrics,
-                    sync_metrics=sync_metrics,
-                    stage_times=stage_times,
-                )
+            if failure_imagined_rl:
+                selector = self._initial_condition_selector()
+                eligible = int(replay_group.eligible_initial_condition_count(selector).wait()[0])
+                replay_metrics["replay_buffer/eligible_failure_anchors"] = float(eligible)
+                if eligible <= 0:
+                    return self._finish_no_failure_imagination_step(
+                        groups=groups,
+                        global_step=global_step,
+                        real_env_metrics=real_env_metrics,
+                        real_rollout_metrics=real_rollout_metrics,
+                        real_reset_metrics=real_reset_metrics,
+                        real_batch_metrics=real_batch_metrics,
+                        replay_metrics=replay_metrics,
+                        sync_metrics=sync_metrics,
+                        stage_times=stage_times,
+                    )
             refresh_metrics = _merge_metric_lists([wm_env.refresh_wm_initial_conditions().wait()])
             stage_start = mark_stage("refresh_wm_initial_conditions", stage_start)
         else:
@@ -956,16 +1004,24 @@ class CotrainRunner(BaseRunner):
             stage_times=stage_times,
         )
         stage_start = mark_stage("actor_recv_trajectories", stage_start)
-        advantage_metrics = _aggregate_actor_metric_lists(
-            [actor.compute_advantages_and_returns().wait()]
-        )
-        stage_start = mark_stage(
-            "actor_compute_advantages_and_returns",
-            stage_start,
-        )
+        success_sft = training_mode == "imagined_success_sft"
+        advantage_metrics: dict[str, float] = {}
+        if not success_sft:
+            advantage_metrics = _aggregate_actor_metric_lists(
+                [actor.compute_advantages_and_returns().wait()]
+            )
+            stage_start = mark_stage(
+                "actor_compute_advantages_and_returns",
+                stage_start,
+            )
         if max_policy_kl is not None:
             actor.begin_policy_transaction().wait()
-        train_metrics = _aggregate_actor_metric_lists([actor.run_training().wait()])
+        if success_sft:
+            train_metrics = _aggregate_actor_metric_lists(
+                [actor.run_success_sft(float(groups["classifier_threshold"])).wait()]
+            )
+        else:
+            train_metrics = _aggregate_actor_metric_lists([actor.run_training().wait()])
         actor_kl_attempted = max(
             0.0,
             float(
@@ -995,37 +1051,52 @@ class CotrainRunner(BaseRunner):
             )
             if not actor_committed:
                 actor_kl_effective = 0.0
+            transaction_namespace = "success_sft" if success_sft else "ppo"
             train_metrics.update(
                 {
-                    f"actor/ppo_{key.removeprefix('actor/')}": value
+                    f"actor/{transaction_namespace}_{key.removeprefix('actor/')}": value
                     for key, value in actor_transaction_metrics.items()
                 }
             )
+        commit_metric = (
+            "actor/success_sft_update_committed"
+            if success_sft
+            else "actor/ppo_update_committed"
+        )
         train_metrics.update(
             {
-                "actor/ppo_update_committed": float(actor_committed),
+                commit_metric: float(actor_committed),
                 "actor/policy_kl_encoder": float(encoder_kl_effective),
                 "actor/policy_kl_actor": float(actor_kl_effective),
                 "actor/policy_kl_total": float(encoder_kl_effective + actor_kl_effective),
                 "actor/policy_kl_budget": float(max_policy_kl or 0.0),
             }
         )
-        ppo_done = max(
+        update_steps_key = (
+            "actor/success_sft_optimizer_steps"
+            if success_sft
+            else "actor/ppo_optimizer_steps"
+        )
+        update_done = max(
             0,
             int(
                 float(
                     train_metrics.get(
-                        "actor/ppo_progress_ops",
-                        train_metrics.get("actor/ppo_optimizer_steps", 0.0),
+                        (
+                            update_steps_key
+                            if success_sft
+                            else "actor/ppo_progress_ops"
+                        ),
+                        train_metrics.get(update_steps_key, 0.0),
                     )
                 )
             ),
         )
         self._report_phase_completion(
-            "cotrain-vla-ppo",
+            "cotrain-vla-imagined-success-sft" if success_sft else "cotrain-vla-ppo",
             global_step,
-            done=ppo_done,
-            total=max(1, ppo_done),
+            done=update_done,
+            total=max(1, update_done),
             unit="op",
             status=(
                 f"loss={float(train_metrics.get('actor/loss', 0.0)):.4g} "
@@ -1033,18 +1104,19 @@ class CotrainRunner(BaseRunner):
             ),
         )
         if actor_committed:
+            applied_steps = train_metrics.get(update_steps_key)
+            if applied_steps is None and not success_sft:
+                applied_steps = train_metrics.get("actor/ppo_updates", 0.0)
             self._applied_policy_steps += int(
                 max(
                     0.0,
-                    float(
-                        train_metrics.get(
-                            "actor/ppo_optimizer_steps",
-                            train_metrics.get("actor/ppo_updates", 0.0),
-                        )
-                    ),
+                    float(applied_steps or 0.0),
                 )
             )
-        stage_start = mark_stage("actor_run_training", stage_start)
+        stage_start = mark_stage(
+            "actor_run_success_sft" if success_sft else "actor_run_training",
+            stage_start,
+        )
 
         replay_metrics["replay_buffer/size"] = float(replay_group.size().wait()[0])
         replay_metrics["replay_buffer/transitions"] = float(
@@ -1381,18 +1453,25 @@ class CotrainRunner(BaseRunner):
     ) -> None:
         """Report one monotonic policy-update progress line per global step."""
 
+        success_sft = "actor/success_sft_optimizer_steps" in metrics
         updates = max(
             0,
             int(
                 float(
                     metrics.get(
-                        "actor/ppo_optimizer_steps",
+                        (
+                            "actor/success_sft_optimizer_steps"
+                            if success_sft
+                            else "actor/ppo_optimizer_steps"
+                        ),
                         metrics.get("actor/ppo_updates", 0.0),
                     )
                 )
             ),
         )
-        parts = [f"ppo_steps={updates}"]
+        parts = [f"{'success_sft' if success_sft else 'ppo'}_steps={updates}"]
+        if "actor/success_sft_trajectories" in metrics:
+            parts.append(f"successes={int(metrics['actor/success_sft_trajectories'])}")
         valid_samples = metrics.get("actor/global_loss_mask_sum")
         total_samples = metrics.get("actor/global_ppo_samples")
         if valid_samples is not None and total_samples is not None:
@@ -1667,12 +1746,25 @@ class CotrainRunner(BaseRunner):
                 default="staged_full_cotrain",
             )
         ).strip()
-        allowed = {"failure_imagined_rl", "staged_full_cotrain"}
+        allowed = {
+            "failure_imagined_rl",
+            "imagined_success_sft",
+            "staged_full_cotrain",
+        }
         if mode not in allowed:
             raise ValueError(
                 f"manual_cotrain.training_mode must be one of {sorted(allowed)}, got {mode!r}"
             )
         return mode
+
+    def _require_training_signal(self) -> bool:
+        return bool(
+            OmegaConf.select(
+                self.cfg,
+                "manual_cotrain.require_training_signal",
+                default=False,
+            )
+        )
 
     def _initial_condition_selector(self) -> str:
         selector = str(
@@ -3025,6 +3117,12 @@ def _aggregate_actor_metric_lists(items: list[Any]) -> dict[str, float]:
             "actor/micro_batch_size",
             "actor/global_loss_mask_sum",
             "actor/global_logprob_token_count",
+            "actor/success_sft_trajectories",
+            "actor/success_sft_valid_samples",
+            "actor/success_sft_valid_tokens",
+            "actor/success_sft_optimizer_steps",
+            "actor/success_sft_forward_backward_steps",
+            "actor/success_sft_update_committed",
         }:
             aggregated[key] = float(max(values))
         else:
