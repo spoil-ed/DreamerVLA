@@ -1,0 +1,61 @@
+# @package _global_
+# Six-card official-data success-classifier recipe tuned for 96 GiB GPUs.
+defaults:
+  - wmpo_token_classifier_openvla_onetraj_libero_goal_h1
+  - _self_
+
+run:
+  name: dreamer-cls-6gpu-96gb
+
+launch:
+  ngpu: 6
+  gpus: 0,1,2,3,4,5
+
+training:
+  # Prefer optimizer-step coverage over raw memory occupancy: batch=72 was
+  # input-loader bound and made the classifier collapse under LR scaling.
+  num_epochs: 80
+  batch_size: 8
+  val_batch_size: 64
+  lr: 3.0e-5
+  log_every: 10
+  # There is only one globally synchronized optimizer step per epoch for the
+  # 40-trajectory train split.  Validate during training so top-k selects an
+  # epoch instead of silently treating the final epoch as the best model.
+  eval_every: 5
+  checkpoint_every_epochs: 5
+  final_selection_metric: episode_f1
+  episode_eval_enabled: true
+  episode_threshold_metric: macro_f1
+  episode_eval_min_steps: 0
+  episode_eval_stride: 1
+  episode_eval_batch: 64
+  thresh_min: 0.05
+  thresh_max: 0.95
+  thresh_steps: 91
+
+data:
+  success_dir_raw: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/libero_goal_classifier_episode_f1/reward
+  success_dir_hidden: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/libero_goal_classifier_episode_f1/hidden
+  failure_dir_raw: null
+  failure_dir_hidden: null
+  train_split: train
+  val_split: val
+  val_fraction: 0.2
+  split_seed: ${training.seed}
+  stratify_by_complete: true
+  require_sidecar_contract: true
+  require_reference_complete: true
+  required_filenames: null
+
+runner:
+  logger:
+    logger_backends: [tensorboard, wandb]
+    wandb_mode: online
+
+checkpoint:
+  topk:
+    monitor_key: macro_f1
+    metric_name: episode_macro_f1
+    mode: max
+    k: 3

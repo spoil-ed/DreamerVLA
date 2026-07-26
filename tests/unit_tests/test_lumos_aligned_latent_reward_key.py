@@ -6,6 +6,7 @@ import torch
 from dreamervla.dataset.lumos_aligned_latent_dataset import (
     LumosAlignedLatentTrainDataset,
     _load_demo,
+    _rank_shard_demo_pairs,
 )
 from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
 from dreamervla.dataset.wm_replay_classifier_dataset import _find_demo_pairs
@@ -75,6 +76,28 @@ def test_find_demo_pairs_rejects_raw_hidden_demo_set_mismatch(tmp_path):
 
     with pytest.raises(ValueError, match="demo set mismatch"):
         _find_demo_pairs(raw_dir, hid_dir)
+
+
+def test_rank_shard_demo_pairs_is_disjoint_and_complete(tmp_path):
+    pairs = [
+        (tmp_path / f"raw_{index}", tmp_path / f"hidden_{index}", f"demo_{index}")
+        for index in range(7)
+    ]
+
+    shards = [
+        _rank_shard_demo_pairs(
+            pairs,
+            distributed_rank=rank,
+            distributed_world_size=3,
+        )
+        for rank in range(3)
+    ]
+
+    assert [len(shard) for shard in shards] == [3, 2, 2]
+    assert {pair for shard in shards for pair in shard} == set(pairs)
+    assert all(
+        set(shards[left]).isdisjoint(shards[right]) for left in range(3) for right in range(left)
+    )
 
 
 def test_load_demo_rejects_raw_hidden_length_mismatch(tmp_path):

@@ -34,6 +34,7 @@ from dreamervla.envs.libero.utils import (
     get_libero_dummy_action,
     get_libero_env,
     get_libero_image,
+    load_libero_task_init_states,
     quat2axisangle,
     resize_hwc_uint8,
 )
@@ -132,7 +133,7 @@ class LiberoEnv:
         self.total_num_group_envs = 0
         self.trial_id_bins = []
         for task_id in range(self._get_num_tasks()):
-            task_num_trials = len(self.task_suite.get_task_init_states(task_id))
+            task_num_trials = len(load_libero_task_init_states(self.task_suite, task_id))
             if max_trials is not None:
                 task_num_trials = min(task_num_trials, int(max_trials))
             self.trial_id_bins.append(task_num_trials)
@@ -247,7 +248,7 @@ class LiberoEnv:
         if env_idx is None:
             env_idx = np.arange(self.num_envs)
         return [
-            self.task_suite.get_task_init_states(int(self.task_ids[env_id]))[
+            load_libero_task_init_states(self.task_suite, int(self.task_ids[env_id]))[
                 int(self.trial_ids[env_id])
             ]
             for env_id in env_idx
@@ -864,7 +865,7 @@ class DreamerVLAOnlineTrainEnv:
         self._closed = False
         self.task_id = task_id
         self.task = self.task_suite.get_task(self.task_id)
-        self.initial_states = self.task_suite.get_task_init_states(self.task_id)
+        self.initial_states = load_libero_task_init_states(self.task_suite, self.task_id)
         if len(self.initial_states) <= 0:
             raise RuntimeError(
                 f"LIBERO task {self.cfg.task_suite_name}/{self.task_id} has no initial states"

@@ -1,0 +1,12 @@
+defaults:
+  - openvla_onetraj_libero
+  - _self_
+
+# Raw-rollout classifier capacity route. The model/input contract remains the
+# OpenVLA-OFT task contract; only storage and embedding time change.
+classifier:
+  dataset:
+    train:
+      _target_: dreamervla.dataset.lumos_aligned_raw_dataset.LumosAlignedRawTrainDataset
+    validation:
+      _target_: dreamervla.dataset.lumos_aligned_raw_dataset.LumosAlignedRawValDataset

@@ -1005,7 +1005,6 @@ def test_release_scripts_tree_is_curated() -> None:
         "install",
         "preprocess",
         "reproduce",
-        "utils",
     }
     assert sorted(path.name for path in (scripts / "experiments").iterdir()) == [
         "classifier_training",

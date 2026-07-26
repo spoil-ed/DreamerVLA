@@ -37,6 +37,7 @@ bash scripts/experiments/collect_rollouts/train.sh task=openvla_onetraj_coldstar
 python -m dreamervla.train experiment=wm_full_dataset_train task=openvla_onetraj_coldstart_libero
 bash scripts/experiments/world_model_training/train.sh --config dino-wm
 bash scripts/experiments/world_model_training/train.sh --config dreamer-wm
+bash scripts/experiments/world_model_training/train.sh --config dreamer-wm-6gpu-96gb
 python -m dreamervla.train experiment=eval_libero_vla task=openvla_onetraj_libero
 ```
 
@@ -83,6 +84,7 @@ wandb beta sync --live /path/to/run_root/wandb
 | `wm_dino_token_official` | DINO-WM architecture/data protocol over official OpenVLA-OFT tokens |
 | `dino-wm` | user-facing DINO-WM recipe with Dreamer-WM-aligned batch size and learning rate |
 | `dreamer-wm` | user-facing official-data Chunk-WM recipe |
+| `dreamer-wm-6gpu-96gb` | measured 6-GPU Chunk-WM recipe for 96 GiB cards |
 | `wm_official_upper_bound_profile` | bounded 8-GPU timing run of the same optimized WM route |
 | `classifier_official_upper_bound` | pre-mainline classifier training from official data |
 | `wmpo_token_classifier_openvla_onetraj_libero_goal_h1` | token classifier recipe |

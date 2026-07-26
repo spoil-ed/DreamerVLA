@@ -186,6 +186,65 @@ def test_threshold_sweep_reports_confusion_counts() -> None:
     assert row["true_neg"] == 2
 
 
+def test_threshold_sweep_can_select_class_balanced_macro_f1() -> None:
+    probs = np.asarray([0.9, 0.8, 0.7, 0.6, 0.55, 0.1], dtype=np.float32)
+    ys = np.asarray([1, 1, 1, 1, 0, 0], dtype=np.int64)
+
+    positive = sweep_threshold_metrics(
+        probs,
+        ys,
+        np.asarray([0.5, 0.7], dtype=np.float32),
+        tag="episode",
+    )
+    balanced = sweep_threshold_metrics(
+        probs,
+        ys,
+        np.asarray([0.5, 0.7], dtype=np.float32),
+        tag="episode",
+        selection_metric="macro_f1",
+    )
+
+    assert positive["best_thresh"] == pytest.approx(0.5)
+    assert balanced["best_thresh"] == pytest.approx(0.7)
+    assert balanced["selection_metric"] == "macro_f1"
+    assert balanced["best_score"] == balanced["best_macro_f1"]
+
+
+def test_demo_pair_partition_stratifies_success_and_failure(tmp_path: Path) -> None:
+    import h5py
+
+    pairs = []
+    for index, complete in enumerate([False, False, False, True, True, True]):
+        raw = tmp_path / f"raw_{index}.hdf5"
+        hidden = tmp_path / f"hidden_{index}.hdf5"
+        with h5py.File(raw, "w") as handle:
+            demo = handle.create_group("data/demo_0")
+            demo.create_dataset("sparse_rewards", data=[float(complete)])
+        pairs.append((raw, hidden, "data/demo_0"))
+
+    train = _partition_demo_pairs(
+        pairs,
+        split="train",
+        val_fraction=0.34,
+        split_seed=7,
+        stratify_by_complete=True,
+    )
+    val = _partition_demo_pairs(
+        pairs,
+        split="val",
+        val_fraction=0.34,
+        split_seed=7,
+        stratify_by_complete=True,
+    )
+
+    assert len(train) == 4
+    assert len(val) == 2
+    assert {path.name.startswith(("raw_0", "raw_1", "raw_2")) for path, _, _ in val} == {
+        False,
+        True,
+    }
+
+
 def test_runner_dataset_summary_payload_handles_train_and_val() -> None:
     runner = object.__new__(SuccessClassifierTrainingRunner)
 
@@ -445,6 +504,9 @@ class _TinyMapDataset(torch.utils.data.Dataset):
 
 
 class _TinyIterableDataset(IterableDataset):
+    def __len__(self) -> int:
+        return 4
+
     def __iter__(self):
         yield torch.tensor([1.0]), 1
 
@@ -478,6 +540,9 @@ class _FakeDistributed:
 
     def reduce_mean_dict(self, metrics: dict[str, float | int]) -> dict[str, float]:
         return {key: float(value) for key, value in metrics.items()}
+
+    def reduce_min_int(self, value: int) -> int:
+        return int(value)
 
     def barrier(self) -> None:
         return None
@@ -535,6 +600,48 @@ def test_classifier_runner_marks_iterable_train_dataset_for_rank_sharding() -> N
     assert dataset.distributed_world_size == 2
 
 
+def test_classifier_runner_uses_local_iterable_loader_length() -> None:
+    runner = object.__new__(SuccessClassifierTrainingRunner)
+    runner.world_size = 2
+    runner.distributed = _FakeDistributed()
+    runner.train_loader = runner._make_classifier_loader(
+        _TinyIterableDataset(),
+        batch_size=2,
+        num_workers=0,
+        shuffle=False,
+        drop_last=True,
+        use_distributed_sampler=False,
+    )
+
+    assert runner._steps_per_epoch(0) == 2
+    assert runner._steps_per_epoch(7) == 7
+
+
+@pytest.mark.parametrize(
+    "rank_steps",
+    [
+        [29],
+        [29, 28],
+        [15, 15, 14, 15],
+        [10, 10, 9, 10, 10, 9],
+        [8, 8, 7, 8, 8, 7, 8, 8],
+    ],
+)
+def test_classifier_runner_uses_global_minimum_for_any_world_size(
+    rank_steps: list[int],
+) -> None:
+    expected = min(rank_steps)
+
+    for local_steps in rank_steps:
+        runner = object.__new__(SuccessClassifierTrainingRunner)
+        runner.world_size = len(rank_steps)
+        runner.train_loader = [None] * local_steps
+        runner.distributed = _FakeDistributed()
+        runner.distributed.reduce_min_int = lambda _value: expected
+
+        assert runner._steps_per_epoch(0) == expected
+
+
 def test_named_classifier_checkpoint_saves_full_flat_payload_once(tmp_path: Path) -> None:
     inner = torch.nn.Linear(2, 1)
     wrapper = torch.nn.Module()
@@ -574,6 +681,9 @@ def test_named_classifier_checkpoint_saves_full_flat_payload_once(tmp_path: Path
     assert latest.read_bytes() == metric.read_bytes()
     assert sorted(payload["state_dicts"]["model"].keys()) == ["bias", "weight"]
     assert payload["classifier_threshold"] == 0.5
+    assert payload["classifier_threshold_metric"] == "window_f1"
+    assert payload["best_window_threshold"] == 0.5
+    assert payload["best_episode_threshold"] == 0.5
 
 
 def test_final_classifier_save_reuses_latest_written_by_named_selection(tmp_path: Path) -> None:

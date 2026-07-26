@@ -199,6 +199,66 @@ def test_seed_replay_caps_episodes_per_task(tmp_path):
     assert n == 3  # task 2 capped at 2, task 5 has 1
 
 
+def test_seed_replay_shards_eligible_episodes_per_task(tmp_path):
+    rdir, hdir = tmp_path / "reward", tmp_path / "hidden"
+    with RolloutDumpWriter(rdir, hdir, "r0_shard.hdf5") as writer:
+        for index in range(5):
+            writer.write_demo(
+                index=index,
+                steps=_demo_steps(6, success=True),
+                preprocess_config=_HIDDEN_TOKEN_CONFIG,
+                task_id=2,
+                episode_id=index,
+            )
+
+    rank_counts = []
+    for rank in range(2):
+        replay = OnlineReplay(capacity=10_000, sequence_length=4, task_ids=(2,), rank=rank)
+        rank_counts.append(
+            seed_replay_from_offline(
+                replay,
+                data_dir=rdir,
+                hidden_dir=hdir,
+                shard_rank=rank,
+                shard_world_size=2,
+                include_images=False,
+            )
+        )
+        assert all("image" not in step for record in replay.episodes for step in record["episode"])
+
+    assert rank_counts == [3, 2]
+    assert sum(rank_counts) == 5
+
+
+def test_seed_replay_sharding_applies_global_per_task_cap(tmp_path):
+    rdir, hdir = tmp_path / "reward", tmp_path / "hidden"
+    with RolloutDumpWriter(rdir, hdir, "r0_shard.hdf5") as writer:
+        for index in range(5):
+            writer.write_demo(
+                index=index,
+                steps=_demo_steps(6, success=True),
+                preprocess_config=_HIDDEN_TOKEN_CONFIG,
+                task_id=2,
+                episode_id=index,
+            )
+
+    counts = []
+    for rank in range(2):
+        replay = OnlineReplay(capacity=10_000, sequence_length=4, task_ids=(2,), rank=rank)
+        counts.append(
+            seed_replay_from_offline(
+                replay,
+                data_dir=rdir,
+                hidden_dir=hdir,
+                max_episodes_per_task=3,
+                shard_rank=rank,
+                shard_world_size=2,
+            )
+        )
+
+    assert counts == [2, 1]
+
+
 def test_seeded_replay_is_training_ready(tmp_path):
     rdir, hdir = tmp_path / "reward", tmp_path / "hidden"
     with RolloutDumpWriter(rdir, hdir, "r0_shard.hdf5") as w:

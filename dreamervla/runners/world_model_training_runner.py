@@ -353,7 +353,8 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 "wm-warmup",
                 "update",
             )
-        windows = int(count_fn())
+        global_windows = getattr(self, "_warmup_global_sampleable_windows", None)
+        windows = int(count_fn() if global_windows is None else global_windows)
         world_size = max(1, int(getattr(self, "_world_size", 1)))
         global_batch = int(batch_size) * world_size
         steps_per_epoch = max(1, (windows + global_batch - 1) // global_batch)
@@ -804,26 +805,37 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         cls_batch_size: int,
         cls_window: int,
         cls_chunk_size: int,
+        wm_window_count: int | None = None,
+        cls_window_count: int | None = None,
     ) -> tuple[int, int]:
         epoch_count = int(replay_epochs)
         if epoch_count <= 0:
             return int(wm_steps), int(cls_steps)
-        resolved_wm = (
-            cls._steps_for_replay_epochs(
-                replay,
-                replay_epochs=epoch_count,
-                batch_size=int(wm_batch_size),
+        wm_windows = (
+            int(replay.sampleable_window_count())
+            if wm_window_count is None
+            else int(wm_window_count)
+        )
+        classifier_windows = (
+            int(
+                replay.classifier_window_count(
+                    window=int(cls_window),
+                    chunk_size=int(cls_chunk_size),
+                )
             )
+            if cls_window_count is None
+            else int(cls_window_count)
+        )
+        resolved_wm = (
+            epoch_count * max(1, (wm_windows + int(wm_batch_size) - 1) // int(wm_batch_size))
             if int(wm_steps) > 0
             else 0
         )
         resolved_cls = (
-            cls._steps_for_classifier_replay_epochs(
-                replay,
-                replay_epochs=epoch_count,
-                batch_size=int(cls_batch_size),
-                window=int(cls_window),
-                chunk_size=int(cls_chunk_size),
+            epoch_count
+            * max(
+                1,
+                (classifier_windows + int(cls_batch_size) - 1) // int(cls_batch_size),
             )
             if int(cls_steps) > 0
             else 0
@@ -1716,6 +1728,10 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             OmegaConf.select(cfg, "offline_warmup.infer_task_id_from_shard", default=False)
         )
         max_seed_eps = OmegaConf.select(cfg, "offline_warmup.max_episodes_per_task", default=None)
+        shard_by_rank = bool(OmegaConf.select(cfg, "offline_warmup.shard_by_rank", default=False))
+        include_replay_images = bool(
+            OmegaConf.select(cfg, "offline_warmup.include_images", default=True)
+        )
         # resume / need_wm / need_cls were computed above (before the heavy build) so the
         # offline-data existence check could fail fast; reuse them here.
 
@@ -1735,37 +1751,59 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 f"data_dir={data_dir} hidden_dir={hidden_dir} "
                 f"tasks={list(env_task_ids)} seq_len={seq_len} "
                 f"capacity={buffer_size} capacity_mode={replay_capacity_mode} "
-                f"episodes={max_seed_label}"
+                f"episodes={max_seed_label} shard_by_rank={shard_by_rank} "
+                f"include_images={include_replay_images}"
             )
             replay_load_start = time.perf_counter()
-            n = seed_replay_from_offline(
-                warmup_replay,
-                data_dir=data_dir,
-                hidden_dir=hidden_dir,
-                default_task_id=(int(default_task_id) if default_task_id is not None else None),
-                infer_task_id_from_shard=infer_task_id_from_shard,
-                max_episodes_per_task=(int(max_seed_eps) if max_seed_eps is not None else None),
-                require_reference_complete=bool(
+            seed_kwargs: dict[str, Any] = {
+                "data_dir": data_dir,
+                "hidden_dir": hidden_dir,
+                "default_task_id": (int(default_task_id) if default_task_id is not None else None),
+                "infer_task_id_from_shard": infer_task_id_from_shard,
+                "max_episodes_per_task": (int(max_seed_eps) if max_seed_eps is not None else None),
+                "require_reference_complete": bool(
                     OmegaConf.select(
                         cfg,
                         "offline_warmup.require_reference_complete",
                         default=True,
                     )
                 ),
-            )
+            }
+            # Preserve the legacy call surface for routes that do not opt into
+            # distributed sharding or hidden-only replay.
+            if shard_by_rank:
+                seed_kwargs.update(
+                    shard_rank=self._rank,
+                    shard_world_size=self._world_size,
+                )
+            if not include_replay_images:
+                seed_kwargs["include_images"] = False
+            n = seed_replay_from_offline(warmup_replay, **seed_kwargs)
             replay_load_s = time.perf_counter() - replay_load_start
-            sampleable_windows = int(warmup_replay.sampleable_window_count())
+            local_sampleable_windows = int(warmup_replay.sampleable_window_count())
+            sampleable_windows = int(
+                self.distributed.reduce_sum(local_sampleable_windows)
+                if shard_by_rank
+                else local_sampleable_windows
+            )
+            global_seeded_episodes = int(self.distributed.reduce_sum(n) if shard_by_rank else n)
+            global_transitions = int(
+                self.distributed.reduce_sum(warmup_replay.num_transitions)
+                if shard_by_rank
+                else warmup_replay.num_transitions
+            )
+            self._warmup_global_sampleable_windows = sampleable_windows
             self._print_pipeline_event(
                 "[pipeline][replay] loaded complete "
-                f"episodes={n} transitions={warmup_replay.num_transitions} "
+                f"episodes={global_seeded_episodes} transitions={global_transitions} "
                 f"sampleable_windows={sampleable_windows} "
                 f"elapsed_s={replay_load_s:.1f}"
             )
             if self.distributed.is_main_process:
                 cap_msg = "all" if max_seed_eps is None else f"<= {int(max_seed_eps)}/task"
                 print(
-                    f"[pipeline] seeded {n} offline episodes ({cap_msg}), "
-                    f"{warmup_replay.num_transitions} transitions, "
+                    f"[pipeline] seeded {global_seeded_episodes} offline episodes ({cap_msg}), "
+                    f"{global_transitions} transitions, "
                     f"capacity_mode={replay_capacity_mode}",
                     flush=True,
                 )
@@ -1821,11 +1859,16 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 or 1
             )
             cls_chunk_size = int(getattr(classifier_cfg, "chunk_size", default_cls_chunk_size))
-            classifier_windows = int(
+            local_classifier_windows = int(
                 warmup_replay.classifier_window_count(
                     window=cls_window,
                     chunk_size=cls_chunk_size,
                 )
+            )
+            classifier_windows = int(
+                self.distributed.reduce_sum(local_classifier_windows)
+                if shard_by_rank
+                else local_classifier_windows
             )
             wm_global_bs = self._global_batch_size(
                 per_rank_batch_size=bs,
@@ -1845,6 +1888,8 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 cls_batch_size=cls_global_bs,
                 cls_window=cls_window,
                 cls_chunk_size=cls_chunk_size,
+                wm_window_count=sampleable_windows,
+                cls_window_count=classifier_windows,
             )
             wm_steps_per_epoch = (
                 max(1, (sampleable_windows + wm_global_bs - 1) // wm_global_bs)

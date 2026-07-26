@@ -101,11 +101,14 @@ def _demo_to_transitions(
     task_id: int,
     *,
     lang_emb: np.ndarray | None = None,
+    include_images: bool = True,
 ) -> list[dict[str, Any]]:
     actions = np.asarray(demo["actions"][...], dtype=np.float32)  # (T, 7)
     sparse = np.asarray(demo["sparse_rewards"][...], dtype=np.float32)  # (T,)
     dones = np.asarray(demo["dones"][...], dtype=np.float32)  # (T,)
-    images = np.asarray(demo["obs"]["agentview_rgb"][...], dtype=np.uint8)
+    images = (
+        np.asarray(demo["obs"]["agentview_rgb"][...], dtype=np.uint8) if include_images else None
+    )
     success_hits = np.flatnonzero(sparse > 0.5)
     attr_success = bool(demo.attrs.get("episode_success", bool(success_hits.size)))
     success = bool(attr_success or success_hits.size)
@@ -124,7 +127,6 @@ def _demo_to_transitions(
         if step_success and reward <= 0.0:
             reward = 1.0
         step = {
-            "image": images[t],
             "obs_embedding": np.asarray(emb[t]),
             "proprio": _demo_proprio_at(demo, t),
             "reward": reward,  # sparse reward = collector signal
@@ -135,6 +137,8 @@ def _demo_to_transitions(
             "task_id": int(task_id),
             "success": step_success,
         }
+        if images is not None:
+            step["image"] = images[t]
         if lang_emb is not None:
             step["lang_emb"] = np.asarray(lang_emb, dtype=np.float32).reshape(-1)
         transitions.append(step)
@@ -150,6 +154,9 @@ def seed_replay_from_offline(
     infer_task_id_from_shard: bool = False,
     max_episodes_per_task: int | None = None,
     require_reference_complete: bool = True,
+    shard_rank: int = 0,
+    shard_world_size: int = 1,
+    include_images: bool = True,
 ) -> int:
     """Add demos from data_dir's reward shards to ``replay``. Returns the number of
     episodes actually added (demos shorter than sequence_length are skipped by
@@ -163,7 +170,19 @@ def seed_replay_from_offline(
     ``require_reference_complete`` distinguishes collector-written reward shards,
     which carry per-demo completion markers, from structurally validated official
     LIBERO shards, which predate those markers.
+
+    ``shard_rank`` and ``shard_world_size`` partition eligible episodes within each
+    task.  This keeps every DDP rank's replay task-balanced while ensuring that the
+    ranks collectively retain the complete offline dataset instead of materializing
+    one full copy per process. ``include_images=False`` avoids retaining RGB frames
+    for hidden-token-only WM warmup.
     """
+    rank = int(shard_rank)
+    world_size = int(shard_world_size)
+    if world_size < 1:
+        raise ValueError("shard_world_size must be >= 1")
+    if rank < 0 or rank >= world_size:
+        raise ValueError(f"shard_rank must be in [0, {world_size}), got {rank}")
     data_dir = Path(data_dir).expanduser().resolve()
     hidden_dir = Path(hidden_dir).expanduser().resolve()
     shards = sorted(p.name for p in data_dir.glob("*.hdf5"))
@@ -186,14 +205,23 @@ def seed_replay_from_offline(
         infer_task_id_from_shard=infer_task_id_from_shard,
     )
     cap = None if max_episodes_per_task is None else int(max_episodes_per_task)
-    per_task: dict[int, int] = {}
+    eligible_per_task: dict[int, int] = {}
     n_added = 0
     for shard in shards:
         with h5py.File(data_dir / shard, "r") as rf, h5py.File(hidden_dir / shard, "r") as hf:
             for demo_key in rf["data"]:
                 demo = rf["data"][demo_key]
                 task_id = task_ids[(shard, str(demo_key))]
-                if cap is not None and per_task.get(task_id, 0) >= cap:
+                # Match OnlineReplay.add_episode's short-episode rejection before
+                # assigning an ordinal, so the rank shards are disjoint and their
+                # union exactly matches the unsharded eligible dataset.
+                if int(demo["actions"].shape[0]) < int(replay.sequence_length):
+                    continue
+                ordinal = eligible_per_task.get(task_id, 0)
+                if cap is not None and ordinal >= cap:
+                    continue
+                eligible_per_task[task_id] = ordinal + 1
+                if ordinal % world_size != rank:
                     continue
                 hidden_demo = hf["data"][demo_key]
                 emb = np.asarray(hidden_demo["obs_embedding"][...])
@@ -209,11 +237,11 @@ def seed_replay_from_offline(
                             emb,
                             task_id,
                             lang_emb=lang_emb,
+                            include_images=bool(include_images),
                         ),
                         source="coldstart",
                     )
                     is not None
                 ):
                     n_added += 1
-                    per_task[task_id] = per_task.get(task_id, 0) + 1
     return n_added

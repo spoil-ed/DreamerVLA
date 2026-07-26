@@ -501,7 +501,7 @@ def _validate_pre_mainline_routes(cfg: DictConfig) -> None:
             )
         if int(_select_int(cfg, "training.num_epochs") or 0) <= 0:
             raise ValueError("pre-mainline classifier upper bound requires num_epochs > 0")
-        if bool(
+        if not bool(
             OmegaConf.select(
                 cfg,
                 "training.episode_eval_enabled",
@@ -509,8 +509,8 @@ def _validate_pre_mainline_routes(cfg: DictConfig) -> None:
             )
         ):
             raise ValueError(
-                "pre-mainline classifier upper bound uses held-out window F1; "
-                "episode evaluation is invalid without failure trajectories"
+                "pre-mainline classifier upper bound must evaluate held-out trajectories "
+                "to calibrate its deployment threshold"
             )
         if (
             _select_str(cfg, "data.train_split") != "train"
@@ -522,8 +522,10 @@ def _validate_pre_mainline_routes(cfg: DictConfig) -> None:
         val_fraction = float(OmegaConf.select(cfg, "data.val_fraction", default=0.0) or 0.0)
         if not 0.0 < val_fraction < 1.0:
             raise ValueError("pre-mainline classifier data.val_fraction must be within (0,1)")
-        if _select_str(cfg, "training.final_selection_metric") != "window_f1":
-            raise ValueError("pre-mainline classifier upper bound must select held-out window F1")
+        if _select_str(cfg, "training.final_selection_metric") != "episode_f1":
+            raise ValueError(
+                "pre-mainline classifier upper bound must select held-out trajectory F1"
+            )
         if not bool(
             OmegaConf.select(
                 cfg,
@@ -1237,17 +1239,6 @@ def _validate_manual_cotrain_placement(cfg: DictConfig) -> None:
             raise ValueError(
                 "manual_cotrain.require_training_signal is only valid for "
                 "training_mode=imagined_success_sft"
-            )
-        checkpoint_every = int(
-            OmegaConf.select(cfg, "manual_cotrain.checkpoint_every", default=0) or 0
-        )
-        global_steps = int(
-            OmegaConf.select(cfg, "manual_cotrain.global_steps", default=0) or 0
-        )
-        if checkpoint_every <= 0 or global_steps % checkpoint_every != 0:
-            raise ValueError(
-                "training-signal verification requires the final global step to write "
-                "a checkpoint"
             )
 
     if bool(

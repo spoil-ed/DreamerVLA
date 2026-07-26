@@ -255,6 +255,9 @@ artifacts elsewhere. Evaluation is the deliberate exception: its run root is
   used by runners. Prefer runner logging and `utils/json_logger.py`.
 - New behavior needs tests under `tests/`; GPU/Ray/real-env coverage belongs in
   `tests/e2e_tests/` and must be gated appropriately.
+- Do not run tests during iterative implementation. Run the relevant test suite once,
+  immediately before preparing a commit, unless the user explicitly requests an
+  earlier test run.
 - Commits use Conventional Commits, about 72 characters, imperative mood, and
   `git commit -s`.
 

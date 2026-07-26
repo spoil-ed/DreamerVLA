@@ -13,6 +13,7 @@ from dreamervla.dataset.collection_manifest import (
 )
 from dreamervla.dataset.rollout_dump_writer import (
     PerTrajectoryDumpWriter,
+    RolloutDumpWriter,
     per_trajectory_shard_name,
 )
 
@@ -46,6 +47,33 @@ def _make_steps(n, success):
 
 def test_per_trajectory_shard_name():
     assert per_trajectory_shard_name("traj", 3, 41) == "traj_t03_ep000041.hdf5"
+
+
+def test_raw_only_writer_persists_main_camera_without_hidden_dir(tmp_path):
+    reward_dir = tmp_path / "reward"
+    steps = _make_steps(3, success=False)
+    for step in steps:
+        step.pop("obs_embedding")
+    with RolloutDumpWriter(
+        reward_dir,
+        None,
+        "raw.hdf5",
+        persist_hidden_sidecar=False,
+        stored_image_keys=("agentview_rgb",),
+    ) as writer:
+        writer.write_demo(
+            index=0,
+            steps=steps,
+            task_id=2,
+            episode_id=4,
+            episode_success=False,
+        )
+
+    with h5py.File(reward_dir / "raw.hdf5", "r") as h5:
+        demo = h5["data"]["demo_0"]
+        assert "agentview_rgb" in demo["obs"]
+        assert "eye_in_hand_rgb" not in demo["obs"]
+    assert complete_episode_ids_per_task(reward_dir, None) == {2: {4}}
 
 
 def test_writes_one_identity_named_pair_per_trajectory(tmp_path, hidden_token_preprocess_config):

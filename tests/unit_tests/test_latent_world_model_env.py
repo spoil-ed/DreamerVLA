@@ -419,10 +419,38 @@ def test_chunk_granularity_classifier_scores_once_per_policy_chunk() -> None:
     assert classifier.windows[0].tolist() == [
         [[0.0, 0.0], [0.0, 0.0], [4.0, 2.0]],
     ]
-    assert rewards.tolist() == [[0.0, 0.0, 6.0]]
+    # One pooled chunk is not a valid W=3 temporal window. Reset padding must
+    # never be interpreted as classifier evidence.
+    assert rewards.tolist() == [[0.0, 0.0, 0.0]]
     assert infos[0]["classifier_evaluations"] == 1
     assert infos[0]["classifier_success_evaluations"] == 0
     assert env.get_metrics()["score_count"] == 1.0
+
+
+def test_chunk_classifier_waits_for_full_native_history_before_success() -> None:
+    classifier = _ChunkWindowCaptureClassifier(window=3)
+    env = LatentWorldModelEnv(
+        world_model=_ChunkWM(),
+        classifier=classifier,
+        latent_dim=2,
+        action_dim=2,
+        success_threshold=0.5,
+        max_episode_steps=99,
+        num_envs=1,
+    )
+    env.reset_slot(0, task_id=0, episode_id=0)
+
+    outcomes = []
+    for _ in range(3):
+        _obs, rewards, terminations, _truncations, _infos = env.chunk_step_batch(
+            np.array([[[1.0, 0.0], [0.0, 0.0], [0.0, 0.0]]], dtype=np.float32),
+            env_ids=[0],
+        )
+        outcomes.append((float(rewards[0, -1]), bool(terminations[0, -1])))
+
+    assert outcomes[:2] == [(0.0, False), (0.0, False)]
+    assert outcomes[2][0] > 0.5
+    assert outcomes[2][1] is True
 
 
 def test_classifier_temporal_windows_do_not_cat_or_stack_slot_histories(

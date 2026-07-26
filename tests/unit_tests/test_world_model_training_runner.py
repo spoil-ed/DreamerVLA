@@ -1099,6 +1099,26 @@ def test_warmup_replay_epochs_use_classifier_window_count_for_classifier(tmp_pat
     ) == (4, 2)
 
 
+def test_warmup_replay_epochs_accept_global_ddp_window_counts(tmp_path):
+    from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
+
+    replay = _seeded_replay(tmp_path, seq_len=4)
+
+    assert WorldModelTrainingRunner._resolve_warmup_steps(
+        replay,
+        wm_steps=1200,
+        cls_steps=1200,
+        replay_epochs=2,
+        replay_max_steps=0,
+        wm_batch_size=12,
+        cls_batch_size=8,
+        cls_window=2,
+        cls_chunk_size=2,
+        wm_window_count=24,
+        cls_window_count=8,
+    ) == (4, 2)
+
+
 def test_warmup_replay_epochs_keep_explicit_zero_classifier_disabled(tmp_path):
     from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
 

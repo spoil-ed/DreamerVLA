@@ -12,31 +12,50 @@ defaults:
 run:
   name: openvla_libero_success_sft_probe
 
+cluster:
+  num_gpus: 6
+
 runner:
   logger:
-    logger_backends: [tensorboard]
+    logger_backends: [tensorboard, wandb]
 
 training:
   require_policy_update: true
 
 manual_cotrain:
+  ngpu: 6
   training_mode: imagined_success_sft
   learner_updates_enabled: false
   staged_policy_update: false
   require_training_signal: true
   global_steps: 1
-  checkpoint_every: 1
-  eval_interval_global_steps: 0
-  eval_initial_global_step: false
+  # This is a one-step causal diagnostic, not a resumable training run.  The
+  # full OpenVLA + Adam recovery payload is larger than the policy itself and
+  # is deliberately not persisted; TensorBoard retains the signal evidence.
+  checkpoint_every: 0
+  # Evaluate the same resident policy before and after the one SFT update.  The
+  # updated weights never leave ActorGroup, so this comparison needs no model
+  # checkpoint and cannot accidentally evaluate the base policy twice.
+  eval_interval_global_steps: 1
+  eval_initial_global_step: true
+  eval_protocol:
+    # Keep the SFT probe scoped to task 0, but evaluate the resident policy on
+    # the complete LIBERO Goal suite before and after the update.
+    task_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    num_episodes_per_task: 10
+    num_envs: 25
+    compute_diagnostics: false
   initial_condition_selector: episode_start
   real_env_workers: 1
   real_envs_per_worker: 1
   real_rollout_epoch: 1
   real_rollout_target_trajectories: 1
-  wm_rollout_target_trajectories: 128
+  # Six Actor ranks require an equal number of 16-trajectory group leases.
+  # Twelve leases give every rank exactly two leases (32 trajectories).
+  wm_rollout_target_trajectories: 192
   max_steps_per_rollout_epoch: 512
   wm_envs_per_worker: 16
-  max_policy_kl: 0.05
+  max_policy_kl: 0.10
 
 ray_data:
   task_ids: [0]
@@ -45,12 +64,20 @@ algorithm:
   group_size: 16
 
 ray_actor_optimizer:
-  lr: 2.0e-6
+  lr: 1.0e-6
+
+learner:
+  train_cfg:
+    # The SFT selector must use the trajectory-level F1 threshold persisted by
+    # classifier validation.  A window-F1 checkpoint or a hand-written
+    # threshold is rejected before Ray workers launch.
+    classifier_threshold: null
+    require_trajectory_classifier_threshold: true
 
 actor:
   train_cfg:
-    lr: 2.0e-6
-    global_batch_size: 8192
+    lr: 1.0e-6
+    global_batch_size: 12288
     micro_batch_size: 8
     success_sft:
       epochs: 1

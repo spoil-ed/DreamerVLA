@@ -51,6 +51,9 @@ class LatentSuccessClassifierConfig:
     # Token count is fixed to 256 for the mainline spatial head. Tiny non-spatial
     # heads remain useful for unit-level architecture tests, not data adapters.
     token_count: int | None = 256
+    # Match the world-model observation contract by concatenating conditioning
+    # on every visual token's channel dimension.
+    spatial_conditioning: str = "channel_concat"
     proprio_dim: int = 0
     proprio_emb_dim: int = 0
     num_proprio_repeat: int = 1
@@ -64,8 +67,10 @@ class LatentSuccessClassifierConfig:
 class LatentSuccessClassifier(nn.Module):
     """Binary success classifier over a window of latent frames.
 
-    Mainline input shape contract: ``[B,W,256,4096]``. The spatial head keeps
-    that token grid intact; flat action-query/hidden-token inputs are rejected.
+    Mainline external input shape is ``[B,W,256,4096]`` plus raw proprio/language
+    side channels. The spatial head builds ``[B,W,256,4138]`` using the same
+    channel-concat contract as the world model. It also accepts WM observation
+    tokens ``[B,W,256,4106]`` whose proprio embedding is already present.
     Output: ``[B, output_dim]`` logits. ``output_dim=1`` is interpreted as a
     binary success logit trained with BCE.
 
@@ -149,6 +154,14 @@ class LatentSuccessClassifier(nn.Module):
         self.state_token_dim = self.obs_token_dim + self.lang_condition_dim
         self.supports_proprio_conditioning = self.proprio_condition_dim > 0
         self.supports_language_conditioning = self.lang_condition_dim > 0
+        self.spatial_channel_concat = (
+            str(getattr(cfg, "spatial_conditioning", "channel_concat")) == "channel_concat"
+        )
+        self.accepts_embedded_proprio = bool(self.spatial_channel_concat)
+        if head_type == "spatial_tf" and not self.spatial_channel_concat:
+            raise ValueError(
+                "head_type='spatial_tf' requires spatial_conditioning='channel_concat'"
+            )
         if cfg.latent_dim is None and str(getattr(cfg, "token_pool", "flat")) == "mean":
             cfg.latent_dim = int(self.state_token_dim)
         if cfg.latent_dim is None:
@@ -224,9 +237,9 @@ class LatentSuccessClassifier(nn.Module):
             token_count = int(getattr(cfg, "token_count", 0) or 0)
             if token_count < 1:
                 raise ValueError("head_type='spatial_tf' requires token_count >= 1")
-            self.vision_proj = nn.Linear(int(cfg.token_dim), int(cfg.hidden_dim))
+            self.vision_proj = nn.Linear(int(self.state_token_dim), int(cfg.hidden_dim))
             self.vision_norm = (
-                nn.LayerNorm(int(cfg.token_dim))
+                nn.LayerNorm(int(self.state_token_dim))
                 if bool(getattr(cfg, "vision_input_norm", True))
                 else nn.Identity()
             )
@@ -235,26 +248,6 @@ class LatentSuccessClassifier(nn.Module):
                 torch.zeros(1, int(cfg.window), 1, int(cfg.hidden_dim))
             )
             self.token_pos_embed = nn.Parameter(torch.zeros(1, 1, token_count, int(cfg.hidden_dim)))
-            self.proprio_token_proj = (
-                nn.Linear(self.proprio_condition_dim, int(cfg.hidden_dim))
-                if self.supports_proprio_conditioning
-                else None
-            )
-            self.proprio_type_embed = (
-                nn.Parameter(torch.zeros(1, 1, 1, int(cfg.hidden_dim)))
-                if self.supports_proprio_conditioning
-                else None
-            )
-            self.lang_token_proj = (
-                nn.Linear(self.lang_condition_dim, int(cfg.hidden_dim))
-                if self.supports_language_conditioning
-                else None
-            )
-            self.lang_type_embed = (
-                nn.Parameter(torch.zeros(1, 1, int(cfg.hidden_dim)))
-                if self.supports_language_conditioning
-                else None
-            )
             layer = nn.TransformerEncoderLayer(
                 d_model=cfg.hidden_dim,
                 nhead=cfg.num_heads,
@@ -269,10 +262,6 @@ class LatentSuccessClassifier(nn.Module):
             nn.init.trunc_normal_(self.spatial_cls_token, std=0.02)
             nn.init.trunc_normal_(self.frame_pos_embed, std=0.02)
             nn.init.trunc_normal_(self.token_pos_embed, std=0.02)
-            if self.proprio_type_embed is not None:
-                nn.init.trunc_normal_(self.proprio_type_embed, std=0.02)
-            if self.lang_type_embed is not None:
-                nn.init.trunc_normal_(self.lang_type_embed, std=0.02)
         elif ht == "transformer":
             self.input_proj = nn.Linear(cfg.latent_dim, cfg.hidden_dim)
             self.cls_token = nn.Parameter(torch.zeros(1, 1, cfg.hidden_dim))
@@ -394,24 +383,65 @@ class LatentSuccessClassifier(nn.Module):
             )
         return out
 
-    def _vision_tokens(self, latent_window: torch.Tensor) -> torch.Tensor:
-        if latent_window.ndim == 4:
-            tokens = latent_window
-        else:
+    def _spatial_input_tokens(
+        self,
+        latent_window: torch.Tensor,
+        *,
+        proprio: torch.Tensor | None,
+        lang_emb: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """Build WM-aligned ``[vision|proprio|language]`` token channels."""
+        if latent_window.ndim != 4:
             raise ValueError(
-                "head_type='spatial_tf' requires vision tokens shaped "
+                "head_type='spatial_tf' requires token grids shaped "
                 f"[B,W,{int(self.cfg.token_count or 0)},{int(self.cfg.token_dim)}]; "
                 "flat observation inputs are not supported, "
                 f"got {tuple(latent_window.shape)}"
             )
-        if int(tokens.shape[-1]) == self.obs_token_dim:
-            tokens = tokens[..., : int(self.cfg.token_dim)]
-        if int(tokens.shape[-1]) != int(self.cfg.token_dim):
+        tokens = latent_window
+        width = int(tokens.shape[-1])
+        valid_widths = {
+            int(self.cfg.token_dim),
+            int(self.obs_token_dim),
+            int(self.state_token_dim),
+        }
+        if width not in valid_widths:
             raise ValueError(
-                f"vision token dim mismatch: got {int(tokens.shape[-1])}, "
-                f"expected {int(self.cfg.token_dim)}"
+                f"spatial token dim mismatch: got {width}, expected one of {sorted(valid_widths)}"
             )
-        return tokens
+        bsz, window, token_count = (
+            int(tokens.shape[0]),
+            int(tokens.shape[1]),
+            int(tokens.shape[2]),
+        )
+        parts = [tokens]
+        if width == int(self.cfg.token_dim) and self.supports_proprio_conditioning:
+            proprio_emb = self._encode_proprio(proprio, window=window)
+            if proprio_emb is None:
+                raise RuntimeError("proprio conditioning is enabled without an embedding")
+            parts.append(
+                proprio_emb[:, :, None, :]
+                .expand(bsz, window, token_count, -1)
+                .to(device=tokens.device, dtype=tokens.dtype)
+            )
+            width += self.proprio_condition_dim
+        if width == self.obs_token_dim and self.supports_language_conditioning:
+            lang_proj = self._project_lang(lang_emb)
+            if lang_proj is None:
+                raise RuntimeError("language conditioning is enabled without an embedding")
+            parts.append(
+                lang_proj[:, None, None, :]
+                .expand(bsz, window, token_count, -1)
+                .to(device=tokens.device, dtype=tokens.dtype)
+            )
+            width += self.lang_condition_dim
+        conditioned = torch.cat(parts, dim=-1) if len(parts) > 1 else tokens
+        if width != self.state_token_dim or int(conditioned.shape[-1]) != self.state_token_dim:
+            raise ValueError(
+                "spatial classifier channel concat produced width "
+                f"{int(conditioned.shape[-1])}, expected state_token_dim={self.state_token_dim}"
+            )
+        return conditioned
 
     def _spatial_forward(
         self,
@@ -420,7 +450,11 @@ class LatentSuccessClassifier(nn.Module):
         proprio: torch.Tensor | None,
         lang_emb: torch.Tensor | None,
     ) -> torch.Tensor:
-        tokens = self._vision_tokens(latent_window)
+        tokens = self._spatial_input_tokens(
+            latent_window,
+            proprio=proprio,
+            lang_emb=lang_emb,
+        )
         bsz, window, token_count = int(tokens.shape[0]), int(tokens.shape[1]), int(tokens.shape[2])
         if window != int(self.cfg.window):
             raise ValueError(f"expected window={self.cfg.window}, got {window}")
@@ -434,38 +468,9 @@ class LatentSuccessClassifier(nn.Module):
         vision = self.vision_proj(normed)
         vision = vision + self.frame_pos_embed[:, :window].to(vision.dtype)
         vision = vision + self.token_pos_embed[:, :, :token_count].to(vision.dtype)
-        seq_parts = [vision.reshape(bsz, window * token_count, -1)]
-
-        proprio_emb = self._encode_proprio(proprio, window=window)
-        if proprio_emb is not None:
-            if self.proprio_token_proj is None or self.proprio_type_embed is None:
-                raise RuntimeError("proprio spatial token modules are missing")
-            p = self.proprio_token_proj(
-                proprio_emb.to(
-                    device=self.proprio_token_proj.weight.device,
-                    dtype=self.proprio_token_proj.weight.dtype,
-                )
-            )
-            p = p[:, :, None, :] + self.frame_pos_embed[:, :window].to(p.dtype)
-            p = p + self.proprio_type_embed.to(p.dtype)
-            seq_parts.append(p.reshape(bsz, window, -1))
-
-        lang_proj = self._project_lang(lang_emb)
-        prefix_parts: list[torch.Tensor] = []
-        if lang_proj is not None:
-            if self.lang_token_proj is None or self.lang_type_embed is None:
-                raise RuntimeError("language spatial token modules are missing")
-            lang_token = self.lang_token_proj(
-                lang_proj.to(
-                    device=self.lang_token_proj.weight.device,
-                    dtype=self.lang_token_proj.weight.dtype,
-                )
-            )[:, None, :]
-            prefix_parts.append(lang_token + self.lang_type_embed.to(lang_token.dtype))
-
-        seq = torch.cat(seq_parts, dim=1)
+        seq = vision.reshape(bsz, window * token_count, -1)
         cls = self.spatial_cls_token.expand(bsz, -1, -1).to(seq.dtype)
-        x = torch.cat([cls, *prefix_parts, seq], dim=1)
+        x = torch.cat([cls, seq], dim=1)
         x = self.encoder(x)
         return self.head(x[:, 0])
 

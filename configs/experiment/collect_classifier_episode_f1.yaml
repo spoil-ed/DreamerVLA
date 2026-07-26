@@ -1,0 +1,26 @@
+# @package _global_
+# Collect real policy rollouts with both successes and failures for trajectory metrics.
+defaults:
+  - collect_rollouts
+  - _self_
+
+run:
+  name: collect_classifier_episode_f1
+
+launch:
+  gpus: 0,1,2,3,4,5
+
+collect:
+  # Fifty complete trajectories gives a held-out trajectory split while keeping
+  # the 256x4096 fp16 hidden sidecars within a single-node disk budget.
+  episodes_per_task: 5
+  episode_horizon: 300
+  num_inference_workers: 6
+  gpu_id: 0
+  hdf5_reward_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/libero_goal_classifier_episode_f1/reward
+  hidden_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/libero_goal_classifier_episode_f1/hidden
+
+env:
+  # Three environments per inference GPU avoids OSMesa startup contention
+  # while keeping each OpenVLA forward usefully batched.
+  num_workers: 18

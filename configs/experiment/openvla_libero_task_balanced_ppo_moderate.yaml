@@ -1,0 +1,29 @@
+# @package _global_
+# Multi-step PPO follow-up: fresh task-balanced imagined groups on every step,
+# two PPO passes, two optimizer batches per pass, and post-update KL rollback.
+defaults:
+  - openvla_libero_task_balanced_ppo_probe
+  - _self_
+
+run:
+  name: openvla_libero_task_balanced_ppo_moderate
+
+manual_cotrain:
+  global_steps: 3
+  max_policy_kl: 0.05
+
+algorithm:
+  entropy_bonus: 1.0e-3
+  kl_beta: 5.0e-3
+
+ray_actor_optimizer:
+  lr: 2.0e-6
+
+actor:
+  train_cfg:
+    lr: 2.0e-6
+    global_batch_size: 5120
+    micro_batch_size: 8
+    algorithm_cfg:
+      ppo_update_epochs: 2
+      measure_post_update_kl: true

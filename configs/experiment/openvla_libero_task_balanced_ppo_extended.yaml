@@ -1,0 +1,23 @@
+# @package _global_
+# Ten-step continuation of the task-balanced mixed-signal PPO experiment.
+# A complete resumable checkpoint is written after the final resident eval.
+defaults:
+  - openvla_libero_task_balanced_ppo_moderate
+  - _self_
+
+run:
+  name: openvla_libero_task_balanced_ppo_extended
+
+manual_cotrain:
+  global_steps: 10
+  eval_interval_global_steps: 1
+  checkpoint_every: 10
+
+checkpoint:
+  topk:
+    monitor_key: eval/success_rate
+    metric_name: accuracy
+    mode: max
+    # The metric file hardlinks latest.ckpt. Retaining one avoids multiplying
+    # the large full-policy recovery payload.
+    k: 1

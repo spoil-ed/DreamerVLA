@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
+import dreamervla.workers.inference.rollout_inference_worker as rollout_worker_module
 from dreamervla.workers.inference._test_rollout_stub import HIDDEN_DIM
 from dreamervla.workers.inference.rollout_inference_worker import RolloutInferenceWorker
 
@@ -24,6 +25,30 @@ def test_forward_batch_returns_action_and_hidden() -> None:
     assert out["obs_embedding"][1].dtype == np.float16
     assert float(out["actions"][1][0]) == 20.0
     assert float(out["obs_embedding"][2][0]) == 30.0
+
+
+def test_init_masks_ray_rank_environment_during_bundle_construction(monkeypatch) -> None:
+    seen = {}
+    original_build = rollout_worker_module._build_from_cfg
+
+    def _recording_build(cfg):
+        import os
+
+        seen.update({key: os.environ.get(key) for key in ("RANK", "LOCAL_RANK", "WORLD_SIZE")})
+        return original_build(cfg)
+
+    monkeypatch.setenv("RANK", "3")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    monkeypatch.setenv("WORLD_SIZE", "6")
+    monkeypatch.setattr(rollout_worker_module, "_build_from_cfg", _recording_build)
+
+    worker = RolloutInferenceWorker(_cfg(), {}, num_envs=1)
+    assert worker.rank == 3
+    worker.init()
+
+    assert seen == {"RANK": None, "LOCAL_RANK": None, "WORLD_SIZE": None}
+    assert rollout_worker_module.os.environ["RANK"] == "3"
+    assert rollout_worker_module.os.environ["WORLD_SIZE"] == "6"
 
 
 class _DecodeResult:

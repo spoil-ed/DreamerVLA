@@ -26,11 +26,22 @@ jobs:
         id: image
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
         run: |
           namespace="${DOCKERHUB_USERNAME:-local}"
           short_sha="${GITHUB_SHA::12}"
           echo "name=${namespace}/dreamervla" >> "${GITHUB_OUTPUT}"
           echo "short_sha=${short_sha}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "tags<<EOF"
+            echo "${namespace}/dreamervla:cu124-h100-v1"
+            echo "${namespace}/dreamervla:v1"
+            echo "${namespace}/dreamervla:sha-${short_sha}"
+            if [[ -n "${RELEASE_TAG}" ]]; then
+              echo "${namespace}/dreamervla:${RELEASE_TAG}"
+            fi
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
       - name: Log in to Docker Hub
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
@@ -49,7 +60,4 @@ jobs:
             DVLA_GIT_COMMIT=${{ github.sha }}
             DVLA_IMAGE_VERSION=cu124-h100-v1
             DVLA_BUILD_TIME=${{ github.event.repository.updated_at }}
-          tags: |
-            ${{ steps.image.outputs.name }}:cu124-h100-v1
-            ${{ steps.image.outputs.name }}:v1
-            ${{ steps.image.outputs.name }}:sha-${{ steps.image.outputs.short_sha }}
+          tags: ${{ steps.image.outputs.tags }}

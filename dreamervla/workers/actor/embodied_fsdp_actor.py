@@ -443,6 +443,7 @@ class EmbodiedFSDPActor(Worker):
             for trajectory_index, trajectory in enumerate(batch.trajectories)
             for transition_index, transition in enumerate(trajectory.transitions)
         ]
+        is_output_rank = int(self.rank) == 0
         replacements: dict[tuple[int, int], dict[str, Any]] = {}
         policy = self._policy()
         original_training = bool(policy.training)
@@ -457,6 +458,8 @@ class EmbodiedFSDPActor(Worker):
                     lang = torch.as_tensor(extras["lang_emb"]).detach().float().cpu()
                     if int(hidden.shape[0]) != len(rows) or int(lang.shape[0]) != len(rows):
                         raise ValueError("raw re-encoding output batch size mismatch")
+                    if not is_output_rank:
+                        continue
                     for row_index, (trajectory_index, transition_index, transition) in enumerate(
                         rows
                     ):
@@ -467,6 +470,14 @@ class EmbodiedFSDPActor(Worker):
                         replacements[(trajectory_index, transition_index)] = updated
         finally:
             policy.train(original_training)
+        if not is_output_rank:
+            # Every FSDP rank must participate in the forwards, but retaining
+            # re-encoded CPU sidecars on every rank multiplies host memory by
+            # world size. Only rank zero materializes the large return batch.
+            return RealTrajectoryBatch(
+                global_step=batch.global_step,
+                trajectories=(),
+            )
         trajectories = tuple(
             replace(
                 trajectory,
@@ -477,13 +488,6 @@ class EmbodiedFSDPActor(Worker):
             )
             for trajectory_index, trajectory in enumerate(batch.trajectories)
         )
-        if int(self.rank) != 0:
-            # Every FSDP rank participates in the forwards, but only rank zero
-            # returns the very large sidecar batch to Ray's object store.
-            return RealTrajectoryBatch(
-                global_step=batch.global_step,
-                trajectories=(),
-            )
         return RealTrajectoryBatch(global_step=batch.global_step, trajectories=trajectories)
 
     def _prepare_raw_batch(self, transitions: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
@@ -651,11 +655,13 @@ class EmbodiedFSDPActor(Worker):
         zero_grad_set_to_none = bool(optim_cfg.get("zero_grad_set_to_none", True))
         logprob_type = str(algorithm_cfg.get("logprob_type", "")).lower()
         token_level_logprob = logprob_type == "token_level"
+        replicated_dataset = bool(sft_cfg.get("replicated_trajectory_batch", False))
 
         local_time_steps = int(batch.rewards.shape[0])
         local_rollouts = int(batch.rewards.shape[1])
         global_time_steps = _distributed_max_int(local_time_steps, self.torch_device)
-        global_rollouts = _distributed_sum_int(local_rollouts, self.torch_device)
+        distributed_rollouts = _distributed_sum_int(local_rollouts, self.torch_device)
+        global_rollouts = local_rollouts if replicated_dataset else distributed_rollouts
         min_rollouts = _distributed_min_int(local_rollouts, self.torch_device)
         max_rollouts = _distributed_max_int(local_rollouts, self.torch_device)
         if min_rollouts != max_rollouts:
@@ -664,7 +670,11 @@ class EmbodiedFSDPActor(Worker):
                 f"Actor rank; observed min={min_rollouts}, max={max_rollouts}"
             )
         local_sample_count = global_time_steps * local_rollouts
-        global_sample_count = _distributed_sum_int(local_sample_count, self.torch_device)
+        distributed_sample_count = _distributed_sum_int(
+            local_sample_count,
+            self.torch_device,
+        )
+        global_sample_count = local_sample_count if replicated_dataset else distributed_sample_count
         micro_batch_size = int(self.train_cfg.get("micro_batch_size", max(1, local_rollouts)))
         if micro_batch_size <= 0 or local_sample_count % micro_batch_size != 0:
             raise ValueError(
@@ -675,23 +685,47 @@ class EmbodiedFSDPActor(Worker):
         loss_mask = batch.loss_mask.to(device="cpu", dtype=torch.bool)
         decision_mask = loss_mask.reshape(local_time_steps, local_rollouts, -1).any(dim=2)
         reward_scores = batch.rewards.detach().to(device="cpu", dtype=torch.float32)
-        success_mask = reward_scores.reshape(local_time_steps, local_rollouts, -1).ge(
-            float(classifier_threshold)
-        ).any(dim=(0, 2))
+        success_mask = (
+            reward_scores.reshape(local_time_steps, local_rollouts, -1)
+            .ge(float(classifier_threshold))
+            .any(dim=(0, 2))
+        )
         selected_mask = decision_mask & success_mask.unsqueeze(0)
         local_flat_mask = selected_mask.reshape(-1)
         padded_flat_mask = torch.zeros(local_sample_count, dtype=torch.bool)
         padded_flat_mask[: int(local_flat_mask.numel())] = local_flat_mask
         local_successes = int(success_mask.sum().item())
-        global_successes = _distributed_sum_int(local_successes, self.torch_device)
+        distributed_successes = _distributed_sum_int(local_successes, self.torch_device)
+        if replicated_dataset:
+            min_successes = _distributed_min_int(local_successes, self.torch_device)
+            max_successes = _distributed_max_int(local_successes, self.torch_device)
+            if min_successes != max_successes:
+                raise ValueError(
+                    "replicated success-SFT data must select the same success count "
+                    f"on every rank; observed min={min_successes}, max={max_successes}"
+                )
+            global_successes = local_successes
+        else:
+            global_successes = distributed_successes
         local_valid_samples = int(padded_flat_mask.sum().item())
-        global_valid_samples = _distributed_sum_int(local_valid_samples, self.torch_device)
+        distributed_valid_samples = _distributed_sum_int(
+            local_valid_samples,
+            self.torch_device,
+        )
+        global_valid_samples = (
+            local_valid_samples if replicated_dataset else distributed_valid_samples
+        )
         tokens_per_sample = (
             _trailing_numel(batch.prev_logprobs.shape[2:]) if token_level_logprob else 1
         )
-        global_valid_tokens = _distributed_sum_int(
+        distributed_valid_tokens = _distributed_sum_int(
             local_valid_samples * tokens_per_sample,
             self.torch_device,
+        )
+        global_valid_tokens = (
+            local_valid_samples * tokens_per_sample
+            if replicated_dataset
+            else distributed_valid_tokens
         )
         common_metrics = {
             "actor/success_sft_threshold": float(classifier_threshold),
@@ -759,9 +793,7 @@ class EmbodiedFSDPActor(Worker):
                     eval_batch["logprob_type"] = logprob_type
                 is_last_micro = micro_index == micro_batches - 1
                 backward_context = (
-                    policy.no_sync()
-                    if fsdp_accumulation and not is_last_micro
-                    else nullcontext()
+                    policy.no_sync() if fsdp_accumulation and not is_last_micro else nullcontext()
                 )
                 with backward_context:
                     new_logprob_raw, entropy, _ = policy(eval_batch)
@@ -774,7 +806,7 @@ class EmbodiedFSDPActor(Worker):
                     if bool(sample_mask_cpu.any()):
                         selected_logprob = new_logprob[sample_mask]
                         loss = -selected_logprob.sum() * (
-                            float(max(1, int(self.world_size))) / float(global_valid_tokens)
+                            float(max(1, int(self.world_size))) / float(distributed_valid_tokens)
                         )
                         local_nll_sum += float(-selected_logprob.detach().sum().cpu().item())
                     else:
@@ -828,12 +860,16 @@ class EmbodiedFSDPActor(Worker):
                         new_logprob[sample_mask],
                         old_logprob[sample_mask],
                         clip_log_ratio=None,
-                    ).sum().detach().cpu().item()
+                    )
+                    .sum()
+                    .detach()
+                    .cpu()
+                    .item()
                 )
         global_nll_sum = _distributed_sum_float(local_nll_sum, self.torch_device)
         global_kl_sum = _distributed_sum_float(local_kl_sum, self.torch_device)
-        mean_loss = global_nll_sum / float(global_valid_tokens * epochs)
-        mean_kl = global_kl_sum / float(global_valid_tokens)
+        mean_loss = global_nll_sum / float(distributed_valid_tokens * epochs)
+        mean_kl = global_kl_sum / float(distributed_valid_tokens)
         mean_grad_norm = _mean(grad_norms)
         return {
             **common_metrics,
@@ -1255,7 +1291,6 @@ class EmbodiedFSDPActor(Worker):
                     force=optimizer_steps == optimizer_steps_total,
                 )
 
-        policy.train(False)
         metric_divisor = float(max(1, forward_backward_steps))
         scalar_values = (
             torch.stack(tuple(metric_sums[name] / metric_divisor for name in metric_names))
@@ -1265,6 +1300,65 @@ class EmbodiedFSDPActor(Worker):
             .tolist()
         )
         scalars = dict(zip(metric_names, scalar_values, strict=True))
+        post_update_behavior_kl = float(scalars["behavior_kl"])
+        if bool(algorithm_cfg.get("measure_post_update_kl", False)):
+            policy.train(False)
+            local_post_update_kl_sum = 0.0
+            with torch.no_grad():
+                for start in range(0, local_sample_count, micro_batch_size):
+                    padded_indices = torch.arange(
+                        start,
+                        start + micro_batch_size,
+                        dtype=torch.long,
+                    )
+                    source_indices = _local_source_indices(
+                        padded_indices,
+                        local_time_steps=local_time_steps,
+                        local_rollouts=local_rollouts,
+                    )
+                    sample_mask_cpu = padded_flat_mask.index_select(0, padded_indices)
+                    eval_batch = self._eval_inputs_for_flat_indices(batch, source_indices)
+                    if logprob_type:
+                        eval_batch["logprob_type"] = logprob_type
+                    new_logprob_raw, _entropy, _ = policy(eval_batch)
+                    new_logprob = _as_tensor(new_logprob_raw).to(
+                        self.torch_device,
+                        dtype=torch.float32,
+                    )
+                    old_logprob = flat_old_logprob.index_select(0, source_indices).to(
+                        self.torch_device,
+                        dtype=torch.float32,
+                    )
+                    if not token_level_logprob:
+                        new_logprob = _as_vector(new_logprob)
+                        old_logprob = _as_vector(old_logprob)
+                    if new_logprob.shape != old_logprob.shape:
+                        raise ValueError(
+                            "post-update PPO log_prob shape must match prev_logprobs; "
+                            f"got {tuple(new_logprob.shape)} and {tuple(old_logprob.shape)}"
+                        )
+                    # FSDP ranks must execute every forward in identical order even
+                    # when a rank-local padded micro-batch has no valid loss token.
+                    if not bool(sample_mask_cpu.any()):
+                        continue
+                    sample_mask = sample_mask_cpu.to(self.torch_device, dtype=torch.bool)
+                    local_post_update_kl_sum += float(
+                        _approx_behavior_kl(
+                            new_logprob[sample_mask],
+                            old_logprob[sample_mask],
+                            clip_log_ratio=clip_log_ratio,
+                        )
+                        .sum()
+                        .detach()
+                        .cpu()
+                        .item()
+                    )
+            post_update_kl_sum = _distributed_sum_float(
+                local_post_update_kl_sum,
+                self.torch_device,
+            )
+            post_update_kl_denominator = logprob_token_count if token_level_logprob else valid_count
+            post_update_behavior_kl = post_update_kl_sum / float(max(1, post_update_kl_denominator))
         mean_grad_norm = _mean(grad_norms)
         return {
             **common_metrics,
@@ -1283,7 +1377,8 @@ class EmbodiedFSDPActor(Worker):
             "actor/clip_fraction": float(scalars["clip_fraction"]),
             "actor/dual_clip_fraction": float(scalars["dual_clip_fraction"]),
             "actor/entropy_mean": float(scalars["entropy"]),
-            "actor/behavior_kl_mean": float(scalars["behavior_kl"]),
+            "actor/behavior_kl_train_mean": float(scalars["behavior_kl"]),
+            "actor/behavior_kl_mean": float(post_update_behavior_kl),
             "actor/policy_grad_norm": mean_grad_norm,
             "actor/grad_norm": mean_grad_norm,
             "actor/lr": _optimizer_lr(optimizer),

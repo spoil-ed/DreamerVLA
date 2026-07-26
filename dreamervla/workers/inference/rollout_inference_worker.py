@@ -8,6 +8,9 @@ extractor history.
 from __future__ import annotations
 
 import importlib
+import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
@@ -30,6 +33,21 @@ def _build_from_cfg(cfg: dict[str, Any]) -> Any:
         module_name, class_name = str(target).rsplit(".", 1)
     module = importlib.import_module(module_name)
     return getattr(module, class_name)(**kwargs)
+
+
+@contextmanager
+def _independent_inference_environment() -> Iterator[None]:
+    """Prevent independent Ray inference actors from impersonating torchrun ranks."""
+    keys = ("RANK", "LOCAL_RANK", "WORLD_SIZE", "LOCAL_WORLD_SIZE")
+    saved = {key: os.environ[key] for key in keys if key in os.environ}
+    try:
+        for key in keys:
+            os.environ.pop(key, None)
+        yield
+    finally:
+        for key in keys:
+            os.environ.pop(key, None)
+        os.environ.update(saved)
 
 
 class RolloutInferenceWorker(Worker):
@@ -57,7 +75,11 @@ class RolloutInferenceWorker(Worker):
         if target.endswith(("oft_rollout:OFTRolloutBundle", "oft_rollout.OFTRolloutBundle")):
             decoder_kwargs.setdefault("device", self.device)
         decoder_cfg["kwargs"] = decoder_kwargs
-        self._bundle = _build_from_cfg(decoder_cfg)
+        # Ray placement ranks describe independent inference actors, not a
+        # torch.distributed process group. OpenVLA-OFT imports Accelerate, which
+        # otherwise sees WORLD_SIZE and attempts an env:// rendezvous.
+        with _independent_inference_environment():
+            self._bundle = _build_from_cfg(decoder_cfg)
         if hasattr(self._bundle, "to"):
             self._bundle.to(self.device)
         self._extractors = [self._bundle.make_extractor() for _ in range(self._num_envs)]
@@ -69,31 +91,50 @@ class RolloutInferenceWorker(Worker):
         env_ids: list[int],
     ) -> dict[str, list[Any]]:
         bundle = self._require_bundle()
-        preps = [
-            self._extractors[int(env_id)].prepare(obs, str(obs.get("task_description", "")))
-            for env_id, obs in zip(env_ids, obs_batch, strict=True)
+        # Hidden-sidecar collection needs a VLA embedding for every observation.
+        # Raw-only collection only needs a new forward when an action chunk has
+        # been consumed; intermediate steps can pop the already predicted chunk.
+        query_indices = [
+            index
+            for index, env_id in enumerate(env_ids)
+            if self._emit_hidden_sidecar or not self._action_queues[int(env_id)].has_pending
         ]
-        results = bundle.predict_batch(preps)
+        preps = [
+            self._extractors[int(env_ids[index])].prepare(
+                obs_batch[index],
+                str(obs_batch[index].get("task_description", "")),
+            )
+            for index in query_indices
+        ]
+        results = bundle.predict_batch(preps) if preps else []
+        result_by_index = dict(zip(query_indices, results, strict=True))
         actions: list[np.ndarray] = []
         hidden: list[np.ndarray] = []
         lang: list[np.ndarray | None] = []
         has_lang = False
-        for env_id, result in zip(env_ids, results, strict=True):
-            action_chunk, flat_hidden = result
+        for index, env_id in enumerate(env_ids):
             # Gripper post-process here (single point for the ray path); the EnvWorker
             # must NOT re-apply it. Without it grasping/success fails.
             env_index = int(env_id)
             queue = self._action_queues[env_index]
-            if not queue.has_pending:
-                queue.refill(np.asarray(action_chunk, dtype=np.float32))
+            result = result_by_index.get(index)
+            if result is not None:
+                action_chunk, flat_hidden = result
+                if not queue.has_pending:
+                    queue.refill(np.asarray(action_chunk, dtype=np.float32))
             action = process_action(queue.pop())[: self._action_dim]
-            obs_embedding = (
-                flat_hidden.numpy() if hasattr(flat_hidden, "numpy") else np.asarray(flat_hidden)
-            )
             actions.append(action)
-            hidden.append(obs_embedding.astype(np.float16, copy=False))
+            if self._emit_hidden_sidecar:
+                if result is None:
+                    raise RuntimeError("hidden-sidecar collection skipped a VLA forward")
+                obs_embedding = (
+                    flat_hidden.numpy()
+                    if hasattr(flat_hidden, "numpy")
+                    else np.asarray(flat_hidden)
+                )
+                hidden.append(obs_embedding.astype(np.float16, copy=False))
             lang_emb = _optional_lang_emb(result)
-            if lang_emb is None:
+            if not self._emit_hidden_sidecar or lang_emb is None:
                 lang.append(None)
             else:
                 has_lang = True

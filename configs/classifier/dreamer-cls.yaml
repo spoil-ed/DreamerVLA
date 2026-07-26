@@ -9,6 +9,7 @@ classifier:
   token_dim: ${task.classifier.input.token_dim}
   token_count: ${task.classifier.input.token_count}
   head_type: spatial_tf
+  spatial_conditioning: channel_concat
   proprio_dim: ${task.classifier.input.proprio_dim}
   proprio_emb_dim: ${task.classifier.input.proprio_emb_dim}
   num_proprio_repeat: ${task.classifier.input.num_proprio_repeat}
@@ -37,6 +38,7 @@ ray_components:
       token_dim: ${classifier.token_dim}
       token_count: ${classifier.token_count}
       head_type: ${classifier.head_type}
+      spatial_conditioning: ${classifier.spatial_conditioning}
       proprio_dim: ${classifier.proprio_dim}
       proprio_emb_dim: ${classifier.proprio_emb_dim}
       num_proprio_repeat: ${classifier.num_proprio_repeat}

@@ -222,6 +222,18 @@ class NopretokenizeSFTDistributedHelper:
             dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
         return float(tensor.item())
 
+    def reduce_min_int(self, value: int) -> int:
+        """Return the smallest integer supplied by any distributed rank."""
+
+        tensor = torch.tensor(
+            int(value),
+            device=self._reduce_device(),
+            dtype=torch.int64,
+        )
+        if self.is_distributed:
+            dist.all_reduce(tensor, op=dist.ReduceOp.MIN)
+        return int(tensor.item())
+
     def reduce_mean_dict(self, metrics: dict[str, float | int | torch.Tensor]) -> dict[str, float]:
         keys = list(metrics.keys())
         if not keys:

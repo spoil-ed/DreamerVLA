@@ -388,5 +388,10 @@ def test_latent_world_model_env_scores_classifier_with_window_sidecars():
     _obs, reward, terminated, _truncated, _info = env.step_slot(0, [0.5])
 
     assert classifier.last is not None
+    assert reward == 0.0
+    assert terminated is False
+
+    env.step_slot(0, [0.5])
+    _obs, reward, terminated, _truncated, _info = env.step_slot(0, [0.5])
     assert np.isclose(reward, float(torch.sigmoid(torch.tensor(2.0))))
     assert terminated is False

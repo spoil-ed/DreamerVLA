@@ -60,6 +60,32 @@ class _MemoryReplay:
         self.episodes.append(list(episode))
 
 
+class _SplitResetSlot(CounterEnv):
+    """Counter env exposing the spawned-slot split reset protocol."""
+
+    def __init__(self, slot_id: int, call_log: list[tuple[str, int]]) -> None:
+        super().__init__(horizon=2, embedding_dim=4)
+        self.slot_id = int(slot_id)
+        self.call_log = call_log
+        self.pending_reset: tuple[int, int] | None = None
+
+    def send_reset(
+        self,
+        *,
+        task_id: int | None = None,
+        episode_id: int | None = None,
+    ) -> None:
+        self.call_log.append(("send", self.slot_id))
+        self.pending_reset = (int(task_id or 0), int(episode_id or 0))
+
+    def recv_reset(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        self.call_log.append(("recv", self.slot_id))
+        assert self.pending_reset is not None
+        task_id, episode_id = self.pending_reset
+        self.pending_reset = None
+        return super().reset(task_id=task_id, episode_id=episode_id)
+
+
 def _counter_env_cfg() -> dict[str, Any]:
     return {
         "target": "dreamervla.workers.env._test_envs:CounterEnv",
@@ -207,6 +233,37 @@ def test_real_env_worker_buffers_rollout_result_into_trajectory() -> None:
         assert shard.dones.shape == (1, 1, 2)
         assert shard.rewards[0, 0].tolist() == [0.0, 1.0]
         assert shard.dones[0, 0].tolist() == [False, True]
+    finally:
+        worker.close()
+
+
+def test_bootstrap_resets_isolated_slots_with_send_all_recv_all_barrier() -> None:
+    worker = BaseTrajectoryEnvWorker(
+        role="real_env",
+        env_cfg=_counter_env_cfg(),
+        num_slots=3,
+        rollout_epoch=1,
+        max_steps_per_rollout_epoch=2,
+        num_action_chunks=2,
+        task_id=0,
+    )
+    call_log: list[tuple[str, int]] = []
+    worker.init()
+    worker.envs = [_SplitResetSlot(slot_id, call_log) for slot_id in range(3)]
+    worker._batched_env = False
+    try:
+        messages = worker.bootstrap_obs()
+
+        assert call_log == [
+            ("send", 0),
+            ("send", 1),
+            ("send", 2),
+            ("recv", 0),
+            ("recv", 1),
+            ("recv", 2),
+        ]
+        assert [message.slot_id for message in messages] == [0, 1, 2]
+        assert [message.obs["step"] for message in messages] == [0, 0, 0]
     finally:
         worker.close()
 

@@ -44,6 +44,14 @@ def test_cotrain_launcher_accepts_atomic_warm_start_pair(
     assert launch.env["LIBERO_CONFIG_PATH"] == str(
         (Path(launch.env["DVLA_DATA_ROOT"]) / ".libero").resolve()
     )
+    for key in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "BLIS_NUM_THREADS",
+    ):
+        assert launch.env[key] == "1"
 
 
 def test_cotrain_launcher_matches_classifier_head_to_checkpoint(

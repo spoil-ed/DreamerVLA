@@ -1,0 +1,25 @@
+# @package _global_
+# Six-card Chunk-WM SFT recipe tuned for 96 GiB GPUs.
+defaults:
+  - dreamer-wm
+  - _self_
+
+run:
+  name: dreamer-wm-6gpu-96gb
+
+launch:
+  ngpu: 6
+  gpus: 0,1,2,3,4,5
+
+training:
+  warmup_replay_epochs: 30
+
+dataloader:
+  # Measured peak: ~88.5 GiB active / 97.9 GiB available per GPU.
+  batch_size: 42
+
+optim:
+  world_model:
+    # Linear scaling from the published 8x16 global-batch baseline:
+    # 1e-4 * (6 * 42) / (8 * 16) = 1.96875e-4.
+    lr: 1.96875e-4

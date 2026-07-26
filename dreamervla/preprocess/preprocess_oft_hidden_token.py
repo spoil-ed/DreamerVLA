@@ -317,42 +317,43 @@ def _loaded_token_dim(vla: Any) -> int:
     raise ValueError("could not derive token_dim from loaded OpenVLA-OFT policy")
 
 
-def _predict_hidden_token_chunk(
+def _predict_hidden_token_images(
     *,
     components: dict[str, Any],
     args: SimpleNamespace,
-    obs_group: h5py.Group,
-    image_keys: tuple[str, ...],
+    images_by_frame: Sequence[Sequence[np.ndarray]],
     prompt: str,
-    start: int,
-    end: int,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Project a frame chunk to current-frame hidden tokens and language embeddings."""
+    return_torch: bool = False,
+) -> tuple[np.ndarray, np.ndarray] | tuple[torch.Tensor, torch.Tensor]:
+    """Project already decoded frame images to hidden tokens and language embeddings."""
 
     cfg = components["cfg"]
     vla = components["vla"]
-    batch = int(end - start)
+    image_keys = tuple(args.image_keys)
+    batch = len(images_by_frame)
+    if batch < 1:
+        raise ValueError("hidden-token image batch cannot be empty")
     token_count, _ = _hidden_token_sidecar_dims(
         vla,
         image_keys=image_keys,
         token_dim=int(args.token_dim),
     )
     if bool(components.get("fake", False)):
-        for index in range(start, end):
-            for hidx in _history_indices(index, int(args.history)):
-                for key in image_keys:
-                    _image_from_hdf5(
-                        obs_group,
-                        key,
-                        hidx,
-                        rotate_images_180=bool(args.rotate_images_180),
-                    )
-            if bool(args.include_state):
-                _state_from_obs_group(obs_group, index)
-        return (
-            np.zeros((batch, token_count, int(args.token_dim)), dtype=np.float32),
-            np.zeros((batch, int(args.token_dim)), dtype=np.float32),
+        for images in images_by_frame:
+            _prepare_images_for_vla(list(images), cfg)
+        tokens = torch.zeros(
+            (batch, token_count, int(args.token_dim)),
+            dtype=torch.float32,
+            device=components["device"],
         )
+        language = torch.zeros(
+            (batch, int(args.token_dim)),
+            dtype=torch.float32,
+            device=components["device"],
+        )
+        if return_torch:
+            return tokens, language
+        return tokens.cpu().numpy(), language.cpu().numpy()
 
     processor = components["processor"]
     prepare_images_for_vla = components["prepare_images_for_vla"]
@@ -363,18 +364,8 @@ def _predict_hidden_token_chunk(
     primary_pixels: list[torch.Tensor] = []
     extra_pixels_by_view: list[list[torch.Tensor]] = []
 
-    for index in range(start, end):
-        images = [
-            _image_from_hdf5(
-                obs_group,
-                key,
-                hidx,
-                rotate_images_180=bool(args.rotate_images_180),
-            )
-            for hidx in _history_indices(index, int(args.history))
-            for key in image_keys
-        ]
-        images = prepare_images_for_vla(images, cfg)
+    for decoded_images in images_by_frame:
+        images = prepare_images_for_vla(list(decoded_images), cfg)
         primary_inputs = processor(model_prompt, images[0]).to(device, dtype=torch.bfloat16)
         input_ids.append(primary_inputs["input_ids"])
         attention_masks.append(primary_inputs["attention_mask"])
@@ -431,9 +422,44 @@ def _predict_hidden_token_chunk(
             f"got {tuple(current_tokens.shape)}, expected "
             f"[B, {token_count}, {int(args.token_dim)}]"
         )
-    return (
-        current_tokens.float().cpu().numpy(),
-        lang_emb.float().cpu().numpy(),
+    if return_torch:
+        return current_tokens.float(), lang_emb.float()
+    return current_tokens.float().cpu().numpy(), lang_emb.float().cpu().numpy()
+
+
+def _predict_hidden_token_chunk(
+    *,
+    components: dict[str, Any],
+    args: SimpleNamespace,
+    obs_group: h5py.Group,
+    image_keys: tuple[str, ...],
+    prompt: str,
+    start: int,
+    end: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Project an HDF5 frame chunk to hidden tokens and language embeddings."""
+
+    images_by_frame = [
+        [
+            _image_from_hdf5(
+                obs_group,
+                key,
+                history_index,
+                rotate_images_180=bool(args.rotate_images_180),
+            )
+            for history_index in _history_indices(index, int(args.history))
+            for key in image_keys
+        ]
+        for index in range(start, end)
+    ]
+    if bool(args.include_state):
+        for index in range(start, end):
+            _state_from_obs_group(obs_group, index)
+    return _predict_hidden_token_images(
+        components=components,
+        args=args,
+        images_by_frame=images_by_frame,
+        prompt=prompt,
     )
 
 

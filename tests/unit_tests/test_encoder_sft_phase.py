@@ -143,6 +143,23 @@ def test_reencode_real_trajectories_updates_every_transition_and_version() -> No
     assert "action_token_ids_chunk" not in transitions[1]
 
 
+def test_reencode_nonzero_rank_does_not_materialize_output_trajectories(monkeypatch) -> None:
+    import dreamervla.workers.actor.embodied_fsdp_actor as actor_module
+
+    actor = _actor()
+    actor.rank = 1
+
+    def fail_replace(*_args, **_kwargs):
+        raise AssertionError("nonzero rank must not materialize trajectory replacements")
+
+    monkeypatch.setattr(actor_module, "replace", fail_replace)
+
+    encoded = actor.reencode_real_trajectories(_batch())
+
+    assert encoded.global_step == 7
+    assert encoded.trajectories == ()
+
+
 def test_policy_transaction_rolls_back_policy_and_both_optimizers() -> None:
     actor = _actor()
     before = _parameters(actor, "")

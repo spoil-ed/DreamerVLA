@@ -83,6 +83,21 @@ def test_chunk_wm_layer_normalizes_only_raw_vision_tokens() -> None:
     )
 
 
+def test_chunk_wm_classifier_input_preserves_embedded_proprio_channels() -> None:
+    wm = _tiny_chunk_wm(
+        proprio_dim=3,
+        proprio_emb_dim=2,
+        model_dim=8,
+    )
+    hidden = torch.randn(1, wm.token_count, wm.obs_token_dim)
+
+    classifier_input = wm({"mode": "classifier_input", "latent": {"hidden": hidden}})
+
+    assert classifier_input.shape == (1, wm.token_count, 6)
+    assert torch.equal(classifier_input, hidden)
+    assert wm.actor_input({"hidden": hidden}).shape == (1, wm.token_count, 4)
+
+
 def test_chunk_loss_reports_visual_one_step_and_persistence_cosines() -> None:
     """Comparable cosine metrics use one normalized visual transition only."""
 

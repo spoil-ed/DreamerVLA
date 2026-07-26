@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import pytest
 from omegaconf import OmegaConf
 
 from dreamervla.runners import CotrainRunner
+from dreamervla.runners.cotrain_runner import _resident_eval_worker_layout
 from dreamervla.workers.cotrain.messages import RealTrajectory, RealTrajectoryBatch
 
 
@@ -60,6 +62,9 @@ class _Rollout:
 class _EvalEnv:
     def set_global_step(self, _step: int):
         return _Ready([None])
+
+    def begin_evaluation_pass(self):
+        return _Ready([{}])
 
     def configure_progress(self, *_args, **_kwargs):
         return _Ready([None])
@@ -152,9 +157,43 @@ def _cfg():
     )
 
 
+@pytest.mark.parametrize(
+    ("eval_slots", "rollout_workers", "expected"),
+    [
+        (25, 6, (5, 5, 4)),
+        (25, 8, (5, 5, 4)),
+        (24, 6, (6, 4, 4)),
+        (8, 1, (1, 8, 12)),
+    ],
+)
+def test_resident_eval_layout_uses_all_compatible_rollout_ranks(
+    eval_slots: int,
+    rollout_workers: int,
+    expected: tuple[int, int, int],
+) -> None:
+    assert (
+        _resident_eval_worker_layout(
+            eval_slots=eval_slots,
+            eval_episodes=eval_slots * expected[2],
+            rollout_workers=rollout_workers,
+        )
+        == expected
+    )
+
+
+def test_resident_eval_layout_rejects_uneven_episode_budget() -> None:
+    with pytest.raises(ValueError, match="total episodes must be divisible"):
+        _resident_eval_worker_layout(
+            eval_slots=25,
+            eval_episodes=101,
+            rollout_workers=6,
+        )
+
+
 def test_resident_eval_reuses_rollout_group_without_checkpoint_reload() -> None:
     runner = CotrainRunner(_cfg())
     runner.console_progress = lambda *_args, **_kwargs: None
+    runner._paired_eval_outcome_metrics(_eval_batch(0), global_step=0)
     actor = _Actor()
     rollout = _Rollout()
     learner = _Learner()
@@ -188,3 +227,33 @@ def test_resident_eval_reuses_rollout_group_without_checkpoint_reload() -> None:
     assert metrics["eval/classifier_real_accuracy"] == 0.82
     assert actor.reencoded_batch.num_trajectories == 100
     assert learner.evaluated_batch.num_trajectories == 100
+
+
+def test_resident_eval_can_skip_expensive_wm_diagnostics() -> None:
+    cfg = _cfg()
+    cfg.manual_cotrain.eval_protocol.compute_diagnostics = False
+    runner = CotrainRunner(cfg)
+    runner.console_progress = lambda *_args, **_kwargs: None
+    actor = _Actor()
+    learner = _Learner()
+    groups = {
+        "ActorGroup": actor,
+        "RolloutGroup": _Rollout(),
+        "LearnerGroup": learner,
+        "EvaluationEnvGroup": _EvalEnv(),
+        "eval_env_channel": _Channel(),
+        "eval_env_channel_name": "eval-env",
+        "eval_rollout_channel_name": "eval-rollout",
+        "eval_actor_channel_name": "eval-actor",
+    }
+
+    metrics = runner._evaluate_resident_policy(
+        groups,
+        global_step=0,
+        sync_policy=False,
+    )
+
+    assert metrics["eval/success_rate"] == 0.56
+    assert "eval/wm_closed_loop_cosine" not in metrics
+    assert not hasattr(actor, "reencoded_batch")
+    assert learner.evaluated_batch is None

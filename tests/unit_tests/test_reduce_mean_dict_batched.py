@@ -82,6 +82,21 @@ def test_rank_extrema_issue_two_batched_collectives(monkeypatch):
     assert calls == [torch.distributed.ReduceOp.MIN, torch.distributed.ReduceOp.MAX]
 
 
+def test_reduce_min_int_uses_integer_min_collective(monkeypatch):
+    helper = _make_helper(world_size=4)
+    monkeypatch.setattr(helper, "_reduce_device", lambda: torch.device("cpu"))
+    calls = []
+
+    def _fake_all_reduce(tensor, op=None):  # noqa: ANN001
+        calls.append((tensor.dtype, op))
+        tensor.fill_(28)
+
+    monkeypatch.setattr("dreamervla.runtime.distributed.dist.all_reduce", _fake_all_reduce)
+
+    assert helper.reduce_min_int(29) == 28
+    assert calls == [(torch.int64, torch.distributed.ReduceOp.MIN)]
+
+
 def test_issues_exactly_one_all_reduce_for_multi_key_dict(monkeypatch):
     """RED-driver: the old per-key implementation calls all_reduce once PER key.
 

@@ -4,6 +4,40 @@ import numpy as np
 from omegaconf import OmegaConf
 
 from dreamervla.envs.libero.libero_env import LiberoEnv
+from dreamervla.envs.libero.utils import load_libero_task_init_states
+
+
+def test_load_init_states_disables_pytorch_weights_only(monkeypatch, tmp_path):
+    class _Task:
+        problem_folder = "libero_goal"
+        init_states_file = "task.pruned_init"
+
+    class _Suite:
+        @staticmethod
+        def get_task(_task_id):
+            return _Task()
+
+    calls = []
+
+    def _fake_torch_load(path, **kwargs):
+        calls.append((path, kwargs))
+        return ["state"]
+
+    import libero.libero
+    import torch
+
+    monkeypatch.setattr(libero.libero, "get_libero_path", lambda _key: str(tmp_path))
+    monkeypatch.setattr(torch, "load", _fake_torch_load)
+
+    states = load_libero_task_init_states(_Suite(), 0)
+
+    assert states == ["state"]
+    assert calls == [
+        (
+            str(tmp_path / "libero_goal" / "task.pruned_init"),
+            {"weights_only": False},
+        )
+    ]
 
 
 class _FakeSuite:

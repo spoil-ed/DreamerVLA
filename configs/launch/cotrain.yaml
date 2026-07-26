@@ -12,5 +12,13 @@ launch:
   env:
     PYTHONUNBUFFERED: 1
     HYDRA_FULL_ERROR: 1
+    # Ray may launch dozens of LIBERO environment subprocesses.  Keep each
+    # NumPy/SciPy backend single-threaded so their imports cannot exhaust the
+    # host thread limit during concurrent environment initialization.
+    OMP_NUM_THREADS: 1
+    OPENBLAS_NUM_THREADS: 1
+    MKL_NUM_THREADS: 1
+    NUMEXPR_NUM_THREADS: 1
+    BLIS_NUM_THREADS: 1
     NCCL_NVLS_ENABLE: 0
     RAY_DEDUP_LOGS: 0

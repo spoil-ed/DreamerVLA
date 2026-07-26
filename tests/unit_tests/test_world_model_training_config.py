@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 
 def test_hidden_token_pipeline_uses_traj1_proprio_language_wm_profile():
     from pathlib import Path
@@ -171,6 +173,26 @@ def test_user_facing_dino_and_dreamer_configs_align_batch_and_lr(tmp_path, monke
     assert dino.optim.predictor.lr == dreamer.optim.world_model.lr == 1.0e-4
     assert dino.optim.conditioning.lr == dreamer.optim.world_model.lr
     assert dreamer.training.warmup_replay_epochs == 100
+
+
+def test_six_gpu_96gb_dreamer_config_owns_measured_batch_and_scaled_lr(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from hydra import compose, initialize_config_dir
+
+    monkeypatch.setenv("RUN_ROOT", str(tmp_path))
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        cfg = compose(
+            config_name="train",
+            overrides=["experiment=dreamer-wm-6gpu-96gb"],
+        )
+
+    assert cfg.launch.ngpu == 6
+    assert cfg.launch.gpus == "0,1,2,3,4,5"
+    assert cfg.dataloader.batch_size == 42
+    assert cfg.training.warmup_replay_epochs == 30
+    assert cfg.optim.world_model.lr == pytest.approx(1.96875e-4)
 
 
 def test_classifier_and_full_dataset_wm_share_mainline_success_sidecar(tmp_path, monkeypatch):

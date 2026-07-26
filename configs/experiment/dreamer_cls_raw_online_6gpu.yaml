@@ -1,0 +1,72 @@
+# @package _global_
+defaults:
+  - wmpo_token_classifier_openvla_onetraj_libero_goal_h1
+  - override /task: openvla_onetraj_libero_raw_classifier
+  - _self_
+
+run:
+  name: dreamer_cls_raw_online_6gpu
+
+launch:
+  ngpu: 6
+  gpus: 0,1,2,3,4,5
+
+training:
+  num_epochs: 20
+  batch_size: 2
+  val_batch_size: 2
+  num_workers: 0
+  lr: 3.0e-5
+  log_every: 10
+  # Select among checkpoints every five epochs using held-out trajectory
+  # macro-F1. Window evaluation is redundant for this route and would encode
+  # the same raw frames repeatedly through overlapping windows.
+  eval_every: 70
+  window_eval_enabled: false
+  checkpoint_every_epochs: 5
+  final_selection_metric: episode_f1
+  episode_eval_enabled: true
+  episode_threshold_metric: macro_f1
+  episode_eval_min_steps: 0
+  episode_eval_stride: 1
+  episode_eval_batch: 8
+  thresh_min: 0.05
+  thresh_max: 0.999
+  thresh_steps: 191
+
+data:
+  success_dir_raw: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/libero_goal_classifier_raw_200/reward
+  success_dir_hidden: null
+  failure_dir_raw: null
+  failure_dir_hidden: null
+  train_split: train
+  val_split: val
+  val_fraction: 0.2
+  split_seed: ${training.seed}
+  stratify_by_complete: true
+  require_sidecar_contract: false
+  require_reference_complete: false
+  online_encoder:
+    _target_: dreamervla.runtime.online_vla_hidden_encoder.OnlineVLAHiddenEncoder
+    model_path: ${task.openvla_oft.ckpt_path}
+    unnorm_key: ${task.openvla_oft.dataset_statistics_key}
+    token_dim: ${task.openvla_oft.hidden_token.token_dim}
+    token_count: ${task.openvla_oft.hidden_token.token_count}
+    micro_batch_size: 8
+    rotate_images_180: ${task.openvla_oft.expected_rotate_images_180}
+    center_crop: true
+    image_keys: [agentview_rgb]
+    history: ${task.openvla_oft.expected_history}
+    num_images_in_input: ${task.openvla_oft.num_images_in_input}
+    policy_mode: discrete
+
+runner:
+  logger:
+    logger_backends: [tensorboard, wandb]
+
+checkpoint:
+  topk:
+    monitor_key: macro_f1
+    metric_name: episode_macro_f1
+    mode: max
+    k: 3

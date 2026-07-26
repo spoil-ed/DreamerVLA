@@ -66,7 +66,7 @@ from dreamervla.utils.update_timing import GradientUpdateTimer
 
 def _unpack_classifier_batch(
     batch: Any,
-) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any]]:
     if isinstance(batch, (list, tuple)) and len(batch) == 3:
         xs, ys, extra = batch
         return xs, ys, dict(extra or {})
@@ -163,11 +163,14 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         "epoch",
         "best_window_f1",
         "best_episode_f1",
+        "best_episode_selection_score",
         "best_window_ckpt_path",
         "best_episode_ckpt_path",
         "best_window_threshold",
         "best_episode_threshold",
         "classifier_threshold",
+        "classifier_threshold_metric",
+        "classifier_threshold_objective",
     )
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
@@ -216,16 +219,22 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         self.train_loader: DataLoader | None = None
         self.val_loader: DataLoader | None = None
         self.model: LatentSuccessClassifier | None = None
+        self.online_encoder: Any | None = None
         self.optim: torch.optim.Optimizer | None = None
         self.best_window_f1: float = -1.0
         self.best_episode_f1: float = -1.0
+        self.best_episode_selection_score: float = -1.0
         self.best_window_ckpt_path: str | None = None
         self.best_episode_ckpt_path: str | None = None
         self.best_window_threshold = 0.5
         self.best_episode_threshold = 0.5
         self.classifier_threshold = 0.5
+        self.classifier_threshold_metric = "unselected"
+        self.classifier_threshold_objective = "f1"
         self._log_path: pathlib.Path | None = None
         self._pending_setup_logs: list[dict[str, Any]] = []
+        self._last_episode_eval_step = -1
+        self._last_episode_eval_metrics: dict[str, Any] | None = None
 
     def _make_classifier_loader(
         self,
@@ -264,8 +273,22 @@ class SuccessClassifierTrainingRunner(BaseRunner):
     def _prepare_train_dataset_for_distributed(self, dataset: object) -> None:
         if not isinstance(dataset, IterableDataset):
             return
+        if bool(getattr(dataset, "pre_sharded", False)):
+            return
         dataset.distributed_rank = int(self.distributed.rank)
         dataset.distributed_world_size = int(self.distributed.world_size)
+
+    def _steps_per_epoch(self, configured_steps: int) -> int:
+        """Resolve one identical optimizer-step budget for every DDP rank."""
+
+        if int(configured_steps) > 0:
+            return int(configured_steps)
+        assert self.train_loader is not None
+        local_steps = max(1, len(self.train_loader))
+        reduce_min = getattr(self.distributed, "reduce_min_int", None)
+        if callable(reduce_min):
+            return max(1, int(reduce_min(local_steps)))
+        return local_steps
 
     def _classifier_module(self) -> LatentSuccessClassifier:
         assert self.model is not None
@@ -294,8 +317,19 @@ class SuccessClassifierTrainingRunner(BaseRunner):
     def _checkpoint_metadata(self) -> dict[str, Any]:
         return {
             "classifier_threshold": float(getattr(self, "classifier_threshold", 0.5)),
+            "classifier_threshold_metric": str(
+                getattr(self, "classifier_threshold_metric", "unselected")
+            ),
+            "classifier_threshold_objective": str(
+                getattr(self, "classifier_threshold_objective", "f1")
+            ),
             "best_window_f1": float(getattr(self, "best_window_f1", -1.0)),
+            "best_window_threshold": float(getattr(self, "best_window_threshold", 0.5)),
             "best_episode_f1": float(getattr(self, "best_episode_f1", -1.0)),
+            "best_episode_selection_score": float(
+                getattr(self, "best_episode_selection_score", -1.0)
+            ),
+            "best_episode_threshold": float(getattr(self, "best_episode_threshold", 0.5)),
         }
 
     def load_payload(
@@ -356,13 +390,16 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         require_reference_complete = bool(
             OmegaConf.select(d, "require_reference_complete", default=True)
         )
-        validate_hidden_token_sidecar_dir(
-            d.success_dir_hidden,
-            reference_dir=d.success_dir_raw,
-            require_reference_complete=require_reference_complete,
-        )
+        online_encoder_cfg = OmegaConf.select(d, "online_encoder", default=None)
+        uses_online_encoder = online_encoder_cfg is not None
+        if not uses_online_encoder:
+            validate_hidden_token_sidecar_dir(
+                d.success_dir_hidden,
+                reference_dir=d.success_dir_raw,
+                require_reference_complete=require_reference_complete,
+            )
         failure_hidden_dir = OmegaConf.select(d, "failure_dir_hidden")
-        if failure_hidden_dir is not None:
+        if failure_hidden_dir is not None and not uses_online_encoder:
             failure_raw_dir = OmegaConf.select(d, "failure_dir_raw")
             if failure_raw_dir is None:
                 raise ValueError("failure_dir_hidden requires failure_dir_raw")
@@ -378,7 +415,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         chunk_pool = str(OmegaConf.select(d, "chunk_pool") or "last")
         sampling_protocol = str(OmegaConf.select(d, "sampling_protocol") or "lumos")
         balance_batches = bool(OmegaConf.select(d, "balance_batches") or False)
-        if bool(
+        if not uses_online_encoder and bool(
             OmegaConf.select(
                 d,
                 "require_sidecar_contract",
@@ -415,6 +452,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                 default=OmegaConf.select(self.cfg, "training.seed", default=0),
             )
         )
+        stratify_by_complete = bool(OmegaConf.select(d, "stratify_by_complete", default=False))
         train_dataset_cfg = OmegaConf.select(self.cfg, "task.classifier.dataset.train")
         validation_dataset_cfg = OmegaConf.select(self.cfg, "task.classifier.dataset.validation")
         if train_dataset_cfg is None or validation_dataset_cfg is None:
@@ -441,6 +479,9 @@ class SuccessClassifierTrainingRunner(BaseRunner):
             demo_split=str(OmegaConf.select(d, "train_split", default="all")),
             val_fraction=val_fraction,
             split_seed=split_seed,
+            stratify_by_complete=stratify_by_complete,
+            distributed_rank=int(self.rank),
+            distributed_world_size=int(self.world_size),
         )
         self.val_ds = hydra.utils.instantiate(
             validation_dataset_cfg,
@@ -459,7 +500,15 @@ class SuccessClassifierTrainingRunner(BaseRunner):
             demo_split=str(OmegaConf.select(d, "val_split", default="all")),
             val_fraction=val_fraction,
             split_seed=split_seed,
+            stratify_by_complete=stratify_by_complete,
+            distributed_rank=int(self.rank),
+            distributed_world_size=int(self.world_size),
         )
+        if uses_online_encoder:
+            self.online_encoder = hydra.utils.instantiate(
+                online_encoder_cfg,
+                device=self.device,
+            )
         self._prepare_train_dataset_for_distributed(self.train_ds)
         self._pending_setup_logs.append(self._dataset_summary_payload("train", self.train_ds))
         self._pending_setup_logs.append(self._dataset_summary_payload("val", self.val_ds))
@@ -555,6 +604,22 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         )
 
         self._finish_setup_after_optimizer()
+
+    def _prepare_classifier_inputs(
+        self,
+        xs: torch.Tensor,
+        extra: dict[str, Any],
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
+        """Move latent inputs, or encode raw pixels transiently on this rank."""
+        if getattr(self, "online_encoder", None) is None:
+            return xs.to(self.device, non_blocking=True), extra
+        prompts = extra.get("task_description")
+        if not isinstance(prompts, (list, tuple)):
+            raise ValueError("online VLA classifier batches require task_description prompts")
+        tokens, language = self.online_encoder.encode(xs, prompts)
+        prepared = dict(extra)
+        prepared["lang_emb"] = language
+        return tokens, prepared
 
     def _prepare_train_log(self, *, resume: bool) -> None:
         """Prepare classifier JSONL without truncating a resumed run."""
@@ -667,12 +732,21 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                 raise ValueError(
                     "final_selection_metric=episode_f1 requires training.episode_eval_enabled=true"
                 )
+            if (
+                int(self._last_episode_eval_step) == int(self.global_step)
+                and self._last_episode_eval_metrics is not None
+            ):
+                return {"episode": dict(self._last_episode_eval_metrics)}
             metrics = self._evaluate_episode_level()
-            if float(metrics["best_f1"]) > float(self.best_episode_f1):
+            if float(metrics["best_score"]) > float(
+                getattr(self, "best_episode_selection_score", -1.0)
+            ):
+                self.best_episode_selection_score = float(metrics["best_score"])
                 self.best_episode_f1 = float(metrics["best_f1"])
+                self.best_episode_threshold = float(metrics["best_thresh"])
             self._maybe_save_named(
                 "best_episode_"
-                f"f1{float(metrics['best_f1']):.4f}_"
+                f"{metrics['selection_metric']}{float(metrics['best_score']):.4f}_"
                 f"th{float(metrics['best_thresh']):.2f}",
                 extra={"val_episode": metrics},
             )
@@ -694,9 +768,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         )
         log_every = int(OmegaConf.select(tr, "log_every") or 50)
         steps_per_epoch_cfg = int(OmegaConf.select(tr, "steps_per_epoch") or 0)
-        steps_per_epoch = (
-            steps_per_epoch_cfg if steps_per_epoch_cfg > 0 else max(1, len(self.train_loader))
-        )
+        steps_per_epoch = self._steps_per_epoch(steps_per_epoch_cfg)
         label_smoothing = float(OmegaConf.select(tr, "label_smoothing") or 0.0)
         loss_type = str(OmegaConf.select(tr, "loss_type") or "ce")
 
@@ -736,7 +808,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
 
                 with timer.device_stage("h2d"):
                     xs, ys, extra = _unpack_classifier_batch(batch)
-                    xs = xs.to(self.device, non_blocking=True)
+                    xs, extra = self._prepare_classifier_inputs(xs, extra)
                     ys = ys.to(self.device, non_blocking=True)
                     forward_kwargs = _classifier_forward_kwargs(
                         self._classifier_module(), extra, self.device
@@ -818,14 +890,33 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                 maintenance_metrics: dict[str, float] = {}
                 if self.global_step % eval_every == 0:
                     eval_started_at = time.perf_counter()
-                    w_metrics = self._evaluate_window_level()
-                    self._log({"event": "val_window", "step": self.global_step, **w_metrics})
-                    if w_metrics["best_f1"] > self.best_window_f1:
-                        self.best_window_f1 = float(w_metrics["best_f1"])
-                        self.best_window_threshold = float(w_metrics["best_thresh"])
+                    if bool(OmegaConf.select(tr, "window_eval_enabled", default=True)):
+                        w_metrics = self._evaluate_window_level()
+                        self._log({"event": "val_window", "step": self.global_step, **w_metrics})
+                        if w_metrics["best_f1"] > self.best_window_f1:
+                            self.best_window_f1 = float(w_metrics["best_f1"])
+                            self.best_window_threshold = float(w_metrics["best_thresh"])
+                            if (
+                                str(
+                                    OmegaConf.select(
+                                        tr,
+                                        "final_selection_metric",
+                                        default="none",
+                                    )
+                                ).lower()
+                                == "window_f1"
+                            ):
+                                self._maybe_save_named(
+                                    "best_window_"
+                                    f"f1{self.best_window_f1:.4f}_"
+                                    f"th{self.best_window_threshold:.2f}",
+                                    extra={"val_window": w_metrics},
+                                )
 
                     if bool(OmegaConf.select(tr, "episode_eval_enabled") or False):
                         e_metrics = self._evaluate_episode_level()
+                        self._last_episode_eval_step = int(self.global_step)
+                        self._last_episode_eval_metrics = dict(e_metrics)
                         self._log(
                             {
                                 "event": "val_episode",
@@ -833,9 +924,29 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                                 **e_metrics,
                             }
                         )
-                        if e_metrics["best_f1"] > self.best_episode_f1:
+                        if e_metrics["best_score"] > getattr(
+                            self, "best_episode_selection_score", -1.0
+                        ):
+                            self.best_episode_selection_score = float(e_metrics["best_score"])
                             self.best_episode_f1 = float(e_metrics["best_f1"])
                             self.best_episode_threshold = float(e_metrics["best_thresh"])
+                            if (
+                                str(
+                                    OmegaConf.select(
+                                        tr,
+                                        "final_selection_metric",
+                                        default="none",
+                                    )
+                                ).lower()
+                                == "episode_f1"
+                            ):
+                                self._maybe_save_named(
+                                    "best_episode_"
+                                    f"{e_metrics['selection_metric']}"
+                                    f"{self.best_episode_selection_score:.4f}_"
+                                    f"th{self.best_episode_threshold:.2f}",
+                                    extra={"val_episode": e_metrics},
+                                )
                     maintenance_metrics["time/classifier_eval_s"] = (
                         time.perf_counter() - eval_started_at
                     )
@@ -871,6 +982,9 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         summary = {
             "best_window_f1": self.best_window_f1,
             "best_episode_f1": self.best_episode_f1,
+            "best_episode_selection_score": float(
+                getattr(self, "best_episode_selection_score", -1.0)
+            ),
             "best_window_ckpt_path": self.best_window_ckpt_path,
             "best_episode_ckpt_path": self.best_episode_ckpt_path,
             "total_steps": int(self.global_step),
@@ -885,6 +999,29 @@ class SuccessClassifierTrainingRunner(BaseRunner):
 
     # --------------------------- evaluation ----------------------------
 
+    def _gather_binary_predictions(
+        self,
+        probabilities: list[float],
+        labels: list[int],
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Gather rank-sharded validation predictions on every DDP rank."""
+
+        gather = getattr(getattr(self, "distributed", None), "all_gather_objects", None)
+        shards = (
+            gather((list(probabilities), list(labels)))
+            if callable(gather)
+            else [(list(probabilities), list(labels))]
+        )
+        all_probabilities: list[float] = []
+        all_labels: list[int] = []
+        for shard_probabilities, shard_labels in shards:
+            all_probabilities.extend(float(value) for value in shard_probabilities)
+            all_labels.extend(int(value) for value in shard_labels)
+        return (
+            np.asarray(all_probabilities, dtype=np.float32),
+            np.asarray(all_labels, dtype=np.int64),
+        )
+
     @torch.no_grad()
     def _evaluate_window_level(self) -> dict[str, Any]:
         """Softmax + threshold sweep over the positive class.
@@ -898,13 +1035,19 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         ys_l: list[int] = []
         for batch in self.val_loader:
             xs, ys, extra_or_meta = batch
-            xs = xs.to(self.device, non_blocking=True)
-            extra: dict[str, torch.Tensor] = {}
+            extra: dict[str, Any] = {}
             if isinstance(extra_or_meta, list):
                 if extra_or_meta and all("proprio" in meta for meta in extra_or_meta):
                     extra["proprio"] = torch.stack([meta["proprio"] for meta in extra_or_meta])
                 if extra_or_meta and all("lang_emb" in meta for meta in extra_or_meta):
                     extra["lang_emb"] = torch.stack([meta["lang_emb"] for meta in extra_or_meta])
+                if extra_or_meta and all("task_description" in meta for meta in extra_or_meta):
+                    extra["task_description"] = [
+                        str(meta["task_description"]) for meta in extra_or_meta
+                    ]
+            elif isinstance(extra_or_meta, dict):
+                extra = dict(extra_or_meta)
+            xs, extra = self._prepare_classifier_inputs(xs, extra)
             forward_kwargs = _classifier_forward_kwargs(
                 self._classifier_module(), extra, self.device
             )
@@ -912,8 +1055,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
             probs = _success_probabilities_from_logits(logits).detach().cpu().numpy()
             probs_l.extend(probs.tolist())
             ys_l.extend(ys.tolist())
-        probs = np.asarray(probs_l, dtype=np.float32)
-        ys = np.asarray(ys_l, dtype=np.int64)
+        probs, ys = self._gather_binary_predictions(probs_l, ys_l)
 
         tr = self.cfg.training
         thresholds = np.linspace(
@@ -998,6 +1140,19 @@ class SuccessClassifierTrainingRunner(BaseRunner):
             T_env = int(min(finish_step, obs.shape[0]))
             proprio = extra.get("proprio") if isinstance(extra, dict) else None
             lang_emb = extra.get("lang_emb") if isinstance(extra, dict) else None
+            if getattr(self, "online_encoder", None) is not None:
+                prompt = extra.get("task_description") if isinstance(extra, dict) else None
+                if not isinstance(prompt, str):
+                    raise ValueError("raw trajectory evaluation requires task_description")
+                encoded, language = self.online_encoder.encode(
+                    torch.from_numpy(np.ascontiguousarray(obs)).unsqueeze(0),
+                    [prompt],
+                )
+                obs = encoded.squeeze(0).to(dtype=torch.float16).cpu().numpy()
+                lang_emb = language.squeeze(0).float().cpu().numpy()
+                # Raw trajectories() has already selected one frame per chunk.
+                T_env = int(obs.shape[0])
+                K = 1
             if K > 1:
                 T_chunk = T_env // K
                 if T_chunk < 1:
@@ -1050,14 +1205,22 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         # placeholder -1.0 → 0.0 (too-short episodes)
         ep_max_prob = [max(0.0, p) for p in ep_max_prob]
 
-        probs = np.asarray(ep_max_prob, dtype=np.float32)
-        ys = np.asarray(ep_true, dtype=np.int64)
+        probs, ys = self._gather_binary_predictions(ep_max_prob, ep_true)
         thresholds = np.linspace(
             float(OmegaConf.select(tr, "thresh_min") or 0.3),
             float(OmegaConf.select(tr, "thresh_max") or 1.0),
             int(OmegaConf.select(tr, "thresh_steps") or 20),
         )
-        return _sweep_metrics(probs, ys, thresholds, tag="episode")
+        selection_metric = str(
+            OmegaConf.select(tr, "episode_threshold_metric", default="f1")
+        ).lower()
+        return _sweep_metrics(
+            probs,
+            ys,
+            thresholds,
+            tag="episode",
+            selection_metric=selection_metric,
+        )
 
     # --------------------------- io helpers ----------------------------
 
@@ -1102,14 +1265,16 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         """Save latest and a full metric-selected payload from one serialization."""
 
         del name
-        f1 = 0.0
+        score = 0.0
         threshold = 0.5
         selection = "window"
+        selected_metrics: dict[str, Any] = {}
         if isinstance(extra, dict):
             for k in ("val_episode", "val_window"):
                 v = extra.get(k)
                 if isinstance(v, dict):
-                    f1 = float(v.get("best_f1", f1))
+                    selected_metrics = v
+                    score = float(v.get("best_score", v.get("best_f1", score)))
                     threshold = float(v.get("best_thresh", threshold))
                     if k == "val_episode":
                         selection = "episode"
@@ -1124,7 +1289,7 @@ class SuccessClassifierTrainingRunner(BaseRunner):
             path = manager.get_ckpt_path(
                 {
                     "epoch": int(self.epoch),
-                    manager.monitor_key: f1,
+                    manager.monitor_key: score,
                 }
             )
         broadcast = getattr(self.distributed, "broadcast_object", None)
@@ -1133,6 +1298,8 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         if path is None:
             return
         self.classifier_threshold = threshold
+        self.classifier_threshold_metric = f"{selection}_f1"
+        self.classifier_threshold_objective = str(selected_metrics.get("selection_metric", "f1"))
         if selection == "episode":
             self.best_episode_ckpt_path = str(path)
             self.best_episode_threshold = threshold
@@ -1144,7 +1311,15 @@ class SuccessClassifierTrainingRunner(BaseRunner):
             extra_paths=(path,),
         )
         self._latest_checkpoint_step = int(self.global_step)
-        self._log({"event": "ckpt_named", "path": str(path), "f1": f1, "threshold": threshold})
+        self._log(
+            {
+                "event": "ckpt_named",
+                "path": str(path),
+                "score": score,
+                "selection_metric": self.classifier_threshold_objective,
+                "threshold": threshold,
+            }
+        )
 
     def _log(self, payload: dict) -> None:
         if not self.is_main_process:
@@ -1162,6 +1337,9 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                 fh.write(json.dumps(payload) + "\n")
 
     def teardown(self) -> None:
+        if getattr(self, "online_encoder", None) is not None:
+            self.online_encoder.close()
+            self.online_encoder = None
         super().teardown()
         self.distributed.barrier()
         self.distributed.cleanup()
@@ -1169,6 +1347,9 @@ class SuccessClassifierTrainingRunner(BaseRunner):
     def teardown_after_setup_failure(self) -> None:
         """Clean up a partial setup without entering a cross-rank barrier."""
         try:
+            if getattr(self, "online_encoder", None) is not None:
+                self.online_encoder.close()
+                self.online_encoder = None
             BaseRunner.teardown(self)
         finally:
             self.distributed.cleanup()

@@ -10,6 +10,7 @@ artifact_name: OpenVLA_Onetraj_LIBERO_libero_goal
 
 hdf5_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/${task.artifact_name}/no_noops_t_256
 hdf5_reward_dir: ${task.hdf5_dir}_remaining_reward
+lerobot_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/datasets/libero_goal_no_noops_1.0.0_lerobot
 
 openvla_oft:
   ckpt_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1
@@ -36,7 +37,23 @@ openvla_oft:
   chunk_size: 8
   wm_sequence_length: 36
   sft_policy_target: dreamervla.models.embodiment.OpenVLAOFTPolicy
-  sft_dataset_target: dreamervla.dataset.VLASFTHDF5DatasetFactory
+  sft_dataset_target: dreamervla.dataset.VLASFTLeRobotDatasetFactory
+  sft_dataset:
+    _target_: ${task.openvla_oft.sft_dataset_target}
+    root_dir: ${task.lerobot_dir}
+    dataset_statistics_path: ${task.openvla_oft.dataset_statistics_path}
+    dataset_statistics_key: ${task.openvla_oft.dataset_statistics_key}
+    action_horizon: ${task.openvla_oft.action_horizon}
+    image_key: observation.images.image
+    action_key: action
+    state_key: observation.state
+    use_wrist_image: ${task.openvla_oft.use_wrist_image}
+    use_proprio: ${task.openvla_oft.use_proprio}
+    episodes_per_task: 1
+    episode_selection: first
+    episode_selection_seed: 0
+    video_cache_size: 10
+    dataset_name: ${task.openvla_oft.dataset_statistics_key}
   wm_target: dreamervla.models.embodiment.world_model.wm_chunk.ChunkAwareWorldModel
   actor_target: dreamervla.algorithms.actor.LatentToOpenVLAHiddenStateActor
   actor_head_type: oft_discrete_token

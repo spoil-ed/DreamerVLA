@@ -1373,6 +1373,7 @@ class LIBEROVLAEvaluationRunner(
             resolve_libero_eval_protocol,
             save_rollout_video,
         )
+        from dreamervla.envs.libero.utils import load_libero_task_init_states
         from dreamervla.runtime.eval_subproc_env import EvalSubprocEnv, make_libero_env_fn
 
         protocol = resolve_libero_eval_protocol(self.cfg, eval_cfg)
@@ -1431,7 +1432,7 @@ class LIBEROVLAEvaluationRunner(
         run_t0 = time.time()
         for task_index, task_id in enumerate(task_ids):
             task = task_suite.get_task(task_id)
-            initial_states = task_suite.get_task_init_states(task_id)
+            initial_states = load_libero_task_init_states(task_suite, task_id)
             task_bddl_file = os.path.join(
                 get_libero_path("bddl_files"), task.problem_folder, task.bddl_file
             )

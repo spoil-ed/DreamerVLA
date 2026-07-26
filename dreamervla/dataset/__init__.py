@@ -1,5 +1,9 @@
 from .base_dataset import BaseDataset
 from .dino_token_dataset import DinoTokenTrajectoryDataset
+from .lumos_aligned_raw_dataset import (
+    LumosAlignedRawTrainDataset,
+    LumosAlignedRawValDataset,
+)
 from .one_trajectory_pretokenize_dataset import (
     OneTrajectoryPretokenizeActionChunkDataset,
 )
@@ -24,6 +28,11 @@ from .vla_sft_hdf5_dataset import (
     VLASFTHDF5DatasetFactory,
     VLASFTHDF5Spec,
 )
+from .vla_sft_lerobot_dataset import (
+    VLASFTLeRobotDataset,
+    VLASFTLeRobotDatasetFactory,
+    VLASFTLeRobotSpec,
+)
 from .vla_sft_rlds_dataset import (
     VLASFTRLDSDatasetBundle,
     VLASFTRLDSDatasetFactory,
@@ -32,6 +41,8 @@ from .vla_sft_rlds_dataset import (
 __all__ = [
     "BaseDataset",
     "DinoTokenTrajectoryDataset",
+    "LumosAlignedRawTrainDataset",
+    "LumosAlignedRawValDataset",
     "OneTrajectoryPretokenizeActionChunkDataset",
     "PixelHiddenSequenceDataset",
     "PixelSequenceDataset",
@@ -44,6 +55,9 @@ __all__ = [
     "VLASFTHDF5Dataset",
     "VLASFTHDF5DatasetFactory",
     "VLASFTHDF5Spec",
+    "VLASFTLeRobotDataset",
+    "VLASFTLeRobotDatasetFactory",
+    "VLASFTLeRobotSpec",
     "VLASFTRLDSDatasetBundle",
     "VLASFTRLDSDatasetFactory",
 ]

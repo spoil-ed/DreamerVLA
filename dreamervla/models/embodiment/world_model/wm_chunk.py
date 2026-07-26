@@ -638,6 +638,11 @@ class ChunkAwareWorldModel(WorldModel):
         obs_tokens = z[..., : self.obs_token_dim]
         return self._condition_tokens(obs_tokens, lang, act)
 
+    def classifier_input(self, latent: dict[str, torch.Tensor] | torch.Tensor) -> torch.Tensor:
+        """Return visual plus embedded-proprio channels for the classifier."""
+        hidden = self._latent_hidden(latent)
+        return hidden[..., : self.obs_token_dim]
+
     def actor_input(self, latent: dict[str, torch.Tensor] | torch.Tensor) -> torch.Tensor:
         """Return the visual token segment consumed by VLA action actors."""
         hidden = self._latent_hidden(latent)
@@ -1213,7 +1218,7 @@ class ChunkAwareWorldModel(WorldModel):
             latent = self._latent_with_batch_sidecars(batch["latent"], batch)
             return self.predict_next(latent, batch["actions"])
         if isinstance(batch, dict) and batch.get("mode") == "classifier_input":
-            return self.actor_input(batch["latent"])
+            return self.classifier_input(batch["latent"])
         if isinstance(batch, dict) and batch.get("mode") == "chunk_loss":
             return self.chunk_loss(batch)
         return super().forward(batch)

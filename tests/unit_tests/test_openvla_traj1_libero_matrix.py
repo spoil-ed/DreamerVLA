@@ -152,6 +152,7 @@ def test_wmpo_token_h1_classifier_experiment_composes() -> None:
     assert cfg.training.episode_eval_enabled is True
     assert cfg.training.lr == 3.0e-5
     assert cfg.classifier.head_type == "spatial_tf"
+    assert cfg.classifier.spatial_conditioning == "channel_concat"
     assert cfg.classifier._target_ == "dreamervla.algorithms.critic.LatentSuccessClassifier"
     assert (
         cfg.task.classifier.dataset.train._target_

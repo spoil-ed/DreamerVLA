@@ -119,10 +119,12 @@ class LearnerWorker(Worker):
             enabled=self.precision.use_grad_scaler,
         )
         self.replay_client = ReplayClient(self.replay)
+        checkpoint_threshold = self.init_ckpt.get("classifier_threshold")
+        configured_threshold = self.train_cfg.get("classifier_threshold")
         self.classifier_threshold = float(
-            self.train_cfg.get("classifier_threshold")
-            if self.train_cfg.get("classifier_threshold") is not None
-            else self.init_ckpt.get("classifier_threshold", 0.5)
+            checkpoint_threshold
+            if checkpoint_threshold is not None
+            else (configured_threshold if configured_threshold is not None else 0.5)
         )
         if str(self.train_cfg.get("mode", "synthetic_ppo")) == "dreamervla_cotrain":
             self._validate_dreamervla_cotrain_components()

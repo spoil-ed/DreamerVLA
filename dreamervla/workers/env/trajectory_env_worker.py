@@ -186,9 +186,40 @@ class _SpawnedTrajectoryEnvSlot:
         task_id: int | None = None,
         episode_id: int | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
+        self.send_reset(task_id=task_id, episode_id=episode_id)
+        return self.recv_reset()
+
+    def send_reset(
+        self,
+        *,
+        task_id: int | None = None,
+        episode_id: int | None = None,
+    ) -> None:
+        """Dispatch one reset RPC without waiting for the observation."""
+
         selected_task_id = self.task_id if task_id is None else int(task_id)
         self.task_id = int(selected_task_id)
-        return self._rpc("reset", (int(selected_task_id), int(episode_id or 0)))
+        conn = self._conn
+        if conn is None:
+            raise RuntimeError("spawned trajectory env is closed")
+        try:
+            conn.send(("reset", (int(selected_task_id), int(episode_id or 0))))
+        except (BrokenPipeError, EOFError, OSError) as exc:
+            raise RuntimeError("spawned trajectory env exited unexpectedly") from exc
+
+    def recv_reset(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Receive the result of a prior :meth:`send_reset` call."""
+
+        conn = self._conn
+        if conn is None:
+            raise RuntimeError("spawned trajectory env is closed")
+        try:
+            status, value = conn.recv()
+        except (BrokenPipeError, EOFError, OSError) as exc:
+            raise RuntimeError("spawned trajectory env exited unexpectedly") from exc
+        if status == "error":
+            raise RuntimeError(f"spawned trajectory env error: {value}")
+        return value
 
     def step(self, action: Any) -> tuple[Any, ...]:
         self.send_step(action)
@@ -748,6 +779,38 @@ def _concat_worker_slot_shards(shards: list[TrajectoryShard]) -> TrajectoryShard
     )
 
 
+def _select_trajectory_shard_batch(
+    shard: TrajectoryShard,
+    indices: torch.Tensor,
+) -> TrajectoryShard:
+    """Select trajectory columns from a step-major shard."""
+
+    selected = indices.detach().cpu().long().reshape(-1)
+    batch_size = int(as_tensor(shard.actions).shape[1])
+    if int(selected.numel()) <= 0:
+        raise ValueError("trajectory shard selection must not be empty")
+    if int(selected.min().item()) < 0 or int(selected.max().item()) >= batch_size:
+        raise IndexError("trajectory shard selection index is out of range")
+
+    def take(value: Any) -> torch.Tensor:
+        return _cpu_tensor(value).index_select(1, selected)
+
+    return TrajectoryShard(
+        env_rank=int(shard.env_rank),
+        slot_id=int(shard.slot_id),
+        task_id=int(shard.task_id),
+        episode_ids=[int(shard.episode_ids[index]) for index in selected.tolist()],
+        actions=take(shard.actions),
+        rewards=take(shard.rewards).float(),
+        dones=take(shard.dones).bool(),
+        prev_logprobs=take(shard.prev_logprobs).float(),
+        prev_values=(None if shard.prev_values is None else take(shard.prev_values).float()),
+        forward_inputs={key: take(value) for key, value in shard.forward_inputs.items()},
+        versions={key: take(value).long() for key, value in shard.versions.items()},
+        loss_mask=(None if shard.loss_mask is None else take(shard.loss_mask).float()),
+    )
+
+
 def _transition_value(value: Any) -> Any:
     tensor = as_tensor(value).detach().cpu()
     if tensor.dtype == torch.bfloat16:
@@ -1080,6 +1143,7 @@ class BaseTrajectoryEnvWorker(Worker):
         self._last_apply_classifier_total_trajectories = 0
         self._last_apply_env_crashes = 0
         self._last_apply_env_respawns = 0
+        self._actor_group_signal_counts: dict[str, int] = {}
         self._pending_step: dict[int, tuple[Any, ...]] = {}
         self._progress_path: Path | None = None
         self._progress_min_interval_s = 5.0
@@ -1093,6 +1157,25 @@ class BaseTrajectoryEnvWorker(Worker):
         """Set runner-visible progress metadata for observations and replay."""
 
         self.global_step = int(global_step)
+
+    def begin_evaluation_pass(self) -> dict[str, float]:
+        """Reset resident evaluation slots to the canonical paired protocol."""
+
+        if self.role != "eval_env":
+            raise RuntimeError("begin_evaluation_pass is only defined for eval_env workers")
+        self._episode_ids_by_slot = [0 for _ in range(self.num_slots)]
+        self._task_ids_by_slot = [
+            self._scheduled_task_id(slot_id, episode_id=0) for slot_id in range(self.num_slots)
+        ]
+        self._obs_by_slot = [None for _ in range(self.num_slots)]
+        self._episodes_by_slot = [[] for _ in range(self.num_slots)]
+        self._actor_shards_by_slot = [[] for _ in range(self.num_slots)]
+        self._completed_real_trajectories.clear()
+        self._prefetched_bootstrap = None
+        return {
+            "env/eval_env/paired_protocol": 1.0,
+            "env/eval_env/episode_id_start": 0.0,
+        }
 
     def begin_step_local_real_collection(
         self,
@@ -1326,10 +1409,45 @@ class BaseTrajectoryEnvWorker(Worker):
                     messages.append(self._observation_msg(slot_id, dict(obs)))
                 return messages
 
+        if self._can_reset_slots_parallel():
+            return self._reset_slots_parallel()
+
         messages: list[ObservationMsg] = []
         for slot_id in range(self.num_slots):
             obs = self._reset_slot(slot_id)
             messages.append(self._observation_msg(slot_id, obs))
+        return messages
+
+    def _can_reset_slots_parallel(self) -> bool:
+        """Return whether every isolated slot supports split reset RPCs."""
+
+        return (
+            not self._batched_env
+            and len(self.envs) > 1
+            and all(
+                callable(getattr(env, "send_reset", None))
+                and callable(getattr(env, "recv_reset", None))
+                for env in self.envs
+            )
+        )
+
+    def _reset_slots_parallel(self) -> list[ObservationMsg]:
+        """Reset isolated slots concurrently with a send-all/recv-all barrier."""
+
+        for slot_id, env in enumerate(self.envs):
+            if self.role in {"real_env", "eval_env"}:
+                self._task_ids_by_slot[slot_id] = self._scheduled_task_id(slot_id)
+            env.send_reset(
+                task_id=int(self._task_ids_by_slot[slot_id]),
+                episode_id=int(self._episode_ids_by_slot[slot_id]),
+            )
+
+        messages: list[ObservationMsg] = []
+        for slot_id, env in enumerate(self.envs):
+            obs, _ = env.recv_reset()
+            self._obs_by_slot[slot_id] = dict(obs)
+            self._episodes_by_slot[slot_id] = []
+            messages.append(self._observation_msg(slot_id, dict(obs)))
         return messages
 
     def prefetch_bootstrap(self) -> dict[str, float]:
@@ -1818,6 +1936,16 @@ class BaseTrajectoryEnvWorker(Worker):
         rollout_channel = Channel.connect(rollout_channel_name)
         actor_channel = Channel.connect(actor_channel_name)
         metrics = self._new_interact_metrics()
+        self._actor_group_signal_counts = {
+            "total_groups": 0,
+            "any_success_groups": 0,
+            "mixed_signal_groups": 0,
+            "all_success_groups": 0,
+            "all_failure_groups": 0,
+            "accepted_groups": 0,
+            "success_trajectories": 0,
+            "failure_trajectories": 0,
+        }
         interact_start = time.perf_counter()
         progress_total = self._interact_progress_total()
         self._write_interact_progress(
@@ -2029,6 +2157,9 @@ class BaseTrajectoryEnvWorker(Worker):
         }
 
     def _finalize_interact_metrics(self, metrics: dict[str, float]) -> dict[str, float]:
+        if self.role == "wm_env":
+            for name, value in self._actor_group_signal_counts.items():
+                metrics[f"env/actor_group_{name}"] = float(value)
         _derive_wm_classifier_success_rates(metrics, "env/")
         prefix = f"env/{self.role}/"
         for key, value in list(metrics.items()):
@@ -2123,7 +2254,71 @@ class BaseTrajectoryEnvWorker(Worker):
                     materialized.append(self._build_trajectory_shard_from_chunks([item]))
             shard = _concat_uniform_slot_shards(materialized)
         self._actor_shards_by_slot[slot_id] = []
-        return shard
+        return self._filter_actor_success_shard(shard)
+
+    def _filter_actor_success_shard(
+        self,
+        shard: TrajectoryShard,
+    ) -> TrajectoryShard | None:
+        emit_success_only = bool(self.env_cfg.get("emit_actor_success_only", False))
+        emit_success_group = bool(self.env_cfg.get("emit_actor_group_with_success_only", False))
+        if emit_success_only and emit_success_group:
+            raise ValueError(
+                "emit_actor_success_only and emit_actor_group_with_success_only "
+                "are mutually exclusive"
+            )
+        if self.role != "wm_env" or not (emit_success_only or emit_success_group):
+            return shard
+        threshold = self._pending_classifier_threshold
+        if threshold is None:
+            raise RuntimeError(
+                "success-filtered actor emission requires a loaded classifier threshold"
+            )
+        rewards = as_tensor(shard.rewards).detach().cpu().float()
+        if rewards.ndim < 2:
+            raise ValueError("trajectory rewards must have [time, batch, ...] shape")
+        success_mask = (
+            rewards.reshape(
+                int(rewards.shape[0]),
+                int(rewards.shape[1]),
+                -1,
+            )
+            .ge(float(threshold))
+            .any(dim=(0, 2))
+        )
+        indices = torch.nonzero(success_mask, as_tuple=False).reshape(-1)
+        if emit_success_group:
+            success_count = int(indices.numel())
+            trajectory_count = int(success_mask.numel())
+            failure_count = trajectory_count - success_count
+            mixed_signal = success_count > 0 and failure_count > 0
+            counts = self._actor_group_signal_counts
+            counts["total_groups"] = int(counts.get("total_groups", 0)) + 1
+            counts["success_trajectories"] = (
+                int(counts.get("success_trajectories", 0)) + success_count
+            )
+            counts["failure_trajectories"] = (
+                int(counts.get("failure_trajectories", 0)) + failure_count
+            )
+            if success_count <= 0:
+                counts["all_failure_groups"] = int(counts.get("all_failure_groups", 0)) + 1
+            else:
+                counts["any_success_groups"] = int(counts.get("any_success_groups", 0)) + 1
+                if failure_count <= 0:
+                    counts["all_success_groups"] = int(counts.get("all_success_groups", 0)) + 1
+                else:
+                    counts["mixed_signal_groups"] = int(counts.get("mixed_signal_groups", 0)) + 1
+            require_mixed = bool(self.env_cfg.get("require_actor_group_mixed_success", False))
+            accepted = mixed_signal if require_mixed else success_count > 0
+            if accepted:
+                counts["accepted_groups"] = int(counts.get("accepted_groups", 0)) + 1
+                return shard
+            return None
+        keep = max(1, int(self.env_cfg.get("actor_success_quota_per_task", 1)))
+        indices = indices[:keep]
+        if int(indices.numel()) == 0:
+            return None
+        return _select_trajectory_shard_batch(shard, indices)
 
     def _flush_buffered_actor_shard(
         self,
@@ -2164,6 +2359,9 @@ class BaseTrajectoryEnvWorker(Worker):
             else:
                 for slot_id in chunk_slot_ids:
                     self._actor_shards_by_slot[slot_id] = []
+                shard = self._filter_actor_success_shard(shard)
+                if shard is None:
+                    return 0.0, 0
                 put_s = self._queue_actor_shard(actor_channel, shard, pending)
                 return put_s, 1
 
@@ -2736,6 +2934,30 @@ class BaseTrajectoryEnvWorker(Worker):
         self._bootstrap_wm_initial_latents_from_replay(force=True)
         return {"env/wm_env/initial_conditions_refreshed": 1.0}
 
+    def refresh_wm_initial_conditions_for_tasks(
+        self,
+        task_ids: Sequence[int],
+    ) -> dict[str, float]:
+        """Resample WM initial conditions only from the requested task IDs."""
+
+        if self.role != "wm_env":
+            raise RuntimeError(
+                "task-scoped initial-condition refresh is only defined for WMEnvWorker"
+            )
+        selected = tuple(int(task_id) for task_id in task_ids)
+        if not selected:
+            raise ValueError("task-scoped WM initial-condition refresh requires task_ids")
+        self._ensure_initialized()
+        self._prefetched_bootstrap = None
+        self._bootstrap_wm_initial_latents_from_replay(
+            force=True,
+            task_ids=selected,
+        )
+        return {
+            "env/wm_env/initial_conditions_refreshed": 1.0,
+            "env/wm_env/initial_condition_task_id": float(selected[0]),
+        }
+
     def close(self) -> None:
         """Close all env slots."""
 
@@ -3088,6 +3310,7 @@ class BaseTrajectoryEnvWorker(Worker):
         self,
         *,
         force: bool = False,
+        task_ids: Sequence[int] | None = None,
     ) -> None:
         if self.role != "wm_env" or self.replay is None:
             return
@@ -3113,10 +3336,14 @@ class BaseTrajectoryEnvWorker(Worker):
             if any(int(getattr(env, "proprio_dim", 0) or 0) > 0 for env in self.envs):
                 keys.append("proprio")
             raw_task_ids = self.env_cfg.get("bootstrap_task_ids")
-            task_ids = (
-                tuple(int(task_id) for task_id in raw_task_ids)
-                if raw_task_ids is not None
-                else None
+            selected_task_ids = (
+                tuple(int(task_id) for task_id in task_ids)
+                if task_ids is not None
+                else (
+                    tuple(int(task_id) for task_id in raw_task_ids)
+                    if raw_task_ids is not None
+                    else None
+                )
             )
             try:
                 selector = str(self.env_cfg.get("initial_condition_selector", "episode_start"))
@@ -3126,7 +3353,7 @@ class BaseTrajectoryEnvWorker(Worker):
                 conditions = _call_maybe_remote(
                     aligned_sampler,
                     sampled_condition_count,
-                    task_ids=task_ids,
+                    task_ids=selected_task_ids,
                     keys=tuple(keys),
                     **selector_kwargs,
                 )

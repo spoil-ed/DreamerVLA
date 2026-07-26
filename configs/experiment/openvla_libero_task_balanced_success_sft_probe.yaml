@@ -1,0 +1,42 @@
+# @package _global_
+# Causal signal probe with one classifier-accepted imagined trajectory from
+# every LIBERO Goal task. The ten retained trajectories are the entire SFT set.
+defaults:
+  - openvla_libero_success_sft_probe
+  - _self_
+
+run:
+  name: openvla_libero_task_balanced_success_sft_probe
+
+manual_cotrain:
+  # Seed replay with one current-policy episode from every task so each WM
+  # imagination lease has a task-matched initial state and language embedding.
+  real_env_workers: 10
+  real_envs_per_worker: 1
+  real_rollout_epoch: 1
+  real_rollout_target_trajectories: 10
+
+  # Run one 16-candidate lease at a time for a task. Failed tasks return to the
+  # queue; successful tasks stop permanently after their first retained shard.
+  wm_success_quota_task_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  wm_success_quota_per_task: 1
+  wm_rollout_target_trajectories: 4800
+  env_rollout_timeout_s: 14400
+  actor_channel_timeout_s: 14400
+
+ray_data:
+  task_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+env:
+  wm:
+    cfg:
+      emit_actor_success_only: true
+      actor_success_quota_per_task: ${manual_cotrain.wm_success_quota_per_task}
+
+actor:
+  train_cfg:
+    # All ranks see the same ten-trajectory dataset. This is intentional DDP
+    # replication, not ten trajectories counted once per Actor rank.
+    success_sft:
+      epochs: 1
+      replicated_trajectory_batch: true

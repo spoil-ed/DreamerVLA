@@ -34,6 +34,8 @@ class RolloutDumpWorker(Worker):
         start_shard_index: int = 0,
         manifest_root: str | None = None,
         keep_last_global_steps: int = 0,
+        persist_hidden_sidecar: bool = True,
+        stored_image_keys: tuple[str, ...] = ("agentview_rgb", "eye_in_hand_rgb"),
     ) -> None:
         super().__init__()
         self.reward_dir = str(reward_dir)
@@ -50,6 +52,8 @@ class RolloutDumpWorker(Worker):
             else str(Path(self.reward_dir).expanduser().parent)
         )
         self.keep_last_global_steps = int(keep_last_global_steps)
+        self.persist_hidden_sidecar = bool(persist_hidden_sidecar)
+        self.stored_image_keys = tuple(stored_image_keys)
         # Resume-aware: start rotation at the next free index so a relaunch appends new
         # shards instead of overwriting ``ray_shard_000``.
         self._shard_idx = int(start_shard_index)
@@ -62,24 +66,18 @@ class RolloutDumpWorker(Worker):
 
     def init(self) -> None:
         first = self.shard_name if self.demos_per_shard <= 0 else self._shard_name(self._shard_idx)
-        self.writer = RolloutDumpWriter(Path(self.reward_dir), Path(self.hidden_dir), first)
+        self.writer = self._new_writer(first)
 
     def add_episode(self, episode: list[dict[str, Any]]) -> dict[str, Any] | None:
         if not episode:
             return None
         if self.writer is None:
-            self.writer = RolloutDumpWriter(
-                Path(self.reward_dir),
-                Path(self.hidden_dir),
-                self._shard_name(self._shard_idx),
-            )
+            self.writer = self._new_writer(self._shard_name(self._shard_idx))
         elif self.demos_per_shard > 0 and self._shard_demos >= self.demos_per_shard:
             self._writer().close()
             self._shard_idx += 1
             self._shard_demos = 0
-            self.writer = RolloutDumpWriter(
-                Path(self.reward_dir), Path(self.hidden_dir), self._shard_name(self._shard_idx)
-            )
+            self.writer = self._new_writer(self._shard_name(self._shard_idx))
         first = episode[0]
         index = self._shard_demos if self.demos_per_shard > 0 else int(self.num_episodes)
         self._writer().write_demo(
@@ -150,6 +148,20 @@ class RolloutDumpWorker(Worker):
             raise RuntimeError("RolloutDumpWorker.init() has not been called")
         return self.writer
 
+    def _new_writer(self, shard_name: str) -> RolloutDumpWriter:
+        if self.persist_hidden_sidecar and self.stored_image_keys == (
+            "agentview_rgb",
+            "eye_in_hand_rgb",
+        ):
+            return RolloutDumpWriter(Path(self.reward_dir), Path(self.hidden_dir), shard_name)
+        return RolloutDumpWriter(
+            Path(self.reward_dir),
+            Path(self.hidden_dir) if self.persist_hidden_sidecar else None,
+            shard_name,
+            persist_hidden_sidecar=self.persist_hidden_sidecar,
+            stored_image_keys=self.stored_image_keys,
+        )
+
     def _rename_completed_episode_shard(
         self,
         shard_name: str,
@@ -163,10 +175,9 @@ class RolloutDumpWorker(Worker):
         # collide on re-collection: the fresh episode replaces the stale one.
         metadata = dict(episode[-1].get("episode_metadata") or {})
         allow_overwrite = _metadata_int(metadata, "global_step") is None
-        pairs = [
-            (Path(self.reward_dir) / shard_name, Path(self.reward_dir) / target_name),
-            (Path(self.hidden_dir) / shard_name, Path(self.hidden_dir) / target_name),
-        ]
+        pairs = [(Path(self.reward_dir) / shard_name, Path(self.reward_dir) / target_name)]
+        if self.persist_hidden_sidecar:
+            pairs.append((Path(self.hidden_dir) / shard_name, Path(self.hidden_dir) / target_name))
         existing = [(src, dst) for src, dst in pairs if src.exists()]
         if not existing:
             return shard_name

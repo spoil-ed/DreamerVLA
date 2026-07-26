@@ -70,6 +70,7 @@ def _partition_demo_pairs(
     split: str,
     val_fraction: float,
     split_seed: int,
+    stratify_by_complete: bool = False,
 ) -> list[tuple[Path, Path, str]]:
     """Return a stable trajectory-level train/validation partition."""
 
@@ -93,9 +94,54 @@ def _partition_demo_pairs(
         digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
         return digest, raw.name, demo_key
 
-    ranked = sorted(values, key=rank)
-    num_val = max(1, min(len(ranked) - 1, int(round(len(ranked) * fraction))))
-    return ranked[num_val:] if split == "train" else ranked[:num_val]
+    def partition(items: list[tuple[Path, Path, str]]) -> tuple[list, list]:
+        ranked = sorted(items, key=rank)
+        num_val = max(1, min(len(ranked) - 1, int(round(len(ranked) * fraction))))
+        return ranked[num_val:], ranked[:num_val]
+
+    if not stratify_by_complete:
+        train, val = partition(values)
+        return train if split == "train" else val
+
+    by_label: dict[bool, list[tuple[Path, Path, str]]] = {False: [], True: []}
+    for pair in values:
+        raw, _hidden, demo_key = pair
+        with h5py.File(str(raw), "r") as handle:
+            demo = handle[demo_key]
+            reward_key = "sparse_rewards" if "sparse_rewards" in demo else "rewards"
+            complete = bool(np.asarray(demo[reward_key][...]).sum() > 0)
+        by_label[complete].append(pair)
+    populated = [items for items in by_label.values() if items]
+    if any(len(items) < 2 for items in populated):
+        counts = {int(label): len(items) for label, items in by_label.items()}
+        raise ValueError(
+            "stratify_by_complete requires at least two trajectories for every "
+            "class present in a source directory, "
+            f"got {counts}"
+        )
+    train, val = [], []
+    for items in populated:
+        class_train, class_val = partition(items)
+        train.extend(class_train)
+        val.extend(class_val)
+    return sorted(train, key=rank) if split == "train" else sorted(val, key=rank)
+
+
+def _rank_shard_demo_pairs(
+    pairs: Sequence[tuple[Path, Path, str]],
+    *,
+    distributed_rank: int,
+    distributed_world_size: int,
+) -> list[tuple[Path, Path, str]]:
+    """Shard trajectory files before loading their large hidden-token arrays."""
+
+    rank = int(distributed_rank)
+    world_size = int(distributed_world_size)
+    if world_size < 1:
+        raise ValueError(f"distributed_world_size must be >= 1, got {world_size}")
+    if rank < 0 or rank >= world_size:
+        raise ValueError(f"distributed_rank must be within [0, {world_size}), got {rank}")
+    return list(pairs)[rank::world_size]
 
 
 def _read_proprio(
@@ -269,6 +315,9 @@ class LumosAlignedLatentTrainDataset(IterableDataset):
         demo_split: str = "all",
         val_fraction: float = 0.2,
         split_seed: int = 0,
+        stratify_by_complete: bool = False,
+        distributed_rank: int = 0,
+        distributed_world_size: int = 1,
     ) -> None:
         super().__init__()
         if window < 1:
@@ -302,12 +351,21 @@ class LumosAlignedLatentTrainDataset(IterableDataset):
         self.demo_split = str(demo_split).lower()
         self.val_fraction = float(val_fraction)
         self.split_seed = int(split_seed)
+        self.distributed_rank = int(distributed_rank)
+        self.distributed_world_size = int(distributed_world_size)
+        self.pre_sharded = self.distributed_world_size > 1
 
         succ_pairs = _partition_demo_pairs(
             _find_demo_pairs(success_dir_raw, success_dir_hidden),
             split=self.demo_split,
             val_fraction=self.val_fraction,
             split_seed=self.split_seed,
+            stratify_by_complete=stratify_by_complete,
+        )
+        succ_pairs = _rank_shard_demo_pairs(
+            succ_pairs,
+            distributed_rank=self.distributed_rank,
+            distributed_world_size=self.distributed_world_size,
         )
         fail_pairs: list[tuple[Path, Path, str]] = []
         if failure_dir_raw is not None and failure_dir_hidden is not None:
@@ -316,6 +374,12 @@ class LumosAlignedLatentTrainDataset(IterableDataset):
                 split=self.demo_split,
                 val_fraction=self.val_fraction,
                 split_seed=self.split_seed,
+                stratify_by_complete=stratify_by_complete,
+            )
+            fail_pairs = _rank_shard_demo_pairs(
+                fail_pairs,
+                distributed_rank=self.distributed_rank,
+                distributed_world_size=self.distributed_world_size,
             )
 
         if verbose:
@@ -480,10 +544,10 @@ class LumosAlignedLatentTrainDataset(IterableDataset):
         self,
     ) -> Iterator[tuple[torch.Tensor, int] | tuple[torch.Tensor, int, dict[str, torch.Tensor]]]:
         info = get_worker_info()
-        distributed_rank = int(getattr(self, "distributed_rank", 0) or 0)
-        distributed_world_size = max(
-            1,
-            int(getattr(self, "distributed_world_size", 1) or 1),
+        pre_sharded = bool(getattr(self, "pre_sharded", False))
+        distributed_rank = 0 if pre_sharded else int(getattr(self, "distributed_rank", 0) or 0)
+        distributed_world_size = (
+            1 if pre_sharded else max(1, int(getattr(self, "distributed_world_size", 1) or 1))
         )
         if distributed_world_size == 1:
             if info is None:
@@ -623,6 +687,9 @@ class LumosAlignedLatentValDataset(Dataset):
         demo_split: str = "all",
         val_fraction: float = 0.2,
         split_seed: int = 0,
+        stratify_by_complete: bool = False,
+        distributed_rank: int = 0,
+        distributed_world_size: int = 1,
     ) -> None:
         super().__init__()
         if chunk_subsample < 1:
@@ -646,12 +713,21 @@ class LumosAlignedLatentValDataset(Dataset):
         self.demo_split = str(demo_split).lower()
         self.val_fraction = float(val_fraction)
         self.split_seed = int(split_seed)
+        self.distributed_rank = int(distributed_rank)
+        self.distributed_world_size = int(distributed_world_size)
+        self.pre_sharded = self.distributed_world_size > 1
 
         succ_pairs = _partition_demo_pairs(
             _find_demo_pairs(success_dir_raw, success_dir_hidden),
             split=self.demo_split,
             val_fraction=self.val_fraction,
             split_seed=self.split_seed,
+            stratify_by_complete=stratify_by_complete,
+        )
+        succ_pairs = _rank_shard_demo_pairs(
+            succ_pairs,
+            distributed_rank=self.distributed_rank,
+            distributed_world_size=self.distributed_world_size,
         )
         fail_pairs: list[tuple[Path, Path, str]] = []
         if failure_dir_raw is not None and failure_dir_hidden is not None:
@@ -660,6 +736,12 @@ class LumosAlignedLatentValDataset(Dataset):
                 split=self.demo_split,
                 val_fraction=self.val_fraction,
                 split_seed=self.split_seed,
+                stratify_by_complete=stratify_by_complete,
+            )
+            fail_pairs = _rank_shard_demo_pairs(
+                fail_pairs,
+                distributed_rank=self.distributed_rank,
+                distributed_world_size=self.distributed_world_size,
             )
         if verbose:
             print(

@@ -20,17 +20,14 @@ def build_dump_step(
     done: bool,
 ) -> dict[str, Any]:
     """Build one ``RolloutDumpWriter.write_demo`` step from Ray env output."""
-    step = build_step_record(
-        full_record,
-        np.asarray(obs_embedding, dtype=np.float16),
-        action,
-        lang_emb=lang_emb,
-    )
+    hidden = np.asarray(obs_embedding, dtype=np.float16) if obs_embedding is not None else None
+    step = build_step_record(full_record, hidden, action, lang_emb=lang_emb)
     step["actions"] = np.asarray(action, dtype=np.float64).reshape(-1)[:7]
     step["rewards"] = np.float32(reward)
     step["sparse_rewards"] = np.uint8(int(sparse_reward))
     step["dones"] = np.uint8(1 if done else 0)
-    step["obs_embedding"] = np.asarray(obs_embedding, dtype=np.float16)
+    if hidden is not None:
+        step["obs_embedding"] = hidden
     step["proprio"] = proprio_from_record(full_record)
     step["success"] = bool(done and sparse_reward)
     step["wm_action"] = np.asarray(action, dtype=np.float32).reshape(-1)

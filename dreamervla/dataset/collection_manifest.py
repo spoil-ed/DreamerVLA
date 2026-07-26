@@ -28,7 +28,6 @@ _REWARD_DATASETS = (
 )
 _OBS_DATASETS = (
     "agentview_rgb",
-    "eye_in_hand_rgb",
     "ee_pos",
     "ee_ori",
     "ee_states",
@@ -104,7 +103,7 @@ def count_episodes_per_task(
 
 
 def complete_episode_ids_per_task(
-    reward_dir: str | Path, hidden_dir: str | Path
+    reward_dir: str | Path, hidden_dir: str | Path | None
 ) -> dict[int, set[int]]:
     """Complete ``episode_id`` values bucketed by ``task_id``.
 
@@ -117,31 +116,35 @@ def complete_episode_ids_per_task(
     import h5py
 
     reward = Path(reward_dir).expanduser()
-    hidden = Path(hidden_dir).expanduser()
+    hidden = Path(hidden_dir).expanduser() if hidden_dir is not None else None
     complete: dict[int, set[int]] = {}
-    if not reward.is_dir() or not hidden.is_dir():
+    if not reward.is_dir() or (hidden is not None and not hidden.is_dir()):
         return complete
     fallback_index: dict[int, int] = {}
     for shard in sorted(reward.glob("*.hdf5")):
-        hidden_shard = hidden / shard.name
-        if not hidden_shard.is_file():
+        hidden_shard = hidden / shard.name if hidden is not None else None
+        if hidden_shard is not None and not hidden_shard.is_file():
             continue
         try:
-            with h5py.File(str(shard), "r") as rf, h5py.File(str(hidden_shard), "r") as hf:
+            with h5py.File(str(shard), "r") as rf:
                 reward_data = rf.get("data")
-                hidden_data = hf.get("data")
-                if reward_data is None or hidden_data is None:
+                if reward_data is None:
                     continue
                 for demo_key in sorted(reward_data.keys()):
                     reward_demo = reward_data[demo_key]
-                    hidden_demo = hidden_data.get(demo_key)
-                    if hidden_demo is None:
-                        continue
                     length = _complete_reward_length(reward_demo)
                     if length is None:
                         continue
-                    if not _complete_hidden_demo(hidden_demo, length):
-                        continue
+                    if hidden_shard is not None:
+                        with h5py.File(str(hidden_shard), "r") as hf:
+                            hidden_data = hf.get("data")
+                            hidden_demo = (
+                                hidden_data.get(demo_key) if hidden_data is not None else None
+                            )
+                            if hidden_demo is None or not _complete_hidden_demo(
+                                hidden_demo, length
+                            ):
+                                continue
                     task_id = int(reward_demo.attrs.get("task_id", -1))
                     if task_id < 0:
                         continue
@@ -211,7 +214,7 @@ def _complete_hidden_demo(demo: Any, length: int) -> bool:
     return int(demo["obs_embedding"].shape[0]) >= int(length)
 
 
-def quarantine_corrupt_shards(reward_dir: str | Path, hidden_dir: str | Path) -> list[str]:
+def quarantine_corrupt_shards(reward_dir: str | Path, hidden_dir: str | Path | None) -> list[str]:
     """Phase-1 integrity check: move truncated/unreadable shards out of the way.
 
     A crashed collect can leave a half-written shard (e.g. a 96-byte truncated HDF5).
@@ -225,7 +228,7 @@ def quarantine_corrupt_shards(reward_dir: str | Path, hidden_dir: str | Path) ->
     import h5py
 
     reward = Path(reward_dir).expanduser()
-    hidden = Path(hidden_dir).expanduser()
+    hidden = Path(hidden_dir).expanduser() if hidden_dir is not None else None
     quarantined: list[str] = []
     if not reward.is_dir():
         return quarantined
@@ -237,6 +240,8 @@ def quarantine_corrupt_shards(reward_dir: str | Path, hidden_dir: str | Path) ->
         except OSError as exc:
             reason = exc
         for directory in (reward, hidden):
+            if directory is None:
+                continue
             src = directory / shard.name
             if src.exists():
                 dest_dir = directory / ".corrupt"

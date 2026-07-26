@@ -1,0 +1,25 @@
+# @package _global_
+# Collect task-balanced policy trajectories without persisting VLA embeddings.
+defaults:
+  - collect_rollouts
+  - _self_
+
+run:
+  name: collect_classifier_raw_200
+
+launch:
+  gpus: 0,1,2,3,4,5
+
+collect:
+  episodes_per_task: 20
+  episode_horizon: 300
+  num_inference_workers: 6
+  gpu_id: 0
+  persist_hidden_sidecar: false
+  stored_image_keys:
+    - agentview_rgb
+  hdf5_reward_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/libero_goal_classifier_raw_200/reward
+  hidden_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/libero_goal_classifier_raw_200/hidden
+
+env:
+  num_workers: 25

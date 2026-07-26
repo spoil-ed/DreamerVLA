@@ -689,6 +689,9 @@ def test_docker_publish_workflow_uses_secrets_and_release_tags() -> None:
     assert "spoil/dreamervla" not in text
     assert "cu124-h100-v1" in text
     assert "sha-" in text
+    assert "github.ref_type == 'tag'" in text
+    assert "github.ref_name" in text
+    assert "steps.image.outputs.tags" in text
     assert "push:" in text
     assert "cache-from: type=gha" in text
     assert "cache-to: type=gha,mode=max" in text

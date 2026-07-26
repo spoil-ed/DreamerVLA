@@ -499,7 +499,10 @@ class LIBEROVLAEvaluationBase(BaseRunner):
             save_rollout_video,
             select_libero_action_chunk,
         )
-        from dreamervla.envs.libero.utils import build_libero_eval_record
+        from dreamervla.envs.libero.utils import (
+            build_libero_eval_record,
+            load_libero_task_init_states,
+        )
 
         protocol = resolve_libero_eval_protocol(self.cfg, eval_cfg)
         seed = int(protocol["seed"])
@@ -611,7 +614,7 @@ class LIBEROVLAEvaluationBase(BaseRunner):
 
         for task_index, task_id in enumerate(task_ids):
             task = task_suite.get_task(task_id)
-            initial_states = task_suite.get_task_init_states(task_id)
+            initial_states = load_libero_task_init_states(task_suite, task_id)
             env, task_description = get_libero_env(task, resolution=resolution, seed=seed)
             n_eps = num_episodes
             print(

@@ -7,6 +7,7 @@ from omegaconf import OmegaConf
 
 from dreamervla.config import validate_cfg
 from dreamervla.runners import RolloutCollectionRunner
+from dreamervla.runtime.rollout_collection_ray import _dispatch_initial_env_work
 
 
 def test_collect_rollouts_experiment_composes_and_validates() -> None:
@@ -99,3 +100,55 @@ def test_build_collect_cfg_forwards_ray_worker_controls() -> None:
 
     assert resolved["demos_per_shard"] == 25
     assert resolved["num_inference_workers"] == 2
+
+
+def test_raw_only_collect_disables_sidecar_and_selects_main_camera() -> None:
+    cfg = _fake_cfg()
+    cfg.collect.persist_hidden_sidecar = False
+    cfg.collect.stored_image_keys = ["agentview_rgb"]
+
+    runner = RolloutCollectionRunner(cfg)
+    resolved = runner._build_collect_cfg()
+    plan = runner.build_oft_worker_plan()
+
+    assert resolved["persist_hidden_sidecar"] is False
+    assert resolved["stored_image_keys"] == ["agentview_rgb"]
+    assert plan["inference"]["emit_hidden_sidecar"] is False
+    assert plan["dump"]["persist_hidden_sidecar"] is False
+
+
+def test_initial_episode_work_is_dispatched_with_one_ray_wait(monkeypatch) -> None:
+    import ray
+
+    calls = []
+    waits = []
+
+    class _Result:
+        def __init__(self, ref):
+            self.refs = [ref]
+
+    class _Worker:
+        def __init__(self, env_id):
+            self.env_id = env_id
+
+        def set_task(self, task_id, episode_id):
+            calls.append((self.env_id, task_id, episode_id))
+            return _Result(f"ref-{self.env_id}")
+
+    class _Group:
+        @staticmethod
+        def execute_on(env_id):
+            return _Worker(env_id)
+
+    monkeypatch.setattr(ray, "get", lambda refs: waits.append(list(refs)) or list(refs))
+
+    env_task_ids, remaining = _dispatch_initial_env_work(
+        _Group(),
+        [(0, 0), (0, 1), (1, 0), (1, 1)],
+        num_envs=3,
+    )
+
+    assert env_task_ids == [0, 0, 1]
+    assert remaining == [(1, 1)]
+    assert calls == [(0, 0, 0), (1, 0, 1), (2, 1, 0)]
+    assert waits == [["ref-0", "ref-1", "ref-2"]]

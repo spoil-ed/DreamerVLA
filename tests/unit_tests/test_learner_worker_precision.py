@@ -279,6 +279,23 @@ def test_learner_state_dicts_include_classifier_threshold(
     assert state_dicts["classifier_threshold"] == 0.875
 
 
+def test_learner_checkpoint_threshold_cannot_be_overridden_by_train_cfg(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_dummy_syncer(monkeypatch)
+    train_cfg = _cotrain_train_cfg()
+    train_cfg["classifier_threshold"] = 0.875
+    learner = LearnerWorker(
+        _cotrain_model_cfg(),
+        {"classifier_threshold": 0.125},
+        train_cfg,
+        _DirectReplay(),
+    )
+    learner.init()
+
+    assert learner.state_dicts()["classifier_threshold"] == 0.125
+
+
 def test_dreamervla_rl_update_uses_init_classifier_threshold_when_cfg_null(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

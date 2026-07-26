@@ -56,23 +56,41 @@ class RolloutDumpWriter:
     def __init__(
         self,
         reward_dir: str | Path,
-        hidden_dir: str | Path,
+        hidden_dir: str | Path | None,
         shard_name: str,
+        *,
+        persist_hidden_sidecar: bool = True,
+        stored_image_keys: tuple[str, ...] = ("agentview_rgb", "eye_in_hand_rgb"),
     ) -> None:
         self.reward_dir = Path(reward_dir).expanduser().resolve()
-        self.hidden_dir = Path(hidden_dir).expanduser().resolve()
+        self.persist_hidden_sidecar = bool(persist_hidden_sidecar)
+        self.hidden_dir = (
+            Path(hidden_dir).expanduser().resolve() if hidden_dir is not None else None
+        )
+        if self.persist_hidden_sidecar and self.hidden_dir is None:
+            raise ValueError("hidden_dir is required when persist_hidden_sidecar=true")
+        self.stored_image_keys = tuple(str(key) for key in stored_image_keys)
+        if "agentview_rgb" not in self.stored_image_keys:
+            raise ValueError("stored_image_keys must include agentview_rgb")
         self.reward_dir.mkdir(parents=True, exist_ok=True)
-        self.hidden_dir.mkdir(parents=True, exist_ok=True)
+        if self.hidden_dir is not None and self.persist_hidden_sidecar:
+            self.hidden_dir.mkdir(parents=True, exist_ok=True)
         self.shard_name = str(shard_name)
 
         self._reward_path = self.reward_dir / self.shard_name
-        self._hidden_path = self.hidden_dir / self.shard_name
+        self._hidden_path = (
+            self.hidden_dir / self.shard_name if self.hidden_dir is not None else None
+        )
 
         self._reward_f: h5py.File = h5py.File(str(self._reward_path), "w")
-        self._hidden_f: h5py.File = h5py.File(str(self._hidden_path), "w")
+        self._hidden_f: h5py.File | None = (
+            h5py.File(str(self._hidden_path), "w") if self.persist_hidden_sidecar else None
+        )
 
         self._reward_data: h5py.Group = self._reward_f.create_group("data")
-        self._hidden_data: h5py.Group = self._hidden_f.create_group("data")
+        self._hidden_data: h5py.Group | None = (
+            self._hidden_f.create_group("data") if self._hidden_f is not None else None
+        )
 
         self._num_demos: int = 0
         self._preprocess_config_written: bool = False
@@ -123,11 +141,15 @@ class RolloutDumpWriter:
             raise RuntimeError("RolloutDumpWriter has been closed")
         if not steps:
             return
-        if not self._preprocess_config_written and preprocess_config is None:
+        if (
+            self.persist_hidden_sidecar
+            and not self._preprocess_config_written
+            and preprocess_config is None
+        ):
             raise ValueError(
                 "the first rollout demo must provide the canonical hidden-token preprocess_config"
             )
-        if preprocess_config is not None:
+        if preprocess_config is not None and self.persist_hidden_sidecar:
             validate_hidden_token_preprocess_config(
                 preprocess_config,
                 context="RolloutDumpWriter preprocess_config",
@@ -150,37 +172,39 @@ class RolloutDumpWriter:
         states = np.stack(
             [np.asarray(s["states"], dtype=np.float64) for s in steps], axis=0
         )  # (T, S)
-        obs_embedding = np.stack(
-            [np.asarray(s["obs_embedding"], dtype=np.float16) for s in steps], axis=0
-        )  # (T, token_count, token_dim)
-        if obs_embedding.ndim != 3:
-            raise ValueError(
-                f"rollout obs_embedding must be tokenized [T,N,D], got {obs_embedding.shape}"
+        obs_embedding = None
+        if self.persist_hidden_sidecar:
+            obs_embedding = np.stack(
+                [np.asarray(s["obs_embedding"], dtype=np.float16) for s in steps], axis=0
+            )  # (T, token_count, token_dim)
+            if obs_embedding.ndim != 3:
+                raise ValueError(
+                    f"rollout obs_embedding must be tokenized [T,N,D], got {obs_embedding.shape}"
+                )
+            validate_hidden_token_array_shape(
+                obs_embedding.shape,
+                context="rollout obs_embedding",
+                token_count=(
+                    int(preprocess_config["token_count"]) if preprocess_config is not None else None
+                ),
+                token_dim=(
+                    int(preprocess_config["token_dim"]) if preprocess_config is not None else None
+                ),
             )
-        validate_hidden_token_array_shape(
-            obs_embedding.shape,
-            context="rollout obs_embedding",
-            token_count=(
-                int(preprocess_config["token_count"]) if preprocess_config is not None else None
-            ),
-            token_dim=(
-                int(preprocess_config["token_dim"]) if preprocess_config is not None else None
-            ),
-        )
         lang_emb = None
         if steps[0].get("lang_emb") is not None:
             lang_emb = np.asarray(steps[0]["lang_emb"], dtype=np.float16).reshape(-1)
 
         # obs sub-fields
         obs_keys_dtypes = {
-            "agentview_rgb": np.uint8,
-            "eye_in_hand_rgb": np.uint8,
             "ee_pos": np.float64,
             "ee_ori": np.float64,
             "ee_states": np.float64,
             "gripper_states": np.float64,
             "joint_states": np.float64,
         }
+        for image_key in self.stored_image_keys:
+            obs_keys_dtypes[image_key] = np.uint8
         obs_arrays: dict[str, np.ndarray] = {}
         for key, dtype in obs_keys_dtypes.items():
             obs_arrays[key] = np.stack(
@@ -228,29 +252,32 @@ class RolloutDumpWriter:
             demo_grp.attrs[key] = value
 
         # Write sidecar HDF5
-        hidden_demo_grp = self._hidden_data.create_group(demo_key)
-        hidden_demo_grp.create_dataset("obs_embedding", data=obs_embedding)
-        if lang_emb is not None:
-            hidden_demo_grp.create_dataset("lang_emb", data=lang_emb)
-        hidden_demo_grp.attrs["num_samples"] = str(T)
-        if task_id is not None:
-            hidden_demo_grp.attrs["task_id"] = int(task_id)
-        if episode_id is not None:
-            hidden_demo_grp.attrs["episode_id"] = int(episode_id)
-        if resolved_init_state_index is not None:
-            hidden_demo_grp.attrs["init_state_index"] = int(resolved_init_state_index)
-        if task_description is not None:
-            hidden_demo_grp.attrs["task_description"] = str(task_description)
-        hidden_demo_grp.attrs["complete"] = True
-        for key, value in _episode_attrs(
-            preprocess_config=preprocess_config,
-            data_attrs=data_attrs,
-            task_description=task_description,
-            episode_success=episode_success,
-            episode_horizon=episode_horizon,
-            episode_metadata=episode_metadata,
-        ).items():
-            hidden_demo_grp.attrs[key] = value
+        if self.persist_hidden_sidecar:
+            assert self._hidden_data is not None
+            assert obs_embedding is not None
+            hidden_demo_grp = self._hidden_data.create_group(demo_key)
+            hidden_demo_grp.create_dataset("obs_embedding", data=obs_embedding)
+            if lang_emb is not None:
+                hidden_demo_grp.create_dataset("lang_emb", data=lang_emb)
+            hidden_demo_grp.attrs["num_samples"] = str(T)
+            if task_id is not None:
+                hidden_demo_grp.attrs["task_id"] = int(task_id)
+            if episode_id is not None:
+                hidden_demo_grp.attrs["episode_id"] = int(episode_id)
+            if resolved_init_state_index is not None:
+                hidden_demo_grp.attrs["init_state_index"] = int(resolved_init_state_index)
+            if task_description is not None:
+                hidden_demo_grp.attrs["task_description"] = str(task_description)
+            hidden_demo_grp.attrs["complete"] = True
+            for key, value in _episode_attrs(
+                preprocess_config=preprocess_config,
+                data_attrs=data_attrs,
+                task_description=task_description,
+                episode_success=episode_success,
+                episode_horizon=episode_horizon,
+                episode_metadata=episode_metadata,
+            ).items():
+                hidden_demo_grp.attrs[key] = value
 
         self._num_demos += 1
 
@@ -258,13 +285,19 @@ class RolloutDumpWriter:
         if data_attrs is not None and not self._data_attrs_written:
             for attr_key, attr_val in data_attrs.items():
                 self._reward_data.attrs[attr_key] = attr_val
-                self._hidden_data.attrs[attr_key] = attr_val
+                if self._hidden_data is not None:
+                    self._hidden_data.attrs[attr_key] = attr_val
             self._data_attrs_written = True
 
         # Write preprocess_config.json on first call (if provided). Atomic
         # tmp+rename: per-trajectory collects rewrite this once per episode,
         # so a reader must never observe a torn write.
-        if preprocess_config is not None and not self._preprocess_config_written:
+        if (
+            self.persist_hidden_sidecar
+            and preprocess_config is not None
+            and not self._preprocess_config_written
+        ):
+            assert self.hidden_dir is not None
             config_path = self.hidden_dir / "preprocess_config.json"
             tmp_path = config_path.with_suffix(".json.tmp")
             tmp_path.write_text(json.dumps(preprocess_config, indent=2), encoding="utf-8")
@@ -277,9 +310,11 @@ class RolloutDumpWriter:
             return
         self._closed = True
         self._reward_data.attrs["num_demos"] = str(self._num_demos)
-        self._hidden_data.attrs["num_demos"] = str(self._num_demos)
+        if self._hidden_data is not None:
+            self._hidden_data.attrs["num_demos"] = str(self._num_demos)
         self._reward_f.close()
-        self._hidden_f.close()
+        if self._hidden_f is not None:
+            self._hidden_f.close()
 
     def __enter__(self) -> RolloutDumpWriter:
         return self

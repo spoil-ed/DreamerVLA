@@ -167,6 +167,10 @@ class LatentWorldModelEnv:
             dtype=classifier_history_dtype,
             device=self.device,
         )
+        # A classifier trained on W distinct temporal observations must not fire
+        # on reset padding.  The history tensors are preallocated/repeated for
+        # shape stability, but those synthetic entries are not valid evidence.
+        self._classifier_history_counts = np.zeros((self.num_envs,), dtype=np.int64)
 
     def _world_model_autocast(self):
         if self._autocast_dtype is None or self.device.type not in {"cuda", "cpu"}:
@@ -1147,6 +1151,12 @@ class LatentWorldModelEnv:
                 f"classifier returned {scores.numel()} scores; expected {latent.shape[0]}"
             )
         if window is not None:
+            ready = self._advance_classifier_history_counts(
+                batch_size=int(latent.shape[0]),
+                slots=slots,
+                window=int(window),
+            )
+            scores = torch.where(ready, scores, torch.zeros_like(scores))
             self._commit_classifier_history(latent_updates, proprio_updates)
         return scores
 
@@ -1208,11 +1218,13 @@ class LatentWorldModelEnv:
             .to(dtype=self._observation_tensor_dtype())
             .contiguous()
         )
+        self._classifier_history_counts.fill(0)
 
     def _reset_classifier_history(self, slot_id: int) -> None:
         window = self._classifier_window_size()
         self._ensure_classifier_history_window(window)
         slot = int(slot_id)
+        self._classifier_history_counts[slot] = 0
         self._classifier_latent_history[slot] = (
             self._latent[slot].reshape(1, self.latent_dim).expand(window, self.latent_dim)
         )
@@ -1220,6 +1232,28 @@ class LatentWorldModelEnv:
             self._classifier_proprio_history[slot] = (
                 self._proprio[slot].reshape(1, self.proprio_dim).expand(window, self.proprio_dim)
             )
+
+    def _advance_classifier_history_counts(
+        self,
+        *,
+        batch_size: int,
+        slots: Sequence[int] | None,
+        window: int,
+    ) -> torch.Tensor:
+        """Mark rows ready only after W real/predicted observations exist."""
+
+        slot_ids = self._slot_ids_for_classifier_batch(int(batch_size), slots)
+        local_counts: dict[int, int] = {}
+        ready: list[bool] = []
+        for slot_id in slot_ids:
+            slot = int(slot_id)
+            previous = local_counts.get(slot, int(self._classifier_history_counts[slot]))
+            current = min(int(window), previous + 1)
+            local_counts[slot] = current
+            ready.append(current >= int(window))
+        for slot_id, count in local_counts.items():
+            self._classifier_history_counts[int(slot_id)] = int(count)
+        return torch.as_tensor(ready, dtype=torch.bool, device=self.device)
 
     def _classifier_temporal_windows(
         self,

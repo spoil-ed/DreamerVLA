@@ -473,9 +473,10 @@ def _imagine_and_score_slice(
                 chunk_world_model, next_seq["hidden_seq"]
             )  # [b, K, ...] all K classifier-visible frames
             proprio_seq = next_seq.get("proprio_seq")
-            if bool(
+            needs_raw_proprio = bool(
                 getattr(classifier_module, "supports_proprio_conditioning", False)
-            ) and not isinstance(proprio_seq, torch.Tensor):
+            ) and not bool(getattr(classifier_module, "accepts_embedded_proprio", False))
+            if needs_raw_proprio and not isinstance(proprio_seq, torch.Tensor):
                 raise ValueError(
                     "classifier requires proprio conditioning, but world model "
                     "predict_next_chunk did not return raw proprio_seq"
@@ -499,11 +500,11 @@ def _imagine_and_score_slice(
                         proprio_seq[:, -1] if isinstance(proprio_seq, torch.Tensor) else None
                     )
                 video_latents.append(pooled.unsqueeze(1).to("cpu"))  # [b, 1, ...]
-                if pooled_proprio is not None:
+                if needs_raw_proprio and pooled_proprio is not None:
                     proprio_latents.append(pooled_proprio.unsqueeze(1).to("cpu"))
             else:
                 video_latents.append(hidden_seq.to("cpu"))
-                if isinstance(proprio_seq, torch.Tensor):
+                if needs_raw_proprio and isinstance(proprio_seq, torch.Tensor):
                     proprio_latents.append(proprio_seq.to("cpu"))
             next_current = {
                 "history": next_seq["history"],
@@ -523,8 +524,9 @@ def _imagine_and_score_slice(
     # predict_success is a per-rollout temporal scan (no cross-rollout coupling),
     # so even within this slice we sweep in ``eval_micro_batch`` sub-batches and
     # never materialize the slice's full [b, num_chunks, latent_dim] video on GPU.
-    # Tokenized WMs emit a 4-D hidden_seq; keep the token grid intact for the
-    # spatial classifier and pass raw proprio/lang side channels alongside it.
+    # Tokenized WMs emit a 4-D hidden_seq; keep the token grid intact. The WM
+    # classifier boundary already carries embedded proprio channels, while
+    # language remains an episode-level side channel appended by the classifier.
     # ``pre_pooled`` only matters on the chunk path (we pooled each chunk while
     # generating).
     b = int(video_latents[0].shape[0])
@@ -539,7 +541,9 @@ def _imagine_and_score_slice(
         predict_kwargs: dict[str, Any] = {}
         if chunk_granular:
             predict_kwargs["pre_pooled"] = True
-        if bool(getattr(classifier_module, "supports_proprio_conditioning", False)):
+        if bool(getattr(classifier_module, "supports_proprio_conditioning", False)) and not bool(
+            getattr(classifier_module, "accepts_embedded_proprio", False)
+        ):
             if len(proprio_latents) != len(video_latents):
                 raise ValueError(
                     "classifier requires proprio conditioning, but imagined raw "

@@ -32,6 +32,40 @@ def _libero_benchmark_dict():
     return libero_benchmark.get_benchmark_dict()
 
 
+def load_libero_task_init_states(task_suite: Any, task_id: int) -> Any:
+    """Load trusted local LIBERO init states across PyTorch versions.
+
+    PyTorch 2.6 changed ``torch.load`` to default to ``weights_only=True``.
+    LIBERO init-state assets contain NumPy objects, so the upstream
+    ``Benchmark.get_task_init_states`` call fails under that default.  Resolve
+    the same packaged asset here and explicitly opt into the legacy loader.
+    Suites without standard LIBERO task metadata keep their own loader, which
+    also preserves lightweight test doubles.
+    """
+    get_task = getattr(task_suite, "get_task", None)
+    if not callable(get_task):
+        return task_suite.get_task_init_states(int(task_id))
+    task = get_task(int(task_id))
+    problem_folder = getattr(task, "problem_folder", None)
+    init_states_file = getattr(task, "init_states_file", None)
+    if problem_folder is None or init_states_file is None:
+        return task_suite.get_task_init_states(int(task_id))
+
+    import torch
+    from libero.libero import get_libero_path
+
+    init_states_path = os.path.join(
+        get_libero_path("init_states"),
+        str(problem_folder),
+        str(init_states_file),
+    )
+    try:
+        return torch.load(init_states_path, weights_only=False)
+    except TypeError:
+        # PyTorch < 2.0 did not expose the weights_only keyword.
+        return torch.load(init_states_path)
+
+
 def resolve_libero_eval_protocol(root_cfg: Any, eval_cfg: Any) -> dict[str, int]:
     """Resolve RLinf-compatible LIBERO rollout protocol options."""
     root_seed = OmegaConf.select(root_cfg, "seed", default=0)
@@ -166,7 +200,7 @@ class LIBERODreamerEnv:
         benchmark_dict = _libero_benchmark_dict()
         self.task_suite = benchmark_dict[self.task_suite_name]()
         self.task = self.task_suite.get_task(self.task_id)
-        self.initial_states = self.task_suite.get_task_init_states(self.task_id)
+        self.initial_states = load_libero_task_init_states(self.task_suite, self.task_id)
         if not len(self.initial_states):
             raise RuntimeError(
                 f"LIBERO task {self.task_suite_name}/{self.task_id} has no initial states"

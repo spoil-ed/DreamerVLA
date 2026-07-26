@@ -1,0 +1,37 @@
+# @package _global_
+# One PPO signal update from one classifier-informative 16-rollout group per
+# LIBERO Goal task, followed by resident paired evaluation.
+defaults:
+  - openvla_libero_task_balanced_success_sft_probe
+  - _self_
+
+run:
+  name: openvla_libero_task_balanced_ppo_probe
+
+cluster:
+  # Ten task groups divide evenly over five Actor ranks (two groups/rank).
+  num_gpus: 5
+
+manual_cotrain:
+  ngpu: 5
+  training_mode: failure_imagined_rl
+  require_training_signal: false
+  initial_condition_selector: episode_start
+
+env:
+  wm:
+    cfg:
+      # Retain the complete 16-rollout group once any trajectory crosses the
+      # calibrated classifier threshold. PPO needs both positive and negative
+      # members to form group-relative advantages.
+      emit_actor_success_only: false
+      emit_actor_group_with_success_only: true
+      require_actor_group_mixed_success: true
+
+actor:
+  train_cfg:
+    # 10 tasks * 16 trajectories * 64 chunk decisions.
+    global_batch_size: 10240
+    micro_batch_size: 8
+    success_sft:
+      replicated_trajectory_batch: false

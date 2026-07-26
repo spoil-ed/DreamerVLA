@@ -14,8 +14,9 @@ import threading
 import time
 import uuid
 import warnings
+from collections import deque
 from dataclasses import dataclass
-from math import gcd
+from math import comb, gcd
 from pathlib import Path
 from typing import Any
 
@@ -62,6 +63,36 @@ from dreamervla.workers.rollout.multistep_rollout_worker import MultiStepRollout
 
 _LEGACY_RNG_WARNING_EMITTED = False
 _LEGACY_RNG_WARNING_LOCK = threading.Lock()
+
+
+def _classifier_checkpoint_threshold(
+    metadata: dict[str, Any],
+    *,
+    configured_threshold: float | None,
+    require_trajectory_threshold: bool,
+) -> float:
+    """Resolve a calibrated classifier threshold without changing its provenance."""
+
+    checkpoint_threshold = metadata.get(
+        "classifier_threshold",
+        metadata.get("threshold"),
+    )
+    if require_trajectory_threshold:
+        threshold_metric = str(metadata.get("classifier_threshold_metric", "")).lower()
+        episode_f1 = float(metadata.get("best_episode_f1", -1.0))
+        episode_threshold = metadata.get("best_episode_threshold")
+        if threshold_metric != "episode_f1" or episode_f1 < 0.0 or episode_threshold is None:
+            raise ValueError(
+                "imagined-success SFT requires a classifier checkpoint selected by "
+                "trajectory-level F1; expected classifier_threshold_metric=episode_f1 "
+                "with best_episode_f1 and best_episode_threshold metadata"
+            )
+        return float(episode_threshold)
+    if checkpoint_threshold is not None:
+        return float(checkpoint_threshold)
+    if configured_threshold is not None:
+        return float(configured_threshold)
+    raise ValueError("classifier checkpoint or active config must provide a threshold")
 
 
 class CotrainRunner(BaseRunner):
@@ -117,6 +148,7 @@ class CotrainRunner(BaseRunner):
         self._policy_initial_hash = ""
         self._policy_final_hash = ""
         self._applied_policy_steps = 0
+        self._paired_eval_baseline_outcomes: dict[tuple[int, int, int, int], bool] = {}
 
     def setup(self) -> None:
         super().setup()
@@ -168,9 +200,15 @@ class CotrainRunner(BaseRunner):
                 step_metrics = self._run_global_step(groups, global_step)
                 step_metrics.update(self._maybe_evaluate_resident_policy(groups, global_step))
                 checkpoint_start = time.perf_counter()
-                self._maybe_save_manual_checkpoint(groups, global_step, step_metrics)
+                checkpoint_path = self._maybe_save_manual_checkpoint(
+                    groups,
+                    global_step,
+                    step_metrics,
+                )
                 signal_result = None
                 if self._require_training_signal() and global_step == target_step:
+                    if checkpoint_path is None:
+                        self._refresh_policy_final_hash(groups["ActorGroup"])
                     signal_result = evaluate_imagined_success_sft_signal(
                         step_metrics,
                         training_mode=self._training_mode(),
@@ -178,9 +216,7 @@ class CotrainRunner(BaseRunner):
                         policy_final_hash=self._policy_final_hash,
                         applied_policy_steps=self._applied_policy_steps,
                     )
-                    step_metrics["train/training_signal_passed"] = float(
-                        signal_result.passed
-                    )
+                    step_metrics["train/training_signal_passed"] = float(signal_result.passed)
                 step_metrics["time/manual_cotrain/checkpoint_and_metrics_s"] = float(
                     time.perf_counter() - checkpoint_start
                 )
@@ -431,23 +467,23 @@ class CotrainRunner(BaseRunner):
         if self._evaluation_enabled():
             eval_episodes = self._eval_num_episodes()
             eval_slots = self._eval_num_envs()
-            if eval_episodes % eval_slots != 0:
-                raise ValueError(
-                    "manual_cotrain.eval_protocol total episodes must be divisible "
-                    f"by num_envs; got {eval_episodes} and {eval_slots}"
-                )
+            eval_workers, eval_slots_per_worker, eval_rollout_epoch = _resident_eval_worker_layout(
+                eval_slots=eval_slots,
+                eval_episodes=eval_episodes,
+                rollout_workers=len(plan.rollout_specs),
+            )
             _hs_trace("[build_groups] launch EvaluationEnvironmentWorker start")
             evaluation_env_group = WorkerGroup(
                 EvaluationEnvironmentWorker,
                 self._eval_env_cfg(),
-                eval_slots,
-                eval_episodes // eval_slots,
+                eval_slots_per_worker,
+                eval_rollout_epoch,
                 self._eval_max_steps(),
                 self._num_action_chunks(),
                 task_ids=self._eval_task_ids(),
             ).launch(
                 cluster,
-                NodePlacementStrategy(1),
+                NodePlacementStrategy(eval_workers),
                 name="EvaluationEnvironmentWorker",
             )
             _hs_trace("[build_groups] launch EvaluationEnvironmentWorker done")
@@ -585,16 +621,20 @@ class CotrainRunner(BaseRunner):
                 default=None,
             ),
         )
-        checkpoint_threshold = loaded_classifier.metadata.get(
-            "classifier_threshold",
-            loaded_classifier.metadata.get("threshold"),
+        require_trajectory_threshold = bool(
+            OmegaConf.select(
+                self.cfg,
+                "learner.train_cfg.require_trajectory_classifier_threshold",
+                default=False,
+            )
         )
-        if checkpoint_threshold is not None:
-            threshold = float(checkpoint_threshold)
-        elif configured_threshold is not None:
-            threshold = float(configured_threshold)
-        else:
-            raise ValueError("classifier checkpoint or active config must provide a threshold")
+        threshold = _classifier_checkpoint_threshold(
+            loaded_classifier.metadata,
+            configured_threshold=(
+                None if configured_threshold is None else float(configured_threshold)
+            ),
+            require_trajectory_threshold=require_trajectory_threshold,
+        )
         return {
             "world_model": loaded_wm.state_dict,
             "classifier": loaded_classifier.state_dict,
@@ -635,6 +675,11 @@ class CotrainRunner(BaseRunner):
         )
         self._policy_final_hash = current_hash
         self._applied_policy_steps = int(payload.get("applied_policy_steps", 0) or 0)
+
+    def _refresh_policy_final_hash(self, actor_group: Any) -> None:
+        """Hash the current policy without requiring a checkpoint write."""
+        actor_state = _first_nonempty_mapping(actor_group.state_dict().wait())
+        self._policy_final_hash = state_dict_sha256(actor_state)
 
     def _run_global_step(self, groups: dict[str, Any], global_step: int) -> dict[str, float]:
         return self._run_staged_global_step(groups, global_step)
@@ -965,6 +1010,20 @@ class CotrainRunner(BaseRunner):
         self._stop_rollout_workers(groups)
         wm_rollout_metrics = _sum_metric_lists([wm_rollout_result.wait()])
         imagined_total = self._wm_rollout_target_trajectories()
+        quota_task_ids = self._wm_success_quota_task_ids()
+        quota_attempts = int(
+            float(wm_env_metrics.get("env/wm_env/quota_attempted_trajectories", 0.0))
+        )
+        if quota_task_ids:
+            _normalize_dynamic_wm_trajectory_metrics(
+                wm_env_metrics,
+                total_trajectories=quota_attempts,
+            )
+        elif imagined_total is not None:
+            _normalize_dynamic_wm_trajectory_metrics(
+                wm_env_metrics,
+                total_trajectories=imagined_total,
+            )
         imagined_done = int(
             float(
                 wm_env_metrics.get(
@@ -976,9 +1035,15 @@ class CotrainRunner(BaseRunner):
         self._report_phase_completion(
             "cotrain-imagined-rollout",
             global_step,
-            done=(imagined_total if imagined_total is not None else imagined_done),
-            total=(imagined_total or max(1, imagined_done)),
-            unit="trajectory",
+            done=(
+                len(quota_task_ids)
+                if quota_task_ids
+                else (imagined_total if imagined_total is not None else imagined_done)
+            ),
+            total=(
+                len(quota_task_ids) if quota_task_ids else (imagined_total or max(1, imagined_done))
+            ),
+            unit=("task" if quota_task_ids else "trajectory"),
             status=" ".join(
                 _classifier_progress_status_parts(
                     imagined_progress_monitor.records(),
@@ -1059,9 +1124,7 @@ class CotrainRunner(BaseRunner):
                 }
             )
         commit_metric = (
-            "actor/success_sft_update_committed"
-            if success_sft
-            else "actor/ppo_update_committed"
+            "actor/success_sft_update_committed" if success_sft else "actor/ppo_update_committed"
         )
         train_metrics.update(
             {
@@ -1073,20 +1136,14 @@ class CotrainRunner(BaseRunner):
             }
         )
         update_steps_key = (
-            "actor/success_sft_optimizer_steps"
-            if success_sft
-            else "actor/ppo_optimizer_steps"
+            "actor/success_sft_optimizer_steps" if success_sft else "actor/ppo_optimizer_steps"
         )
         update_done = max(
             0,
             int(
                 float(
                     train_metrics.get(
-                        (
-                            update_steps_key
-                            if success_sft
-                            else "actor/ppo_progress_ops"
-                        ),
+                        (update_steps_key if success_sft else "actor/ppo_progress_ops"),
                         train_metrics.get(update_steps_key, 0.0),
                     )
                 )
@@ -1316,6 +1373,9 @@ class CotrainRunner(BaseRunner):
         actor = groups["ActorGroup"]
         rollout = groups["RolloutGroup"]
         evaluation_env.set_global_step(int(global_step)).wait()
+        paired_protocol_metrics = _merge_metric_lists(
+            [evaluation_env.begin_evaluation_pass().wait()]
+        )
         progress_dir = self._manual_cotrain_progress_dir(int(global_step))
         self._configure_env_progress(evaluation_env, progress_dir)
         progress = _EvaluationProgressMonitor(
@@ -1369,23 +1429,25 @@ class CotrainRunner(BaseRunner):
                 "resident eval did not retain the configured physical-trajectory "
                 f"count: got {eval_batch.num_trajectories}, expected {episodes}"
             )
-        shared_eval_batch = _share_ray_value(
-            eval_batch,
-            cluster=groups.get("cluster"),
-        )
-        reencoded_results = actor.reencode_real_trajectories(shared_eval_batch).wait()
-        reencoded_batch = _first_real_trajectory_batch(reencoded_results)
-        diagnostic_values = (
-            groups["LearnerGroup"]
-            .evaluate_cotrain_trajectories(
-                _share_ray_value(
-                    reencoded_batch,
-                    cluster=groups.get("cluster"),
-                )
+        diagnostic_metrics: dict[str, float] = {}
+        if self._eval_compute_diagnostics():
+            shared_eval_batch = _share_ray_value(
+                eval_batch,
+                cluster=groups.get("cluster"),
             )
-            .wait()
-        )
-        diagnostic_metrics = _merge_metric_lists([diagnostic_values])
+            reencoded_results = actor.reencode_real_trajectories(shared_eval_batch).wait()
+            reencoded_batch = _first_real_trajectory_batch(reencoded_results)
+            diagnostic_values = (
+                groups["LearnerGroup"]
+                .evaluate_cotrain_trajectories(
+                    _share_ray_value(
+                        reencoded_batch,
+                        cluster=groups.get("cluster"),
+                    )
+                )
+                .wait()
+            )
+            diagnostic_metrics = _merge_metric_lists([diagnostic_values])
         diagnostics_elapsed = float(time.perf_counter() - diagnostics_started)
         elapsed = float(time.perf_counter() - started)
         successes = min(
@@ -1403,6 +1465,10 @@ class CotrainRunner(BaseRunner):
             ),
         )
         rate = float(successes) / float(episodes)
+        paired_outcome_metrics = self._paired_eval_outcome_metrics(
+            eval_batch,
+            global_step=int(global_step),
+        )
         chunk_steps = float(
             env_metrics.get(
                 "env/eval_env/chunk_steps",
@@ -1427,9 +1493,79 @@ class CotrainRunner(BaseRunner):
             "eval/chunk_per_s": float(chunk_steps / max(rollout_elapsed, 1e-9)),
             "time/eval_s": elapsed,
             "time/eval_diagnostics_s": diagnostics_elapsed,
+            **paired_protocol_metrics,
+            **paired_outcome_metrics,
             **diagnostic_metrics,
             **sync_metrics,
         }
+
+    def _paired_eval_outcome_metrics(
+        self,
+        batch: RealTrajectoryBatch,
+        *,
+        global_step: int,
+    ) -> dict[str, float]:
+        outcomes = {
+            (
+                int(trajectory.env_rank),
+                int(trajectory.slot_id),
+                int(trajectory.task_id),
+                int(trajectory.episode_id),
+            ): bool(trajectory.success)
+            for trajectory in batch.trajectories
+        }
+        if len(outcomes) != batch.num_trajectories:
+            raise RuntimeError("paired eval produced duplicate trajectory identities")
+
+        metrics: dict[str, float] = {
+            "eval/paired/protocol_enabled": 1.0,
+            "eval/paired/trajectory_count": float(len(outcomes)),
+        }
+        task_ids = sorted({key[2] for key in outcomes})
+        for task_id in task_ids:
+            values = [success for key, success in outcomes.items() if int(key[2]) == int(task_id)]
+            metrics[f"eval/task_{task_id}/success_rate"] = float(
+                sum(int(value) for value in values) / max(1, len(values))
+            )
+
+        if int(global_step) == 0:
+            self._paired_eval_baseline_outcomes = dict(outcomes)
+            metrics["eval/paired/is_baseline"] = 1.0
+            return metrics
+
+        baseline = self._paired_eval_baseline_outcomes
+        if not baseline:
+            raise RuntimeError("paired post-update eval has no resident baseline outcomes")
+        if baseline.keys() != outcomes.keys():
+            missing = len(baseline.keys() - outcomes.keys())
+            extra = len(outcomes.keys() - baseline.keys())
+            raise RuntimeError(
+                "paired eval trajectory identities changed between passes: "
+                f"missing={missing}, extra={extra}"
+            )
+
+        failure_to_success = sum(int(not baseline[key] and outcomes[key]) for key in baseline)
+        success_to_failure = sum(int(baseline[key] and not outcomes[key]) for key in baseline)
+        discordant = failure_to_success + success_to_failure
+        metrics.update(
+            {
+                "eval/paired/is_baseline": 0.0,
+                "eval/paired/failure_to_success": float(failure_to_success),
+                "eval/paired/success_to_failure": float(success_to_failure),
+                "eval/paired/discordant": float(discordant),
+                "eval/paired/net_successes": float(failure_to_success - success_to_failure),
+                "eval/paired/mcnemar_exact_p": _mcnemar_exact_p(
+                    failure_to_success,
+                    success_to_failure,
+                ),
+            }
+        )
+        for task_id in task_ids:
+            keys = [key for key in baseline if int(key[2]) == int(task_id)]
+            before = sum(int(baseline[key]) for key in keys)
+            after = sum(int(outcomes[key]) for key in keys)
+            metrics[f"eval/task_{task_id}/paired_success_delta"] = float(after - before)
+        return metrics
 
     @staticmethod
     def _stop_rollout_workers(
@@ -1624,6 +1760,15 @@ class CotrainRunner(BaseRunner):
             raise ValueError("manual_cotrain.eval_protocol.max_steps must be positive")
         chunk = self._num_action_chunks()
         return ((requested + chunk - 1) // chunk) * chunk
+
+    def _eval_compute_diagnostics(self) -> bool:
+        return bool(
+            OmegaConf.select(
+                self.cfg,
+                "manual_cotrain.eval_protocol.compute_diagnostics",
+                default=True,
+            )
+        )
 
     def _eval_env_cfg(self) -> dict[str, Any]:
         cfg = self._real_env_cfg()
@@ -1891,6 +2036,25 @@ class CotrainRunner(BaseRunner):
             )
         )
 
+    def _wm_success_quota_task_ids(self) -> tuple[int, ...]:
+        value = OmegaConf.select(
+            self.cfg,
+            "manual_cotrain.wm_success_quota_task_ids",
+            default=None,
+        )
+        if value is None:
+            return ()
+        plain = OmegaConf.to_container(value, resolve=True) if OmegaConf.is_config(value) else value
+        task_ids = tuple(int(task_id) for task_id in plain)
+        if not task_ids or len(task_ids) != len(set(task_ids)):
+            raise ValueError(
+                "manual_cotrain.wm_success_quota_task_ids must be non-empty and unique"
+            )
+        return task_ids
+
+    def _wm_success_quota_per_task(self) -> int:
+        return self._positive_manual_int("wm_success_quota_per_task", default=1)
+
     def _wm_rollout_target_trajectories(self) -> int | None:
         value = OmegaConf.select(
             self.cfg,
@@ -2129,6 +2293,23 @@ class CotrainRunner(BaseRunner):
     ) -> dict[str, float]:
         """Run WM imagine as a global lease pool while real env rollout proceeds."""
 
+        quota_task_ids = self._wm_success_quota_task_ids()
+        if quota_task_ids:
+            if real_env_results:
+                raise ValueError("task-quota WM collection does not overlap real env results")
+            return self._wait_for_task_quota_wm_successes(
+                wm_env=wm_env,
+                rollout_result=rollout_result,
+                env_channel_name=env_channel_name,
+                rollout_channel_name=rollout_channel_name,
+                actor_channel_name=actor_channel_name,
+                timeout_s=timeout_s,
+                poll_s=poll_s,
+                progress=progress,
+                task_ids=quota_task_ids,
+                quota_per_task=self._wm_success_quota_per_task(),
+            )
+
         wm_workers = _worker_count(wm_env)
         total_wm_epochs = sum(self._wm_rollout_epochs_by_worker(wm_workers))
         lease_epochs = self._wm_rollout_lease_epochs()
@@ -2336,6 +2517,155 @@ class CotrainRunner(BaseRunner):
         report_central_progress(force=True)
         return _sum_metric_lists(completed_metrics)
 
+    def _wait_for_task_quota_wm_successes(
+        self,
+        *,
+        wm_env: Any,
+        rollout_result: Any,
+        env_channel_name: str,
+        rollout_channel_name: str,
+        actor_channel_name: str,
+        timeout_s: float,
+        poll_s: float,
+        progress: _ManualCotrainEnvProgressMonitor | None,
+        task_ids: tuple[int, ...],
+        quota_per_task: int,
+    ) -> dict[str, float]:
+        """Imagine task-scoped leases until every task reaches its success quota."""
+
+        wm_workers = _worker_count(wm_env)
+        max_leases = sum(self._wm_rollout_epochs_by_worker(wm_workers))
+        if self._wm_rollout_lease_epochs() != 1:
+            raise ValueError("task-quota WM collection requires wm_rollout_lease_epochs=1")
+        pending = deque(int(task_id) for task_id in task_ids)
+        active: dict[int, tuple[Any, int]] = {}
+        successes = {int(task_id): 0 for task_id in task_ids}
+        attempts = {int(task_id): 0 for task_id in task_ids}
+        completed_metrics: list[Any] = []
+        leases_started = 0
+        start = time.monotonic()
+
+        def start_lease(rank: int, task_id: int) -> None:
+            nonlocal leases_started
+            if leases_started >= max_leases:
+                return
+            wm_env.execute_on(int(rank)).refresh_wm_initial_conditions_for_tasks(
+                (int(task_id),)
+            ).wait()
+            wm_env.execute_on(int(rank)).configure_rollout_epoch(1).wait()
+            active[int(rank)] = (
+                wm_env.execute_on(int(rank)).interact(
+                    env_channel_name,
+                    rollout_channel_name,
+                    actor_channel_name,
+                ),
+                int(task_id),
+            )
+            leases_started += 1
+
+        def fill_free_workers() -> None:
+            for rank in range(wm_workers):
+                if rank in active or not pending or leases_started >= max_leases:
+                    continue
+                start_lease(rank, pending.popleft())
+
+        fill_free_workers()
+        while active:
+            ready_rollout_refs = rollout_result.ready()
+            if ready_rollout_refs:
+                values = rollout_result.wait_refs(ready_rollout_refs)
+                raise RuntimeError(
+                    "RolloutGroup.generate completed before task-quota WM collection; "
+                    f"ready_result={values!r}"
+                )
+
+            completed_ranks: list[int] = []
+            for rank, (result, task_id) in list(active.items()):
+                if not result.done():
+                    continue
+                raw_metrics = result.wait()
+                lease_metrics = _sum_metric_lists([raw_metrics])
+                completed_metrics.append(raw_metrics)
+                attempts[int(task_id)] += int(self._wm_envs_per_worker())
+                emitted = max(
+                    0,
+                    int(
+                        lease_metrics.get(
+                            "env/wm_env/trajectory_shards",
+                            lease_metrics.get("env/trajectory_shards", 0.0),
+                        )
+                    ),
+                )
+                successes[int(task_id)] = min(
+                    int(quota_per_task),
+                    int(successes[int(task_id)]) + int(emitted),
+                )
+                if successes[int(task_id)] < int(quota_per_task):
+                    pending.append(int(task_id))
+                completed_ranks.append(int(rank))
+            for rank in completed_ranks:
+                active.pop(int(rank), None)
+
+            completed_tasks = sum(int(count >= int(quota_per_task)) for count in successes.values())
+            self.console_progress(
+                completed_tasks,
+                len(task_ids),
+                f"cotrain-imagined-success-quota/{int(self.global_step):08d}",
+                unit="task",
+                status=(
+                    f"leases={leases_started}/{max_leases} "
+                    f"attempts={sum(attempts.values())} "
+                    + " ".join(
+                        f"t{task_id}={successes[task_id]}/{quota_per_task}" for task_id in task_ids
+                    )
+                ),
+                force=bool(completed_ranks),
+            )
+            if completed_tasks >= len(task_ids):
+                if active:
+                    continue
+                break
+
+            fill_free_workers()
+            if not active and pending:
+                missing = [
+                    task_id for task_id in task_ids if successes[int(task_id)] < int(quota_per_task)
+                ]
+                raise RuntimeError(
+                    "task-quota WM collection exhausted its trajectory budget before "
+                    f"all tasks succeeded; missing_tasks={missing}, "
+                    f"attempts_by_task={attempts}"
+                )
+            if timeout_s > 0 and (time.monotonic() - start) > float(timeout_s):
+                missing = [
+                    task_id for task_id in task_ids if successes[int(task_id)] < int(quota_per_task)
+                ]
+                raise TimeoutError(
+                    "task-quota WM collection timed out; "
+                    f"missing_tasks={missing}, attempts_by_task={attempts}"
+                )
+            if active:
+                time.sleep(max(0.0, float(poll_s)))
+
+        metrics = _sum_metric_lists(completed_metrics)
+        total_attempts = int(sum(attempts.values()))
+        metrics["env/wm_env/quota_completed_tasks"] = float(len(task_ids))
+        metrics["env/wm_env/quota_target_tasks"] = float(len(task_ids))
+        metrics["env/wm_env/quota_attempted_trajectories"] = float(total_attempts)
+        metrics["env/wm_env/quota_collected_trajectories"] = float(sum(successes.values()))
+        for task_id in task_ids:
+            metrics[f"env/wm_env/task_{task_id}/quota_successes"] = float(successes[int(task_id)])
+            metrics[f"env/wm_env/task_{task_id}/attempted_trajectories"] = float(
+                attempts[int(task_id)]
+            )
+        _normalize_dynamic_wm_trajectory_metrics(
+            metrics,
+            total_trajectories=total_attempts,
+        )
+        if progress is not None:
+            progress.report(force=True)
+        return metrics
+
     def _receive_actor_trajectories(
         self,
         groups: dict[str, Any],
@@ -2468,6 +2798,17 @@ class CotrainRunner(BaseRunner):
         groups: dict[str, Any],
         role_counts: list[tuple[str, int]],
     ) -> list[list[tuple[str, int]]] | None:
+        if bool(
+            OmegaConf.select(
+                self.cfg,
+                "actor.train_cfg.success_sft.replicated_trajectory_batch",
+                default=False,
+            )
+        ):
+            # The driver must consume the complete task-balanced set once and
+            # broadcast it to every Actor rank. Direct keyed receives would
+            # partition the ten task shards unevenly across six ranks.
+            return None
         actor = groups["ActorGroup"]
         actor_ranks = len(getattr(actor, "workers", []) or [])
         if actor_ranks <= 0:
@@ -3056,6 +3397,44 @@ def _derive_classifier_rate_metrics(metrics: dict[str, float]) -> None:
                 metrics.get(f"{prefix}classifier_success_trajectories", 0.0)
                 / float(total_trajectories)
             )
+
+
+def _mcnemar_exact_p(failure_to_success: int, success_to_failure: int) -> float:
+    """Return the two-sided exact McNemar p-value for paired binary outcomes."""
+
+    left = max(0, int(failure_to_success))
+    right = max(0, int(success_to_failure))
+    discordant = left + right
+    if discordant == 0:
+        return 1.0
+    tail = sum(comb(discordant, index) for index in range(min(left, right) + 1))
+    return float(min(1.0, 2.0 * tail / float(2**discordant)))
+
+
+def _normalize_dynamic_wm_trajectory_metrics(
+    metrics: dict[str, float],
+    *,
+    total_trajectories: int,
+) -> None:
+    """Replace chunk-local trajectory counters with the lease trajectory budget.
+
+    Dynamic WM workers report once per emitted chunk while an Actor trajectory
+    spans many such reports.  The positive counter remains valid because a
+    classifier-positive chunk terminates that trajectory, but summing the local
+    ``total_trajectories`` values otherwise produces the chunk count.  The
+    runner owns the exact completed lease budget, so normalize both public
+    namespaces before deriving their rates.
+    """
+
+    total = max(0, int(total_trajectories))
+    for prefix in ("env/", "env/wm_env/"):
+        success_key = f"{prefix}classifier_success_trajectories"
+        total_key = f"{prefix}classifier_total_trajectories"
+        rate_key = f"{prefix}classifier_trajectory_success_rate"
+        successes = min(total, max(0, int(float(metrics.get(success_key, 0.0)))))
+        metrics[success_key] = float(successes)
+        metrics[total_key] = float(total)
+        metrics[rate_key] = float(successes / total) if total > 0 else 0.0
 
 
 def _aggregate_sync_metric_lists(items: list[Any]) -> dict[str, float]:
@@ -3763,6 +4142,35 @@ def _load_runner_state_dicts(
     ):
         loaded["classifier_threshold"] = float(payload["classifier_threshold"])
     return loaded
+
+
+def _resident_eval_worker_layout(
+    *,
+    eval_slots: int,
+    eval_episodes: int,
+    rollout_workers: int,
+) -> tuple[int, int, int]:
+    """Partition resident evaluation across compatible rollout ranks.
+
+    Every env worker owns the same slot count and rollout epoch. Choosing the
+    largest rollout-worker count that divides the global slot count preserves
+    the configured episode/task protocol without uneven worker batches.
+    """
+
+    slots = int(eval_slots)
+    episodes = int(eval_episodes)
+    rollout_count = int(rollout_workers)
+    if slots <= 0 or episodes <= 0 or rollout_count <= 0:
+        raise ValueError("resident eval slots, episodes, and rollout workers must be positive")
+    if episodes % slots != 0:
+        raise ValueError(
+            "manual_cotrain.eval_protocol total episodes must be divisible "
+            f"by num_envs; got {episodes} and {slots}"
+        )
+    worker_count = max(
+        candidate for candidate in range(1, min(slots, rollout_count) + 1) if slots % candidate == 0
+    )
+    return worker_count, slots // worker_count, episodes // slots
 
 
 def _nonnegative_int(value: Any, field: str) -> int:

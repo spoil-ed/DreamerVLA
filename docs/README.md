@@ -4,6 +4,9 @@ This directory is organized by document lifetime and reader intent.
 
 ## Root References
 
+- [`DreamerVLA_paper_overview_zh-CN.md`](DreamerVLA_paper_overview_zh-CN.md):
+  Chinese paper-style overview of DreamerVLA's current results, core idea,
+  scientific claims, evidence gaps, and target experiments.
 - [`HISTORY.md`](HISTORY.md): shipped work ledger.
 - [`PARAMETERS.md`](PARAMETERS.md): parameter reference.
 - [`install.md`](install.md): installation and environment setup.
