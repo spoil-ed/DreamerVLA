@@ -612,6 +612,14 @@ class CotrainRunner(BaseRunner):
         }
         if "classifier_threshold" in initial_states:
             component_states["classifier_threshold"] = float(initial_states["classifier_threshold"])
+        if "classifier_threshold_space" in initial_states:
+            component_states["classifier_threshold_space"] = str(
+                initial_states["classifier_threshold_space"]
+            )
+        if "classifier_success_consecutive_chunks" in initial_states:
+            component_states["classifier_success_consecutive_chunks"] = int(
+                initial_states["classifier_success_consecutive_chunks"]
+            )
         if component_states:
             shared_component_states = _share_ray_value(
                 component_states,
@@ -621,11 +629,24 @@ class CotrainRunner(BaseRunner):
                 shared_component_states,
                 0,
             ).wait()
-        if (
-            self._training_mode() == "imagined_success_sft"
-            and "classifier_threshold" not in initial_states
-        ):
-            raise ValueError("LearnerGroup checkpoint state must include classifier_threshold")
+        if self._training_mode() == "imagined_success_sft":
+            if "classifier_threshold" not in initial_states:
+                raise ValueError(
+                    "LearnerGroup checkpoint state must include classifier_threshold"
+                )
+            if (
+                str(initial_states.get("classifier_threshold_space", "")).strip().lower()
+                != "logit"
+            ):
+                raise ValueError(
+                    "imagined-success SFT requires LearnerGroup to preserve the "
+                    "classifier logit threshold space"
+                )
+            if int(initial_states.get("classifier_success_consecutive_chunks", 0)) < 2:
+                raise ValueError(
+                    "imagined-success SFT requires LearnerGroup to preserve at least "
+                    "two consecutive classifier-success chunks"
+                )
         classifier_threshold = initial_states.get("classifier_threshold")
         _hs_trace("[build_groups] all groups launched")
 
@@ -1111,6 +1132,12 @@ class CotrainRunner(BaseRunner):
                 "world_model": dict(state_dicts.get("world_model", {})),
                 "classifier": dict(state_dicts.get("classifier", {})),
                 "classifier_threshold": float(state_dicts.get("classifier_threshold", 0.5)),
+                "classifier_threshold_space": str(
+                    state_dicts.get("classifier_threshold_space", "probability")
+                ),
+                "classifier_success_consecutive_chunks": int(
+                    state_dicts.get("classifier_success_consecutive_chunks", 1)
+                ),
             }
             shared_component_states = _share_ray_value(
                 component_states,
@@ -3381,6 +3408,14 @@ class CotrainRunner(BaseRunner):
             }
             if "classifier_threshold" in payload:
                 component_states["classifier_threshold"] = float(payload["classifier_threshold"])
+            if "classifier_threshold_space" in payload:
+                component_states["classifier_threshold_space"] = str(
+                    payload["classifier_threshold_space"]
+                )
+            if "classifier_success_consecutive_chunks" in payload:
+                component_states["classifier_success_consecutive_chunks"] = int(
+                    payload["classifier_success_consecutive_chunks"]
+                )
             if component_states:
                 shared_component_states = _share_ray_value(
                     component_states,
@@ -3470,6 +3505,12 @@ class CotrainRunner(BaseRunner):
             if "classifier_threshold" in learner_states
             else None
         )
+        classifier_threshold_space = str(
+            learner_states.get("classifier_threshold_space", "probability")
+        )
+        classifier_success_consecutive_chunks = int(
+            learner_states.get("classifier_success_consecutive_chunks", 1)
+        )
         actor_rng_by_rank = groups["ActorGroup"].rng_state_dict().wait()
         learner_rng_by_rank = learner_group.rng_state_dict().wait()
         payload = {
@@ -3488,6 +3529,10 @@ class CotrainRunner(BaseRunner):
         }
         if classifier_threshold is not None:
             payload["classifier_threshold"] = classifier_threshold
+        payload["classifier_threshold_space"] = classifier_threshold_space
+        payload["classifier_success_consecutive_chunks"] = (
+            classifier_success_consecutive_chunks
+        )
         metric_path = None
         topk_manager = self._manual_topk_manager()
         if topk_manager is not None and topk_manager.monitor_key in metrics:
@@ -4449,6 +4494,14 @@ def _load_runner_state_dicts(
         and (components is None or "classifier" in names)
     ):
         loaded["classifier_threshold"] = float(payload["classifier_threshold"])
+        if "classifier_threshold_space" in payload:
+            loaded["classifier_threshold_space"] = str(
+                payload["classifier_threshold_space"]
+            )
+        if "classifier_success_consecutive_chunks" in payload:
+            loaded["classifier_success_consecutive_chunks"] = int(
+                payload["classifier_success_consecutive_chunks"]
+            )
     return loaded
 
 

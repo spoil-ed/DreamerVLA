@@ -418,12 +418,16 @@ def test_wm_env_worker_applies_classifier_threshold_from_component_state() -> No
         worker.load_component_states(
             {
                 "classifier": {},
-                "classifier_threshold": 0.95,
+                "classifier_threshold": -6.455,
+                "classifier_threshold_space": "logit",
+                "classifier_success_consecutive_chunks": 2,
             },
             version=3,
         )
 
-        assert worker.envs[0].success_threshold == 0.95
+        assert worker.envs[0].success_threshold == pytest.approx(-6.455)
+        assert worker.envs[0].success_threshold_space == "logit"
+        assert worker.envs[0].success_consecutive_chunks == 2
     finally:
         worker.close()
 

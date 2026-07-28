@@ -237,7 +237,9 @@ class _Env:
         self.events.append("wm_cls_sync")
         assert sorted(states) == [
             "classifier",
+            "classifier_success_consecutive_chunks",
             "classifier_threshold",
+            "classifier_threshold_space",
             "world_model",
         ]
         return _Ready([{"sync/load_component_states_s": 0.1}])
@@ -292,6 +294,8 @@ class _Learner:
                     "world_model": {"wm": 1},
                     "classifier": {"cls": 2},
                     "classifier_threshold": 0.4,
+                    "classifier_threshold_space": "logit",
+                    "classifier_success_consecutive_chunks": 2,
                 }
             ]
         )

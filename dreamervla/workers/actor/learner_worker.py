@@ -78,6 +78,20 @@ class LearnerWorker(Worker):
         self._cotrain_classifier_updates = 0
         self._cotrain_last_classifier_f1 = 0.0
         self.classifier_threshold: float | None = None
+        self.classifier_threshold_space = str(
+            self.init_ckpt.get("classifier_threshold_space", "probability")
+        ).strip().lower()
+        if self.classifier_threshold_space not in {"probability", "logit"}:
+            raise ValueError(
+                "classifier_threshold_space must be probability or logit"
+            )
+        self.classifier_success_consecutive_chunks = int(
+            self.init_ckpt.get("classifier_success_consecutive_chunks", 1)
+        )
+        if self.classifier_success_consecutive_chunks <= 0:
+            raise ValueError(
+                "classifier_success_consecutive_chunks must be positive"
+            )
         self._train_progress_path = self._resolve_progress_path()
         self._train_progress: dict[str, Any] = {
             "active": False,
@@ -289,6 +303,10 @@ class LearnerWorker(Worker):
             name: _cpu_state_dict(module) for name, module in self.components.items()
         }
         state_dicts["classifier_threshold"] = float(self._classifier_threshold())
+        state_dicts["classifier_threshold_space"] = self.classifier_threshold_space
+        state_dicts["classifier_success_consecutive_chunks"] = (
+            self.classifier_success_consecutive_chunks
+        )
         if include_optimizers:
             for name, optimizer in self.optimizers.items():
                 state_dicts[f"{name}_optimizer"] = _cpu_tree(optimizer.state_dict())

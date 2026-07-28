@@ -279,6 +279,29 @@ def test_learner_state_dicts_include_classifier_threshold(
     assert state_dicts["classifier_threshold"] == 0.875
 
 
+def test_learner_state_dicts_preserve_classifier_decision_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_dummy_syncer(monkeypatch)
+    learner = LearnerWorker(
+        _cotrain_model_cfg(),
+        {
+            "classifier_threshold": -6.455,
+            "classifier_threshold_space": "logit",
+            "classifier_success_consecutive_chunks": 2,
+        },
+        _cotrain_train_cfg(),
+        _DirectReplay(),
+    )
+    learner.init()
+
+    state_dicts = learner.state_dicts()
+
+    assert state_dicts["classifier_threshold"] == pytest.approx(-6.455)
+    assert state_dicts["classifier_threshold_space"] == "logit"
+    assert state_dicts["classifier_success_consecutive_chunks"] == 2
+
+
 def test_learner_checkpoint_threshold_cannot_be_overridden_by_train_cfg(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

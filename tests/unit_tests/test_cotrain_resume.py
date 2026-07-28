@@ -342,6 +342,8 @@ class _LearnerGroup:
                     "world_model_optimizer": {"state": {1: {}}},
                     "classifier_optimizer": {"state": {2: {}}},
                     "classifier_threshold": 0.65,
+                    "classifier_threshold_space": "logit",
+                    "classifier_success_consecutive_chunks": 2,
                 }
             ]
         )
@@ -401,6 +403,9 @@ def test_cotrain_checkpoint_writes_flat_latest_and_metric_topk(tmp_path):
     payload = torch.load(path, map_location="cpu", weights_only=False)
     assert payload["format_version"] == CHECKPOINT_FORMAT_VERSION
     assert payload["epoch"] == 3
+    assert payload["classifier_threshold"] == pytest.approx(0.65)
+    assert payload["classifier_threshold_space"] == "logit"
+    assert payload["classifier_success_consecutive_chunks"] == 2
     assert set(payload["rng"]) == {"python", "numpy", "torch", "cuda"}
     _assert_nested_state_equal(payload["actor_rng_by_rank"], actor_group.rng_states)
     _assert_nested_state_equal(payload["learner_rng_by_rank"], learner_group.rng_states)
@@ -601,17 +606,35 @@ def test_cotrain_component_init_accepts_run_root(tmp_path):
     checkpoint = tmp_path / "wm_run" / "checkpoints" / "latest.ckpt"
     checkpoint.parent.mkdir(parents=True)
     torch.save(
-        {"state_dicts": {"world_model": {"weight": torch.ones(1)}}},
+        {
+            "state_dicts": {
+                "world_model": {"weight": torch.ones(1)},
+                "classifier": {"weight": torch.ones(1)},
+            },
+            "classifier_threshold": -6.455,
+            "classifier_threshold_space": "logit",
+            "classifier_success_consecutive_chunks": 2,
+        },
         checkpoint,
     )
     runner = object.__new__(CotrainRunner)
     runner.cfg = OmegaConf.create(
-        {"learner": {"init_ckpt": {"world_model": str(tmp_path / "wm_run")}}}
+        {
+            "learner": {
+                "init_ckpt": {
+                    "path": str(tmp_path / "wm_run"),
+                    "components": ["world_model", "classifier"],
+                }
+            }
+        }
     )
 
     state = runner._load_init_ckpt("learner.init_ckpt")
 
     torch.testing.assert_close(state["world_model"]["weight"], torch.ones(1))
+    assert state["classifier_threshold"] == pytest.approx(-6.455)
+    assert state["classifier_threshold_space"] == "logit"
+    assert state["classifier_success_consecutive_chunks"] == 2
 
 
 def test_cotrain_run_sets_resume_global_step_before_metric_logger(monkeypatch):
