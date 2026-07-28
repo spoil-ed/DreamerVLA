@@ -582,6 +582,7 @@ class LatentSuccessClassifier(nn.Module):
         task_ids: torch.Tensor | None = None,
         proprio: torch.Tensor | None = None,
         lang_emb: torch.Tensor | None = None,
+        threshold_space: str = "probability",
     ) -> dict[str, torch.Tensor]:
         """Earliest-window success scan over a latent video.
 
@@ -599,7 +600,8 @@ class LatentSuccessClassifier(nn.Module):
         Args:
             latent_video: ``[B, T, latent_dim]`` or ``[B, T, ...]``,
                 ENV-STEP granular.
-            threshold:    p(success) threshold for the positive class.
+            threshold:    success threshold in ``threshold_space``.
+            threshold_space: ``probability`` or unsaturated ``logit``.
             stride:       window stride, NATIVE unit.
             min_steps:    earliest window-end position, NATIVE unit.
 
@@ -609,10 +611,8 @@ class LatentSuccessClassifier(nn.Module):
                               NATIVE unit; ``T_scan - 1`` if no window fired
                               (``T_scan = T // chunk_size`` for chunk,
                                ``T`` for action).
-            ``score``       : ``[B]`` float — max ``p(success)`` seen by the
-                              sliding scan. This gives LUMOS a continuous value
-                              source when sparse threshold outcomes are
-                              all-success or all-fail inside a GRPO group.
+            ``score``       : ``[B]`` float — max success score in the selected
+                              threshold space seen by the sliding scan.
             ``score_step``  : ``[B]`` long — window-end index for ``score`` in
                               the classifier's NATIVE unit.
         """
@@ -624,6 +624,9 @@ class LatentSuccessClassifier(nn.Module):
             raise ValueError(f"min_steps must be >= 0, got {min_steps!r}")
         if not math.isfinite(float(threshold)):
             raise ValueError(f"threshold must be finite, got {threshold!r}")
+        threshold_space = str(threshold_space).strip().lower()
+        if threshold_space not in {"probability", "logit"}:
+            raise ValueError("threshold_space must be probability or logit")
         B, T = int(latent_video.shape[0]), int(latent_video.shape[1])
         W = self.cfg.window
         device = latent_video.device
@@ -658,7 +661,12 @@ class LatentSuccessClassifier(nn.Module):
             )
         complete = torch.zeros(B, dtype=torch.bool, device=device)
         finish_step = torch.full((B,), T_scan - 1, dtype=torch.long, device=device)
-        score = torch.zeros(B, dtype=torch.float32, device=device)
+        score = torch.full(
+            (B,),
+            float("-inf") if threshold_space == "logit" else 0.0,
+            dtype=torch.float32,
+            device=device,
+        )
         score_step = torch.full((B,), T_scan - 1, dtype=torch.long, device=device)
 
         first_end = max(W, int(min_steps) + W)
@@ -671,20 +679,25 @@ class LatentSuccessClassifier(nn.Module):
                 proprio=proprio_window,
                 lang_emb=lang_emb,
             )
-            probs = (
-                torch.sigmoid(logits.squeeze(-1))
+            logit_scores = (
+                logits.squeeze(-1)
                 if logits.shape[-1] == 1
-                else torch.softmax(logits, dim=-1)[:, 1]
+                else logits[:, 1] - logits[:, 0]
             )
-            better = probs > score
+            scores = (
+                torch.sigmoid(logit_scores)
+                if threshold_space == "probability"
+                else logit_scores
+            )
+            better = scores > score
             if better.any():
-                score = torch.where(better, probs.float(), score)
+                score = torch.where(better, scores.float(), score)
                 score_step = torch.where(
                     better,
                     torch.full_like(score_step, end - 1),
                     score_step,
                 )
-            hit = (probs >= threshold) & (~complete)
+            hit = (scores >= threshold) & (~complete)
             if hit.any():
                 finish_step = torch.where(
                     hit,

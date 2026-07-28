@@ -24,8 +24,8 @@ The training loop is epoch-based:
 
 Window-level F1 uses softmax + threshold sweep to mirror ``predict_success``
 (note: LUMOS sweep is [0.3, 1.0]; we expose the bounds via cfg).
-Episode-level F1 mirrors ``predict_success`` (stride-1 sliding window +
-``any-positive`` aggregation).
+Episode-level selection scans stride-1 windows and jointly calibrates the
+required consecutive-positive chunk count and threshold.
 
 The runner owns resume, checkpointing, logging, and Hydra override behavior so
 classifier training follows the same contract as WM and DreamerVLA routes.
@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 import time
 from itertools import islice
 from typing import Any
@@ -105,6 +106,25 @@ def _success_probabilities_from_logits(logits: torch.Tensor) -> torch.Tensor:
     raise ValueError(f"classifier logits last dim must be 1 or 2, got {logits.shape[-1]}")
 
 
+def _success_scores_from_logits(
+    logits: torch.Tensor,
+    *,
+    threshold_space: str,
+) -> torch.Tensor:
+    """Return monotonic success scores without losing saturated logit ordering."""
+
+    space = str(threshold_space).strip().lower()
+    if space == "probability":
+        return _success_probabilities_from_logits(logits)
+    if space != "logit":
+        raise ValueError("threshold_space must be probability or logit")
+    if int(logits.shape[-1]) == 1:
+        return logits.squeeze(-1).float()
+    if int(logits.shape[-1]) == 2:
+        return (logits[:, 1] - logits[:, 0]).float()
+    raise ValueError(f"classifier logits last dim must be 1 or 2, got {logits.shape[-1]}")
+
+
 def _classifier_loss_and_predictions(
     logits: torch.Tensor,
     ys: torch.Tensor,
@@ -112,8 +132,16 @@ def _classifier_loss_and_predictions(
     loss_type: str,
     label_smoothing: float,
     class_weight: torch.Tensor | None,
+    false_positive_weight: float = 1.0,
+    false_positive_focal_gamma: float = 0.0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     loss_type = str(loss_type)
+    false_positive_weight = float(false_positive_weight)
+    if false_positive_weight < 1.0:
+        raise ValueError("false_positive_weight must be >= 1.0")
+    false_positive_focal_gamma = float(false_positive_focal_gamma)
+    if false_positive_focal_gamma < 0.0:
+        raise ValueError("false_positive_focal_gamma must be >= 0.0")
     if loss_type == "bce":
         if int(logits.shape[-1]) != 1:
             raise ValueError("BCE classifier loss requires output_dim=1")
@@ -129,20 +157,42 @@ def _classifier_loss_and_predictions(
                 pos_weight = class_weight.reshape(())
             else:
                 raise ValueError("BCE class_weight must have one or two elements")
-        loss = F.binary_cross_entropy_with_logits(
+        element_loss = F.binary_cross_entropy_with_logits(
             logits.squeeze(-1),
             targets,
             pos_weight=pos_weight,
+            reduction="none",
         )
+        # A false-success prediction is the dangerous error for imagined
+        # rollouts. Weight negative examples explicitly instead of relying on
+        # a post-hoc threshold that may leave no usable positive predictions.
+        negative_weight = torch.full_like(element_loss, false_positive_weight)
+        if false_positive_focal_gamma:
+            negative_weight = negative_weight * torch.sigmoid(
+                logits.squeeze(-1).detach()
+            ).pow(false_positive_focal_gamma)
+        sample_weight = torch.where(
+            ys.bool(),
+            torch.ones_like(element_loss),
+            negative_weight,
+        )
+        loss = (element_loss * sample_weight).mean()
         pred = (_success_probabilities_from_logits(logits) >= 0.5).long()
         return loss, pred
     if loss_type == "ce":
         if int(logits.shape[-1]) != 2:
             raise ValueError("CE classifier loss requires output_dim=2")
+        ce_weight = class_weight
+        if false_positive_weight > 1.0:
+            if ce_weight is None:
+                ce_weight = torch.ones(2, device=logits.device, dtype=logits.dtype)
+            else:
+                ce_weight = ce_weight.to(device=logits.device, dtype=logits.dtype).clone()
+            ce_weight[0] *= false_positive_weight
         loss = F.cross_entropy(
             logits,
             ys.long(),
-            weight=class_weight,
+            weight=ce_weight,
             label_smoothing=float(label_smoothing),
         )
         return loss, logits.argmax(dim=-1)
@@ -171,6 +221,11 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         "classifier_threshold",
         "classifier_threshold_metric",
         "classifier_threshold_objective",
+        "classifier_threshold_space",
+        "classifier_success_aggregation",
+        "classifier_calibrated_task_ids",
+        "classifier_threshold_false_positives",
+        "classifier_success_consecutive_chunks",
     )
 
     def __init__(self, config: DictConfig, output_dir: str | None = None) -> None:
@@ -231,6 +286,11 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         self.classifier_threshold = 0.5
         self.classifier_threshold_metric = "unselected"
         self.classifier_threshold_objective = "f1"
+        self.classifier_threshold_space = "probability"
+        self.classifier_success_aggregation = "rolling_streak"
+        self.classifier_calibrated_task_ids: list[int] = []
+        self.classifier_threshold_false_positives = -1
+        self.classifier_success_consecutive_chunks = 1
         self._log_path: pathlib.Path | None = None
         self._pending_setup_logs: list[dict[str, Any]] = []
         self._last_episode_eval_step = -1
@@ -322,6 +382,37 @@ class SuccessClassifierTrainingRunner(BaseRunner):
             ),
             "classifier_threshold_objective": str(
                 getattr(self, "classifier_threshold_objective", "f1")
+            ),
+            "classifier_threshold_space": str(
+                getattr(self, "classifier_threshold_space", "probability")
+            ),
+            "classifier_success_aggregation": str(
+                getattr(self, "classifier_success_aggregation", "rolling_streak")
+            ),
+            "classifier_calibrated_task_ids": list(
+                getattr(self, "classifier_calibrated_task_ids", [])
+            ),
+            "classifier_threshold_false_positives": int(
+                getattr(self, "classifier_threshold_false_positives", -1)
+            ),
+            "classifier_success_consecutive_chunks": int(
+                getattr(self, "classifier_success_consecutive_chunks", 1)
+            ),
+            "classifier_false_positive_weight": float(
+                OmegaConf.select(
+                    self.cfg,
+                    "training.false_positive_weight",
+                    default=1.0,
+                )
+                or 1.0
+            ),
+            "classifier_false_positive_focal_gamma": float(
+                OmegaConf.select(
+                    self.cfg,
+                    "training.false_positive_focal_gamma",
+                    default=0.0,
+                )
+                or 0.0
             ),
             "best_window_f1": float(getattr(self, "best_window_f1", -1.0)),
             "best_window_threshold": float(getattr(self, "best_window_threshold", 0.5)),
@@ -771,6 +862,29 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         steps_per_epoch = self._steps_per_epoch(steps_per_epoch_cfg)
         label_smoothing = float(OmegaConf.select(tr, "label_smoothing") or 0.0)
         loss_type = str(OmegaConf.select(tr, "loss_type") or "ce")
+        false_positive_weight = float(
+            OmegaConf.select(tr, "false_positive_weight", default=1.0) or 1.0
+        )
+        false_positive_focal_gamma = float(
+            OmegaConf.select(
+                tr,
+                "false_positive_focal_gamma",
+                default=0.0,
+            )
+            or 0.0
+        )
+        if false_positive_weight < 1.0:
+            raise ValueError("training.false_positive_weight must be >= 1.0")
+        if false_positive_focal_gamma < 0.0:
+            raise ValueError("training.false_positive_focal_gamma must be >= 0.0")
+        self._log(
+            {
+                "event": "asymmetric_error_cost",
+                "false_positive_weight": false_positive_weight,
+                "false_positive_focal_gamma": false_positive_focal_gamma,
+                "false_negative_weight": 1.0,
+            }
+        )
 
         # class-balanced CE (matches LUMOS `nn.CrossEntropyLoss()` *unweighted* by
         # default; user can flip via cfg.training.class_balanced)
@@ -825,6 +939,8 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                             loss_type=loss_type,
                             label_smoothing=label_smoothing,
                             class_weight=cw,
+                            false_positive_weight=false_positive_weight,
+                            false_positive_focal_gamma=false_positive_focal_gamma,
                         )
                 with timer.device_stage("backward"):
                     loss.backward()
@@ -1022,6 +1138,31 @@ class SuccessClassifierTrainingRunner(BaseRunner):
             np.asarray(all_labels, dtype=np.int64),
         )
 
+    def _gather_episode_predictions(
+        self,
+        scores: list[float],
+        labels: list[int],
+        episode_ids: list[str],
+    ) -> tuple[np.ndarray, np.ndarray, list[str]]:
+        gather = getattr(getattr(self, "distributed", None), "all_gather_objects", None)
+        shards = (
+            gather((list(scores), list(labels), list(episode_ids)))
+            if callable(gather)
+            else [(list(scores), list(labels), list(episode_ids))]
+        )
+        all_scores: list[float] = []
+        all_labels: list[int] = []
+        all_episode_ids: list[str] = []
+        for shard_scores, shard_labels, shard_ids in shards:
+            all_scores.extend(float(value) for value in shard_scores)
+            all_labels.extend(int(value) for value in shard_labels)
+            all_episode_ids.extend(str(value) for value in shard_ids)
+        return (
+            np.asarray(all_scores, dtype=np.float32),
+            np.asarray(all_labels, dtype=np.int64),
+            all_episode_ids,
+        )
+
     @torch.no_grad()
     def _evaluate_window_level(self) -> dict[str, Any]:
         """Softmax + threshold sweep over the positive class.
@@ -1067,11 +1208,13 @@ class SuccessClassifierTrainingRunner(BaseRunner):
 
     @torch.no_grad()
     def _evaluate_episode_level(self) -> dict[str, Any]:
-        """LUMOS predict_success protocol — stride-1 sliding + any-positive.
+        """Evaluate sustained trajectory success and jointly calibrate its gate.
 
         For each demo, scan stride-1 windows over the full trajectory (from
-        ``min_steps + W`` to ``finish_step``). Use ``max`` over windows as the
-        episode-level score, sweep thresholds, return best F1.
+        ``min_steps + W`` to ``finish_step``). For each configured consecutive
+        length N, use the maximum rolling minimum as the episode score, then
+        select the N/threshold pair with the highest held-out success recall
+        subject to zero false-success episodes.
 
         Unit convention: ``episode_eval_min_steps`` and
         ``episode_eval_stride`` are in the classifier's NATIVE unit
@@ -1086,13 +1229,55 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         min_steps = int(OmegaConf.select(tr, "episode_eval_min_steps") or 0)
         stride = int(OmegaConf.select(tr, "episode_eval_stride") or 1)
         ep_batch = max(1, int(OmegaConf.select(tr, "episode_eval_batch") or 256))
+        selected_task_ids_cfg = OmegaConf.select(
+            tr,
+            "episode_eval_task_ids",
+            default=None,
+        )
+        selected_task_ids = (
+            None
+            if selected_task_ids_cfg is None
+            else {int(value) for value in selected_task_ids_cfg}
+        )
 
         K = int(getattr(self.val_ds, "K", 1))
         chunk_pool = str(getattr(self.val_ds, "chunk_pool", "last"))
 
         self.model.eval()
-        ep_max_prob: list[float] = []
+        threshold_space = str(
+            OmegaConf.select(
+                tr,
+                "episode_threshold_space",
+                default="probability",
+            )
+        ).lower()
+        aggregation = str(
+            OmegaConf.select(
+                tr,
+                "episode_success_aggregation",
+                default="rolling_streak",
+            )
+        ).lower()
+        if aggregation not in {"rolling_streak", "terminal_streak"}:
+            raise ValueError(
+                "episode_success_aggregation must be rolling_streak or terminal_streak"
+            )
+        consecutive_cfg = OmegaConf.select(
+            tr,
+            "episode_success_consecutive_chunks",
+            default=1,
+        )
+        if OmegaConf.is_list(consecutive_cfg) or isinstance(
+            consecutive_cfg, (list, tuple)
+        ):
+            consecutive_candidates = tuple(
+                sorted({max(1, int(value)) for value in consecutive_cfg})
+            )
+        else:
+            consecutive_candidates = (max(1, int(consecutive_cfg or 1)),)
+        ep_window_probs: list[list[float]] = []
         ep_true: list[int] = []
+        ep_ids: list[str] = []
 
         # Stream windows through the classifier in small batches. Token-grid
         # episodes are large, so materializing every episode window before the
@@ -1122,21 +1307,38 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                 torch.from_numpy(chunk).float().to(self.device),
                 **forward_kwargs,
             )
-            p = _success_probabilities_from_logits(logits).detach().cpu().numpy()
+            p = (
+                _success_scores_from_logits(
+                    logits,
+                    threshold_space=threshold_space,
+                )
+                .detach()
+                .cpu()
+                .numpy()
+            )
             for eid, pj in zip(flat_ep, p, strict=True):
-                if pj > ep_max_prob[eid]:
-                    ep_max_prob[eid] = float(pj)
+                ep_window_probs[eid].append(float(pj))
             flat_xs.clear()
             flat_proprio.clear()
             flat_lang.clear()
             flat_ep.clear()
 
-        for ep_idx, trajectory in enumerate(self.val_ds.trajectories()):
+        for trajectory in self.val_ds.trajectories():
             if len(trajectory) == 5:
                 obs, complete, finish_step, _eid, extra = trajectory
             else:
                 obs, complete, finish_step, _eid = trajectory
                 extra = {}
+            task_match = re.search(r"(?:^|_)t(\d+)(?:_|$)", str(_eid))
+            task_id = int(task_match.group(1)) if task_match is not None else None
+            if selected_task_ids is not None:
+                if task_id is None:
+                    raise ValueError(
+                        f"cannot infer task id from validation episode id {_eid!r}"
+                    )
+                if task_id not in selected_task_ids:
+                    continue
+            selected_ep_idx = len(ep_true)
             T_env = int(min(finish_step, obs.shape[0]))
             proprio = extra.get("proprio") if isinstance(extra, dict) else None
             lang_emb = extra.get("lang_emb") if isinstance(extra, dict) else None
@@ -1186,26 +1388,22 @@ class SuccessClassifierTrainingRunner(BaseRunner):
                 proprio_pooled = proprio if isinstance(proprio, np.ndarray) else None
                 T = T_env
             ep_true.append(int(bool(complete)))
+            ep_ids.append(str(_eid))
+            ep_window_probs.append([])
             first_end = max(W, min_steps + W)
             if first_end > T or obs_pooled is None:
-                ep_max_prob.append(0.0)
                 continue
-            ep_max_prob.append(-1.0)  # placeholder; updated below
             for end in range(first_end, T + 1, stride):
                 flat_xs.append(obs_pooled[end - W : end])
                 if proprio_pooled is not None:
                     flat_proprio.append(proprio_pooled[end - W : end])
                 if isinstance(lang_emb, np.ndarray):
                     flat_lang.append(lang_emb)
-                flat_ep.append(ep_idx)
+                flat_ep.append(selected_ep_idx)
                 if len(flat_xs) >= ep_batch:
                     flush_windows()
         flush_windows()
 
-        # placeholder -1.0 → 0.0 (too-short episodes)
-        ep_max_prob = [max(0.0, p) for p in ep_max_prob]
-
-        probs, ys = self._gather_binary_predictions(ep_max_prob, ep_true)
         thresholds = np.linspace(
             float(OmegaConf.select(tr, "thresh_min") or 0.3),
             float(OmegaConf.select(tr, "thresh_max") or 1.0),
@@ -1214,13 +1412,112 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         selection_metric = str(
             OmegaConf.select(tr, "episode_threshold_metric", default="f1")
         ).lower()
-        return _sweep_metrics(
-            probs,
-            ys,
-            thresholds,
-            tag="episode",
-            selection_metric=selection_metric,
+        best_metrics: dict[str, Any] | None = None
+        consecutive_sweep: dict[str, dict[str, float | int]] = {}
+        best_per_task: dict[str, dict[str, float | int]] = {}
+        for consecutive in consecutive_candidates:
+            # Requiring N consecutive windows above a threshold is equivalent
+            # to thresholding max(rolling-min(probabilities, N)).
+            ep_max_prob: list[float] = []
+            for values in ep_window_probs:
+                if len(values) < consecutive:
+                    ep_max_prob.append(
+                        float("-inf") if threshold_space == "logit" else 0.0
+                    )
+                    continue
+                if aggregation == "terminal_streak":
+                    ep_max_prob.append(min(values[-consecutive:]))
+                else:
+                    ep_max_prob.append(
+                        max(
+                            min(values[start : start + consecutive])
+                            for start in range(len(values) - consecutive + 1)
+                        )
+                    )
+            probs, ys, episode_ids = self._gather_episode_predictions(
+                ep_max_prob,
+                ep_true,
+                ep_ids,
+            )
+            candidate = _sweep_metrics(
+                probs,
+                ys,
+                thresholds,
+                tag="episode",
+                selection_metric=selection_metric,
+            )
+            candidate["success_consecutive_chunks"] = int(consecutive)
+            per_task: dict[str, dict[str, float | int]] = {}
+            def task_key_for(episode_id: str) -> str:
+                shard = episode_id.split("/", 1)[0]
+                return shard.split("_ep", 1)[0]
+
+            for task_key in sorted({task_key_for(episode_id) for episode_id in episode_ids}):
+                task_indices = np.asarray(
+                    [
+                        index
+                        for index, episode_id in enumerate(episode_ids)
+                        if task_key_for(episode_id) == task_key
+                    ],
+                    dtype=np.int64,
+                )
+                task_probs = probs[task_indices].astype(np.float64)
+                task_labels = ys[task_indices]
+                negative_scores = task_probs[task_labels == 0]
+                positive_scores = task_probs[task_labels == 1]
+                # A task with no held-out failures cannot establish a safe
+                # operating point; conservatively reject all for that task.
+                if negative_scores.size:
+                    task_threshold = np.nextafter(
+                        float(negative_scores.max()),
+                        np.inf,
+                    )
+                    task_recall = float(
+                        (positive_scores >= task_threshold).mean()
+                    ) if positive_scores.size else 0.0
+                else:
+                    task_threshold = np.nextafter(
+                        float(task_probs.max()) if task_probs.size else 0.0,
+                        np.inf,
+                    )
+                    task_recall = 0.0
+                per_task[task_key] = {
+                    "best_score": task_recall,
+                    "best_thresh": float(task_threshold),
+                    "best_recall": task_recall,
+                    "best_false_positives": 0,
+                    "n_pos": int(positive_scores.size),
+                    "n_neg": int(negative_scores.size),
+                }
+            candidate["per_task"] = per_task
+            for task_key, task_metrics in per_task.items():
+                previous = best_per_task.get(task_key)
+                if previous is None or float(task_metrics["best_score"]) > float(
+                    previous["best_score"]
+                ):
+                    best_per_task[task_key] = {
+                        **task_metrics,
+                        "success_consecutive_chunks": int(consecutive),
+                    }
+            consecutive_sweep[str(consecutive)] = {
+                "best_score": float(candidate["best_score"]),
+                "best_thresh": float(candidate["best_thresh"]),
+                "best_recall": float(candidate["best_recall"]),
+                "best_false_positives": int(candidate["best_false_positives"]),
+            }
+            if best_metrics is None or float(candidate["best_score"]) > float(
+                best_metrics["best_score"]
+            ):
+                best_metrics = candidate
+        assert best_metrics is not None
+        best_metrics["consecutive_sweep"] = consecutive_sweep
+        best_metrics["best_per_task"] = best_per_task
+        best_metrics["threshold_space"] = threshold_space
+        best_metrics["success_aggregation"] = aggregation
+        best_metrics["calibrated_task_ids"] = (
+            sorted(selected_task_ids) if selected_task_ids is not None else []
         )
+        return best_metrics
 
     # --------------------------- io helpers ----------------------------
 
@@ -1300,6 +1597,21 @@ class SuccessClassifierTrainingRunner(BaseRunner):
         self.classifier_threshold = threshold
         self.classifier_threshold_metric = f"{selection}_f1"
         self.classifier_threshold_objective = str(selected_metrics.get("selection_metric", "f1"))
+        self.classifier_threshold_space = str(
+            selected_metrics.get("threshold_space", "probability")
+        )
+        self.classifier_success_aggregation = str(
+            selected_metrics.get("success_aggregation", "rolling_streak")
+        )
+        self.classifier_calibrated_task_ids = [
+            int(value) for value in selected_metrics.get("calibrated_task_ids", [])
+        ]
+        self.classifier_threshold_false_positives = int(
+            selected_metrics.get("best_false_positives", -1)
+        )
+        self.classifier_success_consecutive_chunks = int(
+            selected_metrics.get("success_consecutive_chunks", 1)
+        )
         if selection == "episode":
             self.best_episode_ckpt_path = str(path)
             self.best_episode_threshold = threshold

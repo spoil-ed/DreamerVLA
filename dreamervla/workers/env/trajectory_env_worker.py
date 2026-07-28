@@ -1022,6 +1022,28 @@ def _derive_wm_classifier_success_rates(
         )
 
 
+def _sustained_success_mask(
+    rewards: torch.Tensor,
+    *,
+    threshold: float,
+    consecutive: int,
+    chunk_granularity: bool,
+    terminal_only: bool = False,
+) -> torch.Tensor:
+    """Identify trajectories with sustained, rather than one-off, evidence."""
+
+    values = rewards.reshape(int(rewards.shape[0]), int(rewards.shape[1]), -1)
+    if chunk_granularity:
+        values = values[..., -1:]
+    evidence = values.ge(float(threshold)).any(dim=2)
+    streak = torch.zeros((int(evidence.shape[1]),), dtype=torch.long)
+    confirmed = torch.zeros_like(streak, dtype=torch.bool)
+    for row in evidence:
+        streak = torch.where(row, streak + 1, torch.zeros_like(streak))
+        confirmed |= streak >= int(consecutive)
+    return (streak >= int(consecutive)) if terminal_only else confirmed
+
+
 @dataclass(frozen=True)
 class _TrajectoryChunk:
     """Internal raw trajectory chunk buffered before actor-channel emission."""
@@ -1134,6 +1156,7 @@ class BaseTrajectoryEnvWorker(Worker):
         self.global_step = 0
         self._pending_component_states: dict[str, tuple[dict[str, Any], int]] = {}
         self._pending_classifier_threshold: float | None = None
+        self._pending_classifier_threshold_space: str | None = None
         self._last_apply_completed_episodes = 0
         self._last_apply_successful_episodes = 0
         self._last_apply_physical_steps = 0
@@ -1558,7 +1581,7 @@ class BaseTrajectoryEnvWorker(Worker):
         self._last_apply_physical_steps = int(accum.physical_steps)
         self._last_apply_classifier_success_chunks = int(accum.classifier_success_chunks)
         self._last_apply_classifier_total_chunks = int(accum.classifier_total_chunks)
-        self._last_apply_classifier_success_trajectories = int(accum.classifier_success_chunks > 0)
+        self._last_apply_classifier_success_trajectories = int(accum.successful)
         self._last_apply_classifier_total_trajectories = int(
             self.role == "wm_env" and accum.classifier_total_chunks > 0
         )
@@ -2277,14 +2300,27 @@ class BaseTrajectoryEnvWorker(Worker):
         rewards = as_tensor(shard.rewards).detach().cpu().float()
         if rewards.ndim < 2:
             raise ValueError("trajectory rewards must have [time, batch, ...] shape")
-        success_mask = (
-            rewards.reshape(
-                int(rewards.shape[0]),
-                int(rewards.shape[1]),
-                -1,
-            )
-            .ge(float(threshold))
-            .any(dim=(0, 2))
+        env_kwargs = _plain_dict(self.env_cfg.get("kwargs", {}))
+        consecutive = max(
+            1,
+            int(
+                self.env_cfg.get(
+                    "success_consecutive_chunks",
+                    env_kwargs.get("success_consecutive_chunks", 1),
+                )
+            ),
+        )
+        classifier_granularity = str(
+            self.env_cfg.get("classifier_granularity", "chunk")
+        ).strip().lower()
+        success_mask = _sustained_success_mask(
+            rewards,
+            threshold=float(threshold),
+            consecutive=consecutive,
+            chunk_granularity=classifier_granularity == "chunk",
+            terminal_only=bool(
+                self.env_cfg.get("classifier_success_terminal_only", False)
+            ),
         )
         indices = torch.nonzero(success_mask, as_tuple=False).reshape(-1)
         if emit_success_group:
@@ -2833,7 +2869,7 @@ class BaseTrajectoryEnvWorker(Worker):
                         "successful_episodes": float(successful),
                         "classifier_success_chunks": float(classifier_success_chunks),
                         "classifier_total_chunks": float(classifier_total_chunks),
-                        "classifier_success_trajectories": float(classifier_success_chunks > 0),
+                        "classifier_success_trajectories": float(successful),
                         "classifier_total_trajectories": 1.0,
                     },
                 )
@@ -2866,6 +2902,16 @@ class BaseTrajectoryEnvWorker(Worker):
             threshold = float(state_dicts["classifier_threshold"])
             self.set_classifier_threshold(threshold)
             metrics["sync/classifier_threshold"] = threshold
+        if "classifier_threshold_space" in state_dicts:
+            threshold_space = str(state_dicts["classifier_threshold_space"])
+            self.set_classifier_threshold_space(threshold_space)
+            metrics["sync/classifier_threshold_is_logit"] = float(
+                threshold_space.strip().lower() == "logit"
+            )
+        if "classifier_success_consecutive_chunks" in state_dicts:
+            consecutive = int(state_dicts["classifier_success_consecutive_chunks"])
+            self.set_classifier_success_consecutive_chunks(consecutive)
+            metrics["sync/classifier_success_consecutive_chunks"] = float(consecutive)
         for component in ("world_model", "classifier"):
             if component not in state_dicts:
                 continue
@@ -2885,6 +2931,8 @@ class BaseTrajectoryEnvWorker(Worker):
             self._apply_component_state(component, state_dict, version)
         if self._pending_classifier_threshold is not None:
             self.set_classifier_threshold(float(self._pending_classifier_threshold))
+        if self._pending_classifier_threshold_space is not None:
+            self.set_classifier_threshold_space(self._pending_classifier_threshold_space)
 
     def _apply_component_state(
         self,
@@ -2922,6 +2970,44 @@ class BaseTrajectoryEnvWorker(Worker):
                     "WMEnvWorker env "
                     f"{type(env).__name__} must expose set_success_threshold() "
                     "or success_threshold"
+                )
+
+    def set_classifier_threshold_space(self, threshold_space: str) -> None:
+        value = str(threshold_space).strip().lower()
+        if value not in {"probability", "logit"}:
+            raise ValueError("classifier threshold space must be probability or logit")
+        self._pending_classifier_threshold_space = value
+        self.env_cfg["success_threshold_space"] = value
+        env_kwargs = _plain_dict(self.env_cfg.get("kwargs", {}))
+        env_kwargs["success_threshold_space"] = value
+        self.env_cfg["kwargs"] = env_kwargs
+        for env in self.envs:
+            setter = getattr(env, "set_success_threshold_space", None)
+            if callable(setter):
+                setter(value)
+            elif hasattr(env, "success_threshold_space"):
+                env.success_threshold_space = value
+            elif self.role == "wm_env":
+                raise TypeError(
+                    f"{type(env).__name__} must expose set_success_threshold_space() "
+                    "or success_threshold_space"
+                )
+
+    def set_classifier_success_consecutive_chunks(self, consecutive: int) -> None:
+        value = int(consecutive)
+        if value <= 0:
+            raise ValueError("classifier success consecutive chunks must be positive")
+        self.env_cfg["success_consecutive_chunks"] = value
+        for env in self.envs:
+            setter = getattr(env, "set_success_consecutive_chunks", None)
+            if callable(setter):
+                setter(value)
+            elif hasattr(env, "success_consecutive_chunks"):
+                env.success_consecutive_chunks = value
+            elif self.role == "wm_env":
+                raise TypeError(
+                    f"{type(env).__name__} must expose set_success_consecutive_chunks() "
+                    "or success_consecutive_chunks"
                 )
 
     def refresh_wm_initial_conditions(self) -> dict[str, float]:

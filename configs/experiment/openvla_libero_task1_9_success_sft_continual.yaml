@@ -1,0 +1,36 @@
+# @package _global_
+# Continue the task-balanced imagined-success SFT route with fresh trajectories
+# on every global step. A resident real-environment evaluation transaction
+# commits only candidates that do not regress from the best accepted policy.
+defaults:
+  - openvla_libero_task1_9_success_sft_extended
+  - _self_
+
+run:
+  name: openvla_libero_task1_9_success_sft_continual
+
+manual_cotrain:
+  resume_ckpt: null
+  # Resume at global step 1 and run one fresh imagination/update cycle. The
+  # retained imagined dataset is reused for extra SFT epochs below.
+  global_steps: 2
+  eval_interval_global_steps: 1
+  rollback_on_eval_regression: true
+  eval_guard_min_delta: 0.0
+  # Persist the final accepted state once. Intermediate candidates remain
+  # transactional in memory, while the global-step-1 checkpoint stays intact.
+  checkpoint_every: 2
+
+checkpoint:
+  topk:
+    monitor_key: eval/accepted_success_rate
+    metric_name: accuracy
+    mode: max
+    k: 1
+
+actor:
+  train_cfg:
+    success_sft:
+      # Reuse the same 72 task-balanced imagined successes for twice as many
+      # passes: 8 epochs * 8 synchronized optimizer steps = 64 updates.
+      epochs: 8

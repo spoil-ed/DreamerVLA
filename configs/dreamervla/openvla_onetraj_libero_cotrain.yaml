@@ -266,6 +266,10 @@ env:
         lang_dim: ${task.openvla_oft.hidden_token.lang_dim}
         proprio_dim: ${task.openvla_oft.hidden_token.proprio_dim}
         success_threshold: 0.5
+        # One high score over a long rollout is insufficient evidence.
+        success_consecutive_chunks: 2
+        success_threshold_space: probability
+        terminate_on_success: true
         max_episode_steps: ${manual_cotrain.max_steps_per_rollout_epoch}
         num_envs: ${manual_cotrain.wm_envs_per_worker}
         device: cuda

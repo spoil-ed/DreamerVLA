@@ -37,6 +37,17 @@ class _Actor:
         self.reencoded_batch = batch
         return _Ready([batch])
 
+    def finalize_policy_transaction(self, observed_kl: float, max_kl: float):
+        accepted = float(observed_kl) <= float(max_kl)
+        return _Ready(
+            [
+                {
+                    "actor/kl_transaction_accepted": float(accepted),
+                    "actor/kl_transaction_rolled_back": float(not accepted),
+                }
+            ]
+        )
+
 
 class _Rollout:
     workers = (object(), object())
@@ -190,6 +201,60 @@ def test_resident_eval_layout_rejects_uneven_episode_budget() -> None:
         )
 
 
+def test_resumed_eval_can_establish_paired_baseline_at_nonzero_step() -> None:
+    runner = CotrainRunner(_cfg())
+
+    baseline = runner._paired_eval_outcome_metrics(
+        _eval_batch(1),
+        global_step=1,
+        establish_baseline=True,
+    )
+    post = runner._paired_eval_outcome_metrics(
+        _eval_batch(2),
+        global_step=2,
+    )
+
+    assert baseline["eval/paired/is_baseline"] == 1.0
+    assert baseline["eval/paired/baseline_success_rate"] == 0.5
+    assert post["eval/paired/post_success_rate"] == 0.5
+
+
+def test_eval_guard_commits_only_non_regressing_candidate() -> None:
+    cfg = _cfg()
+    cfg.manual_cotrain.rollback_on_eval_regression = True
+    runner = CotrainRunner(cfg)
+    runner._eval_guard_best_score = 0.56
+    actor = _Actor()
+
+    accepted = {
+        "eval/success_rate": 0.58,
+        "actor/policy_kl_total": 0.01,
+        "actor/success_sft_optimizer_steps": 32.0,
+        "actor/success_sft_update_committed": 1.0,
+    }
+    accepted_metrics = runner._finalize_eval_guard(actor, accepted)
+
+    assert accepted_metrics["train/eval_guard_accepted"] == 1.0
+    assert accepted_metrics["eval/accepted_success_rate"] == 0.58
+    assert runner._applied_policy_steps == 32
+
+    rejected = {
+        "eval/success_rate": 0.55,
+        "actor/policy_kl_total": 0.01,
+        "actor/success_sft_optimizer_steps": 32.0,
+        "actor/success_sft_update_committed": 1.0,
+    }
+    rejected_metrics = runner._finalize_eval_guard(actor, rejected)
+
+    assert rejected_metrics["train/eval_guard_rolled_back"] == 1.0
+    assert rejected_metrics["eval/accepted_success_rate"] == 0.58
+    assert rejected["actor/success_sft_update_committed"] == 0.0
+    assert rejected["actor/policy_kl_total"] == 0.0
+    assert runner._applied_policy_steps == 32
+    assert runner._expected_eval_guard_rejection(rejected_metrics) is True
+    assert runner._expected_eval_guard_rejection(accepted_metrics) is False
+
+
 def test_resident_eval_reuses_rollout_group_without_checkpoint_reload() -> None:
     runner = CotrainRunner(_cfg())
     runner.console_progress = lambda *_args, **_kwargs: None
@@ -222,6 +287,11 @@ def test_resident_eval_reuses_rollout_group_without_checkpoint_reload() -> None:
     assert metrics["eval/episodes"] == 100.0
     assert metrics["eval/successes"] == 56.0
     assert metrics["eval/success_rate"] == 0.56
+    assert metrics["eval/paired/baseline_success_rate"] == 0.5
+    assert metrics["eval/paired/post_success_rate"] == 0.5
+    assert metrics["eval/paired/success_rate_delta"] == 0.0
+    assert metrics["eval/paired/success_rate_percentage_points"] == 0.0
+    assert metrics["eval/paired/relative_success_rate_improvement_percent"] == 0.0
     assert metrics["eval/wm_closed_loop_cosine"] == 0.75
     assert metrics["eval/classifier_real_f1"] == 0.8
     assert metrics["eval/classifier_real_accuracy"] == 0.82

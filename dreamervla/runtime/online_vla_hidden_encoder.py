@@ -66,6 +66,8 @@ class OnlineVLAHiddenEncoder:
         if len(prompts) != batch:
             raise ValueError(f"prompt batch mismatch: {len(prompts)} != {batch}")
         raw = images.detach().cpu().numpy()
+        if raw.dtype != np.uint8:
+            raw = np.clip(raw, 0, 255).astype(np.uint8)
         flat_images: list[np.ndarray] = []
         flat_prompts: list[str] = []
         for batch_idx in range(batch):

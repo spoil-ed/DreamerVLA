@@ -210,6 +210,56 @@ def test_threshold_sweep_can_select_class_balanced_macro_f1() -> None:
     assert balanced["best_score"] == balanced["best_macro_f1"]
 
 
+def test_threshold_sweep_maximizes_recall_subject_to_zero_false_positives() -> None:
+    probs = np.asarray([0.95, 0.8, 0.7, 0.6], dtype=np.float32)
+    ys = np.asarray([1, 0, 1, 0], dtype=np.int64)
+
+    metrics = sweep_threshold_metrics(
+        probs,
+        ys,
+        np.asarray([0.5, 0.75, 0.9], dtype=np.float32),
+        tag="episode",
+        selection_metric="recall_at_zero_fp",
+    )
+
+    assert 0.8 < metrics["best_thresh"] < 0.9
+    assert metrics["best_false_positives"] == 0
+    assert metrics["best_precision"] == 1.0
+    assert metrics["best_recall"] == 0.5
+    assert metrics["zero_false_positive_constraint_satisfied"] is True
+
+
+def test_threshold_sweep_zero_fp_has_reject_all_fallback() -> None:
+    metrics = sweep_threshold_metrics(
+        np.asarray([1.0, 1.0], dtype=np.float32),
+        np.asarray([1, 0], dtype=np.int64),
+        np.asarray([1.0], dtype=np.float32),
+        tag="episode",
+        selection_metric="recall_at_zero_fp",
+    )
+
+    assert metrics["best_thresh"] > 1.0
+    assert metrics["best_false_positives"] == 0
+    assert metrics["best_recall"] == 0.0
+
+
+def test_threshold_sweep_zero_fp_uses_exact_failure_boundary() -> None:
+    probabilities = np.asarray([0.9910, 0.9905, 0.9900, 0.10], dtype=np.float32)
+    labels = np.asarray([1, 1, 0, 0], dtype=np.int64)
+
+    metrics = sweep_threshold_metrics(
+        probabilities,
+        labels,
+        np.asarray([0.98, 1.0], dtype=np.float64),
+        tag="episode",
+        selection_metric="recall_at_zero_fp",
+    )
+
+    assert metrics["best_false_positives"] == 0
+    assert metrics["best_recall"] == pytest.approx(1.0)
+    assert 0.9900 < metrics["best_thresh"] < 0.9905
+
+
 def test_demo_pair_partition_stratifies_success_and_failure(tmp_path: Path) -> None:
     import h5py
 
@@ -1001,6 +1051,72 @@ def test_bce_classifier_loss_uses_float_targets_and_sigmoid_predictions() -> Non
     assert pred.tolist() == [0, 1, 1, 0]
 
 
+def test_bce_classifier_loss_penalizes_false_success_more_heavily() -> None:
+    logits = torch.tensor([[2.0], [-2.0]], dtype=torch.float32)
+    labels = torch.tensor([0, 1], dtype=torch.long)
+
+    baseline, _ = _classifier_loss_and_predictions(
+        logits,
+        labels,
+        loss_type="bce",
+        label_smoothing=0.0,
+        class_weight=None,
+    )
+    asymmetric, _ = _classifier_loss_and_predictions(
+        logits,
+        labels,
+        loss_type="bce",
+        label_smoothing=0.0,
+        class_weight=None,
+        false_positive_weight=8.0,
+    )
+
+    assert asymmetric.item() > baseline.item()
+    false_positive_only, _ = _classifier_loss_and_predictions(
+        logits[:1],
+        labels[:1],
+        loss_type="bce",
+        label_smoothing=0.0,
+        class_weight=None,
+        false_positive_weight=8.0,
+    )
+    false_negative_only, _ = _classifier_loss_and_predictions(
+        logits[1:],
+        labels[1:],
+        loss_type="bce",
+        label_smoothing=0.0,
+        class_weight=None,
+        false_positive_weight=8.0,
+    )
+    assert false_positive_only.item() == pytest.approx(
+        8.0 * false_negative_only.item()
+    )
+
+
+def test_bce_classifier_focal_weight_targets_hard_false_successes() -> None:
+    labels = torch.tensor([0], dtype=torch.long)
+    easy, _ = _classifier_loss_and_predictions(
+        torch.tensor([[-4.0]]),
+        labels,
+        loss_type="bce",
+        label_smoothing=0.0,
+        class_weight=None,
+        false_positive_weight=2.0,
+        false_positive_focal_gamma=2.0,
+    )
+    hard, _ = _classifier_loss_and_predictions(
+        torch.tensor([[4.0]]),
+        labels,
+        loss_type="bce",
+        label_smoothing=0.0,
+        class_weight=None,
+        false_positive_weight=2.0,
+        false_positive_focal_gamma=2.0,
+    )
+
+    assert hard.item() > 1000.0 * easy.item()
+
+
 def test_predict_success_supports_single_bce_logit() -> None:
     model = LatentSuccessClassifier(
         LatentSuccessClassifierConfig(
@@ -1024,3 +1140,29 @@ def test_predict_success_supports_single_bce_logit() -> None:
     assert result["complete"].tolist() == [True]
     assert result["finish_step"].tolist() == [1]
     assert result["score"].item() > 0.8
+
+
+def test_predict_success_supports_unsaturated_logit_thresholds() -> None:
+    model = LatentSuccessClassifier(
+        LatentSuccessClassifierConfig(
+            latent_dim=1,
+            window=1,
+            head_type="linear",
+            output_dim=1,
+            granularity="action",
+        )
+    )
+    with torch.no_grad():
+        model.head.weight.fill_(20.0)
+        model.head.bias.zero_()
+
+    result = model.predict_success(
+        torch.tensor([[[1.0], [2.0]]], dtype=torch.float32),
+        threshold=30.0,
+        threshold_space="logit",
+        stride=1,
+    )
+
+    assert result["complete"].tolist() == [True]
+    assert result["finish_step"].tolist() == [1]
+    assert result["score"].item() == pytest.approx(40.0)

@@ -1,0 +1,26 @@
+# @package _global_
+# Nine-task variant of the extended imagined-success SFT signal experiment.
+# Task 0 remains in real rollout seeding and paired evaluation, but is excluded
+# from the imagined SFT set because its strict classifier pass rate is too low
+# for this first causal test.
+defaults:
+  - openvla_libero_task_balanced_success_sft_extended
+  - _self_
+
+run:
+  name: openvla_libero_task1_9_success_sft_extended
+
+manual_cotrain:
+  wm_success_quota_task_ids: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+actor:
+  train_cfg:
+    success_sft:
+      # The 72 retained trajectories split evenly across six Actor ranks.
+      # Keep one global dataset instead of replicating all 72 trajectories on
+      # every rank as required by the original ten-trajectory probe.
+      replicated_trajectory_batch: false
+      # Replace one full-dataset update per epoch with eight synchronized
+      # mini-batch updates. Four epochs now produce 32 optimizer steps while
+      # preserving the same 72 task-balanced trajectories and micro batch.
+      optimizer_steps_per_epoch: 8

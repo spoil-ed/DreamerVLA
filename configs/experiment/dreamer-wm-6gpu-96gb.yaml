@@ -13,6 +13,9 @@ launch:
 
 training:
   warmup_replay_epochs: 30
+  # Late-stage continuation keeps Adam moments but lowers the step size after
+  # the epoch-22 instability observed with the linearly scaled initial LR.
+  wm_resume_lr: 5.0e-5
 
 dataloader:
   # Measured peak: ~88.5 GiB active / 97.9 GiB available per GPU.

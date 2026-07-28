@@ -131,6 +131,10 @@ def test_worker_group_env_vars_suppress_noisy_library_startup_logs() -> None:
     assert env["TF_ENABLE_ONEDNN_OPTS"] == "0"
     assert env["TOKENIZERS_PARALLELISM"] == "false"
     assert env["TRANSFORMERS_VERBOSITY"] == "error"
+    assert env["OMP_NUM_THREADS"] == "1"
+    assert env["OPENBLAS_NUM_THREADS"] == "1"
+    assert env["MKL_NUM_THREADS"] == "1"
+    assert env["NUMEXPR_NUM_THREADS"] == "1"
     assert "ignore::FutureWarning:libero.libero.benchmark" in env["PYTHONWARNINGS"]
     assert (
         "ignore:enable_nested_tensor is True.*:UserWarning:torch.nn.modules.transformer"

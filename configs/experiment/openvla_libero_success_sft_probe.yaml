@@ -68,9 +68,10 @@ ray_actor_optimizer:
 
 learner:
   train_cfg:
-    # The SFT selector must use the trajectory-level F1 threshold persisted by
-    # classifier validation.  A window-F1 checkpoint or a hand-written
-    # threshold is rejected before Ray workers launch.
+    # The SFT selector must use a trajectory-level threshold calibrated for
+    # zero held-out false successes. A window checkpoint, unconstrained
+    # threshold, or zero-recall reject-all classifier is rejected before Ray
+    # workers launch.
     classifier_threshold: null
     require_trajectory_classifier_threshold: true
 

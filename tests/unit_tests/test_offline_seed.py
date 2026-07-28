@@ -259,6 +259,86 @@ def test_seed_replay_sharding_applies_global_per_task_cap(tmp_path):
     assert counts == [2, 1]
 
 
+class _FakeOnlineEncoder:
+    def encode(self, images, prompts):
+        assert images.ndim == 5
+        assert len(prompts) == 1
+        batch, steps = images.shape[:2]
+        tokens = torch.arange(
+            batch * steps * 6,
+            dtype=torch.float32,
+        ).reshape(batch, steps, 2, 3)
+        language = torch.full((batch, 4), 0.25, dtype=torch.float32)
+        return tokens, language
+
+
+def test_seed_raw_replay_materializes_tokens_only_in_memory(tmp_path):
+    rdir, hdir = tmp_path / "reward", tmp_path / "unused_hidden"
+    with RolloutDumpWriter(rdir, hdir, "r0_shard.hdf5") as writer:
+        writer.write_demo(
+            index=0,
+            steps=_demo_steps(6, success=True),
+            preprocess_config=_HIDDEN_TOKEN_CONFIG,
+            task_id=2,
+            episode_id=0,
+        )
+    replay = OnlineReplay(capacity=10_000, sequence_length=4, task_ids=(2,), rank=0)
+
+    n = seed_replay_from_offline(
+        replay,
+        data_dir=rdir,
+        hidden_dir=None,
+        include_images=False,
+        online_encoder=_FakeOnlineEncoder(),
+        source="adaptation",
+    )
+
+    assert n == 1
+    assert {record["source"] for record in replay.episodes} == {"adaptation"}
+    for step in replay.episodes[0]["episode"]:
+        assert step["obs_embedding"].shape == (2, 3)
+        assert step["obs_embedding"].dtype == np.float16
+        assert step["lang_emb"].dtype == np.float32
+        assert "image" not in step
+
+
+def test_length_balanced_sharding_covers_each_episode_once(tmp_path):
+    rdir, hdir = tmp_path / "reward", tmp_path / "hidden"
+    lengths = [15, 14, 13, 8, 7, 6]
+    with RolloutDumpWriter(rdir, hdir, "r0_shard.hdf5") as writer:
+        for index, length in enumerate(lengths):
+            writer.write_demo(
+                index=index,
+                steps=_demo_steps(length, success=True),
+                preprocess_config=_HIDDEN_TOKEN_CONFIG,
+                task_id=2,
+                episode_id=index,
+            )
+
+    rank_episode_lengths: list[list[int]] = []
+    rank_loads: list[int] = []
+    for rank in range(3):
+        replay = OnlineReplay(capacity=10_000, sequence_length=4, task_ids=(2,), rank=rank)
+        seed_replay_from_offline(
+            replay,
+            data_dir=rdir,
+            hidden_dir=hdir,
+            shard_rank=rank,
+            shard_world_size=3,
+            include_images=False,
+            balance_shards_by_length=True,
+        )
+        rank_episode_lengths.append(
+            [len(record["episode"]) for record in replay.episodes]
+        )
+        rank_loads.append(sum(len(record["episode"]) for record in replay.episodes))
+
+    assert sorted(
+        length for rank_lengths in rank_episode_lengths for length in rank_lengths
+    ) == sorted(lengths)
+    assert max(rank_loads) - min(rank_loads) <= max(lengths)
+
+
 def test_seeded_replay_is_training_ready(tmp_path):
     rdir, hdir = tmp_path / "reward", tmp_path / "hidden"
     with RolloutDumpWriter(rdir, hdir, "r0_shard.hdf5") as w:

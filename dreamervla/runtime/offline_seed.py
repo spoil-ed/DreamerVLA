@@ -2,9 +2,10 @@
 schema) into an OnlineReplay buffer, so WM/classifier warmup and the online
 cotrain loop share one buffer + one set of step functions (no semantic drift).
 
-Each demo (data/demo_<i>) in every reward shard is paired with its
-obs_embedding sidecar and converted to the per-step transition dicts that
-``OnlineReplay.add_episode`` consumes.
+Each demo (data/demo_<i>) in every reward shard is converted to the per-step
+transition dicts that ``OnlineReplay.add_episode`` consumes. Hidden-token
+routes pair reward shards with sidecars; raw-online routes use the frozen VLA
+to materialize tokens in process memory without writing an embedding sidecar.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from typing import Any
 
 import h5py
 import numpy as np
+import torch
 
 from dreamervla.preprocess.sidecar_schema import validate_hidden_token_sidecar_dir
 from dreamervla.runtime.online_replay import OnlineReplay
@@ -83,6 +85,58 @@ def _preflight_task_ids(
     return resolved
 
 
+def _balanced_rank_assignments(
+    data_dir: Path,
+    shards: list[str],
+    *,
+    task_ids: dict[tuple[str, str], int],
+    sequence_length: int,
+    max_episodes_per_task: int | None,
+    world_size: int,
+) -> dict[tuple[str, str], int]:
+    """Assign variable-length episodes with per-task LPT load balancing."""
+
+    eligible: dict[int, list[tuple[str, str, int]]] = {}
+    for shard in shards:
+        with h5py.File(data_dir / shard, "r") as handle:
+            for demo_key, demo in handle["data"].items():
+                length = int(demo["actions"].shape[0])
+                if length < int(sequence_length):
+                    continue
+                task_id = task_ids[(shard, str(demo_key))]
+                rows = eligible.setdefault(task_id, [])
+                if (
+                    max_episodes_per_task is not None
+                    and len(rows) >= int(max_episodes_per_task)
+                ):
+                    continue
+                rows.append((shard, str(demo_key), length))
+
+    assignments: dict[tuple[str, str], int] = {}
+    global_loads = [0 for _ in range(int(world_size))]
+    for task_id in sorted(eligible):
+        task_loads = [0 for _ in range(int(world_size))]
+        task_counts = [0 for _ in range(int(world_size))]
+        for shard, demo_key, length in sorted(
+            eligible[task_id],
+            key=lambda row: (-row[2], row[0], row[1]),
+        ):
+            rank = min(
+                range(int(world_size)),
+                key=lambda candidate: (
+                    task_loads[candidate],
+                    task_counts[candidate],
+                    global_loads[candidate],
+                    candidate,
+                ),
+            )
+            assignments[(shard, demo_key)] = int(rank)
+            task_loads[rank] += int(length)
+            task_counts[rank] += 1
+            global_loads[rank] += int(length)
+    return assignments
+
+
 def _demo_proprio_at(demo: h5py.Group, t: int) -> np.ndarray:
     obs = demo["obs"]
     return np.concatenate(
@@ -95,9 +149,16 @@ def _demo_proprio_at(demo: h5py.Group, t: int) -> np.ndarray:
     ).astype(np.float32, copy=False)
 
 
+def _demo_task_description(demo: h5py.Group, task_id: int) -> str:
+    raw = demo.attrs.get("task_description", _LIBERO_GOAL_TASKS[int(task_id)])
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8")
+    return str(raw).replace("_", " ")
+
+
 def _demo_to_transitions(
     demo: h5py.Group,
-    emb: np.ndarray,
+    emb: np.ndarray | None,
     task_id: int,
     *,
     lang_emb: np.ndarray | None = None,
@@ -110,7 +171,10 @@ def _demo_to_transitions(
         np.asarray(demo["obs"]["agentview_rgb"][...], dtype=np.uint8) if include_images else None
     )
     success_hits = np.flatnonzero(sparse > 0.5)
-    attr_success = bool(demo.attrs.get("episode_success", bool(success_hits.size)))
+    attr_success = bool(
+        demo.attrs.get("episode_success", demo.attrs.get("success", bool(success_hits.size)))
+    )
+    task_description = _demo_task_description(demo, task_id)
     success = bool(attr_success or success_hits.size)
     if success_hits.size:
         success_step = int(success_hits[0])
@@ -127,7 +191,6 @@ def _demo_to_transitions(
         if step_success and reward <= 0.0:
             reward = 1.0
         step = {
-            "obs_embedding": np.asarray(emb[t]),
             "proprio": _demo_proprio_at(demo, t),
             "reward": reward,  # sparse reward = collector signal
             "done": float(dones[t]),
@@ -136,7 +199,10 @@ def _demo_to_transitions(
             "wm_action": actions[t],  # collector stores env-scale wm_action
             "task_id": int(task_id),
             "success": step_success,
+            "task_description": task_description,
         }
+        if emb is not None:
+            step["obs_embedding"] = np.asarray(emb[t])
         if images is not None:
             step["image"] = images[t]
         if lang_emb is not None:
@@ -149,7 +215,7 @@ def seed_replay_from_offline(
     replay: OnlineReplay,
     *,
     data_dir: str | Path,
-    hidden_dir: str | Path,
+    hidden_dir: str | Path | None,
     default_task_id: int | None = None,
     infer_task_id_from_shard: bool = False,
     max_episodes_per_task: int | None = None,
@@ -157,6 +223,9 @@ def seed_replay_from_offline(
     shard_rank: int = 0,
     shard_world_size: int = 1,
     include_images: bool = True,
+    online_encoder: Any | None = None,
+    source: str = "coldstart",
+    balance_shards_by_length: bool = False,
 ) -> int:
     """Add demos from data_dir's reward shards to ``replay``. Returns the number of
     episodes actually added (demos shorter than sequence_length are skipped by
@@ -184,20 +253,25 @@ def seed_replay_from_offline(
     if rank < 0 or rank >= world_size:
         raise ValueError(f"shard_rank must be in [0, {world_size}), got {rank}")
     data_dir = Path(data_dir).expanduser().resolve()
-    hidden_dir = Path(hidden_dir).expanduser().resolve()
+    hidden_dir = Path(hidden_dir).expanduser().resolve() if hidden_dir is not None else None
     shards = sorted(p.name for p in data_dir.glob("*.hdf5"))
     if not shards:
         raise FileNotFoundError(f"no reward HDF5 shards under {data_dir}")
     # Warmup is a public training boundary, so validate every paired shard and
     # demo before adding even one transition. This prevents a valid first shard
     # from masking a later 56-token/flat legacy sidecar.
-    validate_hidden_token_sidecar_dir(
-        hidden_dir,
-        expected_filenames=shards,
-        reference_dir=data_dir,
-        require_reference_complete=bool(require_reference_complete),
-        require_sparse_rewards=True,
-    )
+    if hidden_dir is not None:
+        validate_hidden_token_sidecar_dir(
+            hidden_dir,
+            expected_filenames=shards,
+            reference_dir=data_dir,
+            require_reference_complete=bool(require_reference_complete),
+            require_sparse_rewards=True,
+        )
+    elif not include_images and online_encoder is None:
+        raise ValueError(
+            "raw offline replay requires include_images=true or an online encoder"
+        )
     task_ids = _preflight_task_ids(
         data_dir,
         shards,
@@ -205,10 +279,23 @@ def seed_replay_from_offline(
         infer_task_id_from_shard=infer_task_id_from_shard,
     )
     cap = None if max_episodes_per_task is None else int(max_episodes_per_task)
+    balanced_assignments = (
+        _balanced_rank_assignments(
+            data_dir,
+            shards,
+            task_ids=task_ids,
+            sequence_length=int(replay.sequence_length),
+            max_episodes_per_task=cap,
+            world_size=world_size,
+        )
+        if bool(balance_shards_by_length) and world_size > 1
+        else None
+    )
     eligible_per_task: dict[int, int] = {}
     n_added = 0
     for shard in shards:
-        with h5py.File(data_dir / shard, "r") as rf, h5py.File(hidden_dir / shard, "r") as hf:
+        with h5py.File(data_dir / shard, "r") as rf:
+            hf = h5py.File(hidden_dir / shard, "r") if hidden_dir is not None else None
             for demo_key in rf["data"]:
                 demo = rf["data"][demo_key]
                 task_id = task_ids[(shard, str(demo_key))]
@@ -221,15 +308,48 @@ def seed_replay_from_offline(
                 if cap is not None and ordinal >= cap:
                     continue
                 eligible_per_task[task_id] = ordinal + 1
-                if ordinal % world_size != rank:
+                assigned_rank = (
+                    balanced_assignments[(shard, str(demo_key))]
+                    if balanced_assignments is not None
+                    else ordinal % world_size
+                )
+                if assigned_rank != rank:
                     continue
-                hidden_demo = hf["data"][demo_key]
-                emb = np.asarray(hidden_demo["obs_embedding"][...])
-                lang_emb = (
-                    np.asarray(hidden_demo["lang_emb"][...], dtype=np.float32)
-                    if "lang_emb" in hidden_demo
+                hidden_demo = hf["data"][demo_key] if hf is not None else None
+                emb = (
+                    np.asarray(hidden_demo["obs_embedding"][...])
+                    if hidden_demo is not None
                     else None
                 )
+                lang_emb = (
+                    np.asarray(hidden_demo["lang_emb"][...], dtype=np.float32)
+                    if hidden_demo is not None and "lang_emb" in hidden_demo
+                    else None
+                )
+                if online_encoder is not None:
+                    raw_images = np.asarray(
+                        demo["obs"]["agentview_rgb"][...],
+                        dtype=np.uint8,
+                    )
+                    tokens, language = online_encoder.encode(
+                        torch.from_numpy(raw_images).unsqueeze(0),
+                        [_demo_task_description(demo, task_id)],
+                    )
+                    # Materialize only in process memory. Float16 matches the
+                    # existing hidden sidecar footprint; no embedding file is
+                    # created for raw rollouts.
+                    emb = (
+                        tokens[0]
+                        .detach()
+                        .to(device="cpu", dtype=torch.float16)
+                        .numpy()
+                    )
+                    lang_emb = (
+                        language[0]
+                        .detach()
+                        .to(device="cpu", dtype=torch.float32)
+                        .numpy()
+                    )
                 if (
                     replay.add_episode(
                         _demo_to_transitions(
@@ -237,11 +357,13 @@ def seed_replay_from_offline(
                             emb,
                             task_id,
                             lang_emb=lang_emb,
-                            include_images=bool(include_images),
+                            include_images=bool(include_images and online_encoder is None),
                         ),
-                        source="coldstart",
+                        source=str(source),
                     )
                     is not None
                 ):
                     n_added += 1
+            if hf is not None:
+                hf.close()
     return n_added

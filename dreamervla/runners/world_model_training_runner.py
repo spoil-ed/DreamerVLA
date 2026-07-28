@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import hydra
 import torch
 from omegaconf import OmegaConf
 
@@ -34,6 +35,7 @@ from dreamervla.utils.checkpoint_util import TopKCheckpointManager
 from dreamervla.utils.console import count_trainable
 from dreamervla.utils.hf_checkpoint import load_runner_payload
 from dreamervla.utils.hf_module import load_module_pretrained, save_module_pretrained
+from dreamervla.utils.run_paths import resolve_resume_checkpoint
 from dreamervla.utils.seed import capture_rng_state, restore_rng_state, select_rank_rng_state
 
 _WARMUP_PROGRESS_RE = re.compile(r"^(?P<component>wm|classifier)_step_(?P<step>\d+)\.ckpt$")
@@ -53,7 +55,9 @@ def _cpu_tree(value: Any) -> Any:
     return value
 
 
-def _assert_offline_seed_present(*, data_dir: Any, hidden_dir: Any) -> None:
+def _assert_offline_seed_present(
+    *, data_dir: Any, hidden_dir: Any, require_hidden: bool = True
+) -> None:
     """Fail fast if the collected cold-start dump is missing — BEFORE loading models.
 
     Warmup seeds the replay buffer from collected reward + hidden shards. Without
@@ -62,14 +66,16 @@ def _assert_offline_seed_present(*, data_dir: Any, hidden_dir: Any) -> None:
     everything, then fail" into an immediate, actionable error.
     """
     reward = Path(str(data_dir)).expanduser()
-    hidden = Path(str(hidden_dir)).expanduser()
     if not reward.is_dir() or not any(reward.glob("*.hdf5")):
         raise FileNotFoundError(
             f"offline warmup needs collected reward shards but found none under {reward} — "
             "run cold-start collection first, or set training.resume with existing warmup "
             "checkpoints to skip seeding."
         )
-    if not hidden.is_dir() or not any(hidden.glob("*.hdf5")):
+    hidden = Path(str(hidden_dir)).expanduser() if hidden_dir is not None else None
+    if require_hidden and (
+        hidden is None or not hidden.is_dir() or not any(hidden.glob("*.hdf5"))
+    ):
         raise FileNotFoundError(
             f"offline warmup needs collected hidden sidecars but found none under {hidden} — "
             "run cold-start collection first."
@@ -229,7 +235,18 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
     ) -> tuple[Any | None, dict[str, float] | None]:
         profile_timings: dict[str, float] | None = {} if profile else None
         profile_stage_start = time.perf_counter()
-        replay_batch = replay.sample(int(batch_size), include_images=False)
+        use_online_encoder = getattr(self, "_wm_online_encoder", None) is not None
+        replay_batch = replay.sample(int(batch_size), include_images=use_online_encoder)
+        if use_online_encoder:
+            images = replay_batch.get("images")
+            prompts = replay_batch.get("task_descriptions")
+            if not isinstance(images, torch.Tensor) or not isinstance(prompts, list):
+                raise RuntimeError(
+                    "raw-online WM replay must provide images and task_descriptions"
+                )
+            tokens, language = self._wm_online_encoder.encode(images, prompts)
+            replay_batch["obs_embedding"] = tokens
+            replay_batch["lang_emb"] = language
         if profile_timings is not None:
             now = time.perf_counter()
             profile_timings["sample"] = now - profile_stage_start
@@ -239,6 +256,13 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             now = time.perf_counter()
             profile_timings["batch_build"] = now - profile_stage_start
         return wm_batch, profile_timings
+
+    def teardown(self) -> None:
+        encoder = getattr(self, "_wm_online_encoder", None)
+        if encoder is not None:
+            encoder.close()
+            self._wm_online_encoder = None
+        super().teardown()
 
     def _run_wm_warmup_batch(
         self,
@@ -1325,7 +1349,12 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         self, *, steps_per_epoch: int | None = None, total_steps: int | None = None
     ) -> dict[str, int | bool]:
         del total_steps
-        path = self._existing_warmup_checkpoint("wm_warmup.ckpt")
+        resume_source = OmegaConf.select(self.cfg, "training.resume_path", default=None)
+        path = (
+            Path(resolve_resume_checkpoint(str(resume_source)))
+            if resume_source not in (None, "")
+            else self._existing_warmup_checkpoint("wm_warmup.ckpt")
+        )
         if path is None:
             path = self._latest_warmup_progress_path("wm")
         if path is None:
@@ -1334,6 +1363,20 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             path,
             strict=True,
         )
+        resume_lr = OmegaConf.select(self.cfg, "training.wm_resume_lr", default=None)
+        if resume_lr is not None:
+            resume_lr = float(resume_lr)
+            if resume_lr <= 0.0:
+                raise ValueError("training.wm_resume_lr must be positive")
+            previous_lrs = [
+                float(group["lr"]) for group in self.world_model_optimizer.param_groups
+            ]
+            for group in self.world_model_optimizer.param_groups:
+                group["lr"] = resume_lr
+            self._print_pipeline_event(
+                "[pipeline][wm-warmup] override resumed optimizer lr "
+                f"{previous_lrs} -> {resume_lr:.3e}"
+            )
         if int(progress["epoch"]) <= 0 and int(progress["step"]) > 0:
             progress["epoch"] = (
                 int(progress["step"]) // int(steps_per_epoch) if steps_per_epoch else 0
@@ -1653,12 +1696,36 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         ):
             need_cls = False
         if need_wm or need_cls:
+            raw_online_cfg = OmegaConf.select(cfg, "offline_warmup.online_encoder", default=None)
             _assert_offline_seed_present(
                 data_dir=OmegaConf.select(cfg, "offline_warmup.data_dir"),
                 hidden_dir=OmegaConf.select(cfg, "offline_warmup.hidden_dir"),
+                require_hidden=raw_online_cfg is None,
             )
+            for source_cfg in (
+                OmegaConf.select(cfg, "offline_warmup.additional_sources", default=[]) or []
+            ):
+                source_hidden = OmegaConf.select(source_cfg, "hidden_dir", default=None)
+                _assert_offline_seed_present(
+                    data_dir=OmegaConf.select(source_cfg, "data_dir"),
+                    hidden_dir=source_hidden,
+                    require_hidden=source_hidden is not None,
+                )
 
         self._build_components(cfg)
+        raw_online_cfg = OmegaConf.select(cfg, "offline_warmup.online_encoder", default=None)
+        materialize_online_embeddings = bool(
+            OmegaConf.select(
+                cfg,
+                "offline_warmup.materialize_online_embeddings",
+                default=False,
+            )
+        )
+        self._wm_online_encoder = (
+            hydra.utils.instantiate(raw_online_cfg, device=self.device)
+            if raw_online_cfg is not None and need_wm
+            else None
+        )
         if self.distributed.is_main_process:
             trainable = {
                 "world_model": count_trainable(self.world_model),
@@ -1755,30 +1822,107 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 f"include_images={include_replay_images}"
             )
             replay_load_start = time.perf_counter()
-            seed_kwargs: dict[str, Any] = {
-                "data_dir": data_dir,
-                "hidden_dir": hidden_dir,
-                "default_task_id": (int(default_task_id) if default_task_id is not None else None),
-                "infer_task_id_from_shard": infer_task_id_from_shard,
-                "max_episodes_per_task": (int(max_seed_eps) if max_seed_eps is not None else None),
-                "require_reference_complete": bool(
-                    OmegaConf.select(
-                        cfg,
-                        "offline_warmup.require_reference_complete",
-                        default=True,
-                    )
-                ),
-            }
-            # Preserve the legacy call surface for routes that do not opt into
-            # distributed sharding or hidden-only replay.
-            if shard_by_rank:
-                seed_kwargs.update(
-                    shard_rank=self._rank,
-                    shard_world_size=self._world_size,
+            sources: list[dict[str, Any]] = [
+                {
+                    "data_dir": data_dir,
+                    "hidden_dir": hidden_dir,
+                    "default_task_id": default_task_id,
+                    "infer_task_id_from_shard": infer_task_id_from_shard,
+                    "max_episodes_per_task": max_seed_eps,
+                    "require_reference_complete": bool(
+                        OmegaConf.select(
+                            cfg,
+                            "offline_warmup.require_reference_complete",
+                            default=True,
+                        )
+                    ),
+                    "include_images": include_replay_images,
+                    "source": "coldstart",
+                }
+            ]
+            for source_cfg in (
+                OmegaConf.select(cfg, "offline_warmup.additional_sources", default=[]) or []
+            ):
+                sources.append(
+                    {
+                        "data_dir": OmegaConf.select(source_cfg, "data_dir"),
+                        "hidden_dir": OmegaConf.select(source_cfg, "hidden_dir", default=None),
+                        "default_task_id": OmegaConf.select(
+                            source_cfg, "task_id", default=None
+                        ),
+                        "infer_task_id_from_shard": bool(
+                            OmegaConf.select(
+                                source_cfg,
+                                "infer_task_id_from_shard",
+                                default=False,
+                            )
+                        ),
+                        "max_episodes_per_task": OmegaConf.select(
+                            source_cfg,
+                            "max_episodes_per_task",
+                            default=None,
+                        ),
+                        "require_reference_complete": bool(
+                            OmegaConf.select(
+                                source_cfg,
+                                "require_reference_complete",
+                                default=True,
+                            )
+                        ),
+                        "include_images": bool(
+                            OmegaConf.select(source_cfg, "include_images", default=False)
+                        ),
+                        "source": str(
+                            OmegaConf.select(source_cfg, "source", default="adaptation")
+                        ),
+                        "balance_shards_by_length": bool(
+                            OmegaConf.select(
+                                source_cfg,
+                                "balance_shards_by_length",
+                                default=False,
+                            )
+                        ),
+                    }
                 )
-            if not include_replay_images:
-                seed_kwargs["include_images"] = False
-            n = seed_replay_from_offline(warmup_replay, **seed_kwargs)
+            n = 0
+            for source in sources:
+                seed_kwargs = dict(source)
+                source_hidden = seed_kwargs.get("hidden_dir")
+                if seed_kwargs.get("default_task_id") is not None:
+                    seed_kwargs["default_task_id"] = int(
+                        seed_kwargs["default_task_id"]
+                    )
+                if seed_kwargs.get("max_episodes_per_task") is not None:
+                    seed_kwargs["max_episodes_per_task"] = int(
+                        seed_kwargs["max_episodes_per_task"]
+                    )
+                if shard_by_rank:
+                    seed_kwargs.update(
+                        shard_rank=self._rank,
+                        shard_world_size=self._world_size,
+                    )
+                if materialize_online_embeddings and source_hidden is None:
+                    if self._wm_online_encoder is None:
+                        raise RuntimeError(
+                            "raw replay materialization requires offline_warmup.online_encoder"
+                        )
+                    seed_kwargs["online_encoder"] = self._wm_online_encoder
+                    seed_kwargs["include_images"] = False
+                self._print_pipeline_event(
+                    "[pipeline][replay] seeding source "
+                    f"name={seed_kwargs['source']} data_dir={seed_kwargs['data_dir']} "
+                    f"hidden_dir={source_hidden} "
+                    f"online_encode={seed_kwargs.get('online_encoder') is not None}"
+                )
+                n += seed_replay_from_offline(warmup_replay, **seed_kwargs)
+            if materialize_online_embeddings and self._wm_online_encoder is not None:
+                self._wm_online_encoder.close()
+                self._wm_online_encoder = None
+                torch.cuda.empty_cache()
+                self._print_pipeline_event(
+                    "[pipeline][replay] transient VLA encoder released; "
+                    "no raw embedding sidecar was written"
+                )
             replay_load_s = time.perf_counter() - replay_load_start
             local_sampleable_windows = int(warmup_replay.sampleable_window_count())
             sampleable_windows = int(

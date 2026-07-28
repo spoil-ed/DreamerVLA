@@ -124,6 +124,10 @@ class EmbodiedFSDPActor(Worker):
                 encoder_optimizer_state,
                 optimizer=self.encoder_optimizer,
             )
+        # Constructor arguments live for the lifetime of a Ray actor. Keeping a
+        # consolidated policy plus Adam state here duplicates tens of GB on every
+        # FSDP rank after the state has already been loaded and sharded.
+        self.init_ckpt = {}
         # Encoder parameters are opt-in only during encoder_sft(). Imagined PPO
         # always updates the native action decoder/actor partition.
         for parameter in self.policy.parameters():
@@ -135,6 +139,53 @@ class EmbodiedFSDPActor(Worker):
             if self.encoder_optimizer is not None:
                 self._offload_optimizer(self.encoder_optimizer)
             self._offload_parameters(offload_grad=True)
+
+    def load_resume_policy_state(self, state: dict[str, Any] | None) -> None:
+        """Collectively restore policy state from a full state dict on every rank."""
+
+        payload = {} if state is None else dict(state)
+        if not payload:
+            raise RuntimeError("policy resume requires full state on every actor rank")
+        restore_weights = bool(self.enable_offload and self.is_weight_offloaded)
+        try:
+            self._load_parameters(onload_grad=False)
+            _load_policy_state_dict(
+                self._policy(),
+                payload,
+                rank=int(self.rank),
+            )
+        finally:
+            if restore_weights:
+                self._offload_parameters(offload_grad=True)
+
+    def load_resume_optimizer_state(
+        self,
+        state: dict[str, Any] | None,
+        *,
+        encoder: bool = False,
+    ) -> None:
+        """Collectively restore one optimizer with full state held by rank zero."""
+
+        optimizer = self.encoder_optimizer if encoder else self._optimizer()
+        if optimizer is None:
+            raise RuntimeError("resume checkpoint contains an unavailable encoder optimizer")
+        payload = {} if state is None else dict(state)
+        if not _is_fsdp_module(self._policy()) and not payload:
+            raise RuntimeError("non-FSDP optimizer resume requires state on every actor rank")
+        is_offloaded = (
+            self.is_encoder_optimizer_offloaded if encoder else self.is_optimizer_offloaded
+        )
+        restore_optimizer = bool(self.enable_offload and is_offloaded)
+        restore_weights = bool(self.enable_offload and self.is_weight_offloaded)
+        try:
+            self._load_parameters(onload_grad=False)
+            self._load_optimizer(optimizer)
+            self._load_optimizer_state_dict(payload, optimizer=optimizer)
+        finally:
+            if restore_optimizer:
+                self._offload_optimizer(optimizer)
+            if restore_weights:
+                self._offload_parameters(offload_grad=True)
 
     def set_global_step(self, global_step: int) -> None:
         """Set runner-visible global progress used by weight-sync versions."""
@@ -652,6 +703,11 @@ class EmbodiedFSDPActor(Worker):
         )
         sft_cfg = _as_plain_dict(self.train_cfg.get("success_sft", {}))
         epochs = max(1, int(sft_cfg.get("epochs", 1)))
+        optimizer_steps_per_epoch = int(sft_cfg.get("optimizer_steps_per_epoch", 1))
+        if optimizer_steps_per_epoch <= 0:
+            raise ValueError(
+                "actor.train_cfg.success_sft.optimizer_steps_per_epoch must be positive"
+            )
         zero_grad_set_to_none = bool(optim_cfg.get("zero_grad_set_to_none", True))
         logprob_type = str(algorithm_cfg.get("logprob_type", "")).lower()
         token_level_logprob = logprob_type == "token_level"
@@ -664,22 +720,33 @@ class EmbodiedFSDPActor(Worker):
         global_rollouts = local_rollouts if replicated_dataset else distributed_rollouts
         min_rollouts = _distributed_min_int(local_rollouts, self.torch_device)
         max_rollouts = _distributed_max_int(local_rollouts, self.torch_device)
-        if min_rollouts != max_rollouts:
+        if replicated_dataset and min_rollouts != max_rollouts:
             raise ValueError(
-                "imagined success SFT requires equal trajectory counts on every "
+                "replicated imagined success SFT requires equal trajectory counts on every "
                 f"Actor rank; observed min={min_rollouts}, max={max_rollouts}"
             )
-        local_sample_count = global_time_steps * local_rollouts
-        distributed_sample_count = _distributed_sum_int(
-            local_sample_count,
-            self.torch_device,
+        padded_sample_count = global_time_steps * max_rollouts
+        global_sample_count = (
+            global_time_steps * local_rollouts
+            if replicated_dataset
+            else global_time_steps * distributed_rollouts
         )
-        global_sample_count = local_sample_count if replicated_dataset else distributed_sample_count
         micro_batch_size = int(self.train_cfg.get("micro_batch_size", max(1, local_rollouts)))
-        if micro_batch_size <= 0 or local_sample_count % micro_batch_size != 0:
+        if padded_sample_count % optimizer_steps_per_epoch != 0:
             raise ValueError(
-                "actor.train_cfg.micro_batch_size must divide per-rank flattened "
-                f"success-SFT samples: {local_sample_count} % {micro_batch_size} != 0"
+                "DDP-padded per-rank success-SFT samples must be divisible by "
+                "success_sft.optimizer_steps_per_epoch: "
+                f"{padded_sample_count} % {optimizer_steps_per_epoch} != 0"
+            )
+        samples_per_optimizer_step = padded_sample_count // optimizer_steps_per_epoch
+        if (
+            micro_batch_size <= 0
+            or samples_per_optimizer_step % micro_batch_size != 0
+        ):
+            raise ValueError(
+                "actor.train_cfg.micro_batch_size must divide the per-rank "
+                "success-SFT optimizer batch: "
+                f"{samples_per_optimizer_step} % {micro_batch_size} != 0"
             )
 
         loss_mask = batch.loss_mask.to(device="cpu", dtype=torch.bool)
@@ -691,9 +758,13 @@ class EmbodiedFSDPActor(Worker):
             .any(dim=(0, 2))
         )
         selected_mask = decision_mask & success_mask.unsqueeze(0)
-        local_flat_mask = selected_mask.reshape(-1)
-        padded_flat_mask = torch.zeros(local_sample_count, dtype=torch.bool)
-        padded_flat_mask[: int(local_flat_mask.numel())] = local_flat_mask
+        padded_mask = torch.zeros(
+            global_time_steps,
+            max_rollouts,
+            dtype=torch.bool,
+        )
+        padded_mask[:local_time_steps, :local_rollouts] = selected_mask
+        padded_flat_mask = padded_mask.reshape(-1)
         local_successes = int(success_mask.sum().item())
         distributed_successes = _distributed_sum_int(local_successes, self.torch_device)
         if replicated_dataset:
@@ -737,7 +808,15 @@ class EmbodiedFSDPActor(Worker):
             "actor/success_sft_valid_tokens": float(global_valid_tokens),
             "actor/global_rollout_trajectories": float(global_rollouts),
             "actor/global_batch_size": float(global_sample_count),
-            "actor/per_rank_global_batch_size": float(local_sample_count),
+            "actor/per_rank_local_rollout_trajectories": float(local_rollouts),
+            "actor/per_rank_padded_rollout_trajectories": float(max_rollouts),
+            "actor/per_rank_global_batch_size": float(padded_sample_count),
+            "actor/success_sft_optimizer_steps_per_epoch": float(
+                optimizer_steps_per_epoch
+            ),
+            "actor/success_sft_samples_per_optimizer_step_per_rank": float(
+                samples_per_optimizer_step
+            ),
             "actor/micro_batch_size": float(micro_batch_size),
         }
         if global_successes <= 0 or global_valid_tokens <= 0:
@@ -755,7 +834,7 @@ class EmbodiedFSDPActor(Worker):
                 "actor/lr": _optimizer_lr(optimizer),
             }
 
-        sample_ids = torch.arange(local_sample_count, dtype=torch.long)
+        sample_ids = torch.arange(padded_sample_count, dtype=torch.long)
         flat_old_logprob = _flatten_time_batch(batch.prev_logprobs)
         fsdp_policy = _is_fsdp_module(policy)
         fsdp_accumulation = bool(
@@ -763,8 +842,14 @@ class EmbodiedFSDPActor(Worker):
             and self.fsdp_manager is not None
             and self.fsdp_manager.enable_gradient_accumulation
         )
-        micro_batches = local_sample_count // micro_batch_size
-        progress_total = epochs * (micro_batches + 1)
+        micro_batches_per_optimizer_step = (
+            samples_per_optimizer_step // micro_batch_size
+        )
+        optimizer_steps_total = epochs * optimizer_steps_per_epoch
+        forward_backward_steps_total = (
+            optimizer_steps_total * micro_batches_per_optimizer_step
+        )
+        progress_total = optimizer_steps_total + forward_backward_steps_total
         progress = ProgressReporter(
             progress_total,
             f"cotrain-vla-imagined-success-sft/{int(self.global_step):08d}",
@@ -774,65 +859,126 @@ class EmbodiedFSDPActor(Worker):
         )
         progress.set(0, force=True)
         forward_backward_steps = 0
+        optimizer_steps = 0
         grad_norms: list[float] = []
         local_nll_sum = 0.0
         policy.train()
         for epoch in range(epochs):
-            optimizer.zero_grad(set_to_none=zero_grad_set_to_none)
-            for micro_index, start in enumerate(range(0, local_sample_count, micro_batch_size)):
-                padded_indices = sample_ids[start : start + micro_batch_size]
-                source_indices = _local_source_indices(
-                    padded_indices,
-                    local_time_steps=local_time_steps,
-                    local_rollouts=local_rollouts,
-                )
-                sample_mask_cpu = padded_flat_mask.index_select(0, padded_indices)
-                sample_mask = sample_mask_cpu.to(self.torch_device, dtype=torch.bool)
-                eval_batch = self._eval_inputs_for_flat_indices(batch, source_indices)
-                if logprob_type:
-                    eval_batch["logprob_type"] = logprob_type
-                is_last_micro = micro_index == micro_batches - 1
-                backward_context = (
-                    policy.no_sync() if fsdp_accumulation and not is_last_micro else nullcontext()
-                )
-                with backward_context:
-                    new_logprob_raw, entropy, _ = policy(eval_batch)
-                    new_logprob = _as_tensor(new_logprob_raw).to(
-                        self.torch_device,
-                        dtype=torch.float32,
+            generator = torch.Generator(device="cpu")
+            generator.manual_seed(
+                int(self.train_cfg.get("seed", 0))
+                + int(self.global_step) * max(1, epochs)
+                + epoch
+            )
+            epoch_sample_ids = sample_ids.index_select(
+                0,
+                torch.randperm(padded_sample_count, generator=generator),
+            )
+            for optimizer_index in range(optimizer_steps_per_epoch):
+                optimizer.zero_grad(set_to_none=zero_grad_set_to_none)
+                optimizer_start = optimizer_index * samples_per_optimizer_step
+                optimizer_end = optimizer_start + samples_per_optimizer_step
+                optimizer_sample_ids = epoch_sample_ids[
+                    optimizer_start:optimizer_end
+                ]
+                local_optimizer_valid_tokens = (
+                    int(
+                        padded_flat_mask.index_select(
+                            0,
+                            optimizer_sample_ids,
+                        ).sum().item()
                     )
-                    if not token_level_logprob:
-                        new_logprob = _as_vector(new_logprob)
-                    if bool(sample_mask_cpu.any()):
-                        selected_logprob = new_logprob[sample_mask]
-                        loss = -selected_logprob.sum() * (
-                            float(max(1, int(self.world_size))) / float(distributed_valid_tokens)
-                        )
-                        local_nll_sum += float(-selected_logprob.detach().sum().cpu().item())
-                    else:
-                        loss = _zero_loss_from_policy_outputs(
-                            new_logprob,
-                            _as_tensor(entropy).to(self.torch_device),
-                        )
-                    loss.backward()
-                forward_backward_steps += 1
-                progress.set(
-                    epoch * (micro_batches + 1) + micro_index + 1,
-                    force=False,
+                    * tokens_per_sample
                 )
-            grad_norms.append(float(self._clip_or_measure_grad_norm(optim_cfg)))
-            optimizer.step()
-            progress.set((epoch + 1) * (micro_batches + 1), force=True)
+                global_optimizer_valid_tokens = _distributed_sum_int(
+                    local_optimizer_valid_tokens,
+                    self.torch_device,
+                )
+                for micro_index, start in enumerate(
+                    range(0, samples_per_optimizer_step, micro_batch_size)
+                ):
+                    padded_indices = optimizer_sample_ids[
+                        start : start + micro_batch_size
+                    ]
+                    source_indices = _local_source_indices_2d(
+                        padded_indices,
+                        local_time_steps=local_time_steps,
+                        local_rollouts=local_rollouts,
+                        padded_rollouts=max_rollouts,
+                    )
+                    sample_mask_cpu = padded_flat_mask.index_select(
+                        0,
+                        padded_indices,
+                    )
+                    sample_mask = sample_mask_cpu.to(
+                        self.torch_device,
+                        dtype=torch.bool,
+                    )
+                    eval_batch = self._eval_inputs_for_flat_indices(
+                        batch,
+                        source_indices,
+                    )
+                    if logprob_type:
+                        eval_batch["logprob_type"] = logprob_type
+                    is_last_micro = (
+                        micro_index == micro_batches_per_optimizer_step - 1
+                    )
+                    backward_context = (
+                        policy.no_sync()
+                        if fsdp_accumulation and not is_last_micro
+                        else nullcontext()
+                    )
+                    with backward_context:
+                        new_logprob_raw, entropy, _ = policy(eval_batch)
+                        new_logprob = _as_tensor(new_logprob_raw).to(
+                            self.torch_device,
+                            dtype=torch.float32,
+                        )
+                        if not token_level_logprob:
+                            new_logprob = _as_vector(new_logprob)
+                        if bool(sample_mask_cpu.any()):
+                            selected_logprob = new_logprob[sample_mask]
+                            loss = -selected_logprob.sum() * (
+                                float(max(1, int(self.world_size)))
+                                / float(max(1, global_optimizer_valid_tokens))
+                            )
+                            local_nll_sum += float(
+                                -selected_logprob.detach().sum().cpu().item()
+                            )
+                        else:
+                            loss = _zero_loss_from_policy_outputs(
+                                new_logprob,
+                                _as_tensor(entropy).to(self.torch_device),
+                            )
+                        loss.backward()
+                    forward_backward_steps += 1
+                    progress.set(
+                        optimizer_steps
+                        * (micro_batches_per_optimizer_step + 1)
+                        + micro_index
+                        + 1,
+                        force=False,
+                    )
+                grad_norms.append(
+                    float(self._clip_or_measure_grad_norm(optim_cfg))
+                )
+                optimizer.step()
+                optimizer_steps += 1
+                progress.set(
+                    optimizer_steps * (micro_batches_per_optimizer_step + 1),
+                    force=True,
+                )
 
         policy.train(False)
         local_kl_sum = 0.0
         with torch.no_grad():
-            for start in range(0, local_sample_count, micro_batch_size):
+            for start in range(0, padded_sample_count, micro_batch_size):
                 padded_indices = sample_ids[start : start + micro_batch_size]
-                source_indices = _local_source_indices(
+                source_indices = _local_source_indices_2d(
                     padded_indices,
                     local_time_steps=local_time_steps,
                     local_rollouts=local_rollouts,
+                    padded_rollouts=max_rollouts,
                 )
                 sample_mask_cpu = padded_flat_mask.index_select(0, padded_indices)
                 eval_batch = self._eval_inputs_for_flat_indices(batch, source_indices)
@@ -873,7 +1019,7 @@ class EmbodiedFSDPActor(Worker):
         mean_grad_norm = _mean(grad_norms)
         return {
             **common_metrics,
-            "actor/success_sft_optimizer_steps": float(epochs),
+            "actor/success_sft_optimizer_steps": float(optimizer_steps),
             "actor/success_sft_forward_backward_steps": float(forward_backward_steps),
             "actor/success_sft_loss": float(mean_loss),
             "actor/loss": float(mean_loss),
@@ -1992,6 +2138,29 @@ def _local_source_indices(
     )
 
 
+def _local_source_indices_2d(
+    padded_indices: torch.Tensor,
+    *,
+    local_time_steps: int,
+    local_rollouts: int,
+    padded_rollouts: int,
+) -> torch.Tensor:
+    """Map a padded ``[time, rollout]`` grid to safe local source rows.
+
+    The caller owns a separate zero loss mask for padded rows. Mapping them to
+    valid local rows keeps policy evaluation shape-identical across DDP ranks
+    without allowing dummy samples to contribute gradients.
+    """
+
+    if local_time_steps <= 0 or local_rollouts <= 0 or padded_rollouts <= 0:
+        raise ValueError("local and padded success-SFT dimensions must be positive")
+    padded_time = padded_indices.div(int(padded_rollouts), rounding_mode="floor")
+    padded_rollout = padded_indices.remainder(int(padded_rollouts))
+    source_time = padded_time.clamp(max=int(local_time_steps) - 1)
+    source_rollout = padded_rollout.clamp(max=int(local_rollouts) - 1)
+    return source_time * int(local_rollouts) + source_rollout
+
+
 def _optimizer_lr(optimizer: torch.optim.Optimizer) -> float:
     if not optimizer.param_groups:
         return 0.0
@@ -2252,14 +2421,16 @@ def _load_policy_state_dict(
             StateDictType,
         )
 
-        cfg = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
-        payload = state if int(rank) == 0 else {}
+        # FSDP1 only supports rank0_only for FULL_STATE_DICT export. During
+        # load, every rank must provide the full dictionary. Runner-side resume
+        # still stages policy separately from optimizer state to bound memory.
+        cfg = FullStateDictConfig(offload_to_cpu=True, rank0_only=False)
         with FullyShardedDataParallel.state_dict_type(
             policy,
             StateDictType.FULL_STATE_DICT,
             cfg,
         ):
-            policy.load_state_dict(payload)
+            policy.load_state_dict(state)
         return
     policy.load_state_dict(_to_device_state(state, next(policy.parameters()).device))
 

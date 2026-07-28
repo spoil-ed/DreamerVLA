@@ -1,0 +1,39 @@
+# @package _global_
+# Scale the paired SFT signal experiment from one to eight accepted imagined
+# trajectories per task and report the resident before/after gain explicitly.
+defaults:
+  - openvla_libero_task_balanced_success_sft_probe
+  - _self_
+
+run:
+  name: openvla_libero_task_balanced_success_sft_extended
+
+manual_cotrain:
+  # Eight successes per task gives an 80-trajectory balanced SFT set. The
+  # trajectory budget scales linearly from the proven 10-trajectory probe.
+  wm_success_quota_per_task: 8
+  wm_rollout_target_trajectories: 38400
+  env_rollout_timeout_s: 43200
+  actor_channel_timeout_s: 43200
+  checkpoint_every: 1
+
+env:
+  wm:
+    cfg:
+      # A quota unit is one retained trajectory shard. Keep exactly one
+      # classifier-positive trajectory in each shard so eight quota units mean
+      # eight trajectories, rather than eight batches of up to eight.
+      actor_success_quota_per_task: 1
+
+actor:
+  train_cfg:
+    success_sft:
+      epochs: 4
+      replicated_trajectory_batch: true
+
+checkpoint:
+  topk:
+    monitor_key: eval/success_rate
+    metric_name: accuracy
+    mode: max
+    k: 1

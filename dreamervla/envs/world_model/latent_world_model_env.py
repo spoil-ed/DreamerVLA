@@ -63,6 +63,9 @@ class LatentWorldModelEnv:
         token_dim: int | None = None,
         action_dim: int,
         success_threshold: float = 0.5,
+        success_threshold_space: str = "probability",
+        success_consecutive_chunks: int = 1,
+        terminate_on_success: bool = True,
         max_episode_steps: int = 64,
         image_shape: tuple[int, int, int] = (4, 4, 3),
         device: str | torch.device = "cpu",
@@ -85,6 +88,9 @@ class LatentWorldModelEnv:
         self.proprio_dim = int(proprio_dim)
         self.num_envs = int(num_envs)
         self.success_threshold = float(success_threshold)
+        self.success_threshold_space = str(success_threshold_space).strip().lower()
+        self.success_consecutive_chunks = int(success_consecutive_chunks)
+        self.terminate_on_success = bool(terminate_on_success)
         self.max_episode_steps = int(max_episode_steps)
         self.image_shape = tuple(int(value) for value in image_shape)
         self.device = torch.device(device)
@@ -101,6 +107,10 @@ class LatentWorldModelEnv:
         self.observation_format = normalized_observation_format
         if self.num_envs <= 0:
             raise ValueError("num_envs must be positive")
+        if self.success_consecutive_chunks <= 0:
+            raise ValueError("success_consecutive_chunks must be positive")
+        if self.success_threshold_space not in {"probability", "logit"}:
+            raise ValueError("success_threshold_space must be probability or logit")
         if (self.token_count is None) != (self.token_dim is None):
             raise ValueError("token_count and token_dim must be configured together")
         if self.token_count is not None and self.token_dim is not None:
@@ -136,6 +146,7 @@ class LatentWorldModelEnv:
             device=self.device,
         )
         self._elapsed_steps = np.zeros((self.num_envs,), dtype=np.int64)
+        self._success_streaks = np.zeros((self.num_envs,), dtype=np.int64)
         self._task_ids = np.zeros((self.num_envs,), dtype=np.int64)
         self._episode_ids = np.zeros((self.num_envs,), dtype=np.int64)
         self._wm_forward_calls = 0
@@ -185,6 +196,37 @@ class LatentWorldModelEnv:
 
     def set_success_threshold(self, threshold: float) -> None:
         self.success_threshold = float(threshold)
+
+    def set_success_threshold_space(self, threshold_space: str) -> None:
+        value = str(threshold_space).strip().lower()
+        if value not in {"probability", "logit"}:
+            raise ValueError("success_threshold_space must be probability or logit")
+        self.success_threshold_space = value
+
+    def set_success_consecutive_chunks(self, consecutive: int) -> None:
+        value = int(consecutive)
+        if value <= 0:
+            raise ValueError("success_consecutive_chunks must be positive")
+        self.success_consecutive_chunks = value
+        self._success_streaks.fill(0)
+
+    def _update_success_streaks(
+        self,
+        *,
+        slots: list[int],
+        evidence: np.ndarray,
+    ) -> np.ndarray:
+        """Return slots confirmed by sustained classifier evidence."""
+
+        values = np.asarray(evidence, dtype=np.bool_).reshape(len(slots), -1)
+        confirmed = np.zeros((len(slots),), dtype=np.bool_)
+        for row_index, slot_id in enumerate(slots):
+            streak = int(self._success_streaks[int(slot_id)])
+            for positive in values[row_index]:
+                streak = streak + 1 if bool(positive) else 0
+                confirmed[row_index] |= streak >= self.success_consecutive_chunks
+            self._success_streaks[int(slot_id)] = streak
+        return confirmed
 
     @torch.no_grad()
     def offload_model(self) -> None:
@@ -250,6 +292,7 @@ class LatentWorldModelEnv:
         self._task_ids[slot] = int(task_id)
         self._episode_ids[slot] = int(episode_id)
         self._elapsed_steps[slot] = 0
+        self._success_streaks[slot] = 0
         self._latent[slot] = self._initial_latent_for_slot(slot).detach()
         if self.lang_dim > 0:
             self._lang_emb[slot] = self._initial_lang_for_slot(slot).detach()
@@ -431,9 +474,13 @@ class LatentWorldModelEnv:
         terminations: list[bool] = []
         truncations: list[bool] = []
         infos: list[dict[str, Any]] = []
+        success_by_slot = self._update_success_streaks(
+            slots=slots,
+            evidence=scores_cpu.reshape(batch_size, 1) >= self.success_threshold,
+        )
         for index, slot_id in enumerate(slots):
             score = float(scores_cpu[index])
-            terminated = bool(score >= self.success_threshold)
+            terminated = bool(success_by_slot[index] and self.terminate_on_success)
             truncated = bool(
                 self._elapsed_steps[slot_id] >= self.max_episode_steps and not terminated
             )
@@ -443,6 +490,8 @@ class LatentWorldModelEnv:
                 "episode_id": int(self._episode_ids[slot_id]),
                 "elapsed_steps": int(self._elapsed_steps[slot_id]),
                 "success_score": score,
+                "success": terminated,
+                "success_streak": int(self._success_streaks[slot_id]),
                 "wm_version": self.wm_version,
                 "classifier_version": self.classifier_version,
             }
@@ -642,20 +691,34 @@ class LatentWorldModelEnv:
                 self._record_scores(recorded_scores)
         slot_index = np.asarray(slots, dtype=np.int64)
         old_elapsed = self._elapsed_steps[slot_index].copy()
-        success_by_slot = (rewards >= self.success_threshold).any(axis=1)
+        if self.classifier is None:
+            success_evidence = np.zeros((batch_size, 1), dtype=np.bool_)
+        elif classifier_granularity == "chunk":
+            assert recorded_scores is not None
+            success_evidence = (
+                np.asarray(recorded_scores).reshape(batch_size, 1)
+                >= self.success_threshold
+            )
+        else:
+            success_evidence = rewards >= self.success_threshold
+        success_by_slot = self._update_success_streaks(
+            slots=slots,
+            evidence=success_evidence,
+        )
         if self.classifier is None:
             classifier_evaluations = np.zeros((batch_size,), dtype=np.int64)
             classifier_success_evaluations = np.zeros((batch_size,), dtype=np.int64)
         elif classifier_granularity == "chunk":
             classifier_evaluations = np.ones((batch_size,), dtype=np.int64)
-            classifier_success_evaluations = success_by_slot.astype(np.int64)
+            classifier_success_evaluations = success_evidence.sum(axis=1, dtype=np.int64)
         else:
             classifier_evaluations = np.full((batch_size,), chunk_len, dtype=np.int64)
             classifier_success_evaluations = (rewards >= self.success_threshold).sum(
                 axis=1, dtype=np.int64
             )
         terminations = np.zeros((batch_size, chunk_len), dtype=np.bool_)
-        terminations[:, -1] = success_by_slot
+        if self.terminate_on_success:
+            terminations[:, -1] = success_by_slot
         timeout_by_slot = old_elapsed + chunk_len >= self.max_episode_steps
         truncations = np.zeros((batch_size, chunk_len), dtype=np.bool_)
         truncations[:, -1] = timeout_by_slot
@@ -671,6 +734,7 @@ class LatentWorldModelEnv:
                 "elapsed_steps": int(self._elapsed_steps[slot_id]),
                 "success": bool(success_by_slot[index]),
                 "success_score": float(rewards[index, -1]),
+                "success_streak": int(self._success_streaks[slot_id]),
                 "classifier_evaluations": int(classifier_evaluations[index]),
                 "classifier_success_evaluations": int(classifier_success_evaluations[index]),
                 "wm_action": np.asarray(
@@ -1138,11 +1202,13 @@ class LatentWorldModelEnv:
         score_tensor = torch.as_tensor(raw, dtype=torch.float32, device=self.device)
         if raw_is_logits and score_tensor.ndim >= 2 and score_tensor.shape[0] == latent.shape[0]:
             if score_tensor.shape[-1] == 1:
-                score_tensor = torch.sigmoid(score_tensor[..., 0])
+                score_tensor = score_tensor[..., 0]
             elif score_tensor.shape[-1] == 2:
-                score_tensor = torch.softmax(score_tensor, dim=-1)[..., 1]
+                score_tensor = score_tensor[..., 1] - score_tensor[..., 0]
             else:
                 score_tensor = score_tensor[..., -1]
+            if self.success_threshold_space == "probability":
+                score_tensor = torch.sigmoid(score_tensor)
         elif score_tensor.ndim > 1 and score_tensor.shape[0] == latent.shape[0]:
             score_tensor = score_tensor[..., -1]
         scores = score_tensor.reshape(-1)

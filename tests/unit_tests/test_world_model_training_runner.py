@@ -1399,6 +1399,10 @@ def _make_orchestration_runner(
         infer_task_id_from_shard=False,
         max_episodes_per_task=None,
         require_reference_complete=True,
+        include_images=True,
+        source="coldstart",
+        balance_shards_by_length=False,
+        online_encoder=None,
     ):
         del (
             data_dir,
@@ -1406,6 +1410,10 @@ def _make_orchestration_runner(
             default_task_id,
             infer_task_id_from_shard,
             require_reference_complete,
+            include_images,
+            source,
+            balance_shards_by_length,
+            online_encoder,
         )
         calls.append("seed")
         if seed_capture is not None:

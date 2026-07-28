@@ -112,6 +112,11 @@ class WorldModelTrainingBase(BaseRunner):
             enable_activation_checkpointing=bool(
                 OmegaConf.select(config, "training.enable_activation_checkpointing", default=True)
             ),
+            nccl_timeout_seconds=OmegaConf.select(
+                config,
+                "training.nccl_timeout_seconds",
+                default=None,
+            ),
         )
         self.rank = self.distributed.rank
         self.local_rank = self.distributed.local_rank

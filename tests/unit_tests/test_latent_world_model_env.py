@@ -37,6 +37,32 @@ def test_frozen_world_model_env_supports_phase_offload() -> None:
     assert obs["latent"].shape == (2,)
 
 
+def test_success_requires_consecutive_classifier_evidence_and_reset_clears_streak() -> None:
+    env = LatentWorldModelEnv(
+        _TinyWM(),
+        _TinyClassifier(),
+        latent_dim=2,
+        action_dim=2,
+        success_threshold=0.5,
+        success_consecutive_chunks=2,
+        device="cpu",
+    )
+    env.reset()
+
+    _obs, _reward, terminated, _truncated, info = env.step([1.0, 0.0])
+    assert terminated is False
+    assert info["success_streak"] == 1
+    _obs, _reward, terminated, _truncated, info = env.step([0.0, 0.0])
+    assert terminated is True
+    assert info["success"] is True
+    assert info["success_streak"] == 2
+
+    env.reset()
+    _obs, _reward, terminated, _truncated, info = env.step([0.0, 0.0])
+    assert terminated is False
+    assert info["success_streak"] == 0
+
+
 class _ChunkWM(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -140,6 +166,15 @@ class _ZeroTwoClassClassifier(torch.nn.Module):
 class _ZeroOneLogitClassifier(torch.nn.Module):
     def forward(self, latent):
         return torch.zeros(latent.shape[0], 1, device=latent.device)
+
+
+class _LargeOneLogitClassifier(torch.nn.Module):
+    def forward(self, latent):
+        return torch.full(
+            (latent.shape[0], 1),
+            30.0,
+            device=latent.device,
+        )
 
 
 class _MalformedDictClassifier(torch.nn.Module):
@@ -246,6 +281,27 @@ def test_latent_world_model_env_converts_single_logit_to_success_probability():
     assert reward == pytest.approx(0.5)
     assert info["success_score"] == pytest.approx(0.5)
     assert terminated is True
+    assert truncated is False
+
+
+def test_latent_world_model_env_can_threshold_unsaturated_logits() -> None:
+    env = LatentWorldModelEnv(
+        world_model=_TinyWM(),
+        classifier=_LargeOneLogitClassifier(),
+        latent_dim=2,
+        action_dim=2,
+        success_threshold=31.0,
+        success_threshold_space="logit",
+    )
+
+    env.reset()
+    _next_obs, reward, terminated, truncated, info = env.step(
+        np.zeros(2, dtype=np.float32)
+    )
+
+    assert reward == pytest.approx(30.0)
+    assert info["success_score"] == pytest.approx(30.0)
+    assert terminated is False
     assert truncated is False
 
 

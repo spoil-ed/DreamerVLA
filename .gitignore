@@ -20,6 +20,7 @@ third_party/
 # Runtime data: downloaded weights, datasets, preprocessed tokens, training outputs.
 # Everything under the repository-root data/ is generated or downloaded per README.
 /data/
+/dreamervla-data/
 
 # Local training / experiment logs
 log/

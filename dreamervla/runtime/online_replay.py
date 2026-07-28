@@ -580,7 +580,7 @@ class OnlineReplay:
         *,
         staleness_threshold: int | None = None,
         include_images: bool = True,
-    ) -> dict[str, torch.Tensor]:
+    ) -> dict[str, Any]:
         windows = []
         task_ids: list[int] = []
         successes: list[bool] = []
@@ -610,9 +610,11 @@ class OnlineReplay:
             source_ranks.append(int(record["rank"]))
             replay_source_ids.append(int(record.get("source_id", self._source_id("online"))))
 
-        obs_embedding = np.stack(
-            [[step["obs_embedding"] for step in window] for window in windows], axis=0
-        )
+        obs_embedding = None
+        if all("obs_embedding" in step for window in windows for step in window):
+            obs_embedding = np.stack(
+                [[step["obs_embedding"] for step in window] for window in windows], axis=0
+            )
         rewards = np.stack([[_step_reward(step) for step in window] for window in windows], axis=0)
         dones = np.stack([[_step_done(step) for step in window] for window in windows], axis=0)
         is_terminal = np.stack(
@@ -648,7 +650,6 @@ class OnlineReplay:
                 axis=0,
             )
         batch = {
-            "obs_embedding": torch.from_numpy(obs_embedding),
             "actions": torch.from_numpy(actions),
             "current_actions": torch.from_numpy(current_actions),
             "rewards": torch.from_numpy(rewards.astype(np.float32, copy=False)),
@@ -667,6 +668,12 @@ class OnlineReplay:
             "source_ranks": torch.tensor(source_ranks, dtype=torch.long),
             "replay_source_ids": torch.tensor(replay_source_ids, dtype=torch.long),
         }
+        if obs_embedding is not None:
+            batch["obs_embedding"] = torch.from_numpy(obs_embedding)
+        if all("task_description" in window[0] for window in windows):
+            batch["task_descriptions"] = [
+                str(window[0]["task_description"]) for window in windows
+            ]
         if proprio is not None:
             batch["proprio"] = torch.from_numpy(proprio.astype(np.float32, copy=False))
         if lang_emb is not None:

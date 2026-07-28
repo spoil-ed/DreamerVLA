@@ -1,0 +1,96 @@
+# @package _global_
+# Formal continual WM training: retain official hidden-token replay while
+# adapting to newly collected raw rollouts. Raw embeddings exist only in RAM.
+defaults:
+  - dreamer-wm
+  - override /pre_mainline: null
+  - _self_
+
+run:
+  name: dreamer-wm-mixed-replay-6gpu-96gb
+  output_root: /root/autodl-fs/DreamerVLA/outputs
+
+pre_mainline: null
+
+launch:
+  ngpu: 6
+  gpus: 0,1,2,3,4,5
+
+training:
+  # Rank-local raw trajectories have different lengths. Preprocessing performs
+  # no collectives, so a fast rank may wait at the post-seed reduction while a
+  # slower rank is still encoding. This timeout covers that finite startup work.
+  nccl_timeout_seconds: 7200
+  # Epoch 1 already improves new-data close cosine while retaining the old
+  # distribution. Five epochs are enough to measure the adaptation trend
+  # without spending another full day on low-value continuation.
+  warmup_replay_epochs: 5
+  warmup_replay_max_steps: 0
+  warmup_checkpoint_every_epochs: 1
+  wm_prefetch_workers: 1
+  wm_profile_steps: 8
+  wm_diagnostics_every: 10
+  classifier_warmup_steps: 0
+
+dataloader:
+  # Same full formal per-rank batch as the stable 96-GiB WM recipe.
+  batch_size: 42
+
+optim:
+  world_model:
+    # Stable continuation LR used after epoch 18; the larger linearly-scaled
+    # initial LR previously diverged at epoch 22.
+    lr: 5.0e-5
+
+offline_warmup:
+  # Retention distribution: the complete official replay used by the original WM.
+  data_dir: ${task.hdf5_reward_dir}
+  hidden_dir: ${task.openvla_oft.hidden_token_dir}
+  infer_task_id_from_shard: true
+  require_reference_complete: false
+  shard_by_rank: true
+  include_images: false
+  required_task_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+  # New raw trajectories are encoded once per rank at training startup and
+  # retained only in CPU replay memory. No hidden HDF5 is ever written.
+  materialize_online_embeddings: true
+  online_encoder:
+    _target_: dreamervla.runtime.online_vla_hidden_encoder.OnlineVLAHiddenEncoder
+    model_path: ${task.openvla_oft.ckpt_path}
+    unnorm_key: ${task.openvla_oft.dataset_statistics_key}
+    token_dim: ${task.openvla_oft.hidden_token.token_dim}
+    token_count: ${task.openvla_oft.hidden_token.token_count}
+    # A100-96G has enough headroom to amortize CPU image preparation and the
+    # frozen vision forward over substantially more frames during startup.
+    micro_batch_size: 32
+    rotate_images_180: ${task.openvla_oft.expected_rotate_images_180}
+    center_crop: true
+    image_keys: [agentview_rgb]
+    history: ${task.openvla_oft.expected_history}
+    num_images_in_input: ${task.openvla_oft.num_images_in_input}
+    policy_mode: discrete
+  additional_sources:
+    - source: adaptation
+      data_dir: ${oc.env:DVLA_ROOT,.}/dreamervla-data/collected_rollouts/libero_goal_classifier_raw_200/reward
+      hidden_dir: null
+      infer_task_id_from_shard: false
+      require_reference_complete: false
+      include_images: false
+      balance_shards_by_length: true
+
+init:
+  world_model_state_ckpt: null
+  world_model_optimizer_state_ckpt: null
+
+checkpoint:
+  topk:
+    monitor_key: loss
+    metric_name: loss
+    mode: min
+    k: 3
+
+runner:
+  logger:
+    logger_backends: [tensorboard, wandb]
+    wandb_mode: offline

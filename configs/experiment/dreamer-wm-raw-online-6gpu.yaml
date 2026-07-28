@@ -1,0 +1,66 @@
+# @package _global_
+# Adapt Chunk-WM on newly collected raw trajectories. OpenVLA is frozen and
+# encodes sampled RGB windows transiently; no hidden-token sidecar is created.
+defaults:
+  - dreamer-wm
+  - override /pre_mainline: null
+  - _self_
+
+run:
+  name: dreamer-wm-raw-online-6gpu
+
+# This is collected-rollout mainline warmup, not the official-data capacity
+# check inherited by the generic dreamer-wm recipe.
+pre_mainline: null
+
+launch:
+  ngpu: 6
+  gpus: 0,1,2,3,4,5
+
+training:
+  warmup_replay_epochs: 10
+  # Online VLA encoding dominates runtime. This first adaptation pass samples
+  # 400 global DDP updates and can be extended by an explicit Hydra override.
+  warmup_replay_max_steps: 400
+  wm_prefetch_workers: 0
+  wm_profile_steps: 8
+  classifier_warmup_steps: 0
+
+dataloader:
+  # Frozen OpenVLA and the 415M WM coexist on every rank.
+  batch_size: 1
+
+optim:
+  world_model:
+    lr: 5.0e-5
+
+offline_warmup:
+  data_dir: ${oc.env:DVLA_ROOT,.}/dreamervla-data/collected_rollouts/libero_goal_classifier_raw_200/reward
+  hidden_dir: null
+  infer_task_id_from_shard: false
+  require_reference_complete: false
+  shard_by_rank: true
+  include_images: true
+  required_task_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  online_encoder:
+    _target_: dreamervla.runtime.online_vla_hidden_encoder.OnlineVLAHiddenEncoder
+    model_path: ${task.openvla_oft.ckpt_path}
+    unnorm_key: ${task.openvla_oft.dataset_statistics_key}
+    token_dim: ${task.openvla_oft.hidden_token.token_dim}
+    token_count: ${task.openvla_oft.hidden_token.token_count}
+    micro_batch_size: 2
+    rotate_images_180: ${task.openvla_oft.expected_rotate_images_180}
+    center_crop: true
+    image_keys: [agentview_rgb]
+    history: ${task.openvla_oft.expected_history}
+    num_images_in_input: ${task.openvla_oft.num_images_in_input}
+    policy_mode: discrete
+
+init:
+  # Supplied by the eval-then-train launcher after selecting the epoch-30 WM.
+  world_model_state_ckpt: null
+
+runner:
+  logger:
+    logger_backends: [tensorboard, wandb]
+    wandb_mode: offline

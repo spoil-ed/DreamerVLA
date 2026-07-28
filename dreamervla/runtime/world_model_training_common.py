@@ -188,6 +188,36 @@ class _WorldModelTrainingCommon(WorldModelTrainingBase):
         else:
             super()._load_world_model_init_ckpt(ckpt_path)
 
+    def _load_world_model_optimizer_init_ckpt(self, ckpt_path: str) -> None:
+        """Warm-start Adam moments without importing old warmup progress."""
+
+        payload = torch.load(
+            str(ckpt_path),
+            map_location="cpu",
+            weights_only=False,
+        )
+        state = payload.get("state_dicts", {}).get("world_model_optimizer")
+        if state is None:
+            raise RuntimeError(
+                f"{ckpt_path} has no state_dicts.world_model_optimizer"
+            )
+        self.distributed.load_optimizer_state_dict(
+            self.world_model,
+            self.world_model_optimizer,
+            state,
+        )
+        configured_lr = float(
+            OmegaConf.select(self.cfg, "optim.world_model.lr")
+        )
+        for group in self.world_model_optimizer.param_groups:
+            group["lr"] = configured_lr
+        if self.distributed.is_main_process:
+            print(
+                "[init] world_model optimizer state loaded from "
+                f"{ckpt_path}; lr={configured_lr:.3e}",
+                flush=True,
+            )
+
     def _assert_optimizers_disjoint(self) -> None:
         seen: set[int] = set()
         for name, optimizer in (
@@ -245,6 +275,13 @@ class _WorldModelTrainingCommon(WorldModelTrainingBase):
         self.world_model_optimizer = build_optimizer(
             self.world_model, OmegaConf.select(cfg, "optim.world_model")
         )
+        optimizer_ckpt = OmegaConf.select(
+            cfg,
+            "init.world_model_optimizer_state_ckpt",
+            default=None,
+        )
+        if optimizer_ckpt:
+            self._load_world_model_optimizer_init_ckpt(str(optimizer_ckpt))
 
         classifier_steps = int(
             OmegaConf.select(cfg, "training.classifier_warmup_steps", default=0) or 0

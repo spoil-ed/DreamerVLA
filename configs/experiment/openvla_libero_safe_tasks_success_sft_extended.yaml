@@ -1,0 +1,24 @@
+# @package _global_
+# Precision-first imagined SFT validation. Only tasks with held-out failures
+# and non-zero recall at zero false positives are admitted.
+defaults:
+  - openvla_libero_task1_9_success_sft_extended
+  - _self_
+
+run:
+  name: openvla_libero_safe_tasks_success_sft_extended
+
+manual_cotrain:
+  wm_success_quota_task_ids: [1, 2, 4, 8]
+
+ray_data:
+  task_ids: [1, 2, 4, 8]
+
+env:
+  wm:
+    cfg:
+      classifier_success_terminal_only: true
+      kwargs:
+        # Generate a complete imagined trajectory, then accept it only when
+        # the final calibrated chunk streak is successful.
+        terminate_on_success: false

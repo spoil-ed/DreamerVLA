@@ -266,6 +266,37 @@ def test_actor_checkpoint_round_trips_policy_optimizer_state() -> None:
     )
 
 
+def test_actor_releases_constructor_checkpoint_after_init() -> None:
+    source = EmbodiedFSDPActor(**_actor_cfg())
+    source.init()
+    cfg = _actor_cfg()
+    cfg["init_ckpt"] = {"policy": source.state_dict()}
+    actor = EmbodiedFSDPActor(**cfg)
+    actor.init()
+
+    assert actor.init_ckpt == {}
+
+
+def test_actor_staged_resume_restores_policy_and_optimizer() -> None:
+    source = EmbodiedFSDPActor(**_actor_cfg())
+    source.init()
+    source.load_trajectory_shards([_shard(0.0, 1.0)])
+    source.compute_advantages_and_returns()
+    source.run_training()
+
+    restored = EmbodiedFSDPActor(**_actor_cfg())
+    restored.init()
+    restored.load_resume_policy_state(source.state_dict())
+    restored.load_resume_optimizer_state(source.optimizer_state_dict())
+
+    for name, value in source.state_dict().items():
+        assert torch.equal(restored.state_dict()[name], value)
+    assert (
+        restored._optimizer().state_dict()["param_groups"]
+        == source._optimizer().state_dict()["param_groups"]
+    )
+
+
 def test_actor_optimizer_uses_complete_hydra_adam_contract() -> None:
     cfg = _actor_cfg()
     cfg["train_cfg"]["optimizers"] = {
@@ -521,6 +552,69 @@ def test_actor_success_sft_updates_only_classifier_success_rollouts() -> None:
     assert metrics["actor/success_sft_grad_norm"] > 0.0
     assert metrics["actor/success_sft_skipped_no_success"] == 0.0
     assert any(not torch.equal(before[key], after[key]) for key in before)
+
+
+def test_actor_success_sft_pads_unequal_rank_rollout_counts(monkeypatch) -> None:
+    cfg = _actor_cfg()
+    cfg["train_cfg"]["micro_batch_size"] = 2
+    cfg["train_cfg"]["success_sft"] = {
+        "epochs": 1,
+        "replicated_trajectory_batch": False,
+    }
+    actor = EmbodiedFSDPActor(**cfg)
+    actor.init()
+    before = {key: value.clone() for key, value in actor.state_dict().items()}
+    actor.load_trajectory_shards([_shard(0.0, 1.0)])
+
+    distributed_maxima = iter((2, 4))
+    monkeypatch.setattr(
+        embodied_fsdp_actor,
+        "_distributed_max_int",
+        lambda _value, _device: next(distributed_maxima),
+    )
+    monkeypatch.setattr(
+        embodied_fsdp_actor,
+        "_distributed_min_int",
+        lambda value, _device: int(value),
+    )
+    monkeypatch.setattr(
+        embodied_fsdp_actor,
+        "_distributed_sum_int",
+        lambda value, _device: int(value),
+    )
+    monkeypatch.setattr(
+        embodied_fsdp_actor,
+        "_distributed_sum_float",
+        lambda value, _device: float(value),
+    )
+
+    metrics = actor.run_success_sft(classifier_threshold=0.5)
+
+    assert metrics["actor/per_rank_local_rollout_trajectories"] == 2.0
+    assert metrics["actor/per_rank_padded_rollout_trajectories"] == 4.0
+    assert metrics["actor/per_rank_global_batch_size"] == 8.0
+    assert metrics["actor/success_sft_forward_backward_steps"] == 4.0
+    assert metrics["actor/success_sft_trajectories"] == 1.0
+    assert any(not torch.equal(before[key], actor.state_dict()[key]) for key in before)
+
+
+def test_actor_success_sft_supports_multiple_optimizer_steps_per_epoch() -> None:
+    cfg = _actor_cfg()
+    cfg["train_cfg"]["micro_batch_size"] = 1
+    cfg["train_cfg"]["success_sft"] = {
+        "epochs": 2,
+        "optimizer_steps_per_epoch": 2,
+    }
+    actor = EmbodiedFSDPActor(**cfg)
+    actor.init()
+    actor.load_trajectory_shards([_shard(1.0, 1.0)])
+
+    metrics = actor.run_success_sft(classifier_threshold=0.5)
+
+    assert metrics["actor/success_sft_optimizer_steps_per_epoch"] == 2.0
+    assert metrics["actor/success_sft_optimizer_steps"] == 4.0
+    assert metrics["actor/success_sft_forward_backward_steps"] == 8.0
+    assert metrics["actor/success_sft_samples_per_optimizer_step_per_rank"] == 2.0
 
 
 def test_actor_success_sft_skips_when_classifier_selects_nothing() -> None:

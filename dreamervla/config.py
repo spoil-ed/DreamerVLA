@@ -980,10 +980,46 @@ def _validate_world_model_training_pipeline(cfg: DictConfig) -> None:
         )
     data_dir = OmegaConf.select(cfg, "offline_warmup.data_dir", default=None)
     hidden_dir = OmegaConf.select(cfg, "offline_warmup.hidden_dir", default=None)
+    online_encoder = OmegaConf.select(cfg, "offline_warmup.online_encoder", default=None)
+    materialize_online = bool(
+        OmegaConf.select(
+            cfg,
+            "offline_warmup.materialize_online_embeddings",
+            default=False,
+        )
+    )
     if not data_dir or not os.path.isdir(str(data_dir)):
         raise ValueError(f"offline_warmup.data_dir does not exist: {data_dir!r}")
-    if not hidden_dir or not os.path.isdir(str(hidden_dir)):
+    if online_encoder is None and (not hidden_dir or not os.path.isdir(str(hidden_dir))):
         raise ValueError(f"offline_warmup.hidden_dir does not exist: {hidden_dir!r}")
+    if online_encoder is not None and hidden_dir is None:
+        if not (
+            materialize_online
+            or bool(OmegaConf.select(cfg, "offline_warmup.include_images", default=False))
+        ):
+            raise ValueError(
+                "raw-online WM training requires include_images=true or "
+                "materialize_online_embeddings=true"
+            )
+    for source in (
+        OmegaConf.select(cfg, "offline_warmup.additional_sources", default=[]) or []
+    ):
+        source_data = OmegaConf.select(source, "data_dir", default=None)
+        source_hidden = OmegaConf.select(source, "hidden_dir", default=None)
+        if not source_data or not os.path.isdir(str(source_data)):
+            raise ValueError(
+                f"offline_warmup.additional_sources data_dir does not exist: {source_data!r}"
+            )
+        if source_hidden is not None and not os.path.isdir(str(source_hidden)):
+            raise ValueError(
+                "offline_warmup.additional_sources hidden_dir does not exist: "
+                f"{source_hidden!r}"
+            )
+        if source_hidden is None and (online_encoder is None or not materialize_online):
+            raise ValueError(
+                "raw additional replay sources require online_encoder and "
+                "materialize_online_embeddings=true"
+            )
     for key in (
         "wm_warmup_steps",
         "classifier_warmup_steps",
@@ -1226,6 +1262,107 @@ def _validate_manual_cotrain_placement(cfg: DictConfig) -> None:
                 f"{training_mode} requires initial_condition_selector to be one of "
                 f"{sorted(allowed_selectors)}"
             )
+    if training_mode == "imagined_success_sft":
+        rollback_on_eval_regression = bool(
+            OmegaConf.select(
+                cfg,
+                "manual_cotrain.rollback_on_eval_regression",
+                default=False,
+            )
+        )
+        if rollback_on_eval_regression:
+            eval_interval = int(
+                OmegaConf.select(
+                    cfg,
+                    "manual_cotrain.eval_interval_global_steps",
+                    default=0,
+                )
+            )
+            if eval_interval != 1:
+                raise ValueError(
+                    "rollback_on_eval_regression requires "
+                    "manual_cotrain.eval_interval_global_steps=1"
+                )
+            eval_guard_min_delta = float(
+                OmegaConf.select(
+                    cfg,
+                    "manual_cotrain.eval_guard_min_delta",
+                    default=0.0,
+                )
+            )
+            if eval_guard_min_delta < 0.0:
+                raise ValueError(
+                    "manual_cotrain.eval_guard_min_delta must be non-negative"
+                )
+        optimizer_steps_per_epoch = int(
+            OmegaConf.select(
+                cfg,
+                "actor.train_cfg.success_sft.optimizer_steps_per_epoch",
+                default=1,
+            )
+        )
+        if optimizer_steps_per_epoch <= 0:
+            raise ValueError(
+                "imagined success SFT requires "
+                "actor.train_cfg.success_sft.optimizer_steps_per_epoch > 0"
+            )
+        quota_task_ids = OmegaConf.select(
+            cfg,
+            "manual_cotrain.wm_success_quota_task_ids",
+            default=None,
+        )
+        if quota_task_ids:
+            quota_per_task = int(
+                OmegaConf.select(
+                    cfg,
+                    "manual_cotrain.wm_success_quota_per_task",
+                    default=0,
+                )
+            )
+            if quota_per_task <= 0:
+                raise ValueError(
+                    "task-quota imagined success SFT requires "
+                    "manual_cotrain.wm_success_quota_per_task > 0"
+                )
+            if not bool(
+                OmegaConf.select(
+                    cfg,
+                    "env.wm.cfg.emit_actor_success_only",
+                    default=False,
+                )
+            ):
+                raise ValueError(
+                    "task-quota imagined success SFT requires "
+                    "env.wm.cfg.emit_actor_success_only=true"
+                )
+            retained_per_shard = int(
+                OmegaConf.select(
+                    cfg,
+                    "env.wm.cfg.actor_success_quota_per_task",
+                    default=1,
+                )
+            )
+            if retained_per_shard != 1:
+                raise ValueError(
+                    "task-quota imagined success SFT counts emitted shards as retained "
+                    "trajectories, so env.wm.cfg.actor_success_quota_per_task must be 1; "
+                    f"got {retained_per_shard}"
+                )
+            replicated = bool(
+                OmegaConf.select(
+                    cfg,
+                    "actor.train_cfg.success_sft.replicated_trajectory_batch",
+                    default=False,
+                )
+            )
+            retained_total = len(quota_task_ids) * quota_per_task
+            actor_ranks = len(plan.actor_specs)
+            if not replicated and retained_total < actor_ranks:
+                raise ValueError(
+                    "non-replicated task-quota success SFT requires at least one retained "
+                    "trajectory per Actor rank; got "
+                    f"{retained_total} trajectories and {actor_ranks} ranks"
+                )
 
     require_signal = bool(
         OmegaConf.select(

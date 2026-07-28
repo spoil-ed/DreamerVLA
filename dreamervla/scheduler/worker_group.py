@@ -122,6 +122,14 @@ class WorkerGroup:
             "TF_ENABLE_ONEDNN_OPTS": "0",
             "TOKENIZERS_PARALLELISM": "false",
             "TRANSFORMERS_VERBOSITY": "error",
+            # A single-node Ray job can own dozens of Python workers. Letting
+            # every worker inherit a host-sized OpenMP/BLAS pool exhausts the
+            # process/thread limit as GPU count grows. A caller can still
+            # override these through ``extra_env_vars`` below.
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
             "PYTHONWARNINGS": (
                 "ignore::FutureWarning:libero.libero.benchmark,"
                 "ignore:enable_nested_tensor is True.*:UserWarning:torch.nn.modules.transformer"

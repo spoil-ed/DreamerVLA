@@ -17,22 +17,34 @@ training:
   val_batch_size: 2
   num_workers: 0
   lr: 3.0e-5
+  # Keep the empirically stable BCE recipe. The runner supports asymmetric
+  # hard-negative weighting for ablations, but it degraded held-out ordering
+  # here; safety is enforced by the logit/terminal calibration gate below.
+  false_positive_weight: 1.0
+  false_positive_focal_gamma: 0.0
   log_every: 10
-  # Select among checkpoints every five epochs using held-out trajectory
-  # macro-F1. Window evaluation is redundant for this route and would encode
+  # Maximize held-out success recall subject to zero observed false successes.
+  # Window evaluation is redundant for this route and would encode
   # the same raw frames repeatedly through overlapping windows.
   eval_every: 70
   window_eval_enabled: false
   checkpoint_every_epochs: 5
   final_selection_metric: episode_f1
   episode_eval_enabled: true
-  episode_threshold_metric: macro_f1
+  episode_threshold_metric: recall_at_zero_fp
+  episode_threshold_space: logit
+  episode_success_aggregation: terminal_streak
+  # Only these tasks have both held-out failures and non-zero safe recall.
+  episode_eval_task_ids: [1, 2, 4, 8]
   episode_eval_min_steps: 0
   episode_eval_stride: 1
   episode_eval_batch: 8
-  thresh_min: 0.05
-  thresh_max: 0.999
-  thresh_steps: 191
+  # Adjacent stride-1 classifier windows overlap by 7/8 chunks, so short
+  # streaks are highly correlated. Sweep long sustained-evidence gates too.
+  episode_success_consecutive_chunks: [2, 3, 4, 6, 8, 12, 16, 20, 24]
+  thresh_min: -20.0
+  thresh_max: 20.0
+  thresh_steps: 192
 
 data:
   success_dir_raw: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/libero_goal_classifier_raw_200/reward
@@ -66,7 +78,7 @@ runner:
 
 checkpoint:
   topk:
-    monitor_key: macro_f1
-    metric_name: episode_macro_f1
+    monitor_key: recall_at_zero_fp
+    metric_name: episode_recall_at_zero_fp
     mode: max
     k: 3

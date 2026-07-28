@@ -79,13 +79,42 @@ def _classifier_checkpoint_threshold(
     )
     if require_trajectory_threshold:
         threshold_metric = str(metadata.get("classifier_threshold_metric", "")).lower()
+        threshold_objective = str(
+            metadata.get("classifier_threshold_objective", "")
+        ).lower()
+        threshold_space = str(
+            metadata.get("classifier_threshold_space", "")
+        ).lower()
+        success_aggregation = str(
+            metadata.get("classifier_success_aggregation", "")
+        ).lower()
         episode_f1 = float(metadata.get("best_episode_f1", -1.0))
         episode_threshold = metadata.get("best_episode_threshold")
-        if threshold_metric != "episode_f1" or episode_f1 < 0.0 or episode_threshold is None:
+        false_positives = int(metadata.get("classifier_threshold_false_positives", -1))
+        consecutive = int(metadata.get("classifier_success_consecutive_chunks", 1))
+        constrained_recall = float(
+            metadata.get("best_episode_selection_score", -1.0)
+        )
+        calibrated_task_ids = {
+            int(value)
+            for value in metadata.get("classifier_calibrated_task_ids", [])
+        }
+        if (
+            threshold_metric != "episode_f1"
+            or threshold_objective != "recall_at_zero_fp"
+            or threshold_space != "logit"
+            or success_aggregation != "terminal_streak"
+            or false_positives != 0
+            or consecutive < 2
+            or constrained_recall <= 0.0
+            or not calibrated_task_ids
+            or episode_f1 < 0.0
+            or episode_threshold is None
+        ):
             raise ValueError(
                 "imagined-success SFT requires a classifier checkpoint selected by "
-                "trajectory-level F1; expected classifier_threshold_metric=episode_f1 "
-                "with best_episode_f1 and best_episode_threshold metadata"
+                "trajectory-level recall at zero false positives with at least two "
+                "consecutive positive chunks in unsaturated logit space"
             )
         return float(episode_threshold)
     if checkpoint_threshold is not None:
@@ -149,6 +178,7 @@ class CotrainRunner(BaseRunner):
         self._policy_final_hash = ""
         self._applied_policy_steps = 0
         self._paired_eval_baseline_outcomes: dict[tuple[int, int, int, int], bool] = {}
+        self._eval_guard_best_score: float | None = None
 
     def setup(self) -> None:
         super().setup()
@@ -177,6 +207,11 @@ class CotrainRunner(BaseRunner):
                 self._restore_manual_resume_state(groups, resume_payload)
                 self.global_step = resume_step
                 self.set_metric_resume_step(resume_step)
+                # Actor/Learner/WM workers now own their restored states. Drop
+                # the consolidated controller payload before rollout/eval so a
+                # long-running job does not retain another checkpoint-sized copy.
+                self._pending_manual_resume_payload = None
+                resume_payload = None
                 _hs_trace("[cotrain] restore resume state done")
             else:
                 _hs_trace("[cotrain] no resume payload")
@@ -187,18 +222,42 @@ class CotrainRunner(BaseRunner):
             metrics: dict[str, float | int] = {}
             target_step = self._global_steps()
             last_step = resume_step
-            if resume_step == 0 and self._eval_initial_global_step():
+            if resume_step > 0 and self._rollback_on_eval_regression():
+                resume_eval = self._evaluate_resident_policy(
+                    groups,
+                    global_step=resume_step,
+                    sync_policy=True,
+                    establish_paired_baseline=True,
+                )
+                self._eval_guard_best_score = float(resume_eval["eval/success_rate"])
+                resume_eval["eval/accepted_success_rate"] = self._eval_guard_best_score
+                resume_eval["train/eval_guard_resume_baseline"] = 1.0
+                metrics.update(resume_eval)
+                self.log_metrics(resume_eval, step=resume_step)
+            elif resume_step == 0 and self._eval_initial_global_step():
                 initial_eval = self._evaluate_resident_policy(
                     groups,
                     global_step=0,
                     sync_policy=False,
                 )
+                if self._rollback_on_eval_regression():
+                    self._eval_guard_best_score = float(initial_eval["eval/success_rate"])
+                    initial_eval["eval/accepted_success_rate"] = self._eval_guard_best_score
                 metrics.update(initial_eval)
                 self.log_metrics(initial_eval, step=0)
             for global_step in range(resume_step + 1, target_step + 1):
                 global_step_start = time.perf_counter()
+                if self._rollback_on_eval_regression():
+                    groups["ActorGroup"].begin_policy_transaction().wait()
                 step_metrics = self._run_global_step(groups, global_step)
                 step_metrics.update(self._maybe_evaluate_resident_policy(groups, global_step))
+                if self._rollback_on_eval_regression():
+                    step_metrics.update(
+                        self._finalize_eval_guard(
+                            groups["ActorGroup"],
+                            step_metrics,
+                        )
+                    )
                 checkpoint_start = time.perf_counter()
                 checkpoint_path = self._maybe_save_manual_checkpoint(
                     groups,
@@ -230,7 +289,11 @@ class CotrainRunner(BaseRunner):
                     total_steps=target_step,
                     metrics=step_metrics,
                 )
-                if signal_result is not None and not signal_result.passed:
+                if (
+                    signal_result is not None
+                    and not signal_result.passed
+                    and not self._expected_eval_guard_rejection(step_metrics)
+                ):
                     raise RuntimeError(
                         "imagined-success SFT training-signal probe failed: "
                         + "; ".join(signal_result.failures)
@@ -518,6 +581,7 @@ class CotrainRunner(BaseRunner):
             name="EmbodiedFSDPActor",
         )
         _hs_trace("[build_groups] launch EmbodiedFSDPActor done")
+        self._restore_actor_resume_state_staged(actor_group, cluster=cluster)
         self._initialize_policy_hashes(actor_group)
 
         learner_group = None
@@ -635,28 +699,121 @@ class CotrainRunner(BaseRunner):
             ),
             require_trajectory_threshold=require_trajectory_threshold,
         )
+        if require_trajectory_threshold:
+            calibrated_task_ids = {
+                int(value)
+                for value in loaded_classifier.metadata.get(
+                    "classifier_calibrated_task_ids",
+                    [],
+                )
+            }
+            active_task_ids = {
+                int(value)
+                for value in (
+                    OmegaConf.select(
+                        self.cfg,
+                        "manual_cotrain.wm_success_quota_task_ids",
+                        default=[],
+                    )
+                    or []
+                )
+            }
+            if not active_task_ids.issubset(calibrated_task_ids):
+                raise ValueError(
+                    "imagined-success SFT task ids must be covered by classifier "
+                    f"calibration; active={sorted(active_task_ids)}, "
+                    f"calibrated={sorted(calibrated_task_ids)}"
+                )
+        success_consecutive_chunks = int(
+            loaded_classifier.metadata.get(
+                "classifier_success_consecutive_chunks",
+                1,
+            )
+        )
+        threshold_space = str(
+            loaded_classifier.metadata.get(
+                "classifier_threshold_space",
+                "probability",
+            )
+        )
         return {
             "world_model": loaded_wm.state_dict,
             "classifier": loaded_classifier.state_dict,
             "classifier_threshold": float(threshold),
+            "classifier_threshold_space": threshold_space,
+            "classifier_success_consecutive_chunks": success_consecutive_chunks,
         }
 
     def _actor_init_checkpoint(self) -> dict[str, Any]:
-        payload = self._pending_manual_resume_payload
-        if payload is not None:
-            state_dicts = payload.get("state_dicts", {})
-            policy_state = state_dicts.get("policy") if isinstance(state_dicts, dict) else None
-            if not isinstance(policy_state, dict) or not policy_state:
-                raise RuntimeError("manual cotrain resume checkpoint has no non-empty policy state")
-            init_state = {"policy": dict(policy_state)}
-            optimizer_state = state_dicts.get("policy_optimizer")
-            if isinstance(optimizer_state, dict) and optimizer_state:
-                init_state["policy_optimizer"] = dict(optimizer_state)
-            encoder_optimizer_state = state_dicts.get("encoder_optimizer")
-            if isinstance(encoder_optimizer_state, dict) and encoder_optimizer_state:
-                init_state["encoder_optimizer"] = dict(encoder_optimizer_state)
-            return init_state
         return self._load_init_ckpt("actor.init_ckpt")
+
+    def _restore_actor_resume_state_staged(self, actor_group: Any, *, cluster: Any) -> None:
+        """Restore large FSDP states one component at a time through rank zero."""
+
+        payload = self._pending_manual_resume_payload
+        if payload is None:
+            return
+        state_dicts = payload.get("state_dicts", {})
+        if not isinstance(state_dicts, dict):
+            raise RuntimeError("manual cotrain resume checkpoint has no state_dicts mapping")
+        policy_state = state_dicts.get("policy")
+        if not isinstance(policy_state, dict) or not policy_state:
+            raise RuntimeError("manual cotrain resume checkpoint has no non-empty policy state")
+
+        self._restore_actor_resume_component(
+            actor_group,
+            "load_resume_policy_state",
+            policy_state,
+            cluster=cluster,
+            rank0_only=False,
+        )
+        optimizer_state = state_dicts.get("policy_optimizer")
+        if isinstance(optimizer_state, dict) and optimizer_state:
+            self._restore_actor_resume_component(
+                actor_group,
+                "load_resume_optimizer_state",
+                optimizer_state,
+                cluster=cluster,
+            )
+        encoder_optimizer_state = state_dicts.get("encoder_optimizer")
+        if isinstance(encoder_optimizer_state, dict) and encoder_optimizer_state:
+            self._restore_actor_resume_component(
+                actor_group,
+                "load_resume_optimizer_state",
+                encoder_optimizer_state,
+                cluster=cluster,
+                encoder=True,
+            )
+
+    def _restore_actor_resume_component(
+        self,
+        actor_group: Any,
+        method: str,
+        state: dict[str, Any],
+        *,
+        cluster: Any,
+        rank0_only: bool = True,
+        **kwargs: Any,
+    ) -> None:
+        """Run an FSDP restore collective without copying full state to every rank."""
+
+        shared = _share_ray_value(state, cluster=cluster)
+        fsdp_enabled = OmegaConf.select(self.cfg, "actor.train_cfg.fsdp", default=None) is not None
+        refs = [
+            getattr(worker, method).remote(
+                (
+                    shared
+                    if not fsdp_enabled or not rank0_only or rank == 0
+                    else None
+                ),
+                **kwargs,
+            )
+            for rank, worker in enumerate(actor_group.workers)
+        ]
+        try:
+            ray.get(refs)
+        finally:
+            _release_ray_value(shared)
 
     def _initialize_policy_hashes(self, actor_group: Any) -> None:
         actor_state = _first_nonempty_mapping(actor_group.state_dict().wait())
@@ -1079,7 +1236,8 @@ class CotrainRunner(BaseRunner):
                 "actor_compute_advantages_and_returns",
                 stage_start,
             )
-        if max_policy_kl is not None:
+        eval_guard = self._rollback_on_eval_regression()
+        if max_policy_kl is not None and not eval_guard:
             actor.begin_policy_transaction().wait()
         if success_sft:
             train_metrics = _aggregate_actor_metric_lists(
@@ -1098,7 +1256,7 @@ class CotrainRunner(BaseRunner):
         )
         actor_kl_effective = actor_kl_attempted
         actor_committed = True
-        if max_policy_kl is not None:
+        if max_policy_kl is not None and not eval_guard:
             actor_transaction_metrics = _aggregate_actor_metric_lists(
                 [
                     actor.finalize_policy_transaction(
@@ -1123,6 +1281,13 @@ class CotrainRunner(BaseRunner):
                     for key, value in actor_transaction_metrics.items()
                 }
             )
+        elif max_policy_kl is not None:
+            actor_committed = actor_kl_attempted <= max(
+                0.0,
+                max_policy_kl - encoder_kl_effective,
+            )
+            if not actor_committed:
+                actor_kl_effective = 0.0
         commit_metric = (
             "actor/success_sft_update_committed" if success_sft else "actor/ppo_update_committed"
         )
@@ -1160,7 +1325,7 @@ class CotrainRunner(BaseRunner):
                 f"kl={float(train_metrics.get('actor/policy_kl_total', 0.0)):.4g}"
             ),
         )
-        if actor_committed:
+        if actor_committed and not eval_guard:
             applied_steps = train_metrics.get(update_steps_key)
             if applied_steps is None and not success_sft:
                 applied_steps = train_metrics.get("actor/ppo_updates", 0.0)
@@ -1203,6 +1368,62 @@ class CotrainRunner(BaseRunner):
             metrics.update(groups.get("replay_seed_metrics", {}))
         metrics = _with_train_learner_aliases(metrics)
         return metrics
+
+    def _finalize_eval_guard(
+        self,
+        actor: Any,
+        metrics: dict[str, float],
+    ) -> dict[str, float]:
+        """Commit a candidate only when KL and resident evaluation do not regress."""
+
+        if "eval/success_rate" not in metrics:
+            raise RuntimeError(
+                "rollback_on_eval_regression requires resident evaluation every global step"
+            )
+        candidate_score = float(metrics["eval/success_rate"])
+        if self._eval_guard_best_score is None:
+            self._eval_guard_best_score = candidate_score
+        previous_best = float(self._eval_guard_best_score)
+        min_delta = self._eval_guard_min_delta()
+        score_accepted = candidate_score + 1.0e-12 >= previous_best + min_delta
+        max_policy_kl = self._max_policy_kl()
+        observed_kl = max(0.0, float(metrics.get("actor/policy_kl_total", 0.0)))
+        kl_accepted = max_policy_kl is None or observed_kl <= max_policy_kl
+        accepted = bool(score_accepted and kl_accepted)
+        transaction_metrics = _aggregate_actor_metric_lists(
+            [
+                actor.finalize_policy_transaction(
+                    0.0 if accepted else 1.0,
+                    0.0,
+                ).wait()
+            ]
+        )
+        if accepted:
+            self._eval_guard_best_score = max(previous_best, candidate_score)
+            applied_steps = max(
+                0,
+                int(float(metrics.get("actor/success_sft_optimizer_steps", 0.0))),
+            )
+            self._applied_policy_steps += applied_steps
+        else:
+            metrics["actor/policy_kl_candidate"] = observed_kl
+            metrics["actor/policy_kl_actor"] = 0.0
+            metrics["actor/policy_kl_total"] = 0.0
+            metrics["actor/success_sft_update_committed"] = 0.0
+        return {
+            "eval/candidate_success_rate": candidate_score,
+            "eval/accepted_success_rate": float(self._eval_guard_best_score),
+            "eval/guard_previous_best_success_rate": previous_best,
+            "eval/guard_min_delta": min_delta,
+            "train/eval_guard_accepted": float(accepted),
+            "train/eval_guard_rolled_back": float(not accepted),
+            "train/eval_guard_score_accepted": float(score_accepted),
+            "train/eval_guard_kl_accepted": float(kl_accepted),
+            **{
+                f"actor/eval_guard_{key.removeprefix('actor/')}": value
+                for key, value in transaction_metrics.items()
+            },
+        }
 
     def _finish_no_failure_imagination_step(
         self,
@@ -1362,6 +1583,7 @@ class CotrainRunner(BaseRunner):
         *,
         global_step: int,
         sync_policy: bool,
+        establish_paired_baseline: bool = False,
     ) -> dict[str, float]:
         """Run read-only real-LIBERO evaluation with the resident RolloutGroup."""
 
@@ -1468,7 +1690,20 @@ class CotrainRunner(BaseRunner):
         paired_outcome_metrics = self._paired_eval_outcome_metrics(
             eval_batch,
             global_step=int(global_step),
+            establish_baseline=bool(establish_paired_baseline),
         )
+        paired_status = ""
+        if "eval/paired/success_rate_percentage_points" in paired_outcome_metrics:
+            paired_status = (
+                " paired="
+                f"{paired_outcome_metrics['eval/paired/baseline_success_rate']:.3f}"
+                "->"
+                f"{paired_outcome_metrics['eval/paired/post_success_rate']:.3f}"
+                " delta="
+                f"{paired_outcome_metrics['eval/paired/success_rate_percentage_points']:+.1f}pp"
+                " relative="
+                f"{paired_outcome_metrics['eval/paired/relative_success_rate_improvement_percent']:+.1f}%"
+            )
         chunk_steps = float(
             env_metrics.get(
                 "env/eval_env/chunk_steps",
@@ -1483,6 +1718,7 @@ class CotrainRunner(BaseRunner):
             status=(
                 f"successes={successes} success_rate={rate:.3f} "
                 f"chunk_per_s={chunk_steps / max(rollout_elapsed, 1e-9):.2f}"
+                f"{paired_status}"
             ),
             force=True,
         )
@@ -1504,6 +1740,7 @@ class CotrainRunner(BaseRunner):
         batch: RealTrajectoryBatch,
         *,
         global_step: int,
+        establish_baseline: bool = False,
     ) -> dict[str, float]:
         outcomes = {
             (
@@ -1528,9 +1765,17 @@ class CotrainRunner(BaseRunner):
                 sum(int(value) for value in values) / max(1, len(values))
             )
 
-        if int(global_step) == 0:
+        if int(global_step) == 0 or establish_baseline:
             self._paired_eval_baseline_outcomes = dict(outcomes)
-            metrics["eval/paired/is_baseline"] = 1.0
+            baseline_success_rate = float(
+                sum(int(success) for success in outcomes.values()) / max(1, len(outcomes))
+            )
+            metrics.update(
+                {
+                    "eval/paired/is_baseline": 1.0,
+                    "eval/paired/baseline_success_rate": baseline_success_rate,
+                }
+            )
             return metrics
 
         baseline = self._paired_eval_baseline_outcomes
@@ -1547,9 +1792,27 @@ class CotrainRunner(BaseRunner):
         failure_to_success = sum(int(not baseline[key] and outcomes[key]) for key in baseline)
         success_to_failure = sum(int(baseline[key] and not outcomes[key]) for key in baseline)
         discordant = failure_to_success + success_to_failure
+        baseline_success_rate = float(
+            sum(int(success) for success in baseline.values()) / max(1, len(baseline))
+        )
+        post_success_rate = float(
+            sum(int(success) for success in outcomes.values()) / max(1, len(outcomes))
+        )
+        success_rate_delta = post_success_rate - baseline_success_rate
+        relative_improvement = (
+            success_rate_delta / baseline_success_rate if baseline_success_rate > 0.0 else 0.0
+        )
         metrics.update(
             {
                 "eval/paired/is_baseline": 0.0,
+                "eval/paired/baseline_success_rate": baseline_success_rate,
+                "eval/paired/post_success_rate": post_success_rate,
+                "eval/paired/success_rate_delta": success_rate_delta,
+                "eval/paired/success_rate_percentage_points": 100.0 * success_rate_delta,
+                "eval/paired/relative_success_rate_improvement": relative_improvement,
+                "eval/paired/relative_success_rate_improvement_percent": (
+                    100.0 * relative_improvement
+                ),
                 "eval/paired/failure_to_success": float(failure_to_success),
                 "eval/paired/success_to_failure": float(success_to_failure),
                 "eval/paired/discordant": float(discordant),
@@ -1811,6 +2074,35 @@ class CotrainRunner(BaseRunner):
                 default=0,
             ),
             "manual_cotrain.checkpoint_every",
+        )
+
+    def _rollback_on_eval_regression(self) -> bool:
+        return bool(
+            OmegaConf.select(
+                self.cfg,
+                "manual_cotrain.rollback_on_eval_regression",
+                default=False,
+            )
+        )
+
+    def _expected_eval_guard_rejection(self, metrics: dict[str, float]) -> bool:
+        """Return whether a non-committed update was deliberately rolled back."""
+
+        return bool(
+            self._rollback_on_eval_regression()
+            and float(metrics.get("train/eval_guard_rolled_back", 0.0)) > 0.0
+        )
+
+    def _eval_guard_min_delta(self) -> float:
+        return max(
+            0.0,
+            float(
+                OmegaConf.select(
+                    self.cfg,
+                    "manual_cotrain.eval_guard_min_delta",
+                    default=0.0,
+                )
+            ),
         )
 
     def _sync_every(self) -> int:
@@ -2746,7 +3038,8 @@ class CotrainRunner(BaseRunner):
             time.perf_counter() - channel_get_start
         )
         load_start = time.perf_counter()
-        actor.load_trajectory_shards(shards).wait()
+        shared_shards = _share_ray_value(shards, cluster=groups["cluster"])
+        actor.load_trajectory_shards(shared_shards).wait()
         stage_times["time/manual_cotrain/actor_load_trajectory_shards_s"] = float(
             time.perf_counter() - load_start
         )
@@ -4043,6 +4336,21 @@ def _share_ray_value(value: Any, *, cluster: Any) -> Any:
     if ray.is_initialized() and callable(getattr(cluster, "find_free_port", None)):
         return ray.put(value)
     return value
+
+
+def _release_ray_value(value: Any) -> None:
+    """Release a one-shot object-store broadcast as soon as consumers finish."""
+
+    if not isinstance(value, ray.ObjectRef):
+        return
+    try:
+        from ray._private.internal_api import free
+
+        free([value], local_only=False)
+    except (ImportError, RuntimeError):
+        # Ray also releases the object once the final ObjectRef leaves scope.
+        # Explicit release is an optimization for multi-GB resume components.
+        return
 
 
 def _read_json_mapping(path: Path) -> dict[str, Any]:

@@ -22,7 +22,35 @@ from dreamervla.workers.env.trajectory_env_worker import (
     BaseTrajectoryEnvWorker,
     RealEnvWorker,
     WMEnvWorker,
+    _sustained_success_mask,
 )
+
+
+def test_terminal_success_mask_rejects_mid_trajectory_spike() -> None:
+    rewards = torch.tensor(
+        [
+            [[0.9], [0.1]],
+            [[0.9], [0.9]],
+            [[0.1], [0.9]],
+        ]
+    )
+
+    rolling = _sustained_success_mask(
+        rewards,
+        threshold=0.5,
+        consecutive=2,
+        chunk_granularity=True,
+    )
+    terminal = _sustained_success_mask(
+        rewards,
+        threshold=0.5,
+        consecutive=2,
+        chunk_granularity=True,
+        terminal_only=True,
+    )
+
+    assert rolling.tolist() == [True, True]
+    assert terminal.tolist() == [False, True]
 
 
 class _MemoryChannel:
