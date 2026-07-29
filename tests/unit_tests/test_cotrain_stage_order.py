@@ -476,6 +476,32 @@ def test_imagined_success_sft_skips_ppo_encoder_and_learner(monkeypatch) -> None
     assert metrics["actor/success_sft_optimizer_steps"] == 1.0
 
 
+def test_imagined_success_sft_reuses_resident_batch_without_rollout() -> None:
+    events: list[str] = []
+    cfg = _cfg(training_mode="imagined_success_sft")
+    cfg.manual_cotrain.staged_policy_update = False
+    cfg.manual_cotrain.learner_updates_enabled = False
+    cfg.manual_cotrain.reuse_imagined_success_trajectories = True
+    runner = DreamerRunner(cfg)
+    runner.console_progress = lambda *_args, **_kwargs: None
+    runner._cached_success_sft_batch_available = True
+    runner._cached_success_sft_batch_step = 2
+
+    metrics = runner._run_global_step(
+        {
+            "ActorGroup": _Actor(events),
+            "classifier_threshold": 0.4,
+        },
+        global_step=3,
+    )
+
+    assert events == ["success_sft"]
+    assert metrics["train/reused_imagined_success_trajectories"] == 1.0
+    assert metrics["actor/success_sft_reused_trajectory_batch"] == 1.0
+    assert metrics["actor/success_sft_cached_batch_source_step"] == 2.0
+    assert metrics["actor/success_sft_optimizer_steps"] == 1.0
+
+
 def test_dreamer_shared_real_stop_key_targets_every_rollout_worker() -> None:
     groups = {
         "RolloutGroup": type("RolloutGroup", (), {"workers": [object()] * 8})(),

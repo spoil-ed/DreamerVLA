@@ -1,0 +1,41 @@
+# @package _global_
+# Collect one precision-first imagined-success set, then repeatedly SFT and
+# paired-evaluate the same trajectories. Eval transactions reject regressions.
+defaults:
+  - openvla_libero_safe_tasks_success_sft_extended
+  - _self_
+
+run:
+  name: openvla_libero_safe_tasks_success_sft_reuse_aggressive
+
+manual_cotrain:
+  global_steps: 5
+  eval_interval_global_steps: 1
+  rollback_on_eval_regression: true
+  eval_guard_min_delta: 0.0
+  reuse_imagined_success_trajectories: true
+  wm_success_quota_per_task: 12
+  max_policy_kl: 0.15
+  checkpoint_every: 5
+
+env:
+  wm:
+    cfg:
+      actor_success_quota_per_task: 1
+
+ray_actor_optimizer:
+  lr: 2.0e-6
+
+actor:
+  train_cfg:
+    lr: 2.0e-6
+    success_sft:
+      epochs: 4
+      optimizer_steps_per_epoch: 8
+
+checkpoint:
+  topk:
+    monitor_key: eval/accepted_success_rate
+    metric_name: accuracy
+    mode: max
+    k: 1

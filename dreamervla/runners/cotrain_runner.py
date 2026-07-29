@@ -179,6 +179,8 @@ class CotrainRunner(BaseRunner):
         self._applied_policy_steps = 0
         self._paired_eval_baseline_outcomes: dict[tuple[int, int, int, int], bool] = {}
         self._eval_guard_best_score: float | None = None
+        self._cached_success_sft_batch_available = False
+        self._cached_success_sft_batch_step: int | None = None
 
     def setup(self) -> None:
         super().setup()
@@ -860,6 +862,12 @@ class CotrainRunner(BaseRunner):
         self._policy_final_hash = state_dict_sha256(actor_state)
 
     def _run_global_step(self, groups: dict[str, Any], global_step: int) -> dict[str, float]:
+        if (
+            self._training_mode() == "imagined_success_sft"
+            and self._reuse_imagined_success_trajectories()
+            and self._cached_success_sft_batch_available
+        ):
+            return self._run_cached_success_sft_step(groups, global_step)
         return self._run_staged_global_step(groups, global_step)
 
     def _run_staged_global_step(
@@ -1252,6 +1260,12 @@ class CotrainRunner(BaseRunner):
             actor_channel_name=actor_channel_name,
             stage_times=stage_times,
         )
+        if (
+            training_mode == "imagined_success_sft"
+            and self._reuse_imagined_success_trajectories()
+        ):
+            self._cached_success_sft_batch_available = True
+            self._cached_success_sft_batch_step = int(global_step)
         stage_start = mark_stage("actor_recv_trajectories", stage_start)
         success_sft = training_mode == "imagined_success_sft"
         advantage_metrics: dict[str, float] = {}
@@ -1321,6 +1335,7 @@ class CotrainRunner(BaseRunner):
         train_metrics.update(
             {
                 commit_metric: float(actor_committed),
+                "actor/success_sft_reused_trajectory_batch": 0.0,
                 "actor/policy_kl_encoder": float(encoder_kl_effective),
                 "actor/policy_kl_actor": float(actor_kl_effective),
                 "actor/policy_kl_total": float(encoder_kl_effective + actor_kl_effective),
@@ -1395,6 +1410,68 @@ class CotrainRunner(BaseRunner):
             metrics.update(groups.get("replay_seed_metrics", {}))
         metrics = _with_train_learner_aliases(metrics)
         return metrics
+
+    def _run_cached_success_sft_step(
+        self,
+        groups: dict[str, Any],
+        global_step: int,
+    ) -> dict[str, float]:
+        """Repeat one SFT update on the resident imagined-success batch."""
+
+        actor = groups["ActorGroup"]
+        started_at = time.perf_counter()
+        actor.set_global_step(global_step).wait()
+        train_metrics = _aggregate_actor_metric_lists(
+            [actor.run_success_sft(float(groups["classifier_threshold"])).wait()]
+        )
+        observed_kl = max(
+            0.0,
+            float(
+                train_metrics.get(
+                    "actor/behavior_kl_mean",
+                    train_metrics.get("actor/approx_kl", 0.0),
+                )
+            ),
+        )
+        max_policy_kl = self._max_policy_kl()
+        actor_committed = max_policy_kl is None or observed_kl <= max_policy_kl
+        train_metrics.update(
+            {
+                "actor/success_sft_update_committed": float(actor_committed),
+                "actor/success_sft_reused_trajectory_batch": 1.0,
+                "actor/success_sft_cached_batch_source_step": float(
+                    self._cached_success_sft_batch_step or 0
+                ),
+                "actor/policy_kl_encoder": 0.0,
+                "actor/policy_kl_actor": float(observed_kl if actor_committed else 0.0),
+                "actor/policy_kl_total": float(observed_kl if actor_committed else 0.0),
+                "actor/policy_kl_budget": float(max_policy_kl or 0.0),
+            }
+        )
+        optimizer_steps = max(
+            0,
+            int(float(train_metrics.get("actor/success_sft_optimizer_steps", 0.0))),
+        )
+        self._report_phase_completion(
+            "cotrain-vla-reused-imagined-success-sft",
+            global_step,
+            done=optimizer_steps,
+            total=max(1, optimizer_steps),
+            unit="update",
+            status=(
+                f"source_step={int(self._cached_success_sft_batch_step or 0)} "
+                f"loss={float(train_metrics.get('actor/loss', 0.0)):.4g} "
+                f"kl={float(train_metrics.get('actor/policy_kl_total', 0.0)):.4g}"
+            ),
+        )
+        return {
+            "global_step": float(global_step),
+            "train/reused_imagined_success_trajectories": 1.0,
+            "time/manual_cotrain/actor_run_cached_success_sft_s": float(
+                time.perf_counter() - started_at
+            ),
+            **train_metrics,
+        }
 
     def _finalize_eval_guard(
         self,
@@ -2108,6 +2185,15 @@ class CotrainRunner(BaseRunner):
             OmegaConf.select(
                 self.cfg,
                 "manual_cotrain.rollback_on_eval_regression",
+                default=False,
+            )
+        )
+
+    def _reuse_imagined_success_trajectories(self) -> bool:
+        return bool(
+            OmegaConf.select(
+                self.cfg,
+                "manual_cotrain.reuse_imagined_success_trajectories",
                 default=False,
             )
         )

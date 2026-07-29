@@ -38,6 +38,17 @@ def _compose_safe_tasks():
         )
 
 
+def _compose_safe_reuse_aggressive():
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        return compose(
+            config_name="train",
+            overrides=[
+                "experiment=openvla_libero_safe_tasks_success_sft_reuse_aggressive"
+            ],
+        )
+
+
 def test_task1_9_success_sft_has_exact_global_trajectory_contract() -> None:
     cfg = _compose()
 
@@ -97,6 +108,25 @@ def test_safe_task_success_sft_matches_classifier_calibration_contract() -> None
     assert cfg.env.wm.cfg.kwargs.terminate_on_success is False
     assert cfg.actor.train_cfg.success_sft.epochs == 4
     assert cfg.actor.train_cfg.success_sft.optimizer_steps_per_epoch == 8
+
+
+def test_safe_reuse_aggressive_collects_once_and_evaluates_every_update() -> None:
+    cfg = _compose_safe_reuse_aggressive()
+
+    with pytest.warns(UserWarning):
+        validate_cfg(cfg)
+
+    assert cfg.manual_cotrain.global_steps == 5
+    assert cfg.manual_cotrain.eval_interval_global_steps == 1
+    assert cfg.manual_cotrain.rollback_on_eval_regression is True
+    assert cfg.manual_cotrain.reuse_imagined_success_trajectories is True
+    assert cfg.manual_cotrain.wm_success_quota_per_task == 12
+    assert cfg.manual_cotrain.checkpoint_every == 5
+    assert cfg.manual_cotrain.max_policy_kl == pytest.approx(0.15)
+    assert cfg.ray_actor_optimizer.lr == pytest.approx(2.0e-6)
+    assert cfg.actor.train_cfg.success_sft.epochs == 4
+    assert cfg.actor.train_cfg.success_sft.optimizer_steps_per_epoch == 8
+    assert cfg.checkpoint.topk.monitor_key == "eval/accepted_success_rate"
 
 
 @pytest.mark.parametrize("actor_ranks", [1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 16])
