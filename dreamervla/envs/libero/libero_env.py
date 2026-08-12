@@ -20,12 +20,15 @@ from __future__ import annotations
 
 import copy
 import os
+import pickle
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 import numpy as np
+import torch
 from libero.libero import benchmark as libero_benchmark
+from libero.libero import get_libero_path
 from PIL import Image
 
 from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
@@ -39,6 +42,20 @@ from dreamervla.envs.libero.utils import (
 )
 from dreamervla.envs.libero.venv import ReconfigureSubprocEnv
 from dreamervla.utils.episode_end import resolve_episode_end
+
+
+def _load_libero_init_states(task_suite: Any, task_id: int) -> Any:
+    """Load trusted local LIBERO init states across the torch 2.6 default change."""
+
+    try:
+        return task_suite.get_task_init_states(int(task_id))
+    except pickle.UnpicklingError:
+        init_path = os.path.join(
+            get_libero_path("init_states"),
+            task_suite.get_task(int(task_id)).problem_folder,
+            task_suite.get_task(int(task_id)).init_states_file,
+        )
+        return torch.load(init_path, map_location="cpu", weights_only=False)
 
 
 def _make_offscreen_env_fn(bddl_file_name, camera_heights, camera_widths, seed):
@@ -132,7 +149,7 @@ class LiberoEnv:
         self.total_num_group_envs = 0
         self.trial_id_bins = []
         for task_id in range(self._get_num_tasks()):
-            task_num_trials = len(self.task_suite.get_task_init_states(task_id))
+            task_num_trials = len(_load_libero_init_states(self.task_suite, task_id))
             if max_trials is not None:
                 task_num_trials = min(task_num_trials, int(max_trials))
             self.trial_id_bins.append(task_num_trials)
@@ -247,7 +264,7 @@ class LiberoEnv:
         if env_idx is None:
             env_idx = np.arange(self.num_envs)
         return [
-            self.task_suite.get_task_init_states(int(self.task_ids[env_id]))[
+            _load_libero_init_states(self.task_suite, int(self.task_ids[env_id]))[
                 int(self.trial_ids[env_id])
             ]
             for env_id in env_idx
@@ -864,7 +881,7 @@ class DreamerVLAOnlineTrainEnv:
         self._closed = False
         self.task_id = task_id
         self.task = self.task_suite.get_task(self.task_id)
-        self.initial_states = self.task_suite.get_task_init_states(self.task_id)
+        self.initial_states = _load_libero_init_states(self.task_suite, self.task_id)
         if len(self.initial_states) <= 0:
             raise RuntimeError(
                 f"LIBERO task {self.cfg.task_suite_name}/{self.task_id} has no initial states"

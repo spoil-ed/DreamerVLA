@@ -54,6 +54,7 @@ class NopretokenizeSFTDistributedHelper:
     strategy: str
     fsdp_mixed_precision: str
     enable_activation_checkpointing: bool
+    object_group: Any | None = None
 
     @classmethod
     def initialize(
@@ -84,6 +85,18 @@ class NopretokenizeSFTDistributedHelper:
         world_size = (
             int(dist.get_world_size()) if dist.is_available() and dist.is_initialized() else 1
         )
+        object_group = None
+        if world_size > 1:
+            group_timeout = (
+                timedelta(seconds=int(nccl_timeout_seconds))
+                if nccl_timeout_seconds is not None
+                else timedelta(minutes=30)
+            )
+            # NCCL remains the high-throughput training backend.  Python
+            # checkpoint metadata is tiny and belongs on a CPU/Gloo group;
+            # using NCCL's object-collective staging can deadlock after a large
+            # DDP backward on some torch/CUDA combinations.
+            object_group = dist.new_group(backend="gloo", timeout=group_timeout)
         return cls(
             rank=rank,
             local_rank=local_rank,
@@ -91,6 +104,7 @@ class NopretokenizeSFTDistributedHelper:
             strategy=normalized_strategy,
             fsdp_mixed_precision=str(fsdp_mixed_precision).lower(),
             enable_activation_checkpointing=bool(enable_activation_checkpointing),
+            object_group=object_group,
         )
 
     @property
@@ -291,7 +305,7 @@ class NopretokenizeSFTDistributedHelper:
         if not self.is_distributed:
             return [value]
         gathered: list[Any] = [None] * self.world_size
-        dist.all_gather_object(gathered, value)
+        dist.all_gather_object(gathered, value, group=self.object_group)
         return gathered
 
     def model_state_dict_context(
@@ -437,6 +451,9 @@ class NopretokenizeSFTDistributedHelper:
 
     def cleanup(self) -> None:
         if dist.is_available() and dist.is_initialized():
+            if self.object_group is not None:
+                dist.destroy_process_group(self.object_group)
+                self.object_group = None
             dist.destroy_process_group()
 
 

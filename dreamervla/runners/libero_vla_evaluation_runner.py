@@ -651,21 +651,22 @@ class LIBEROVLAEvaluationRunner(
                 f"{ckpt_path} has no saved cfg; cannot rebuild the VLA policy."
             ) from exc
 
-        base_vla_ckpt = OmegaConf.select(
+        base_vla_ckpt_value = OmegaConf.select(
             eval_cfg_root,
             "init.vla_ckpt_path",
             default=OmegaConf.select(train_cfg, "init.vla_ckpt_path", default=None),
         )
-        if base_vla_ckpt in (None, ""):
-            raise ValueError(
-                "VLA-policy eval requires init.vla_ckpt_path for the fixed OFT backbone"
-            )
-        base_vla_ckpt = str(pathlib.Path(str(base_vla_ckpt)).expanduser().resolve())
+        base_vla_ckpt = (
+            None
+            if base_vla_ckpt_value in (None, "")
+            else str(pathlib.Path(str(base_vla_ckpt_value)).expanduser().resolve())
+        )
         with open_dict(train_cfg):
             train_cfg.eval = copy.deepcopy(eval_cfg_root.eval)
             if OmegaConf.select(train_cfg, "init", default=None) is None:
                 train_cfg.init = {}
-            train_cfg.init.vla_ckpt_path = base_vla_ckpt
+            if base_vla_ckpt is not None:
+                train_cfg.init.vla_ckpt_path = base_vla_ckpt
             train_cfg.training.out_dir = self.output_dir
             train_cfg.training.distributed_strategy = "ddp"
             train_cfg.training.enable_activation_checkpointing = False
@@ -705,13 +706,16 @@ class LIBEROVLAEvaluationRunner(
             "fp16": torch.float16,
             "fp32": torch.float32,
         }.get(precision, torch.bfloat16)
-        policy.to(device=self.device, dtype=policy_dtype)
+        if bool(getattr(policy, "preserve_parameter_dtypes", False)):
+            policy.to(device=self.device)
+        else:
+            policy.to(device=self.device, dtype=policy_dtype)
         self._load_module_state(policy, dict(policy_state), "policy")
         policy.eval()
         self._vla_policy_eval_policy = policy
         self._configure_vla_policy_eval_encoder(
             cfg=train_cfg,
-            base_vla_ckpt=base_vla_ckpt,
+            base_vla_ckpt="" if base_vla_ckpt is None else base_vla_ckpt,
             policy=policy,
         )
         self._setup_cotrain_eval_observer(
@@ -1298,9 +1302,21 @@ class LIBEROVLAEvaluationRunner(
 
     def _load_module_state(self, module: Any, state_dict: dict[str, Any], name: str) -> None:
         target_dtype = next(module.parameters()).dtype
+        model_state = module.state_dict()
+        preserve_parameter_dtypes = bool(
+            getattr(module, "preserve_parameter_dtypes", False)
+        )
         converted = {
-            self._strip_wrapping_prefix(key): (
-                value.to(dtype=target_dtype)
+            (clean_key := self._strip_wrapping_prefix(key)): (
+                value.to(
+                    dtype=(
+                        model_state[clean_key].dtype
+                        if preserve_parameter_dtypes
+                        and clean_key in model_state
+                        and torch.is_floating_point(model_state[clean_key])
+                        else target_dtype
+                    )
+                )
                 if isinstance(value, torch.Tensor) and torch.is_floating_point(value)
                 else value
             )
@@ -1843,6 +1859,11 @@ class LIBEROVLAEvaluationRunner(
                 action_chunk = (
                     decoded.action_chunk if hasattr(decoded, "action_chunk") else decoded[0]
                 )
+            if bool(getattr(oft_extractor, "actions_are_env_ready", False)):
+                return [
+                    np.asarray(action, dtype=np.float32)
+                    for action in list(action_chunk)[: int(action_steps)]
+                ]
             from dreamervla.runtime.oft_collect import process_action
 
             return [

@@ -14,6 +14,7 @@ _RUNNER_MODULES = {
     "CotrainRunner": "dreamervla.runners.cotrain_runner",
     "DreamerRunner": "dreamervla.runners.dreamer_runner",
     "LIBEROVLAEvaluationRunner": ("dreamervla.runners.libero_vla_evaluation_runner"),
+    "VLASFTTrainingRunner": "dreamervla.runners.vla_sft_training_runner",
 }
 
 PUBLIC_RUNNERS = list(_RUNNER_MODULES)

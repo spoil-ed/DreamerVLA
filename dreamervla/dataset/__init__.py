@@ -3,6 +3,11 @@ from .dino_token_dataset import DinoTokenTrajectoryDataset
 from .one_trajectory_pretokenize_dataset import (
     OneTrajectoryPretokenizeActionChunkDataset,
 )
+from .pi05_sft import (
+    OFFICIAL_PI05_LIBERO_REPO,
+    build_pi05_sft_dataloader,
+    resolve_lerobot_source,
+)
 from .pixel_hidden_sequence_dataset import (
     PixelHiddenSequenceDataset,
 )
@@ -30,6 +35,7 @@ from .vla_sft_rlds_dataset import (
 )
 
 __all__ = [
+    "OFFICIAL_PI05_LIBERO_REPO",
     "BaseDataset",
     "DinoTokenTrajectoryDataset",
     "OneTrajectoryPretokenizeActionChunkDataset",
@@ -46,4 +52,6 @@ __all__ = [
     "VLASFTHDF5Spec",
     "VLASFTRLDSDatasetBundle",
     "VLASFTRLDSDatasetFactory",
+    "build_pi05_sft_dataloader",
+    "resolve_lerobot_source",
 ]

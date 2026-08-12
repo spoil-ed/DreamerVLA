@@ -34,6 +34,7 @@ and smoke-run limits.
 ```bash
 python -m dreamervla.train experiment=openvla_onetraj_libero_cotrain profile=production
 bash scripts/experiments/collect_rollouts/train.sh task=openvla_onetraj_coldstart_libero
+torchrun --standalone --nproc-per-node=8 -m dreamervla.train experiment=pi05_libero_sft
 python -m dreamervla.train experiment=wm_full_dataset_train task=openvla_onetraj_coldstart_libero
 bash scripts/experiments/world_model_training/train.sh --config dino-wm
 bash scripts/experiments/world_model_training/train.sh --config dreamer-wm
@@ -71,12 +72,14 @@ wandb beta sync --live /path/to/run_root/wandb
 | Bounded WM timing profile | `scripts/experiments/world_model_training/profile.sh` | `wm_official_upper_bound_profile` |
 | Official-data classifier upper bound | `scripts/experiments/classifier_training/train.sh` | `classifier_official_upper_bound` |
 | Rollout collection | `scripts/experiments/collect_rollouts/train.sh` | `collect_rollouts` |
+| π0.5 official LeRobot SFT | `torchrun --standalone --nproc-per-node=8 -m dreamervla.train experiment=pi05_libero_sft` | `pi05_libero_sft` |
 
 ## Experiments
 
 | Experiment | Module group |
 | --- | --- |
 | `collect_rollouts` | Ray rollout collection |
+| `pi05_libero_sft` | RLinf-aligned π0.5 flow-matching SFT on `physical-intelligence/libero` |
 | `openvla_onetraj_libero_cotrain` | canonical Ray cotrain base recipe |
 | `wm_full_dataset_train` | full-replay WM warmup |
 | `wm_official_upper_bound` | pre-mainline WM training from official data |
@@ -115,6 +118,7 @@ task/libero_goal.yaml
 task/libero_object.yaml
 task/libero_spatial.yaml
 task/libero_10.yaml
+task/pi05_libero.yaml
 task/openvla_onetraj_libero.yaml
 task/openvla_onetraj_libero_object.yaml
 task/openvla_onetraj_libero_spatial.yaml
@@ -128,6 +132,25 @@ dimensions, proprio dimensions, model dimensions, actor/classifier targets, and
 world-model sequence length. The one-trajectory mainline contract is
 `task.openvla_oft.hidden_token` with `hidden_token [256,4096]` and
 `wm_obs_dim=1048576`.
+
+`task/pi05_libero.yaml` is an opt-in model boundary and does not alter the
+OpenVLA recipes. It consumes an official OpenPI PyTorch-converted
+`pi05_libero` checkpoint and uses the upstream normalization and action transforms.
+Point
+`OPENPI_ROOT` at an OpenPI checkout (or install OpenPI in the environment) and set
+`task.pi05.ckpt_path` to a directory containing `model.safetensors` plus the
+checkpoint's `physical-intelligence/libero/norm_stats.json`. The default follows
+the RLinf LIBERO-10 route: sample a 10-action chunk and replan after 10 actions.
+
+The `pi05_libero_sft` experiment uses OpenPI's official PyTorch LeRobot loader and
+flow-matching SFT loss. Its default local dataset root is
+`data/datasets/lerobot/physical-intelligence/libero`; override it with
+`PI05_LIBERO_DATA`. RLinf-aligned defaults are micro batch 4, global batch 128,
+30,000 steps, AdamW `2.5e-5`, and 1,000 warmup steps. Training is launched by
+`torchrun` and uses `torch.nn.parallel.DistributedDataParallel`; neither Ray nor
+FSDP nor a sibling RLinf checkout is used at runtime. RLinf remains the SFT
+behavioral reference only. This route does not construct a PPO value head or
+enter the cotrain loop.
 
 ## Runtime Artifacts
 

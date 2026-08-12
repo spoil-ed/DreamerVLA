@@ -54,6 +54,8 @@ def validate_cfg(cfg: DictConfig, *, world_size: int | None = None) -> DictConfi
     _validate_resume_paths(cfg)
     _validate_removed_observation_routes(cfg)
     _validate_mainline_hidden_token_contract(cfg)
+    _validate_pi05_contract(cfg)
+    _validate_vla_sft_contract(cfg, world_size=_resolve_world_size(world_size))
     _validate_pre_mainline_routes(cfg)
     _validate_sidecar_routes(cfg)
     _validate_chunk_horizon_consistency(cfg)
@@ -67,6 +69,54 @@ def validate_cfg(cfg: DictConfig, *, world_size: int | None = None) -> DictConfi
     if bool(OmegaConf.select(cfg, "validation.require_existing_paths", default=False)):
         _validate_existing_paths(cfg)
     return cfg
+
+
+def _validate_vla_sft_contract(cfg: DictConfig, *, world_size: int) -> None:
+    """Validate the explicit offline VLA-SFT batch and π0.5 model contract."""
+
+    target = str(OmegaConf.select(cfg, "_target_", default="") or "")
+    if not target.endswith("VLASFTTrainingRunner"):
+        return
+    micro = int(OmegaConf.select(cfg, "actor.micro_batch_size", default=0) or 0)
+    global_batch = int(OmegaConf.select(cfg, "actor.global_batch_size", default=0) or 0)
+    if micro <= 0 or global_batch <= 0:
+        raise ValueError("VLA SFT micro_batch_size and global_batch_size must be positive")
+    divisor = micro * max(1, int(world_size))
+    if global_batch % divisor != 0:
+        raise ValueError(
+            "VLA SFT actor.global_batch_size must be divisible by "
+            f"micro_batch_size * world_size ({global_batch} % {divisor} != 0)"
+        )
+    if str(OmegaConf.select(cfg, "task.pi05.config_name", default="")) != "pi05_libero":
+        raise ValueError("π0.5 LIBERO SFT requires task.pi05.config_name=pi05_libero")
+    if bool(OmegaConf.select(cfg, "actor.policy_cfg.kwargs.add_value_head", default=True)):
+        raise ValueError("π0.5 SFT must not construct a PPO value head")
+    if str(OmegaConf.select(cfg, "actor.distributed.strategy", default="")) != "ddp":
+        raise ValueError("π0.5 SFT requires actor.distributed.strategy=ddp")
+    if str(OmegaConf.select(cfg, "training.distributed_strategy", default="")) != "ddp":
+        raise ValueError("π0.5 SFT requires training.distributed_strategy=ddp")
+    if int(OmegaConf.select(cfg, "training.max_steps", default=0) or 0) <= 0:
+        raise ValueError("VLA SFT training.max_steps must be positive")
+
+
+def _validate_pi05_contract(cfg: DictConfig) -> None:
+    """Validate relationships owned by an active official π0.5 task."""
+
+    if OmegaConf.select(cfg, "task.pi05", default=None) is None:
+        return
+    action_dim = _select_int(cfg, "task.action_dim")
+    action_horizon = _select_int(cfg, "task.pi05.action_horizon")
+    replan_steps = _select_int(cfg, "task.pi05.replan_steps")
+    for key, value in {
+        "task.action_dim": action_dim,
+        "task.pi05.action_horizon": action_horizon,
+        "task.pi05.replan_steps": replan_steps,
+    }.items():
+        if value is None or value <= 0:
+            raise ValueError(f"{key} must be a positive integer")
+    assert action_horizon is not None and replan_steps is not None
+    if replan_steps > action_horizon:
+        raise ValueError("task.pi05.replan_steps must not exceed action_horizon")
 
 
 def _validate_precision_controls(cfg: DictConfig) -> None:

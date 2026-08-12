@@ -1,0 +1,12 @@
+# @package _global_
+defaults:
+  - /task: pi05_libero
+  - override /dreamervla: pi05_libero_sft
+  - _self_
+
+run:
+  name: pi05_libero_sft
+
+runner:
+  logger:
+    logger_backends: [tensorboard, wandb]

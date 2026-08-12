@@ -1,0 +1,61 @@
+# @package _global_
+# DreamerVLA-native torch DDP π0.5 SFT, aligned with RLinf's OpenPI recipe.
+_target_: dreamervla.runners.VLASFTTrainingRunner
+seed: 0
+
+data:
+  # A complete local LeRobot root is accepted. Otherwise this is the official
+  # Hugging Face repo id and LeRobot uses HF_ENDPOINT/HF_LEROBOT_HOME.
+  train_data_paths: ${oc.env:PI05_LIBERO_DATA,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/datasets/lerobot/physical-intelligence/libero}
+  num_workers: 2
+  shuffle: true
+
+actor:
+  policy_cfg:
+    target: dreamervla.models.embodiment.Pi05Policy
+    kwargs:
+      model_path: ${task.pi05.ckpt_path}
+      config_name: ${task.pi05.config_name}
+      action_chunk: ${task.pi05.action_horizon}
+      action_dim: ${task.action_dim}
+      num_steps: ${task.pi05.num_denoise_steps}
+      train_expert_only: true
+      add_value_head: false
+      rotate_images_180: ${task.pi05.rotate_images_180}
+  # Verified with real forward/backward/AdamW steps on 2x RTX A6000.  With the
+  # RLinf-equivalent global batch below this means accumulation=4 on 2 GPUs and
+  # accumulation=1 on 8 GPUs.
+  micro_batch_size: 16
+  global_batch_size: 128
+  # false matches RLinf's official OpenPI SFT call exactly. Setting true limits
+  # loss to the 10x7 environment action slice.
+  use_action_chunk_loss: false
+  optim:
+    lr: 2.5e-5
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_eps: 1.0e-8
+    weight_decay: 1.0e-10
+    clip_grad: 1.0
+    # RLinf's current manager defaults to constant-after-linear-warmup because
+    # the example's warmup_style key is not consumed by that manager.
+    lr_scheduler: constant
+    lr_warmup_steps: 1000
+    total_training_steps: 30000
+  distributed:
+    strategy: ddp
+    broadcast_buffers: false
+    find_unused_parameters: false
+    gradient_as_bucket_view: true
+    nccl_timeout_seconds: 1800
+
+training:
+  max_steps: 30000
+  checkpoint_every: 2000
+  save_at_end: true
+  log_every: 1
+  distributed_strategy: ddp
+  device: cuda
+
+checkpoint:
+  topk: null

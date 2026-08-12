@@ -1,0 +1,23 @@
+# Official Physical Intelligence π0.5 LIBERO SFT/evaluation task.
+
+name: pi05_libero
+suite: libero_10
+task_name: libero_10
+image_resolution: 256
+image_size: 64
+image_keys: [agentview_rgb, eye_in_hand_rgb]
+action_dim: 7
+action_horizon: 10
+time_horizon: 10
+
+pi05:
+  # The directory contains model.safetensors and LIBERO normalization stats.
+  ckpt_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/RLinf-Pi05-LIBERO-SFT
+  config_name: pi05_libero
+  action_horizon: 10
+  replan_steps: 10
+  num_denoise_steps: 5
+  rotate_images_180: true
+  base_image_key: agentview_rgb
+  wrist_image_key: eye_in_hand_rgb
+  state_key: state

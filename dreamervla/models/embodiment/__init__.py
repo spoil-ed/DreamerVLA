@@ -2,6 +2,7 @@
 
 from dreamervla.models.embodiment.base_encoder import BaseEncoder
 from dreamervla.models.embodiment.openvla_oft_policy import OpenVLAOFTPolicy
+from dreamervla.models.embodiment.pi05 import Pi05Policy
 from dreamervla.models.embodiment.protocol import (
     EncoderInputBatch,
     build_encoder_input_batch,
@@ -18,6 +19,7 @@ __all__ = [
     "DinoTokenWorldModel",
     "EncoderInputBatch",
     "OpenVLAOFTPolicy",
+    "Pi05Policy",
     "WorldModel",
     "build_encoder_input_batch",
 ]
