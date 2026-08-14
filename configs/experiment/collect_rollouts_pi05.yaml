@@ -1,0 +1,85 @@
+# @package _global_
+# Compressed RGB-only pi0.5 collection for LIBERO.
+defaults:
+  - _self_
+  - /task: pi05_libero
+
+_target_: dreamervla.runners.RolloutCollectionRunner
+mode: vla
+
+run:
+  name: collect_rollouts_pi05
+
+launch:
+  distributed: false
+  ngpu: 8
+  gpus: null
+  master_port: 29502
+  python: python
+  write_libero_config: true
+  required_target_values: []
+  env: {}
+
+collect:
+  backend: ray
+  # LIBERO-90 = 10 tasks x 150 trajectories. Every trajectory is capped at
+  # 512 environment steps and stored as compressed RGB/state/action data only.
+  episodes_per_task: 150
+  episode_horizon: 512
+  envs_per_gpu: 4
+  demos_per_shard: 1
+  memory_fraction: 0.8
+  task_ids: all
+  num_inference_workers: 8
+  store_latent: false
+  # One CPU dump actor per inference GPU keeps lossless compression off the
+  # policy critical path when multi-GPU collection is selected.
+  num_dump_workers: ${collect.num_inference_workers}
+  hdf5_compression:
+    codec: gzip
+    level: 1
+    shuffle: true
+    time_chunk: 1
+  # Set to a pi05_libero_sft run root, checkpoints/, or latest.ckpt to collect
+  # with the learned SFT delta. null intentionally uses the immutable RLinf base.
+  policy_ckpt_path: null
+  hdf5_reward_dir: ${task.collected_reward_dir}
+  hidden_dir: ${task.collected_latent_dir}
+  latent_spec: ${task.observation_latent}
+  producer_metadata:
+    model_path: ${task.pi05.ckpt_path}
+    policy_ckpt_path: ${collect.policy_ckpt_path}
+    config_name: ${task.pi05.config_name}
+    task_suite_name: ${task.suite}
+    resolution: ${task.image_resolution}
+    action_dim: ${task.action_dim}
+    num_images_in_input: 3
+  rollout_bundle:
+    target: dreamervla.workers.inference.pi05_rollout:Pi05RolloutBundle
+    kwargs:
+      model_path: ${task.pi05.ckpt_path}
+      policy_ckpt_path: ${collect.policy_ckpt_path}
+      config_name: ${task.pi05.config_name}
+      action_chunk: ${task.pi05.action_horizon}
+      action_dim: ${task.action_dim}
+      num_steps: ${task.pi05.num_denoise_steps}
+      rotate_images_180: ${task.pi05.rotate_images_180}
+      base_image_key: ${task.pi05.base_image_key}
+      wrist_image_key: ${task.pi05.wrist_image_key}
+      state_key: ${task.pi05.state_key}
+
+env:
+  # Four CPU env actors feed each of the eight H100 inference workers.
+  num_workers: 32
+  cfg:
+    target: dreamervla.envs.libero.libero_env:DreamerVLAOnlineTrainEnv
+    use_from_config: true
+    render_backend: osmesa
+
+rollout:
+  target_episodes: 1500
+
+training:
+  distributed_strategy: single
+  data_parallel: false
+  seed: 7

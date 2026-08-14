@@ -14,7 +14,7 @@ actor:
   policy_cfg:
     target: dreamervla.models.embodiment.Pi05Policy
     kwargs:
-      model_path: ${task.pi05.ckpt_path}
+      model_path: ${task.pi05.base_ckpt_path}
       config_name: ${task.pi05.config_name}
       action_chunk: ${task.pi05.action_horizon}
       action_dim: ${task.action_dim}

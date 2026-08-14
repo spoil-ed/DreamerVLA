@@ -113,6 +113,16 @@ def test_forward_batch_applies_gripper_postprocess() -> None:
     assert float(out["actions"][0][0]) == 20.0  # non-gripper dim untouched
 
 
+def test_forward_batch_preserves_env_ready_pi05_gripper() -> None:
+    w = RolloutInferenceWorker(_cfg(), {}, num_envs=1)
+    w.init()
+    w._actions_are_env_ready = True
+
+    out = w.forward_batch([{"seed": 0}], [0])
+
+    assert float(out["actions"][0][-1]) == 0.0
+
+
 def test_forward_batch_executes_action_chunk_open_loop() -> None:
     cfg = _cfg()
     cfg["action_steps"] = 3
@@ -136,3 +146,27 @@ def test_forward_batch_can_disable_hidden_sidecar() -> None:
 
     assert set(out) == {"actions"}
     assert out["actions"][0].shape == (7,)
+
+
+def test_hidden_disabled_uses_action_only_bundle_path() -> None:
+    class _ActionOnlyBundle(_LangBundle):
+        def __init__(self) -> None:
+            self.action_only_calls = 0
+
+        def predict_batch(self, preps):
+            raise AssertionError("hidden-producing path must not run")
+
+        def predict_actions_batch(self, preps):
+            self.action_only_calls += 1
+            return [np.zeros((8, 7), dtype=np.float32) for _ in preps]
+
+    cfg = _cfg()
+    cfg["emit_hidden_sidecar"] = False
+    w = RolloutInferenceWorker(cfg, {}, num_envs=1)
+    w._bundle = _ActionOnlyBundle()
+    w._extractors = [w._bundle.make_extractor()]
+
+    out = w.forward_batch([{"seed": 10}], [0])
+
+    assert set(out) == {"actions"}
+    assert w._bundle.action_only_calls == 1

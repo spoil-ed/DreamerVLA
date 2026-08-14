@@ -1,4 +1,9 @@
-"""Schema and relationship validation for OpenVLA-OFT token sidecars."""
+"""Schema and relationship validation for VLA observation-latent sidecars.
+
+The on-disk tensor key remains ``obs_embedding`` for replay compatibility.  Its
+producer and geometry are described by metadata, so consumers do not need to
+know whether the tokens came from OpenVLA-OFT or pi0.5.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +17,7 @@ import h5py
 DEFAULT_HIDDEN_KEY = "obs_embedding"
 REQUIRED_DEMO_DATASETS_KEY = "required_demo_datasets"
 SIDECAR_SCHEMA_VERSION = 1
+OBSERVATION_LATENT_SCHEMA_VERSION = 2
 
 HIDDEN_TOKEN_SOURCE = "hidden_token"
 HIDDEN_TOKEN_COUNT = 256
@@ -20,6 +26,8 @@ HIDDEN_TOKEN_HIDDEN_DIM = HIDDEN_TOKEN_COUNT * HIDDEN_TOKEN_DIM
 HIDDEN_TOKEN_SHAPE = (HIDDEN_TOKEN_COUNT, HIDDEN_TOKEN_DIM)
 HIDDEN_TOKEN_STORAGE_FORMAT = "tokenized"
 HIDDEN_TOKEN_ACTION_HEAD = "oft_discrete_token"
+PI05_PREFIX_SOURCE = "pi05_prefix_output"
+PI05_ACTION_HEAD = "flow_matching"
 # The one intentional old public value. It is accepted only by the narrow
 # migration adapter below, after HDF5 attributes prove a [256, 4096] payload.
 # New artifacts must never emit it.
@@ -76,16 +84,12 @@ REFERENCE_OBS_DATASETS = (
 )
 
 
-def _hidden_token_contract_errors(config: Mapping[str, Any]) -> list[str]:
+def _observation_latent_geometry_errors(config: Mapping[str, Any]) -> list[str]:
+    """Return errors shared by every tokenized observation-latent producer."""
+
     expected = {
-        "obs_hidden_source": HIDDEN_TOKEN_SOURCE,
-        "action_head_type": HIDDEN_TOKEN_ACTION_HEAD,
         "hidden_key": DEFAULT_HIDDEN_KEY,
         "hidden_storage_format": HIDDEN_TOKEN_STORAGE_FORMAT,
-        "num_images_in_input": 1,
-        "history": 1,
-        "include_state": False,
-        "sidecar_schema_version": SIDECAR_SCHEMA_VERSION,
         REQUIRED_DEMO_DATASETS_KEY: [DEFAULT_HIDDEN_KEY],
     }
     errors: list[str] = []
@@ -94,7 +98,7 @@ def _hidden_token_contract_errors(config: Mapping[str, Any]) -> list[str]:
         if got != wanted:
             errors.append(f"{key}={got!r}, expected {wanted!r}")
     geometry: dict[str, int] = {}
-    for key in ("token_count", "token_dim", "hidden_dim", "patches_per_image"):
+    for key in ("token_count", "token_dim", "hidden_dim"):
         value = config.get(key)
         if type(value) is not int or value <= 0:
             errors.append(f"{key}={value!r}, expected a positive integer")
@@ -103,18 +107,6 @@ def _hidden_token_contract_errors(config: Mapping[str, Any]) -> list[str]:
     token_count = geometry.get("token_count")
     token_dim = geometry.get("token_dim")
     hidden_dim = geometry.get("hidden_dim")
-    patches_per_image = geometry.get("patches_per_image")
-    num_images = config.get("num_images_in_input")
-    if (
-        token_count is not None
-        and patches_per_image is not None
-        and type(num_images) is int
-        and token_count != patches_per_image * num_images
-    ):
-        errors.append(
-            "token_count must equal patches_per_image * num_images_in_input: "
-            f"{token_count} != {patches_per_image} * {num_images}"
-        )
     if (
         token_count is not None
         and token_dim is not None
@@ -138,6 +130,69 @@ def _hidden_token_contract_errors(config: Mapping[str, Any]) -> list[str]:
     present_removed = [key for key in REMOVED_SIDECAR_FIELDS if key in config]
     if present_removed:
         errors.append(f"removed sidecar fields are present: {present_removed!r}")
+    return errors
+
+
+def _pi05_prefix_contract_errors(config: Mapping[str, Any]) -> list[str]:
+    errors = _observation_latent_geometry_errors(config)
+    expected = {
+        "policy_family": "pi05",
+        "obs_hidden_source": PI05_PREFIX_SOURCE,
+        "action_head_type": PI05_ACTION_HEAD,
+        "sidecar_schema_version": OBSERVATION_LATENT_SCHEMA_VERSION,
+        "history": 1,
+        "include_state": True,
+        "prefix_selection": "image_only",
+        "alignment_source": "rlinf_rlt_prefix",
+    }
+    for key, wanted in expected.items():
+        got = config.get(key)
+        if got != wanted:
+            errors.append(f"{key}={got!r}, expected {wanted!r}")
+    if config.get("token_count") != 768:
+        errors.append(f"token_count={config.get('token_count')!r}, expected 768")
+    if config.get("token_dim") != 2048:
+        errors.append(f"token_dim={config.get('token_dim')!r}, expected 2048")
+    return errors
+
+
+def _hidden_token_contract_errors(config: Mapping[str, Any]) -> list[str]:
+    expected = {
+        "obs_hidden_source": HIDDEN_TOKEN_SOURCE,
+        "action_head_type": HIDDEN_TOKEN_ACTION_HEAD,
+        "hidden_key": DEFAULT_HIDDEN_KEY,
+        "hidden_storage_format": HIDDEN_TOKEN_STORAGE_FORMAT,
+        "num_images_in_input": 1,
+        "history": 1,
+        "include_state": False,
+        "sidecar_schema_version": SIDECAR_SCHEMA_VERSION,
+        REQUIRED_DEMO_DATASETS_KEY: [DEFAULT_HIDDEN_KEY],
+    }
+    errors: list[str] = _observation_latent_geometry_errors(config)
+    for key, wanted in expected.items():
+        got = config.get(key)
+        if got != wanted:
+            errors.append(f"{key}={got!r}, expected {wanted!r}")
+    geometry: dict[str, int] = {}
+    for key in ("token_count", "token_dim", "hidden_dim", "patches_per_image"):
+        value = config.get(key)
+        if type(value) is not int or value <= 0:
+            errors.append(f"{key}={value!r}, expected a positive integer")
+            continue
+        geometry[key] = int(value)
+    token_count = geometry.get("token_count")
+    patches_per_image = geometry.get("patches_per_image")
+    num_images = config.get("num_images_in_input")
+    if (
+        token_count is not None
+        and patches_per_image is not None
+        and type(num_images) is int
+        and token_count != patches_per_image * num_images
+    ):
+        errors.append(
+            "token_count must equal patches_per_image * num_images_in_input: "
+            f"{token_count} != {patches_per_image} * {num_images}"
+        )
     return errors
 
 
@@ -175,12 +230,25 @@ def validate_hidden_token_preprocess_config(
 ) -> None:
     """Validate metadata without aliases, inferred defaults, or conversions."""
 
-    errors = _hidden_token_contract_errors(config)
+    source = config.get("obs_hidden_source")
+    errors = (
+        _pi05_prefix_contract_errors(config)
+        if source == PI05_PREFIX_SOURCE
+        else _hidden_token_contract_errors(config)
+    )
     if errors:
         raise ValueError(
-            f"{context} does not satisfy the only supported observation contract:\n  - "
+            f"{context} does not satisfy a supported observation-latent contract:\n  - "
             + "\n  - ".join(errors)
         )
+
+
+def validate_observation_latent_preprocess_config(
+    config: Mapping[str, Any], *, context: str
+) -> None:
+    """Validate a producer-neutral observation-latent sidecar declaration."""
+
+    validate_hidden_token_preprocess_config(config, context=context)
 
 
 def _legacy_value_matches(got: Any, expected: Any) -> bool:
@@ -454,6 +522,15 @@ def validate_hidden_token_sidecar_dir(
                 if reference_handle is not None:
                     reference_handle.close()
     return config
+
+
+def validate_observation_latent_sidecar_dir(
+    hidden_dir: str | Path,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Producer-neutral public name for complete sidecar corpus validation."""
+
+    return validate_hidden_token_sidecar_dir(hidden_dir, **kwargs)
 
 
 def required_demo_datasets() -> list[str]:

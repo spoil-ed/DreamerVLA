@@ -14,6 +14,7 @@ from dreamervla.dataset.collection_manifest import (
     next_shard_index,
 )
 from dreamervla.runners.base_runner import BaseRunner
+from dreamervla.runtime.observation_latent import ObservationLatentSpec
 from dreamervla.runtime.oft_collect import (
     resolve_num_images_in_input,
     select_vla_image_keys,
@@ -77,6 +78,10 @@ def build_oft_collect_config(cfg: DictConfig) -> dict[str, Any]:
         "episode_horizon": int(cfg.collect.episode_horizon),
         "envs_per_gpu": int(cfg.collect.envs_per_gpu),
         "demos_per_shard": int(OmegaConf.select(cfg, "collect.demos_per_shard", default=0)),
+        "num_dump_workers": int(OmegaConf.select(cfg, "collect.num_dump_workers", default=1)),
+        "hdf5_compression": _plain(
+            OmegaConf.select(cfg, "collect.hdf5_compression", default={"codec": "none"})
+        ),
         "memory_fraction": float(cfg.collect.memory_fraction),
         "render_backend": str(
             OmegaConf.select(
@@ -125,6 +130,80 @@ def build_oft_collect_config(cfg: DictConfig) -> dict[str, Any]:
         if value is not None:
             collect_cfg[key] = int(value)
     return collect_cfg
+
+
+def build_vla_collect_config(cfg: DictConfig) -> dict[str, Any]:
+    """Resolve a producer-neutral VLA collection contract from Hydra."""
+
+    raw_latent = OmegaConf.select(cfg, "collect.latent_spec", default=None)
+    if raw_latent is None:
+        raw_latent = OmegaConf.select(cfg, "task.observation_latent", default=None)
+    if raw_latent is None:
+        raise ValueError("collect.latent_spec or task.observation_latent is required")
+    latent_mapping = _plain(raw_latent)
+    latent = ObservationLatentSpec.from_mapping(latent_mapping)
+    task_ids = OmegaConf.select(cfg, "collect.task_ids", default="all")
+    if OmegaConf.is_config(task_ids):
+        task_ids = OmegaConf.to_container(task_ids, resolve=True)
+    rollout_bundle = OmegaConf.select(cfg, "collect.rollout_bundle", default=None)
+    if rollout_bundle is None:
+        raise ValueError("collect.rollout_bundle must select a VLA rollout adapter")
+    reward_dir = OmegaConf.select(
+        cfg,
+        "collect.hdf5_reward_dir",
+        default=OmegaConf.select(cfg, "task.collected_reward_dir", default=None),
+    )
+    hidden_dir = OmegaConf.select(
+        cfg,
+        "collect.hidden_dir",
+        default=OmegaConf.select(cfg, "task.collected_latent_dir", default=None),
+    )
+    if reward_dir is None or hidden_dir is None:
+        raise ValueError("collection reward and observation-latent directories are required")
+    return {
+        "policy_family": latent.policy_family,
+        "task_suite_name": str(cfg.task.suite),
+        "task_ids": task_ids,
+        "num_tasks": OmegaConf.select(cfg, "collect.num_tasks", default=None),
+        "episodes_per_task": int(cfg.collect.episodes_per_task),
+        "episode_horizon": int(cfg.collect.episode_horizon),
+        "envs_per_gpu": int(cfg.collect.envs_per_gpu),
+        "demos_per_shard": int(OmegaConf.select(cfg, "collect.demos_per_shard", default=0)),
+        "num_dump_workers": int(OmegaConf.select(cfg, "collect.num_dump_workers", default=1)),
+        "store_latent": bool(OmegaConf.select(cfg, "collect.store_latent", default=True)),
+        "hdf5_compression": _plain(
+            OmegaConf.select(cfg, "collect.hdf5_compression", default={"codec": "none"})
+        ),
+        "memory_fraction": float(cfg.collect.memory_fraction),
+        "render_backend": str(
+            OmegaConf.select(
+                cfg,
+                "collect.render_backend",
+                default=OmegaConf.select(cfg, "render_backend", default="osmesa"),
+            )
+        ),
+        "reward_dir": str(reward_dir),
+        "hidden_dir": str(hidden_dir),
+        "resolution": int(cfg.task.image_resolution),
+        "action_dim": int(cfg.task.action_dim),
+        "chunk_size": latent.chunk_size,
+        "expected_history": latent.history,
+        "expected_include_state": latent.include_state,
+        "expected_obs_hidden_source": latent.obs_hidden_source,
+        "expected_action_head_type": latent.action_head_type,
+        "expected_rotate_images_180": latent.rotate_images_180,
+        "token_count": latent.token_count,
+        "token_dim": latent.token_dim,
+        "hidden_dim": latent.hidden_dim,
+        "gpu_id": int(OmegaConf.select(cfg, "collect.gpu_id", default=0)),
+        "num_inference_workers": int(
+            OmegaConf.select(cfg, "collect.num_inference_workers", default=1)
+        ),
+        "rollout_bundle": _plain(rollout_bundle),
+        "preprocess_config": latent.preprocess_config(
+            **_plain(OmegaConf.select(cfg, "collect.producer_metadata", default={}))
+        ),
+    }
 
 
 def _shard_env_ids_by_worker(env_ids: list[int], num_workers: int) -> dict[int, list[int]]:
@@ -212,7 +291,7 @@ class _RayRolloutCollection(BaseRunner):
 
     def _build_components(self, cluster: Cluster) -> dict[str, Any]:
         mode = str(self._select_first(("mode",), "synthetic")).lower()
-        if mode == "oft":
+        if mode in {"oft", "vla"}:
             return self._build_oft_components(cluster)
 
         num_envs = self._int_from(("env.num_workers", "num_env_workers"), 1)
@@ -344,6 +423,8 @@ class _RayRolloutCollection(BaseRunner):
                 "reward_dir": collect_cfg["reward_dir"],
                 "hidden_dir": collect_cfg["hidden_dir"],
                 "shard_name": "ray_shard_000.hdf5",
+                "num_workers": collect_cfg["num_dump_workers"],
+                "compression": collect_cfg["hdf5_compression"],
                 "preprocess_config": preprocess_config,
                 "data_attrs": {
                     "task_suite_name": collect_cfg["task_suite_name"],
@@ -352,13 +433,84 @@ class _RayRolloutCollection(BaseRunner):
             },
         }
 
+    def build_vla_worker_plan(self) -> dict[str, Any]:
+        """Assemble a target-injected VLA rollout plan without loading a model."""
+
+        collect_cfg = build_vla_collect_config(self.cfg)
+        inference_device = str(
+            self._select_first(("inference.device", "collect.inference_device"), "cuda")
+        )
+        env_cfg = self._cfg_from(
+            "env.cfg",
+            {
+                "target": "dreamervla.envs.libero.libero_env:DreamerVLAOnlineTrainEnv",
+                "use_from_config": True,
+            },
+        )
+        env_kwargs = dict(env_cfg.get("kwargs", {}))
+        env_kwargs.setdefault("task_suite_name", collect_cfg["task_suite_name"])
+        env_kwargs.setdefault("task_id", _first_task_id(collect_cfg.get("task_ids", 0)))
+        env_kwargs.setdefault("resolution", collect_cfg["resolution"])
+        env_kwargs.setdefault("full_record", True)
+        env_kwargs.setdefault("init_state_sampling", "sequential")
+        env_kwargs.setdefault("action_input", "raw")
+        env_kwargs.setdefault("pixel_rotate_180", False)
+        env_kwargs.setdefault("vla_rotate_180", collect_cfg["expected_rotate_images_180"])
+        env_kwargs.setdefault("history_length", collect_cfg["expected_history"])
+        env_kwargs.setdefault("include_state", collect_cfg["expected_include_state"])
+        env_kwargs.setdefault("obs_hidden_source", collect_cfg["expected_obs_hidden_source"])
+        env_kwargs.setdefault("action_head_type", collect_cfg["expected_action_head_type"])
+        env_kwargs.setdefault("validate_canonical", False)
+        env_kwargs.setdefault("max_steps", collect_cfg["episode_horizon"])
+        env_cfg["kwargs"] = env_kwargs
+        decoder = dict(collect_cfg["rollout_bundle"])
+        decoder_kwargs = dict(decoder.get("kwargs", {}))
+        decoder_kwargs.setdefault("device", inference_device)
+        decoder["kwargs"] = decoder_kwargs
+        return {
+            "collect": collect_cfg,
+            "env": env_cfg,
+            "inference": {
+                "action_dim": collect_cfg["action_dim"],
+                "action_steps": collect_cfg["chunk_size"],
+                "device": inference_device,
+                "decoder": decoder,
+                "emit_hidden_sidecar": collect_cfg["store_latent"],
+            },
+            "dump": {
+                "reward_dir": collect_cfg["reward_dir"],
+                "hidden_dir": collect_cfg["hidden_dir"],
+                "shard_name": "ray_shard_000.hdf5",
+                "num_workers": collect_cfg["num_dump_workers"],
+                "compression": collect_cfg["hdf5_compression"],
+                "write_hidden_sidecar": collect_cfg["store_latent"],
+                "preprocess_config": collect_cfg["preprocess_config"],
+                "data_attrs": {
+                    "task_suite_name": collect_cfg["task_suite_name"],
+                    "env_name": "libero",
+                    "policy_family": collect_cfg["policy_family"],
+                },
+            },
+        }
+
+    def build_worker_plan(self) -> dict[str, Any]:
+        """Build the configured VLA plan while retaining the OFT public adapter."""
+
+        mode = str(self._select_first(("mode",), "oft")).lower()
+        return self.build_oft_worker_plan() if mode == "oft" else self.build_vla_worker_plan()
+
     def _build_collect_cfg(self) -> dict[str, Any]:
         """Resolve Hydra task/collection groups into the Ray worker contract."""
 
-        return build_oft_collect_config(self.cfg)
+        mode = str(self._select_first(("mode",), "oft")).lower()
+        return (
+            build_oft_collect_config(self.cfg)
+            if mode == "oft"
+            else build_vla_collect_config(self.cfg)
+        )
 
     def _build_oft_components(self, cluster: Cluster) -> dict[str, Any]:
-        plan = self.build_oft_worker_plan()
+        plan = self.build_worker_plan()
         collect_cfg = plan["collect"]
         num_envs = self._int_from(("env.num_workers", "collect.envs_per_gpu", "num_env_workers"), 1)
         demos_per_shard = self._int_from(("collect.demos_per_shard", "demos_per_shard"), 0)
@@ -372,7 +524,11 @@ class _RayRolloutCollection(BaseRunner):
         dump_cfg = plan["dump"]
         reward_dir = str(dump_cfg["reward_dir"])
         hidden_dir = str(dump_cfg["hidden_dir"])
-        complete_ids = complete_episode_ids_per_task(reward_dir, hidden_dir)
+        num_dump_workers = max(1, int(dump_cfg.get("num_workers", 1)))
+        complete_ids = complete_episode_ids_per_task(
+            reward_dir,
+            hidden_dir if bool(dump_cfg.get("write_hidden_sidecar", True)) else None,
+        )
         full_work = missing_episode_work_list(
             task_ids,
             episodes_per_task,
@@ -391,8 +547,10 @@ class _RayRolloutCollection(BaseRunner):
             dump_cfg["data_attrs"],
             demos_per_shard,
             shard_start,
-        ).launch(cluster, NodePlacementStrategy(1))
-        dump = dump_group.workers[0]
+            compression=dump_cfg.get("compression"),
+            write_hidden_sidecar=bool(dump_cfg.get("write_hidden_sidecar", True)),
+        ).launch(cluster, NodePlacementStrategy(num_dump_workers))
+        dump_targets = list(dump_group.workers)
 
         env_cfg = _ensure_collect_render_device_pool(
             plan["env"],
@@ -405,7 +563,7 @@ class _RayRolloutCollection(BaseRunner):
             EnvWorker,
             env_cfg,
             task_id=initial_task,
-            replay=dump,
+            replay=dump_targets,
             record_builder=_build_oft_dump_step,
         ).launch(cluster, NodePlacementStrategy(num_envs))
         env_task_ids: list[int | None] = [None] * num_envs
@@ -443,6 +601,7 @@ class _RayRolloutCollection(BaseRunner):
             "infer": infer_group,
             "num_envs": num_envs,
             "num_infer": num_infer,
+            "num_dump_workers": num_dump_workers,
             "env_task_ids": env_task_ids,
             "task_ids": task_ids,
             "pending_work": pending_work,
@@ -459,6 +618,7 @@ class _RayRolloutCollection(BaseRunner):
         dump = groups["dump"]
         num_envs = int(groups["num_envs"])
         num_infer = int(groups.get("num_infer", 1))
+        num_dump_workers = int(groups.get("num_dump_workers", 1))
         scheduled = "env_task_ids" in groups
         env_task_ids = list(groups.get("env_task_ids", [None] * num_envs))
         pending_work = list(groups.get("pending_work", []))
@@ -500,8 +660,11 @@ class _RayRolloutCollection(BaseRunner):
             driver_roundtrips += 1
             return _wait_worker_results(results)
 
+        def dump_size() -> int:
+            return sum(int(value) for value in wait_result(dump.size()))
+
         while env_ids and steps < max_steps:
-            done_count = int(wait_result(dump.size())[0])
+            done_count = dump_size()
             self.console_progress(done_count, target_episodes, "collect", unit="ep")
             if done_count >= target_episodes:
                 break
@@ -523,8 +686,9 @@ class _RayRolloutCollection(BaseRunner):
             for w, ids in shards.items():
                 out = wait_result(infer_calls[w])[0]
                 lang_emb = out.get("lang_emb") or [None] * len(ids)
+                hidden_batch = out.get("obs_embedding") or [None] * len(ids)
                 for e, action, hidden, lang in zip(
-                    ids, out["actions"], out["obs_embedding"], lang_emb, strict=True
+                    ids, out["actions"], hidden_batch, lang_emb, strict=True
                 ):
                     out_by_env[e] = (action, hidden, lang)
             step_calls = [
@@ -563,7 +727,7 @@ class _RayRolloutCollection(BaseRunner):
                 env_ids = [idx for idx, task_id in enumerate(env_task_ids) if task_id is not None]
             steps += 1
 
-        episodes = int(wait_result(dump.size())[0])
+        episodes = dump_size()
         self.console_progress(episodes, target_episodes, "collect", unit="ep")
         wait_result(dump.close())
         wait_result(envs.close())
@@ -580,6 +744,7 @@ class _RayRolloutCollection(BaseRunner):
                 "collect/steps": int(steps),
                 "collect/success_rate": succ_rate,
                 "env/num_env_workers": int(num_envs),
+                "rollout/num_dump_workers": int(num_dump_workers),
             },
             force=True,
         )
@@ -587,6 +752,7 @@ class _RayRolloutCollection(BaseRunner):
             "rollout/episodes": episodes,
             "rollout/steps": int(steps),
             "env/num_env_workers": int(num_envs),
+            "rollout/num_dump_workers": int(num_dump_workers),
             "time/driver_roundtrips": int(driver_roundtrips),
             "time/driver_step_calls": int(driver_step_calls),
             "time/driver_step_waits": int(driver_step_waits),
@@ -600,6 +766,7 @@ class _RayRolloutCollection(BaseRunner):
         infer = groups["infer"]
         dump = groups["dump"]
         num_envs = int(groups["num_envs"])
+        num_dump_workers = int(groups.get("num_dump_workers", 1))
         if int(groups.get("num_infer", 1)) > 1:
             raise NotImplementedError(
                 "multi-GPU inference (collect.num_inference_workers>1) is supported on the "
@@ -648,7 +815,7 @@ class _RayRolloutCollection(BaseRunner):
             if stop_launching:
                 return
             start = time.perf_counter()
-            episodes_so_far = int(dump.size().wait()[0])
+            episodes_so_far = sum(int(value) for value in dump.size().wait())
             dump_wait_s += time.perf_counter() - start
             self.console_progress(episodes_so_far, target_episodes, "collect", unit="ep")
             if episodes_so_far >= target_episodes:
@@ -671,10 +838,11 @@ class _RayRolloutCollection(BaseRunner):
 
         def launch_steps(batch_env_ids: list[int], infer_out: dict[str, Any]) -> None:
             lang_emb = infer_out.get("lang_emb") or [None] * len(batch_env_ids)
+            hidden_batch = infer_out.get("obs_embedding") or [None] * len(batch_env_ids)
             for env_id, action, hidden, lang in zip(
                 batch_env_ids,
                 infer_out["actions"],
-                infer_out["obs_embedding"],
+                hidden_batch,
                 lang_emb,
                 strict=True,
             ):
@@ -766,7 +934,7 @@ class _RayRolloutCollection(BaseRunner):
         pending_infers.clear()
 
         start = time.perf_counter()
-        episodes = int(dump.size().wait()[0])
+        episodes = sum(int(value) for value in dump.size().wait())
         dump.close().wait()
         envs.close().wait()
         dump_wait_s += time.perf_counter() - start
@@ -784,6 +952,7 @@ class _RayRolloutCollection(BaseRunner):
                 "collect/steps": int(steps),
                 "collect/success_rate": succ_rate,
                 "env/num_env_workers": int(num_envs),
+                "rollout/num_dump_workers": int(num_dump_workers),
             },
             force=True,
         )
@@ -791,6 +960,7 @@ class _RayRolloutCollection(BaseRunner):
             "rollout/episodes": episodes,
             "rollout/steps": int(steps),
             "env/num_env_workers": int(num_envs),
+            "rollout/num_dump_workers": int(num_dump_workers),
             "time/overlap_events": int(overlap_events),
             "time/infer_wait_s": float(infer_wait_s),
             "time/env_step_wait_s": float(env_step_wait_s),

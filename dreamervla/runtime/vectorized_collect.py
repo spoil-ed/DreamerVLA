@@ -67,13 +67,13 @@ def extractor_obs_from_record(rec: dict[str, Any]) -> dict[str, Any]:
 
 def build_step_record(
     rec: dict[str, Any],
-    hidden_state: Any,
+    hidden_state: Any | None,
     wm_action: Any,
     lang_emb: Any | None = None,
 ) -> dict[str, Any]:
     """One per-step dict for ``RolloutDumpWriter.write_demo`` (schema per _run_episode)."""
     emb = sidecar_to_numpy(hidden_state)
-    step = {
+    step: dict[str, Any] = {
         "actions": np.asarray(wm_action, dtype=np.float64),
         "rewards": np.float32(0.0),
         "sparse_rewards": np.uint8(0),  # set on the terminal frame
@@ -84,8 +84,9 @@ def build_step_record(
             **{k: rec[k] for k in _OBS_IMG_KEYS},
             **{k: rec[k].astype(np.float64) for k in _OBS_F64_KEYS},
         },
-        "obs_embedding": emb,
     }
+    if emb is not None:
+        step["obs_embedding"] = emb
     lang = sidecar_to_numpy(lang_emb, dtype=np.float32)
     if lang is not None:
         step["lang_emb"] = lang.reshape(-1)

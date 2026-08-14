@@ -3,6 +3,16 @@ from __future__ import annotations
 import numpy as np
 
 
+def test_env_worker_selects_rank_sharded_replay(monkeypatch) -> None:
+    from dreamervla.workers.env.env_worker import EnvWorker
+
+    shards = [object(), object(), object()]
+    monkeypatch.setenv("RANK", "4")
+    worker = EnvWorker({"target": "unused"}, task_id=0, replay=shards)
+
+    assert worker.replay is shards[1]
+
+
 def test_env_worker_uses_injected_record_builder() -> None:
     from dreamervla.workers.env.env_worker import EnvWorker
 

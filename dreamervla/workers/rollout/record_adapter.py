@@ -12,7 +12,7 @@ from dreamervla.runtime.vectorized_collect import build_step_record, proprio_fro
 def build_dump_step(
     *,
     full_record: dict[str, Any],
-    obs_embedding: Any,
+    obs_embedding: Any | None,
     lang_emb: Any | None = None,
     action: Any,
     reward: float,
@@ -22,7 +22,11 @@ def build_dump_step(
     """Build one ``RolloutDumpWriter.write_demo`` step from Ray env output."""
     step = build_step_record(
         full_record,
-        np.asarray(obs_embedding, dtype=np.float16),
+        (
+            np.asarray(obs_embedding, dtype=np.float16)
+            if obs_embedding is not None
+            else None
+        ),
         action,
         lang_emb=lang_emb,
     )
@@ -30,7 +34,8 @@ def build_dump_step(
     step["rewards"] = np.float32(reward)
     step["sparse_rewards"] = np.uint8(int(sparse_reward))
     step["dones"] = np.uint8(1 if done else 0)
-    step["obs_embedding"] = np.asarray(obs_embedding, dtype=np.float16)
+    if obs_embedding is not None:
+        step["obs_embedding"] = np.asarray(obs_embedding, dtype=np.float16)
     step["proprio"] = proprio_from_record(full_record)
     step["success"] = bool(done and sparse_reward)
     step["wm_action"] = np.asarray(action, dtype=np.float32).reshape(-1)

@@ -44,6 +44,7 @@ class RolloutInferenceWorker(Worker):
         self._action_steps = max(1, int(self._cfg.get("action_steps", 1)))
         self._emit_hidden_sidecar = bool(self._cfg.get("emit_hidden_sidecar", True))
         self._bundle: Any | None = None
+        self._actions_are_env_ready = False
         self._extractors: list[Any] = []
         self._action_queues = [
             ActionChunkQueue(action_dim=self._action_dim, action_steps=self._action_steps)
@@ -54,10 +55,16 @@ class RolloutInferenceWorker(Worker):
         decoder_cfg = dict(self._cfg["decoder"])
         decoder_kwargs = dict(decoder_cfg.get("kwargs", {}))
         target = str(decoder_cfg.get("target") or decoder_cfg.get("_target_") or "")
-        if target.endswith(("oft_rollout:OFTRolloutBundle", "oft_rollout.OFTRolloutBundle")):
+        if target.endswith(
+            (
+                "oft_rollout:OFTRolloutBundle",
+                "oft_rollout.OFTRolloutBundle",
+            )
+        ):
             decoder_kwargs.setdefault("device", self.device)
         decoder_cfg["kwargs"] = decoder_kwargs
         self._bundle = _build_from_cfg(decoder_cfg)
+        self._actions_are_env_ready = bool(getattr(self._bundle, "actions_are_env_ready", False))
         if hasattr(self._bundle, "to"):
             self._bundle.to(self.device)
         self._extractors = [self._bundle.make_extractor() for _ in range(self._num_envs)]
@@ -73,7 +80,11 @@ class RolloutInferenceWorker(Worker):
             self._extractors[int(env_id)].prepare(obs, str(obs.get("task_description", "")))
             for env_id, obs in zip(env_ids, obs_batch, strict=True)
         ]
-        results = bundle.predict_batch(preps)
+        if not self._emit_hidden_sidecar and hasattr(bundle, "predict_actions_batch"):
+            action_chunks = bundle.predict_actions_batch(preps)
+            results = [(action_chunk, None) for action_chunk in action_chunks]
+        else:
+            results = bundle.predict_batch(preps)
         actions: list[np.ndarray] = []
         hidden: list[np.ndarray] = []
         lang: list[np.ndarray | None] = []
@@ -86,12 +97,20 @@ class RolloutInferenceWorker(Worker):
             queue = self._action_queues[env_index]
             if not queue.has_pending:
                 queue.refill(np.asarray(action_chunk, dtype=np.float32))
-            action = process_action(queue.pop())[: self._action_dim]
-            obs_embedding = (
-                flat_hidden.numpy() if hasattr(flat_hidden, "numpy") else np.asarray(flat_hidden)
-            )
+            queued_action = queue.pop()
+            action = (
+                np.asarray(queued_action, dtype=np.float32)
+                if self._actions_are_env_ready
+                else process_action(queued_action)
+            )[: self._action_dim]
             actions.append(action)
-            hidden.append(obs_embedding.astype(np.float16, copy=False))
+            if self._emit_hidden_sidecar:
+                obs_embedding = (
+                    flat_hidden.numpy()
+                    if hasattr(flat_hidden, "numpy")
+                    else np.asarray(flat_hidden)
+                )
+                hidden.append(obs_embedding.astype(np.float16, copy=False))
             lang_emb = _optional_lang_emb(result)
             if lang_emb is None:
                 lang.append(None)

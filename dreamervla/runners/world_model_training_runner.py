@@ -8,6 +8,7 @@ Online cotrain is owned by the Ray ``CotrainRunner`` route.
 
 from __future__ import annotations
 
+import json
 import re
 import threading
 import time
@@ -17,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+import hydra
 import numpy as np
 import torch
 from omegaconf import OmegaConf
@@ -74,6 +76,59 @@ def _assert_offline_seed_present(*, data_dir: Any, hidden_dir: Any) -> None:
             f"offline warmup needs collected hidden sidecars but found none under {hidden} — "
             "run cold-start collection first."
         )
+
+
+def _assert_offline_reward_present(*, data_dir: Any) -> None:
+    """Fail fast for RGB-only warmup before loading either large model."""
+
+    reward = Path(str(data_dir)).expanduser()
+    if not reward.is_dir() or not any(reward.glob("*.hdf5")):
+        raise FileNotFoundError(
+            f"online-latent warmup needs collected RGB reward shards under {reward}"
+        )
+
+
+def _apply_collected_latent_spec(cfg: Any) -> dict[str, Any]:
+    """Derive WM input geometry from the collected sidecar manifest."""
+
+    hidden_dir = Path(str(OmegaConf.select(cfg, "offline_warmup.hidden_dir"))).expanduser()
+    config_path = hidden_dir / "preprocess_config.json"
+    if not config_path.is_file():
+        raise FileNotFoundError(f"observation-latent metadata is missing: {config_path}")
+    with config_path.open("r", encoding="utf-8") as handle:
+        latent = json.load(handle)
+    from dreamervla.preprocess.sidecar_schema import (
+        validate_observation_latent_preprocess_config,
+    )
+
+    validate_observation_latent_preprocess_config(latent, context=str(config_path))
+    token_count = int(latent["token_count"])
+    token_dim = int(latent["token_dim"])
+    obs_dim = token_count * token_dim
+    chunk_size = int(latent.get("chunk_size", latent.get("time_horizon", 1)))
+    for path, value in (
+        ("world_model.token_count", token_count),
+        ("world_model.token_dim", token_dim),
+        ("world_model.obs_dim", obs_dim),
+        ("world_model.chunk_size", chunk_size),
+        ("world_model.time_horizon", chunk_size),
+        ("world_model.latent_source", str(latent["obs_hidden_source"])),
+        ("ray_components.world_model.kwargs.token_count", token_count),
+        ("ray_components.world_model.kwargs.token_dim", token_dim),
+        ("ray_components.world_model.kwargs.obs_dim", obs_dim),
+        ("ray_components.world_model.kwargs.chunk_size", chunk_size),
+        ("ray_components.world_model.kwargs.time_horizon", chunk_size),
+        ("ray_components.world_model.kwargs.latent_source", str(latent["obs_hidden_source"])),
+    ):
+        if OmegaConf.select(cfg, path, default=None) is not None:
+            OmegaConf.update(cfg, path, value, force_add=True)
+    OmegaConf.update(
+        cfg,
+        "env.obs_hidden_source",
+        str(latent["obs_hidden_source"]),
+        force_add=True,
+    )
+    return latent
 
 
 class WorldModelTrainingRunner(_WorldModelTrainingCommon):
@@ -381,6 +436,9 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         start_i = int(start_step)
         total_steps = int(steps)
         prefetch_workers = self._wm_prefetch_workers()
+        seek_update = getattr(replay, "seek_update", None)
+        if callable(seek_update):
+            seek_update(start_i, batch_size=int(batch_size))
 
         def should_profile(step_idx: int) -> bool:
             return profile_steps < 0 or int(step_idx) < profile_steps
@@ -1606,20 +1664,8 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             resolved_batch_size,
             force_add=True,
         )
-        removed_latent_type = OmegaConf.select(cfg, "latent_type", default=None)
-        if removed_latent_type is not None:
-            raise ValueError(
-                "latent_type route selection has been removed; the pipeline only "
-                "supports hidden_token [256,4096]"
-            )
         env_image_keys = OmegaConf.select(cfg, "env.image_keys", default=["agentview_rgb"])
         self._num_views = len(list(env_image_keys)) if env_image_keys is not None else 1
-        OmegaConf.update(
-            cfg,
-            "env.obs_hidden_source",
-            "hidden_token",
-            force_add=True,
-        )
 
         # Identify that the collected cold-start dump exists BEFORE loading the heavy
         # WM/encoder/classifier. When warmup will seed from offline shards (i.e. no full
@@ -1640,13 +1686,69 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             <= 0
         ):
             need_cls = False
+        latent_metadata: dict[str, Any] | None = None
+        online_latent = bool(
+            OmegaConf.select(cfg, "offline_warmup.online_latent.enabled", default=False)
+        )
+        if online_latent and need_cls:
+            raise ValueError(
+                "offline_warmup.online_latent is a WM-only stream; "
+                "set training.classifier_warmup_steps=0"
+            )
+        hidden_dir = Path(
+            str(OmegaConf.select(cfg, "offline_warmup.hidden_dir", default=""))
+        ).expanduser()
+        metadata_path = hidden_dir / "preprocess_config.json"
         if need_wm or need_cls:
-            _assert_offline_seed_present(
-                data_dir=OmegaConf.select(cfg, "offline_warmup.data_dir"),
-                hidden_dir=OmegaConf.select(cfg, "offline_warmup.hidden_dir"),
+            if online_latent:
+                _assert_offline_reward_present(
+                    data_dir=OmegaConf.select(cfg, "offline_warmup.data_dir")
+                )
+            else:
+                _assert_offline_seed_present(
+                    data_dir=OmegaConf.select(cfg, "offline_warmup.data_dir"),
+                    hidden_dir=hidden_dir,
+                )
+                if metadata_path.is_file():
+                    latent_metadata = _apply_collected_latent_spec(cfg)
+                elif bool(
+                    OmegaConf.select(
+                        cfg,
+                        "offline_warmup.require_latent_metadata",
+                        default=False,
+                    )
+                ):
+                    raise FileNotFoundError(
+                        f"observation-latent metadata is missing: {metadata_path}"
+                    )
+        elif not online_latent and metadata_path.is_file():
+            latent_metadata = _apply_collected_latent_spec(cfg)
+        if latent_metadata is not None:
+            self._print_pipeline_event(
+                "[pipeline][latent] "
+                f"producer={latent_metadata.get('policy_family', 'openvla_oft')} "
+                f"source={latent_metadata['obs_hidden_source']} "
+                f"shape=[{latent_metadata['token_count']},{latent_metadata['token_dim']}]"
             )
 
         self._build_components(cfg)
+        latent_producer = None
+        if online_latent and need_wm:
+            producer_cfg = OmegaConf.select(
+                cfg,
+                "offline_warmup.online_latent.policy",
+                default=None,
+            )
+            if producer_cfg is None:
+                raise ValueError("online latent warmup requires online_latent.policy")
+            latent_producer = hydra.utils.instantiate(producer_cfg).to(self.device).eval()
+            for parameter in latent_producer.parameters():
+                parameter.requires_grad_(False)
+            if not hasattr(latent_producer, "encode_raw_observation_prefix_batch"):
+                raise TypeError(
+                    "online latent policy must implement "
+                    "encode_raw_observation_prefix_batch"
+                )
         if self.distributed.is_main_process:
             trainable = {
                 "world_model": count_trainable(self.world_model),
@@ -1719,13 +1821,57 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         # resume / need_wm / need_cls were computed above (before the heavy build) so the
         # offline-data existence check could fail fast; reuse them here.
 
-        warmup_replay = OnlineReplay(
-            capacity=buffer_size,
-            sequence_length=seq_len,
-            task_ids=env_task_ids,
-            capacity_mode=replay_capacity_mode,
-            rank=self._rank,
-        )
+        if online_latent and need_wm:
+            from dreamervla.runtime.pi05_trajectory_replay import Pi05TrajectoryReplay
+
+            warmup_replay = Pi05TrajectoryReplay(
+                data_dir=OmegaConf.select(cfg, "offline_warmup.data_dir"),
+                sequence_length=seq_len,
+                encoder=latent_producer,
+                encode_batch_size=int(
+                    OmegaConf.select(
+                        cfg,
+                        "offline_warmup.online_latent.encode_batch_size",
+                        default=4,
+                    )
+                ),
+                rank=self._rank,
+                world_size=self._world_size,
+                seed=int(OmegaConf.select(cfg, "seed", default=0)),
+                task_ids=env_task_ids,
+                rotate_images_180=bool(
+                    OmegaConf.select(
+                        cfg,
+                        "offline_warmup.online_latent.rotate_images_180",
+                        default=True,
+                    )
+                ),
+                base_image_key=str(
+                    OmegaConf.select(
+                        cfg,
+                        "offline_warmup.online_latent.base_image_key",
+                        default="agentview_rgb",
+                    )
+                ),
+                wrist_image_key=str(
+                    OmegaConf.select(
+                        cfg,
+                        "offline_warmup.online_latent.wrist_image_key",
+                        default="eye_in_hand_rgb",
+                    )
+                ),
+                max_episodes_per_task=(
+                    int(max_seed_eps) if max_seed_eps is not None else None
+                ),
+            )
+        else:
+            warmup_replay = OnlineReplay(
+                capacity=buffer_size,
+                sequence_length=seq_len,
+                task_ids=env_task_ids,
+                capacity_mode=replay_capacity_mode,
+                rank=self._rank,
+            )
         if need_wm or need_cls:
             data_dir = OmegaConf.select(cfg, "offline_warmup.data_dir")
             hidden_dir = OmegaConf.select(cfg, "offline_warmup.hidden_dir")
@@ -1738,21 +1884,28 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 f"episodes={max_seed_label}"
             )
             replay_load_start = time.perf_counter()
-            n = seed_replay_from_offline(
-                warmup_replay,
-                data_dir=data_dir,
-                hidden_dir=hidden_dir,
-                default_task_id=(int(default_task_id) if default_task_id is not None else None),
-                infer_task_id_from_shard=infer_task_id_from_shard,
-                max_episodes_per_task=(int(max_seed_eps) if max_seed_eps is not None else None),
-                require_reference_complete=bool(
-                    OmegaConf.select(
-                        cfg,
-                        "offline_warmup.require_reference_complete",
-                        default=True,
-                    )
-                ),
-            )
+            if online_latent:
+                n = int(sum(warmup_replay.task_episode_counts().values()))
+            else:
+                n = seed_replay_from_offline(
+                    warmup_replay,
+                    data_dir=data_dir,
+                    hidden_dir=hidden_dir,
+                    default_task_id=(
+                        int(default_task_id) if default_task_id is not None else None
+                    ),
+                    infer_task_id_from_shard=infer_task_id_from_shard,
+                    max_episodes_per_task=(
+                        int(max_seed_eps) if max_seed_eps is not None else None
+                    ),
+                    require_reference_complete=bool(
+                        OmegaConf.select(
+                            cfg,
+                            "offline_warmup.require_reference_complete",
+                            default=True,
+                        )
+                    ),
+                )
             replay_load_s = time.perf_counter() - replay_load_start
             sampleable_windows = int(warmup_replay.sampleable_window_count())
             self._print_pipeline_event(
@@ -1761,6 +1914,13 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 f"sampleable_windows={sampleable_windows} "
                 f"elapsed_s={replay_load_s:.1f}"
             )
+            raw_windows = getattr(warmup_replay, "raw_window_count", None)
+            if raw_windows is not None:
+                self._print_pipeline_event(
+                    "[pipeline][replay] online π0.5 prefix stream "
+                    f"raw_windows={int(raw_windows)} "
+                    f"ddp_padded_windows={sampleable_windows}"
+                )
             if self.distributed.is_main_process:
                 cap_msg = "all" if max_seed_eps is None else f"<= {int(max_seed_eps)}/task"
                 print(

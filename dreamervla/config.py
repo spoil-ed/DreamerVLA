@@ -56,6 +56,10 @@ def validate_cfg(cfg: DictConfig, *, world_size: int | None = None) -> DictConfi
     _validate_mainline_hidden_token_contract(cfg)
     _validate_pi05_contract(cfg)
     _validate_vla_sft_contract(cfg, world_size=_resolve_world_size(world_size))
+    _validate_latent_pixel_decoder_contract(
+        cfg,
+        world_size=_resolve_world_size(world_size),
+    )
     _validate_pre_mainline_routes(cfg)
     _validate_sidecar_routes(cfg)
     _validate_chunk_horizon_consistency(cfg)
@@ -65,6 +69,7 @@ def validate_cfg(cfg: DictConfig, *, world_size: int | None = None) -> DictConfi
     _validate_epoch_checkpoint_cadence(cfg)
     _validate_world_model_training_pipeline(cfg)
     _validate_ray_manual_resources(cfg)
+    _validate_collection_dump_contract(cfg)
     _validate_fsdp_config(cfg)
     if bool(OmegaConf.select(cfg, "validation.require_existing_paths", default=False)):
         _validate_existing_paths(cfg)
@@ -97,6 +102,45 @@ def _validate_vla_sft_contract(cfg: DictConfig, *, world_size: int) -> None:
         raise ValueError("π0.5 SFT requires training.distributed_strategy=ddp")
     if int(OmegaConf.select(cfg, "training.max_steps", default=0) or 0) <= 0:
         raise ValueError("VLA SFT training.max_steps must be positive")
+
+
+def _validate_latent_pixel_decoder_contract(cfg: DictConfig, *, world_size: int) -> None:
+    """Validate the π0.5 token-to-pixel training geometry and DDP batch."""
+
+    target = str(OmegaConf.select(cfg, "_target_", default="") or "")
+    if not target.endswith("LatentPixelDecoderTrainingRunner"):
+        return
+    micro = int(OmegaConf.select(cfg, "decoder_training.micro_batch_size", default=0) or 0)
+    global_batch = int(OmegaConf.select(cfg, "decoder_training.global_batch_size", default=0) or 0)
+    if micro <= 0 or global_batch <= 0:
+        raise ValueError("pixel decoder micro_batch_size and global_batch_size must be positive")
+    divisor = micro * max(1, int(world_size))
+    if global_batch % divisor:
+        raise ValueError(
+            "pixel decoder global_batch_size must be divisible by micro_batch_size * "
+            f"world_size ({global_batch} % {divisor} != 0)"
+        )
+    if str(OmegaConf.select(cfg, "decoder_training.distributed.strategy", default="")) != "ddp":
+        raise ValueError("pixel decoder training requires native torch DDP")
+    token_count = int(OmegaConf.select(cfg, "pixel_decoder.token_count", default=0) or 0)
+    token_dim = int(OmegaConf.select(cfg, "pixel_decoder.token_dim", default=0) or 0)
+    if token_count != int(
+        OmegaConf.select(cfg, "task.observation_latent.token_count", default=-1)
+    ) or token_dim != int(OmegaConf.select(cfg, "task.observation_latent.token_dim", default=-1)):
+        raise ValueError("pixel decoder token geometry must match task.observation_latent")
+    view_indices = OmegaConf.select(cfg, "pixel_decoder.view_indices", default=[]) or []
+    image_keys = (
+        OmegaConf.select(
+            cfg,
+            "decoder_training.target_image_keys",
+            default=[],
+        )
+        or []
+    )
+    if len(view_indices) != len(image_keys):
+        raise ValueError("pixel decoder view_indices must align one-to-one with target_image_keys")
+    if int(OmegaConf.select(cfg, "training.max_steps", default=0) or 0) <= 0:
+        raise ValueError("pixel decoder training.max_steps must be positive")
 
 
 def _validate_pi05_contract(cfg: DictConfig) -> None:
@@ -1028,10 +1072,37 @@ def _validate_world_model_training_pipeline(cfg: DictConfig) -> None:
         )
     data_dir = OmegaConf.select(cfg, "offline_warmup.data_dir", default=None)
     hidden_dir = OmegaConf.select(cfg, "offline_warmup.hidden_dir", default=None)
+    online_latent = bool(
+        OmegaConf.select(cfg, "offline_warmup.online_latent.enabled", default=False)
+    )
     if not data_dir or not os.path.isdir(str(data_dir)):
         raise ValueError(f"offline_warmup.data_dir does not exist: {data_dir!r}")
-    if not hidden_dir or not os.path.isdir(str(hidden_dir)):
+    if not online_latent and (not hidden_dir or not os.path.isdir(str(hidden_dir))):
         raise ValueError(f"offline_warmup.hidden_dir does not exist: {hidden_dir!r}")
+    if online_latent:
+        if int(OmegaConf.select(cfg, "training.classifier_warmup_steps", default=0) or 0) != 0:
+            raise ValueError("online latent replay currently requires classifier_warmup_steps=0")
+        if int(
+            OmegaConf.select(
+                cfg,
+                "offline_warmup.online_latent.encode_batch_size",
+                default=0,
+            )
+            or 0
+        ) <= 0:
+            raise ValueError("online_latent.encode_batch_size must be positive")
+        policy_target = str(
+            OmegaConf.select(
+                cfg,
+                "offline_warmup.online_latent.policy._target_",
+                default="",
+            )
+            or ""
+        )
+        if not policy_target:
+            raise ValueError("online latent replay requires online_latent.policy._target_")
+        if int(OmegaConf.select(cfg, "training.wm_prefetch_workers", default=0) or 0) != 0:
+            raise ValueError("online latent replay requires training.wm_prefetch_workers=0")
     for key in (
         "wm_warmup_steps",
         "classifier_warmup_steps",
@@ -1094,6 +1165,26 @@ def _validate_model_registry_refs(cfg: DictConfig) -> None:
             validate_model_type(str(model_type))
 
 
+def _validate_collection_dump_contract(cfg: DictConfig) -> None:
+    target = str(OmegaConf.select(cfg, "_target_", default="") or "")
+    if not target.endswith("RolloutCollectionRunner"):
+        return
+    compression = OmegaConf.select(cfg, "collect.hdf5_compression", default=None)
+    if compression is None:
+        return
+    codec = str(OmegaConf.select(cfg, "collect.hdf5_compression.codec", default="none"))
+    codec = codec.strip().lower()
+    if codec not in {"none", "gzip", "lzf"}:
+        raise ValueError("collect.hdf5_compression.codec must be one of: none, gzip, lzf")
+    time_chunk = int(OmegaConf.select(cfg, "collect.hdf5_compression.time_chunk", default=1))
+    if time_chunk <= 0:
+        raise ValueError("collect.hdf5_compression.time_chunk must be positive")
+    if codec == "gzip":
+        level = int(OmegaConf.select(cfg, "collect.hdf5_compression.level", default=1))
+        if not 1 <= level <= 9:
+            raise ValueError("collect.hdf5_compression.level must be in [1, 9] for gzip")
+
+
 def _validate_ray_manual_resources(cfg: DictConfig) -> None:
     target = str(OmegaConf.select(cfg, "_target_", default="") or "")
     is_ray_runner = target.endswith(
@@ -1126,6 +1217,7 @@ def _validate_ray_manual_resources(cfg: DictConfig) -> None:
     _require_positive_if_present(cfg, "learner.train_cfg.batch_size")
     _require_positive_if_present(cfg, "learner.num_workers")
     _require_positive_if_present(cfg, "collect.envs_per_gpu")
+    _require_positive_if_present(cfg, "collect.num_dump_workers")
     _require_non_negative_int_if_present(cfg, "manual_cotrain.ngpu")
     _require_non_negative_int_if_present(cfg, "manual_cotrain.task_id")
     _require_non_negative_if_present(cfg, "manual_cotrain.env_rollout_timeout_s")
@@ -1291,13 +1383,10 @@ def _validate_manual_cotrain_placement(cfg: DictConfig) -> None:
         checkpoint_every = int(
             OmegaConf.select(cfg, "manual_cotrain.checkpoint_every", default=0) or 0
         )
-        global_steps = int(
-            OmegaConf.select(cfg, "manual_cotrain.global_steps", default=0) or 0
-        )
+        global_steps = int(OmegaConf.select(cfg, "manual_cotrain.global_steps", default=0) or 0)
         if checkpoint_every <= 0 or global_steps % checkpoint_every != 0:
             raise ValueError(
-                "training-signal verification requires the final global step to write "
-                "a checkpoint"
+                "training-signal verification requires the final global step to write a checkpoint"
             )
 
     if bool(

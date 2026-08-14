@@ -14,6 +14,9 @@ _RUNNER_MODULES = {
     "CotrainRunner": "dreamervla.runners.cotrain_runner",
     "DreamerRunner": "dreamervla.runners.dreamer_runner",
     "LIBEROVLAEvaluationRunner": ("dreamervla.runners.libero_vla_evaluation_runner"),
+    "LatentPixelDecoderTrainingRunner": (
+        "dreamervla.runners.latent_pixel_decoder_training_runner"
+    ),
     "VLASFTTrainingRunner": "dreamervla.runners.vla_sft_training_runner",
 }
 

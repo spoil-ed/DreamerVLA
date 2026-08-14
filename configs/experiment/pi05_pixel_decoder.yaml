@@ -1,0 +1,72 @@
+# @package _global_
+# Reconstruct OpenPI model-space base/wrist RGB from the exact π0.5 WM tokens.
+defaults:
+  - /task: pi05_libero
+  - override /pixel_decoder: pi05-prefix
+  - _self_
+
+_target_: dreamervla.runners.LatentPixelDecoderTrainingRunner
+seed: 7
+
+run:
+  name: pi05_pixel_decoder
+
+data:
+  train_data_paths: ${oc.env:PI05_LIBERO_DATA,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/datasets/lerobot/physical-intelligence/libero}
+  num_workers: 2
+  shuffle: true
+
+latent_producer:
+  policy_cfg:
+    target: dreamervla.models.embodiment.Pi05Policy
+    kwargs:
+      model_path: ${task.pi05.ckpt_path}
+      config_name: ${task.pi05.config_name}
+      action_chunk: ${task.pi05.action_horizon}
+      action_dim: ${task.action_dim}
+      num_steps: ${task.pi05.num_denoise_steps}
+      train_expert_only: true
+      add_value_head: false
+      rotate_images_180: ${task.pi05.rotate_images_180}
+
+decoder_training:
+  # 2 GPUs: micro 16 x 2 x accumulation 4 = global 128.
+  micro_batch_size: 16
+  global_batch_size: 128
+  precision: bf16
+  # OpenPI loader keys aligned with prefix view_indices [0, 1].
+  target_image_keys: [base_0_rgb, left_wrist_0_rgb]
+  visualize_every: 100
+  loss:
+    l1_weight: 0.85
+    ssim_weight: 0.15
+  optim:
+    lr: 3.0e-4
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_eps: 1.0e-8
+    weight_decay: 1.0e-4
+    clip_grad: 1.0
+    lr_warmup_steps: 500
+  distributed:
+    strategy: ddp
+    broadcast_buffers: false
+    find_unused_parameters: false
+    gradient_as_bucket_view: true
+    nccl_timeout_seconds: 1800
+
+training:
+  max_steps: 10000
+  checkpoint_every: 1000
+  save_at_end: true
+  log_every: 10
+  distributed_strategy: ddp
+  device: cuda
+
+checkpoint:
+  topk: null
+
+runner:
+  logger:
+    logger_backends: [tensorboard, wandb]
+    wandb_mode: online

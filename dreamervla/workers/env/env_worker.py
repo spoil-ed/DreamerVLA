@@ -249,6 +249,16 @@ def _env_subprocess_main(  # noqa: ANN001
         conn.close()
 
 
+def _select_rank_shard(target: Any, rank: int, *, name: str) -> Any:
+    """Select one actor handle from a rank-sharded replay/dump target list."""
+
+    if not isinstance(target, (list, tuple)):
+        return target
+    if not target:
+        raise ValueError(f"{name} shard list must not be empty")
+    return target[int(rank) % len(target)]
+
+
 class EnvWorker(Worker):
     """Hold one env instance, collect episodes, and push completed episodes.
 
@@ -268,8 +278,8 @@ class EnvWorker(Worker):
         self.env_cfg = dict(env_cfg)
         self.task_id = int(task_id)
         self.num_envs = max(1, int(self.env_cfg.get("num_envs_per_worker", 1)))
-        self.replay = replay
-        self.dump = dump
+        self.replay = _select_rank_shard(replay, self.rank, name="replay")
+        self.dump = _select_rank_shard(dump, self.rank, name="dump")
         self._record_builder = record_builder
         self.env: Any | None = None
         self.obs: dict[str, Any] | None = None

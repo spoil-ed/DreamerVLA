@@ -158,32 +158,195 @@ class Pi05Policy(nn.Module):
     @torch.no_grad()
     def infer_one(self, observation: dict[str, Any]) -> torch.Tensor:
         """Transform one raw LIBERO observation and sample one action chunk."""
+        actions, _prefix = self.infer_batch_with_prefix([observation])
+        return actions[0]
 
+    @torch.no_grad()
+    def encode_observation_prefix(self, observation: Any) -> torch.Tensor:
+        """Encode an OpenPI loader observation into the RLinf image prefix.
+
+        Unlike :meth:`infer_batch_with_prefix`, this path does not run the
+        flow-matching expert. It is intended for frozen feature consumers such
+        as the pixel decoder and produces the exact normalized-WM source tensor
+        shape ``[B,768,2048]``.
+        """
+
+        from openpi.models_pytorch.pi0_pytorch import make_att_2d_masks
+
+        device = next(self.parameters()).device
+        register_pytree_dataclasses(observation)
+        observation = tree_map(
+            lambda value: (
+                torch.as_tensor(value, device=device).contiguous() if value is not None else None
+            ),
+            observation,
+        )
+        images, img_masks, lang_tokens, lang_masks, _state = self.model._preprocess_observation(
+            observation,
+            train=False,
+        )
+        prefix_embs, prefix_pad_masks, prefix_att_masks = self.model.embed_prefix(
+            images,
+            img_masks,
+            lang_tokens,
+            lang_masks,
+        )
+        prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
+        prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
+        attention_mask = self.model._prepare_attention_masks_4d(prefix_att_2d_masks)
+        self.model.paligemma_with_expert.paligemma.language_model.config._attn_implementation = (
+            "eager"
+        )
+        (prefix_output, _), _ = self.model.paligemma_with_expert.forward(
+            attention_mask=attention_mask,
+            position_ids=prefix_position_ids,
+            past_key_values=None,
+            inputs_embeds=[prefix_embs, None],
+            use_cache=False,
+        )
+        image_token_count = int(prefix_output.shape[1] - lang_tokens.shape[1])
+        image_prefix = prefix_output[:, :image_token_count].detach()
+        if tuple(image_prefix.shape[1:]) != (768, 2048):
+            raise ValueError(
+                "RLinf-aligned π0.5 image prefix must be [768,2048], got "
+                f"{tuple(image_prefix.shape[1:])}"
+            )
+        return image_prefix
+
+    @torch.no_grad()
+    def encode_raw_observation_prefix_batch(
+        self,
+        observations: list[dict[str, Any]],
+    ) -> torch.Tensor:
+        """Transform raw OpenPI dictionaries and encode only their image prefix."""
+
+        if not observations:
+            raise ValueError("π0.5 prefix encoding requires at least one observation")
         from openpi.models import model as openpi_model
 
-        inputs = self._input_transform(copy.deepcopy(observation))
+        transformed = [self._input_transform(copy.deepcopy(item)) for item in observations]
         device = next(self.parameters()).device
         tensor_inputs = tree_map(
-            lambda value: torch.from_numpy(np.asarray(value)).to(device)[None, ...],
-            inputs,
+            lambda *values: torch.stack(
+                [torch.from_numpy(np.asarray(value)) for value in values], dim=0
+            ).to(device),
+            *transformed,
         )
         model_observation = openpi_model.Observation.from_dict(tensor_inputs)
-        actions = self.model.sample_actions(
-            device,
-            model_observation,
-            num_steps=self.num_steps,
+        return self.encode_observation_prefix(model_observation)
+
+    @torch.no_grad()
+    def infer_batch_with_prefix(
+        self, observations: list[dict[str, Any]]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Sample actions and return RLinf-aligned image-only prefix outputs.
+
+        RLinf's RLT path extracts the PaliGemma *output* after building the prefix
+        KV cache, then removes the fixed language-token tail.  For pi0.5 this is
+        a ``[B, 768, 2048]`` tensor (three 256-token image slots, including the
+        standard padded third slot).  Collection persists this exact tensor as
+        the world-model observation rather than introducing another encoder.
+        """
+
+        if not observations:
+            raise ValueError("π0.5 inference requires at least one observation")
+        from openpi.models import model as openpi_model
+        from openpi.models_pytorch.pi0_pytorch import make_att_2d_masks
+
+        transformed = [self._input_transform(copy.deepcopy(item)) for item in observations]
+        device = next(self.parameters()).device
+        tensor_inputs = tree_map(
+            lambda *values: torch.stack(
+                [torch.from_numpy(np.asarray(value)) for value in values], dim=0
+            ).to(device),
+            *transformed,
         )
-        output = tree_map(
-            lambda value: np.asarray(value[0].detach().cpu()),
-            {"state": tensor_inputs["state"], "actions": actions},
+        model_observation = openpi_model.Observation.from_dict(tensor_inputs)
+        images, img_masks, lang_tokens, lang_masks, state = self.model._preprocess_observation(
+            model_observation, train=False
         )
-        transformed = self._output_transform(output)
-        return torch.from_numpy(np.asarray(transformed["actions"], dtype=np.float32)).to(device)
+        prefix_embs, prefix_pad_masks, prefix_att_masks = self.model.embed_prefix(
+            images, img_masks, lang_tokens, lang_masks
+        )
+        prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
+        prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
+        prefix_att_2d_masks_4d = self.model._prepare_attention_masks_4d(prefix_att_2d_masks)
+        self.model.paligemma_with_expert.paligemma.language_model.config._attn_implementation = (
+            "eager"
+        )
+        (prefix_output, _), past_key_values = self.model.paligemma_with_expert.forward(
+            attention_mask=prefix_att_2d_masks_4d,
+            position_ids=prefix_position_ids,
+            past_key_values=None,
+            inputs_embeds=[prefix_embs, None],
+            use_cache=True,
+        )
+
+        batch_size = int(state.shape[0])
+        action_shape = (batch_size, self.model.config.action_horizon, self.model.config.action_dim)
+        x_t = self.model.sample_noise(action_shape, device)
+        dt = torch.tensor(-1.0 / self.num_steps, dtype=torch.float32, device=device)
+        time = torch.tensor(1.0, dtype=torch.float32, device=device)
+        while time >= -dt / 2:
+            velocity = self.model.denoise_step(
+                state,
+                prefix_pad_masks,
+                past_key_values,
+                x_t,
+                time.expand(batch_size),
+            )
+            x_t = x_t + dt * velocity
+            time += dt
+
+        env_actions: list[torch.Tensor] = []
+        for index in range(batch_size):
+            output = {
+                "state": np.asarray(tensor_inputs["state"][index].detach().cpu()),
+                "actions": np.asarray(x_t[index].detach().cpu()),
+            }
+            item = self._output_transform(output)
+            env_actions.append(
+                torch.from_numpy(np.asarray(item["actions"], dtype=np.float32)).to(device)
+            )
+
+        image_token_count = int(prefix_output.shape[1] - lang_tokens.shape[1])
+        image_prefix = prefix_output[:, :image_token_count].detach()
+        if tuple(image_prefix.shape[1:]) != (768, 2048):
+            raise ValueError(
+                "RLinf-aligned π0.5 image prefix must be [768,2048], got "
+                f"{tuple(image_prefix.shape[1:])}"
+            )
+        return torch.stack(env_actions), image_prefix
 
     def make_extractor(self) -> _Pi05RawExtractor:
         """Expose raw LIBERO inference to the shared evaluation runner."""
 
         return _Pi05RawExtractor(self)
+
+    def load_sft_delta(self, checkpoint_path: str) -> None:
+        """Restore a DreamerVLA π0.5 trainable-parameter checkpoint."""
+
+        from collections.abc import Mapping
+
+        from dreamervla.utils.hf_checkpoint import load_runner_payload
+        from dreamervla.utils.run_paths import resolve_resume_checkpoint
+
+        resolved = resolve_resume_checkpoint(checkpoint_path)
+        payload = load_runner_payload(resolved)
+        policy_state = payload.get("state_dicts", {}).get("policy")
+        if not isinstance(policy_state, Mapping) or not policy_state:
+            raise RuntimeError(f"{resolved} has no non-empty state_dicts.policy")
+        missing, unexpected = self.load_state_dict(dict(policy_state), strict=False)
+        trainable_names = {
+            name for name, parameter in self.named_parameters() if parameter.requires_grad
+        }
+        missing_trainable = trainable_names.intersection(missing)
+        if missing_trainable or unexpected:
+            raise RuntimeError(
+                "π0.5 SFT delta mismatch: "
+                f"missing_trainable={sorted(missing_trainable)[:5]} "
+                f"unexpected={list(unexpected)[:5]}"
+            )
 
 
 class _Pi05RawExtractor:

@@ -12,6 +12,7 @@ configs/
 ├── launch/
 ├── dreamervla/
 ├── worldmodel/
+├── pixel_decoder/
 ├── classifier/
 ├── pre_mainline/
 ├── evaluation/
@@ -35,6 +36,9 @@ and smoke-run limits.
 python -m dreamervla.train experiment=openvla_onetraj_libero_cotrain profile=production
 bash scripts/experiments/collect_rollouts/train.sh task=openvla_onetraj_coldstart_libero
 torchrun --standalone --nproc-per-node=8 -m dreamervla.train experiment=pi05_libero_sft
+python -m dreamervla.train experiment=collect_rollouts_pi05
+torchrun --standalone --nproc-per-node=8 -m dreamervla.train experiment=wm_pi05_collected_train
+torchrun --standalone --nproc-per-node=2 -m dreamervla.train experiment=pi05_pixel_decoder
 python -m dreamervla.train experiment=wm_full_dataset_train task=openvla_onetraj_coldstart_libero
 bash scripts/experiments/world_model_training/train.sh --config dino-wm
 bash scripts/experiments/world_model_training/train.sh --config dreamer-wm
@@ -73,13 +77,19 @@ wandb beta sync --live /path/to/run_root/wandb
 | Official-data classifier upper bound | `scripts/experiments/classifier_training/train.sh` | `classifier_official_upper_bound` |
 | Rollout collection | `scripts/experiments/collect_rollouts/train.sh` | `collect_rollouts` |
 | π0.5 official LeRobot SFT | `torchrun --standalone --nproc-per-node=8 -m dreamervla.train experiment=pi05_libero_sft` | `pi05_libero_sft` |
+| π0.5 RGB rollout collection | `python -m dreamervla.train experiment=collect_rollouts_pi05` | `collect_rollouts_pi05` |
+| π0.5 online-prefix WM warmup | `torchrun --standalone --nproc-per-node=8 -m dreamervla.train experiment=wm_pi05_collected_train` | `wm_pi05_collected_train` |
+| π0.5 latent-to-pixel decoder | `torchrun --standalone --nproc-per-node=2 -m dreamervla.train experiment=pi05_pixel_decoder` | `pi05_pixel_decoder` |
 
 ## Experiments
 
 | Experiment | Module group |
 | --- | --- |
 | `collect_rollouts` | Ray rollout collection |
+| `collect_rollouts_pi05` | Ray π0.5 rollout collection with compressed RGB-only shards |
 | `pi05_libero_sft` | RLinf-aligned π0.5 flow-matching SFT on `physical-intelligence/libero` |
+| `wm_pi05_collected_train` | DDP Chunk-WM warmup with online frozen π0.5 prefixes |
+| `pi05_pixel_decoder` | DDP pixel reconstruction from frozen π0.5 prefix tokens |
 | `openvla_onetraj_libero_cotrain` | canonical Ray cotrain base recipe |
 | `wm_full_dataset_train` | full-replay WM warmup |
 | `wm_official_upper_bound` | pre-mainline WM training from official data |
@@ -134,23 +144,46 @@ world-model sequence length. The one-trajectory mainline contract is
 `wm_obs_dim=1048576`.
 
 `task/pi05_libero.yaml` is an opt-in model boundary and does not alter the
-OpenVLA recipes. It consumes an official OpenPI PyTorch-converted
-`pi05_libero` checkpoint and uses the upstream normalization and action transforms.
-Point
-`OPENPI_ROOT` at an OpenPI checkout (or install OpenPI in the environment) and set
-`task.pi05.ckpt_path` to a directory containing `model.safetensors` plus the
+OpenVLA recipes. It consumes official OpenPI-compatible checkpoints and uses the
+upstream normalization and action transforms. Point `OPENPI_ROOT` at an OpenPI
+checkout (or install OpenPI in the environment). SFT initializes from
+`task.pi05.base_ckpt_path`; evaluation and collection use the task-specific
+`task.pi05.ckpt_path`. Each directory must contain `model.safetensors` plus the
 checkpoint's `physical-intelligence/libero/norm_stats.json`. The default follows
 the RLinf LIBERO-10 route: sample a 10-action chunk and replan after 10 actions.
+
+`collect_rollouts_pi05` runs 8 inference workers and 32 LIBERO env actors to
+collect 150 trajectories for each of the 10 tasks, with a 512-step trajectory
+cap. It stores compressed RGB/state/action reward shards only; it does not persist
+the very large `[768,2048]` prefix tensor. `wm_pi05_collected_train` shards whole
+trajectories across its 8 DDP ranks, extracts the frozen π0.5 image prefix online,
+and keeps only the current trajectory's float16 latent in host memory. One replay
+epoch visits every full sequence window from both successful and failed episodes.
+After SFT, set `collect.policy_ckpt_path=/path/to/pi05-sft-run` (a run root,
+`checkpoints/`, or `latest.ckpt`) so collection restores the learned delta on top
+of the immutable RLinf-aligned base checkpoint.
+Collection shards use lossless time-major HDF5 `gzip` compression selected by
+`collect.hdf5_compression`; `collect.num_dump_workers` defaults to the inference
+worker count so multi-GPU jobs compress independent environment-rank shards in
+parallel. Set `collect.hdf5_compression.codec=none` only for an explicit
+uncompressed throughput diagnostic.
 
 The `pi05_libero_sft` experiment uses OpenPI's official PyTorch LeRobot loader and
 flow-matching SFT loss. Its default local dataset root is
 `data/datasets/lerobot/physical-intelligence/libero`; override it with
-`PI05_LIBERO_DATA`. RLinf-aligned defaults are micro batch 4, global batch 128,
+`PI05_LIBERO_DATA`. RLinf-aligned defaults are micro batch 16, global batch 128,
 30,000 steps, AdamW `2.5e-5`, and 1,000 warmup steps. Training is launched by
 `torchrun` and uses `torch.nn.parallel.DistributedDataParallel`; neither Ray nor
 FSDP nor a sibling RLinf checkout is used at runtime. RLinf remains the SFT
 behavioral reference only. This route does not construct a PPO value head or
 enter the cotrain loop.
+
+`pi05_pixel_decoder` freezes that same PaliGemma prefix producer and trains only a
+small convolutional decoder. It applies the same parameter-free token LayerNorm
+as Chunk-WM, selects the real base/wrist slots from `[768,2048]`, and reconstructs
+the OpenPI model-space 224×224 RGB targets. Reconstructions are written under
+`video/train/`; the saved decoder accepts both raw prefixes and Chunk-WM
+`hidden_seq` predictions (extra proprio-conditioning width is ignored).
 
 ## Runtime Artifacts
 

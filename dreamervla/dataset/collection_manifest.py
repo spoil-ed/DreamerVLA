@@ -104,56 +104,73 @@ def count_episodes_per_task(
 
 
 def complete_episode_ids_per_task(
-    reward_dir: str | Path, hidden_dir: str | Path
+    reward_dir: str | Path, hidden_dir: str | Path | None
 ) -> dict[int, set[int]]:
     """Complete ``episode_id`` values bucketed by ``task_id``.
 
-    A complete collected episode must have a readable reward demo and a matching
-    hidden sidecar demo in the same shard. ``complete=False`` on either side,
-    missing required reward fields, missing ``obs_embedding``, or a hidden length
-    shorter than the reward length makes the episode incomplete and therefore
-    eligible for re-collection.
+    When ``hidden_dir`` is provided, a complete episode also requires its matching
+    latent sidecar. Passing ``None`` selects the RGB-only collection contract and
+    validates the reward shard alone.
     """
     import h5py
 
     reward = Path(reward_dir).expanduser()
-    hidden = Path(hidden_dir).expanduser()
+    hidden = Path(hidden_dir).expanduser() if hidden_dir is not None else None
     complete: dict[int, set[int]] = {}
-    if not reward.is_dir() or not hidden.is_dir():
+    if not reward.is_dir() or (hidden is not None and not hidden.is_dir()):
         return complete
     fallback_index: dict[int, int] = {}
     for shard in sorted(reward.glob("*.hdf5")):
-        hidden_shard = hidden / shard.name
-        if not hidden_shard.is_file():
+        hidden_shard = hidden / shard.name if hidden is not None else None
+        if hidden_shard is not None and not hidden_shard.is_file():
             continue
         try:
-            with h5py.File(str(shard), "r") as rf, h5py.File(str(hidden_shard), "r") as hf:
+            with h5py.File(str(shard), "r") as rf:
                 reward_data = rf.get("data")
-                hidden_data = hf.get("data")
-                if reward_data is None or hidden_data is None:
+                if reward_data is None:
                     continue
-                for demo_key in sorted(reward_data.keys()):
-                    reward_demo = reward_data[demo_key]
-                    hidden_demo = hidden_data.get(demo_key)
-                    if hidden_demo is None:
-                        continue
-                    length = _complete_reward_length(reward_demo)
-                    if length is None:
-                        continue
-                    if not _complete_hidden_demo(hidden_demo, length):
-                        continue
-                    task_id = int(reward_demo.attrs.get("task_id", -1))
-                    if task_id < 0:
-                        continue
-                    if "episode_id" in reward_demo.attrs:
-                        episode_id = int(reward_demo.attrs["episode_id"])
-                    else:
-                        episode_id = fallback_index.get(task_id, 0)
-                        fallback_index[task_id] = episode_id + 1
-                    complete.setdefault(task_id, set()).add(episode_id)
+                if hidden_shard is None:
+                    _collect_complete_reward_ids(reward_data, None, complete, fallback_index)
+                else:
+                    with h5py.File(str(hidden_shard), "r") as hf:
+                        hidden_data = hf.get("data")
+                        if hidden_data is None:
+                            continue
+                        _collect_complete_reward_ids(
+                            reward_data,
+                            hidden_data,
+                            complete,
+                            fallback_index,
+                        )
         except (OSError, KeyError) as exc:
             warnings.warn(f"skipping unreadable shard {shard}: {exc}", stacklevel=2)
     return complete
+
+
+def _collect_complete_reward_ids(
+    reward_data: Any,
+    hidden_data: Any | None,
+    complete: dict[int, set[int]],
+    fallback_index: dict[int, int],
+) -> None:
+    for demo_key in sorted(reward_data.keys()):
+        reward_demo = reward_data[demo_key]
+        length = _complete_reward_length(reward_demo)
+        if length is None:
+            continue
+        if hidden_data is not None:
+            hidden_demo = hidden_data.get(demo_key)
+            if hidden_demo is None or not _complete_hidden_demo(hidden_demo, length):
+                continue
+        task_id = int(reward_demo.attrs.get("task_id", -1))
+        if task_id < 0:
+            continue
+        if "episode_id" in reward_demo.attrs:
+            episode_id = int(reward_demo.attrs["episode_id"])
+        else:
+            episode_id = fallback_index.get(task_id, 0)
+            fallback_index[task_id] = episode_id + 1
+        complete.setdefault(task_id, set()).add(episode_id)
 
 
 def missing_episode_work_list(

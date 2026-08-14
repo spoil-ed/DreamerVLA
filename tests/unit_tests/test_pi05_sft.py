@@ -26,6 +26,12 @@ def test_pi05_sft_experiment_composes_native_ddp_recipe() -> None:
     assert cfg.actor.global_batch_size == 128
     assert cfg.actor.use_action_chunk_loss is False
     assert cfg.actor.policy_cfg.kwargs.add_value_head is False
+    assert cfg.actor.policy_cfg.kwargs.model_path == cfg.task.pi05.base_ckpt_path
+    assert cfg.task.pi05.base_ckpt_path.endswith("data/checkpoints/pi05_base")
+    assert cfg.task.pi05.ckpt_path.endswith(
+        "data/checkpoints/RLinf-Pi05-LIBERO-SFT"
+    )
+    assert cfg.task.pi05.base_ckpt_path != cfg.task.pi05.ckpt_path
     assert cfg.actor.distributed.strategy == "ddp"
     assert cfg.training.distributed_strategy == "ddp"
     assert cfg.actor.optim.lr_scheduler == "constant"

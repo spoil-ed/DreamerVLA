@@ -42,7 +42,7 @@ class VLASFTTrainingRunner(BaseRunner):
     """Train a Hydra-selected VLA with torchrun and native PyTorch DDP."""
 
     runner_name = "vla_sft"
-    runner_status = "public"
+    runner_status = "current"
     runner_family = "training"
     include_keys = (
         "global_step",
@@ -96,13 +96,9 @@ class VLASFTTrainingRunner(BaseRunner):
         policy.to(device=self.device)
         self.policy = self.distributed.wrap_trainable_module(
             policy,
-            find_unused_parameters=bool(
-                distributed_cfg.get("find_unused_parameters", False)
-            ),
+            find_unused_parameters=bool(distributed_cfg.get("find_unused_parameters", False)),
             broadcast_buffers=bool(distributed_cfg.get("broadcast_buffers", False)),
-            gradient_as_bucket_view=bool(
-                distributed_cfg.get("gradient_as_bucket_view", True)
-            ),
+            gradient_as_bucket_view=bool(distributed_cfg.get("gradient_as_bucket_view", True)),
         )
 
         trainable = [parameter for parameter in self.policy.parameters() if parameter.requires_grad]
@@ -133,9 +129,7 @@ class VLASFTTrainingRunner(BaseRunner):
         )
         torch_loader = openpi_torch_loader(self.data_loader)
         generator = getattr(torch_loader, "generator", None)
-        self._data_generator_state = (
-            None if generator is None else generator.get_state().clone()
-        )
+        self._data_generator_state = None if generator is None else generator.get_state().clone()
 
         super().setup()
         self.append_model_summary(
@@ -143,7 +137,9 @@ class VLASFTTrainingRunner(BaseRunner):
                 "family": "pi05",
                 "parameters": sum(parameter.numel() for parameter in policy.parameters()),
                 "trainable_parameters": sum(
-                    parameter.numel() for parameter in policy.parameters() if parameter.requires_grad
+                    parameter.numel()
+                    for parameter in policy.parameters()
+                    if parameter.requires_grad
                 ),
                 "dataset": source,
                 "download_endpoint": configured_download_endpoint(),
@@ -224,9 +220,7 @@ class VLASFTTrainingRunner(BaseRunner):
                 last_micro = micro_step + 1 == accumulation
                 no_sync = getattr(self.policy, "no_sync", None)
                 sync_context = (
-                    contextlib.nullcontext()
-                    if last_micro or not callable(no_sync)
-                    else no_sync()
+                    contextlib.nullcontext() if last_micro or not callable(no_sync) else no_sync()
                 )
                 with sync_context:
                     output = self.policy(
@@ -288,9 +282,7 @@ class VLASFTTrainingRunner(BaseRunner):
             self.console_progress(self.global_step, max_steps, "pi05-sft", unit="step")
 
         save_at_end = bool(self.cfg.training.get("save_at_end", True))
-        if save_at_end and (
-            checkpoint_every <= 0 or self.global_step % checkpoint_every != 0
-        ):
+        if save_at_end and (checkpoint_every <= 0 or self.global_step % checkpoint_every != 0):
             self.save_checkpoint(tag="latest")
         self.console_banner("VLA SFT", subtitle=f"completed step={self.global_step}", done=True)
         return history

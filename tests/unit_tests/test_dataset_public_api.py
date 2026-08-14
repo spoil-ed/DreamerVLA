@@ -11,6 +11,7 @@ def test_dataset_public_api_exports_only_retained_routes() -> None:
 
     expected = {
         "BaseDataset",
+        "OFFICIAL_PI05_LIBERO_REPO",
         "PixelHiddenSequenceDataset",
         "PixelSequenceDataset",
         "PixelSequenceSpec",
@@ -26,6 +27,8 @@ def test_dataset_public_api_exports_only_retained_routes() -> None:
         "PretokenizeActionChunkDataset",
         "PretokenizeDataSpec",
         "PretokenizeDataset",
+        "build_pi05_sft_dataloader",
+        "resolve_lerobot_source",
     }
 
     assert set(dataset.__all__) == expected

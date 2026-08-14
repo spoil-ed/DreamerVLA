@@ -10,7 +10,43 @@ action_dim: 7
 action_horizon: 10
 time_horizon: 10
 
+collected_rollout_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/pi05_${task.suite}
+collected_reward_dir: ${task.collected_rollout_dir}/reward
+collected_latent_dir: ${task.collected_rollout_dir}/latent
+
+# Producer-neutral observation boundary consumed by collection, replay and WM.
+# Geometry matches RLinf's RLT image-only prefix selection exactly.
+observation_latent:
+  policy_family: pi05
+  obs_hidden_source: pi05_prefix_output
+  action_head_type: flow_matching
+  token_count: 768
+  token_dim: 2048
+  wm_obs_dim: ${dvla_mul:${task.observation_latent.token_count},${task.observation_latent.token_dim}}
+  chunk_size: ${task.pi05.action_horizon}
+  history: 1
+  include_state: true
+  prompt_style: openpi
+  rotate_images_180: ${task.pi05.rotate_images_180}
+  prefix_selection: image_only
+  alignment_source: rlinf_rlt_prefix
+  latent_stage: query_after
+  latent_source: RLinf-aligned pi0.5 PaliGemma image-only prefix output [768,2048]
+  proprio_dim: 8
+  proprio_emb_dim: 10
+  num_proprio_repeat: 1
+  lang_dim: 0
+  lang_emb_dim: 0
+  num_lang_repeat: 1
+  action_emb_dim: 10
+  num_action_repeat: 1
+  model_dim: 2068
+
 pi05:
+  # SFT starts from the upstream/RLinf π0.5 base weights. Evaluation and
+  # collection keep using the task-specific trained policy below. Source:
+  # lerobot/pi05_base@b211f3d44c36b6acfcf7ae94a64e8e96f75a64ba.
+  base_ckpt_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/pi05_base
   # The directory contains model.safetensors and LIBERO normalization stats.
   ckpt_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/RLinf-Pi05-LIBERO-SFT
   config_name: pi05_libero

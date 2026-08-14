@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +22,7 @@ from dreamervla.scheduler.worker import Worker
 
 
 class RolloutDumpWorker(Worker):
-    """Collect completed episodes and write reward HDF5 plus hidden sidecars."""
+    """Collect episodes and write reward HDF5 plus optional hidden sidecars."""
 
     def __init__(
         self,
@@ -34,6 +35,8 @@ class RolloutDumpWorker(Worker):
         start_shard_index: int = 0,
         manifest_root: str | None = None,
         keep_last_global_steps: int = 0,
+        compression: Mapping[str, Any] | None = None,
+        write_hidden_sidecar: bool = True,
     ) -> None:
         super().__init__()
         self.reward_dir = str(reward_dir)
@@ -50,6 +53,13 @@ class RolloutDumpWorker(Worker):
             else str(Path(self.reward_dir).expanduser().parent)
         )
         self.keep_last_global_steps = int(keep_last_global_steps)
+        self.compression = dict(compression) if compression is not None else None
+        self.write_hidden_sidecar = bool(write_hidden_sidecar)
+        if self.keep_last_global_steps > 0 and not self.write_hidden_sidecar:
+            raise ValueError(
+                "online rollout retention requires hidden sidecars; "
+                "RGB-only dumps are supported by cold-start collection only"
+            )
         # Resume-aware: start rotation at the next free index so a relaunch appends new
         # shards instead of overwriting ``ray_shard_000``.
         self._shard_idx = int(start_shard_index)
@@ -58,28 +68,28 @@ class RolloutDumpWorker(Worker):
     def _shard_name(self, idx: int) -> str:
         stem = self.shard_name[:-5] if self.shard_name.endswith(".hdf5") else self.shard_name
         base = re.sub(r"_\d+$", "", stem)
+        if self.world_size > 1:
+            return f"{base}_w{self.rank:02d}_{idx:06d}.hdf5"
         return f"{base}_{idx:03d}.hdf5"
 
     def init(self) -> None:
-        first = self.shard_name if self.demos_per_shard <= 0 else self._shard_name(self._shard_idx)
-        self.writer = RolloutDumpWriter(Path(self.reward_dir), Path(self.hidden_dir), first)
+        first = (
+            self.shard_name
+            if self.demos_per_shard <= 0 and self.world_size == 1
+            else self._shard_name(self._shard_idx)
+        )
+        self.writer = self._new_writer(first)
 
     def add_episode(self, episode: list[dict[str, Any]]) -> dict[str, Any] | None:
         if not episode:
             return None
         if self.writer is None:
-            self.writer = RolloutDumpWriter(
-                Path(self.reward_dir),
-                Path(self.hidden_dir),
-                self._shard_name(self._shard_idx),
-            )
+            self.writer = self._new_writer(self._shard_name(self._shard_idx))
         elif self.demos_per_shard > 0 and self._shard_demos >= self.demos_per_shard:
             self._writer().close()
             self._shard_idx += 1
             self._shard_demos = 0
-            self.writer = RolloutDumpWriter(
-                Path(self.reward_dir), Path(self.hidden_dir), self._shard_name(self._shard_idx)
-            )
+            self.writer = self._new_writer(self._shard_name(self._shard_idx))
         first = episode[0]
         index = self._shard_demos if self.demos_per_shard > 0 else int(self.num_episodes)
         self._writer().write_demo(
@@ -150,6 +160,17 @@ class RolloutDumpWorker(Worker):
             raise RuntimeError("RolloutDumpWorker.init() has not been called")
         return self.writer
 
+    def _new_writer(self, shard_name: str) -> RolloutDumpWriter:
+        kwargs = {} if self.compression is None else {"compression": self.compression}
+        if not self.write_hidden_sidecar:
+            kwargs["write_hidden_sidecar"] = False
+        return RolloutDumpWriter(
+            Path(self.reward_dir),
+            Path(self.hidden_dir),
+            shard_name,
+            **kwargs,
+        )
+
     def _rename_completed_episode_shard(
         self,
         shard_name: str,
@@ -165,8 +186,11 @@ class RolloutDumpWorker(Worker):
         allow_overwrite = _metadata_int(metadata, "global_step") is None
         pairs = [
             (Path(self.reward_dir) / shard_name, Path(self.reward_dir) / target_name),
-            (Path(self.hidden_dir) / shard_name, Path(self.hidden_dir) / target_name),
         ]
+        if self.write_hidden_sidecar:
+            pairs.append(
+                (Path(self.hidden_dir) / shard_name, Path(self.hidden_dir) / target_name)
+            )
         existing = [(src, dst) for src, dst in pairs if src.exists()]
         if not existing:
             return shard_name

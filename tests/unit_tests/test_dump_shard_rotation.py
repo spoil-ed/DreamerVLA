@@ -66,6 +66,18 @@ def test_no_rotation_when_disabled():
         assert _FakeWriter.instances[0].demos == [0, 1, 2, 3, 4]
 
 
+def test_parallel_dump_workers_use_rank_unique_temporary_shards(monkeypatch):
+    _FakeWriter.created = []
+    _FakeWriter.instances = []
+    monkeypatch.setenv("RANK", "2")
+    monkeypatch.setenv("WORLD_SIZE", "4")
+    with mock.patch.object(dw, "RolloutDumpWriter", _FakeWriter):
+        w = dw.RolloutDumpWorker("r", "h", demos_per_shard=1)
+        w.init()
+
+    assert _FakeWriter.created == ["ray_shard_w02_000000.hdf5"]
+
+
 def test_rotates_every_n_demos():
     _FakeWriter.created = []
     _FakeWriter.instances = []

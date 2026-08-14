@@ -188,6 +188,39 @@ def test_writer_creates_directories(tmp_path: Path) -> None:
     assert hidden_dir.is_dir()
 
 
+def test_writer_rgb_only_skips_latent_directory_and_embedding(tmp_path: Path) -> None:
+    """RGB collection must not create the multi-terabyte prefix sidecar."""
+    import h5py
+
+    from dreamervla.dataset.collection_manifest import complete_episode_ids_per_task
+    from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
+
+    reward_dir = tmp_path / "reward"
+    hidden_dir = tmp_path / "latent"
+    steps = _make_episode(success=False)
+    for step in steps:
+        step.pop("obs_embedding")
+    with RolloutDumpWriter(
+        reward_dir,
+        hidden_dir,
+        "rgb.hdf5",
+        write_hidden_sidecar=False,
+    ) as writer:
+        writer.write_demo(
+            0,
+            steps,
+            task_id=2,
+            episode_id=7,
+            task_description="test task",
+        )
+
+    assert (reward_dir / "rgb.hdf5").is_file()
+    assert not hidden_dir.exists()
+    with h5py.File(reward_dir / "rgb.hdf5", "r") as handle:
+        assert "agentview_rgb" in handle["data/demo_0/obs"]
+    assert complete_episode_ids_per_task(reward_dir, None) == {2: {7}}
+
+
 def test_writer_dtypes(tmp_path: Path) -> None:
     """Verify HDF5 datasets have the exact dtypes from the data contract."""
     import h5py
@@ -264,6 +297,43 @@ def test_writer_shapes(tmp_path: Path) -> None:
     with h5py.File(hidden_dir / shard_name, "r") as f:
         demo = f["data"]["demo_0"]
         assert demo["obs_embedding"].shape == (T, *HIDDEN_TOKEN_SHAPE)
+
+
+def test_writer_applies_lossless_time_chunk_compression(tmp_path: Path) -> None:
+    """Configured gzip is visible on reward frames and latent sidecars."""
+    import h5py
+
+    from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
+
+    reward_dir = tmp_path / "reward"
+    hidden_dir = tmp_path / "hidden"
+    writer = RolloutDumpWriter(
+        reward_dir,
+        hidden_dir,
+        "compressed.hdf5",
+        compression={"codec": "gzip", "level": 1, "shuffle": True, "time_chunk": 1},
+    )
+    writer.write_demo(
+        index=0,
+        steps=_make_episode(success=True),
+        preprocess_config=PREPROCESS_CONFIG,
+    )
+    writer.close()
+
+    with h5py.File(reward_dir / "compressed.hdf5", "r") as handle:
+        image = handle["data/demo_0/obs/agentview_rgb"]
+        assert image.compression == "gzip"
+        assert image.compression_opts == 1
+        assert image.shuffle is True
+        assert image.chunks == (1, IMAGE_H, IMAGE_W, 3)
+        assert handle.attrs["compression_codec"] == "gzip"
+
+    with h5py.File(hidden_dir / "compressed.hdf5", "r") as handle:
+        latent = handle["data/demo_0/obs_embedding"]
+        assert latent.compression == "gzip"
+        assert latent.compression_opts == 1
+        assert latent.shuffle is True
+        assert latent.chunks == (1, *HIDDEN_TOKEN_SHAPE)
 
 
 def test_writer_data_attrs(tmp_path: Path) -> None:

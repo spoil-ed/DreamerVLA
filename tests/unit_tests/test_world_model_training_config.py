@@ -1,6 +1,27 @@
 from __future__ import annotations
 
 
+def test_pi05_wm_recipe_streams_rgb_and_does_not_require_sidecars():
+    from pathlib import Path
+
+    from hydra import compose, initialize_config_dir
+
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        cfg = compose(
+            config_name="train",
+            overrides=["experiment=wm_pi05_collected_train"],
+        )
+
+    assert cfg.offline_warmup.hidden_dir is None
+    assert cfg.offline_warmup.online_latent.enabled is True
+    assert cfg.offline_warmup.online_latent.policy._target_.endswith("Pi05Policy")
+    assert cfg.training.wm_prefetch_workers == 0
+    assert cfg.training.classifier_warmup_steps == 0
+    assert cfg.training.warmup_replay_epochs == 1
+    assert cfg.online_rollout.sequence_length == 44
+
+
 def test_hidden_token_pipeline_uses_traj1_proprio_language_wm_profile():
     from pathlib import Path
 

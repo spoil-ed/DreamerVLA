@@ -91,9 +91,14 @@ env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
   hf download physical-intelligence/libero --repo-type dataset \
   --local-dir data/datasets/lerobot/physical-intelligence/libero
 
+env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
+  -u ALL_PROXY -u all_proxy HF_ENDPOINT=https://hf-mirror.com \
+  hf download lerobot/pi05_base \
+  --revision b211f3d44c36b6acfcf7ae94a64e8e96f75a64ba \
+  --local-dir data/checkpoints/pi05_base
+
 torchrun --standalone --nproc-per-node=8 -m dreamervla.train \
-  experiment=pi05_libero_sft \
-  task.pi05.ckpt_path=/path/to/RLinf-Pi05-LIBERO-SFT
+  experiment=pi05_libero_sft
 ```
 
 The SFT process is native PyTorch DDP. It does not start Ray, use FSDP, or import
@@ -101,7 +106,8 @@ the sibling RLinf repository at runtime; the port uses the installed OpenPI mode
 and retains RLinf's SFT loss, VLM-freeze, optimizer, and warmup semantics locally.
 
 Training reads the completed local LeRobot root, so it performs no implicit dataset
-download. The checkpoint directory must include
+download. SFT initializes from `task.pi05.base_ckpt_path`; the base checkpoint
+directory must include
 `physical-intelligence/libero/norm_stats.json`.
 
 The converted directory must retain `model.safetensors` and the checkpoint's

@@ -4,6 +4,7 @@ defaults:
   - run: default
   - VLA: null
   - worldmodel: null
+  - pixel_decoder: null
   - classifier: null
   - pre_mainline: null
   - dreamervla: null

@@ -79,6 +79,7 @@ def test_runner_public_api_exports_only_canonical_mainline_roles() -> None:
         "CotrainRunner",
         "DreamerRunner",
         "LIBEROVLAEvaluationRunner",
+        "LatentPixelDecoderTrainingRunner",
         "VLASFTTrainingRunner",
     ]
 

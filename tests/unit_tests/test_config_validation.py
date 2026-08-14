@@ -618,6 +618,55 @@ def test_tensorboard_wandb_logger_route_composes_and_validates() -> None:
     validate_cfg(cfg)
 
 
+def test_collection_rejects_unknown_hdf5_compression_codec() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        cfg = compose(
+            config_name="train",
+            overrides=[
+                "experiment=collect_rollouts_pi05",
+                "collect.hdf5_compression.codec=unknown",
+            ],
+        )
+
+    with pytest.raises(ValueError, match="hdf5_compression.codec"):
+        validate_cfg(cfg)
+
+
+def test_pi05_online_latent_warmup_does_not_require_hidden_dir(tmp_path) -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        cfg = compose(
+            config_name="train",
+            overrides=[
+                "experiment=wm_pi05_collected_train",
+                f"offline_warmup.data_dir={tmp_path}",
+            ],
+        )
+
+    assert cfg.offline_warmup.hidden_dir is None
+    validate_cfg(cfg, world_size=8)
+
+
+def test_pi05_online_latent_warmup_rejects_cpu_prefetch(tmp_path) -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        cfg = compose(
+            config_name="train",
+            overrides=[
+                "experiment=wm_pi05_collected_train",
+                f"offline_warmup.data_dir={tmp_path}",
+                "training.wm_prefetch_workers=1",
+            ],
+        )
+
+    with pytest.raises(ValueError, match="wm_prefetch_workers=0"):
+        validate_cfg(cfg, world_size=8)
+
+
 def test_train_run_validates_config_before_runner_setup(monkeypatch) -> None:
     import dreamervla.train as train
 
