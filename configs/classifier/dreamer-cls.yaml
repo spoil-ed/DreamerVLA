@@ -1,0 +1,56 @@
+# @package _global_
+# Role-level classifier recipe. The selected task owns the concrete model,
+# dataset targets, and input contract.
+classifier:
+  _target_: ${task.classifier.model._target_}
+  latent_dim: ${task.classifier.input.latent_dim}
+  action_dim: ${task.classifier.input.action_dim}
+  time_horizon: ${task.classifier.input.time_horizon}
+  token_dim: ${task.classifier.input.token_dim}
+  token_count: ${task.classifier.input.token_count}
+  head_type: spatial_tf
+  proprio_dim: ${task.classifier.input.proprio_dim}
+  proprio_emb_dim: ${task.classifier.input.proprio_emb_dim}
+  num_proprio_repeat: ${task.classifier.input.num_proprio_repeat}
+  lang_dim: ${task.classifier.input.lang_dim}
+  lang_emb_dim: ${task.classifier.input.lang_emb_dim}
+  num_lang_repeat: ${task.classifier.input.num_lang_repeat}
+  window: 8
+  hidden_dim: 1024
+  num_layers: 12
+  num_heads: 8
+  mlp_ratio: 4.0
+  dropout: 0.1
+  output_dim: 1
+  granularity: chunk
+  chunk_size: ${task.classifier.input.chunk_size}
+  chunk_pool: last
+  task_conditioning: ${oc.select:task_conditioning,null}
+
+ray_components:
+  classifier:
+    target: ${classifier._target_}
+    kwargs:
+      latent_dim: ${classifier.latent_dim}
+      action_dim: ${classifier.action_dim}
+      time_horizon: ${classifier.time_horizon}
+      token_dim: ${classifier.token_dim}
+      token_count: ${classifier.token_count}
+      head_type: ${classifier.head_type}
+      proprio_dim: ${classifier.proprio_dim}
+      proprio_emb_dim: ${classifier.proprio_emb_dim}
+      num_proprio_repeat: ${classifier.num_proprio_repeat}
+      lang_dim: ${classifier.lang_dim}
+      lang_emb_dim: ${classifier.lang_emb_dim}
+      num_lang_repeat: ${classifier.num_lang_repeat}
+      window: ${classifier.window}
+      hidden_dim: ${classifier.hidden_dim}
+      num_layers: ${classifier.num_layers}
+      num_heads: ${classifier.num_heads}
+      mlp_ratio: ${classifier.mlp_ratio}
+      dropout: ${classifier.dropout}
+      output_dim: ${classifier.output_dim}
+      granularity: ${classifier.granularity}
+      chunk_size: ${classifier.chunk_size}
+      chunk_pool: ${classifier.chunk_pool}
+      task_conditioning: ${classifier.task_conditioning}

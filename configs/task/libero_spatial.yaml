@@ -1,0 +1,15 @@
+defaults:
+  - _base_libero
+  - _self_
+
+name: libero_spatial
+suite: libero_spatial
+task_name: spatial
+
+action_horizon: 8
+time_horizon: 8
+
+openvla_oft:
+  ckpt_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-spatial-traj1
+  dataset_statistics_path: ${task.openvla_oft.ckpt_path}/dataset_statistics.json
+  failure_hdf5_dir: null

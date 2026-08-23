@@ -1,0 +1,234 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dreamer-vla"
+version = "0.1.0"
+description = "Dreamer-style world-model and VLA training framework for LIBERO."
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "accelerate==1.13.0",
+    "bddl==1.0.1",
+    "cython==0.29.36",
+    "diffusers==0.33.0",
+    "dill==0.4.1",
+    "draccus==0.8.0",
+    "easydict==1.13",
+    "gym==0.25.2",
+    "h5py==3.16.0",
+    "hydra-core==1.3.2",
+    "imageio[ffmpeg]==2.37.3",
+    "matplotlib==3.10.9",
+    "mujoco==3.8.0",
+    "ninja==1.13.0",
+    "numba==0.65.1",
+    "numpy==1.26.4",
+    "omegaconf==2.3.0",
+    "opencv-python==4.11.0.86",
+    "packaging==26.0",
+    "pandas==3.0.2",
+    "peft==0.11.0",
+    "protobuf==4.25.9",
+    "psutil==5.9.8",
+    "pybind11==3.0.4",
+    "PyOpenGL==3.1.9",
+    "PyOpenGL-accelerate==3.1.9",
+    "scikit-learn==1.8.0",
+    "scipy==1.17.1",
+    "sentencepiece==0.1.99",
+    "setuptools>=68,<85",
+    "tensorboard==2.15.2",
+    "timm==0.9.10",
+    "tokenizers==0.19.1",
+    "wandb==0.26.1",
+    "wheel>=0.43,<0.49",
+]
+
+[project.optional-dependencies]
+ray = [
+    "ray==2.55.1",
+]
+libero = [
+    "chardet==5.2.0",
+    "egl-probe==1.0.1",
+    "libero==0.1.0",
+    "mimicgen==1.0.0",
+    "robomimic==0.3.0",
+    "robosuite==1.4.1",
+    "robosuite-task-zoo==0.1",
+]
+openvla = [
+    "dlimp==0.0.1",
+    "future==1.0.0",
+    "json-numpy==2.1.1",
+    "jsonlines==4.0.0",
+    "rich==15.0.0",
+    "tensorflow==2.15.0",
+    "tensorflow-datasets==4.9.3",
+    "tensorflow-graphics==2021.12.3",
+    "tensorflow-metadata==1.17.3",
+    "transformers==4.40.1",
+]
+
+[project.scripts]
+dreamer-vla-train = "dreamervla.train:main"
+
+[dependency-groups]
+dev = [
+    "pre-commit",
+    "pytest",
+    "ruff",
+]
+cu124-train = [
+    "flash-attn==2.7.1.post1",
+    "torch==2.5.1",
+    "torchaudio==2.5.1",
+    "torchvision==0.20.1",
+]
+# FlashAttention 2.8.x does not claim Blackwell support.  On CUDA 13 / RTX 5090,
+# use PyTorch SDPA instead of installing an unsupported sm_120 extension.
+cu130-train = [
+    "torch==2.13.0",
+    "torchvision==0.28.0",
+]
+
+[tool.uv]
+conflicts = [
+    [
+        { group = "cu124-train" },
+        { group = "cu130-train" },
+    ],
+]
+default-groups = ["dev"]
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+link-mode = "copy"
+no-build-isolation-package = ["egl-probe", "flash-attn"]
+required-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+required-version = ">=0.12.3"
+
+# The OpenVLA-OFT root environment and the pi0.5/OpenPI environment require
+# incompatible Transformers/Tokenizers versions. Keep pi0.5 as an isolated uv
+# project, while recording its reproducible top-level contract here. The full
+# 318-package resolution is checked in at the lockfile below.
+[tool.dreamervla.environments.pi05-libero]
+profile = "environments/rlinf-libero-pi05/pyproject.toml"
+lockfile = "environments/rlinf-libero-pi05/uv.lock"
+python = "3.11.14"
+uv = "0.12.3"
+cuda = "12.8"
+torch = "2.11.0+cu128"
+torchaudio = "2.11.0+cu128"
+torchvision = "0.26.0+cu128"
+flash-attn = "2.8.3+cu12torch2.11cxx11abitrue"
+jax = "0.5.3"
+orbax-checkpoint = "0.11.13"
+rlinf-openpi = "0.1.1"
+rlinf-libero = "0.1.1"
+rlinf-transformer-openpi = "4.53.2"
+transformers = "4.55.4"
+tokenizers = "0.21.4"
+lerobot = "0.3.3"
+ray = "2.57.0"
+mujoco = "3.8.1"
+tensorflow-graphics = "2021.12.3"
+typeguard = "4.6.0"
+bddl = "3.6.0"
+future = "1.0.0"
+rlinf-revision = "9ad44393d15b0e93461d7415591110678ae17ef6"
+
+[tool.dreamervla.checkpoints.pi05-libero]
+root = "/jfs/oss-import/simate_pretrain_checkpoints"
+base-repo = "lerobot/pi05_base"
+base-revision = "b211f3d44c36b6acfcf7ae94a64e8e96f75a64ba"
+sft-repo = "RLinf/RLinf-Pi05-LIBERO-SFT"
+sft-revision = "45ccfcc4e28634f1576ebf78cab0fbe2fd82432d"
+dataset-repo = "physical-intelligence/libero"
+dataset-revision = "a4336d589d589045d1c56423ffdf3b88a0e19b1f"
+
+[tool.uv.sources]
+dlimp = { url = "https://ghfast.top/https://github.com/moojink/dlimp_openvla/archive/040105d256bd28866cc6620621a3d5f7b6b91b46.tar.gz" }
+egl-probe = { path = "third_party/egl_probe" }
+libero = { path = "third_party/LIBERO", editable = true }
+mimicgen = { path = "third_party/mimicgen", editable = true }
+robomimic = { path = "third_party/robomimic", editable = true }
+robosuite = { path = "third_party/robosuite", editable = true }
+robosuite-task-zoo = { path = "third_party/robosuite-task-zoo", editable = true }
+transformers = { url = "https://ghfast.top/https://github.com/moojink/transformers-openvla-oft/archive/bc339d9ad707454c0c115970db43c260067c61ab.tar.gz" }
+torch = [
+    { index = "pytorch-cu124", group = "cu124-train" },
+    { url = "https://mirrors.aliyun.com/pytorch-wheels/cu130/torch-2.13.0%2Bcu130-cp311-cp311-manylinux_2_28_x86_64.whl", group = "cu130-train" },
+]
+torchaudio = { index = "pytorch-cu124", group = "cu124-train" }
+torchvision = [
+    { index = "pytorch-cu124", group = "cu124-train" },
+    { url = "https://mirrors.aliyun.com/pytorch-wheels/cu130/torchvision-0.28.0%2Bcu130-cp311-cp311-manylinux_2_28_x86_64.whl", group = "cu130-train" },
+]
+flash-attn = [
+    { url = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.1.post1/flash_attn-2.7.1.post1%2Bcu12torch2.5cxx11abiFALSE-cp311-cp311-linux_x86_64.whl", group = "cu124-train" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[[tool.uv.dependency-metadata]]
+name = "flash-attn"
+version = "2.7.1.post1"
+requires-dist = ["einops", "torch"]
+
+
+[tool.setuptools.packages.find]
+include = ["configs*", "dreamervla*"]
+
+[tool.setuptools.package-data]
+configs = ["**/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit_tests"]
+python_files = ["test_*.py"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# Third-party source is read-only and linted upstream.
+extend-exclude = ["third_party"]
+# Apply the exclude even when the file is passed explicitly (e.g. pre-commit hooks).
+force-exclude = true
+
+[tool.ruff.lint]
+select = [
+    "B",
+    "E",
+    "F",
+    "I",
+    "PIE808",
+    "PIE810",
+    "RUF021",
+    "RUF022",
+    "SIM300",
+    "SIM910",
+    "UP",
+]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# The first part of this module is vendored verbatim from RLinf (Apache-2.0).
+# Keep correctness and import checks active while exempting upstream annotation
+# modernization and abstract-method style.
+"dreamervla/envs/libero/venv.py" = [
+    "B027",
+    "B905",
+    "UP004",
+    "UP006",
+    "UP007",
+    "UP035",
+    "UP037",
+    "UP045",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

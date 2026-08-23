@@ -1,0 +1,15 @@
+defaults:
+  - _base_libero
+  - _self_
+
+name: libero_goal
+suite: libero_goal
+task_name: goal
+
+action_horizon: 8
+time_horizon: 8
+
+openvla_oft:
+  ckpt_path: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/Openvla-oft-SFT-traj1/Openvla-oft-SFT-libero-goal-traj1
+  dataset_statistics_path: ${task.openvla_oft.ckpt_path}/dataset_statistics.json
+  failure_hdf5_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/processed_data/libero_goal/no_noops_t_256_failures

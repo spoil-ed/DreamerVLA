@@ -1,0 +1,36 @@
+"""Protocol for swappable LUMOS reward definitions."""
+
+from __future__ import annotations
+
+from typing import Protocol, runtime_checkable
+
+import torch
+
+
+@runtime_checkable
+class RewardModel(Protocol):
+    """Maps an imagined rollout's success outcome to a per-step reward tensor.
+
+    The verifier emits ``(complete, finish_step)`` plus optional continuous
+    ``(score, score_step)`` values; a ``RewardModel`` turns those into the
+    ``[batch, max_steps]`` reward the LUMOS advantage consumes. The default
+    sparse-outcome form places ``float(complete)`` at ``finish_step``; dense /
+    verifier-shaped forms may return a per-step signal instead.
+    """
+
+    name: str
+
+    def build_reward(
+        self,
+        *,
+        batch: int,
+        max_steps: int,
+        chunk_size: int,
+        finish_step: torch.Tensor,
+        complete: torch.Tensor,
+        device: torch.device,
+        score: torch.Tensor | None = None,
+        score_step: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Return a ``[batch, max_steps]`` float32 reward tensor on ``device``."""
+        ...

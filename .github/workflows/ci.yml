@@ -1,0 +1,54 @@
+# RLINF-03: lightweight CI gate (RLinf-aligned engineering hygiene).
+#
+# Scope note — this repo deliberately runs only the dependency-free checks on
+# stock GitHub runners:
+#   * `ruff check` and `ruff format --check` are the whole-repo source gates
+#     (fast, no heavy deps). The vendored LIBERO venv remains format-exempt.
+#   * `bash -n` checks every tracked launcher/install/preprocess shell script.
+#   * Contract tests run with a lightweight Hydra/PyYAML environment. GPU,
+#     LIBERO, OpenVLA-OFT, and π0.5 coverage remains in the locked local
+#     environments because those routes require vendored or accelerator assets.
+#   * An `__init__.py`-presence check is intentionally omitted: several packages
+#     use PEP 420 namespace packages (no `__init__.py`) on purpose.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install ruff
+        run: pip install "ruff==0.15.20"
+      - name: Lint
+        run: ruff check dreamervla tests
+      - name: Check formatting
+        run: >-
+          ruff format --check dreamervla tests
+          --exclude dreamervla/envs/libero/venv.py
+      - name: Check shell syntax
+        run: find scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install contract-test dependencies
+        run: pip install "hydra-core==1.3.2" "pytest==9.1.1" "PyYAML==6.0.3"
+      - name: Run repository contract tests
+        run: >-
+          python -m pytest -q
+          tests/unit_tests/test_commit_message.py
+          tests/unit_tests/test_repository_hygiene.py
+          tests/unit_tests/test_setup_scripts.py
+          tests/unit_tests/test_spec_docs.py

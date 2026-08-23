@@ -1,0 +1,42 @@
+# @package _global_
+# Chunk WM over native π0.5 image/language prefix input embeddings.
+defaults:
+  - dreamer-wm
+  - _self_
+
+world_model:
+  _target_: dreamervla.models.embodiment.world_model.Pi05PrefixInputWorldModel
+  chunk_size: ${task.prefix_input_latent.chunk_size}
+  obs_dim: ${task.prefix_input_latent.wm_obs_dim}
+  token_count: ${task.prefix_input_latent.token_count}
+  token_dim: ${task.prefix_input_latent.token_dim}
+  image_token_count: ${task.prefix_input_latent.image_token_count}
+  text_token_count: ${task.prefix_input_latent.text_token_count}
+  text_mode: ${task.prefix_input_latent.text_mode}
+  wm_use_text: ${task.prefix_input_latent.wm_use_text}
+  policy_use_text: ${task.prefix_input_latent.policy_use_text}
+  predict_text_tokens: ${task.prefix_input_latent.predict_text_tokens}
+  token_normalization: none
+  time_horizon: ${task.prefix_input_latent.chunk_size}
+  latent_stage: ${task.prefix_input_latent.latent_stage}
+  latent_source: ${task.prefix_input_latent.latent_source}
+  action_emb_dim: ${task.prefix_input_latent.action_emb_dim}
+  num_action_repeat: ${task.prefix_input_latent.num_action_repeat}
+  proprio_dim: ${task.prefix_input_latent.proprio_dim}
+  proprio_emb_dim: ${task.prefix_input_latent.proprio_emb_dim}
+  num_proprio_repeat: ${task.prefix_input_latent.num_proprio_repeat}
+  lang_dim: ${task.prefix_input_latent.lang_dim}
+  lang_emb_dim: ${task.prefix_input_latent.lang_emb_dim}
+  num_lang_repeat: ${task.prefix_input_latent.num_lang_repeat}
+  model_dim: ${task.prefix_input_latent.model_dim}
+
+ray_components:
+  world_model:
+    target: ${world_model._target_}
+    kwargs:
+      image_token_count: ${world_model.image_token_count}
+      text_token_count: ${world_model.text_token_count}
+      text_mode: ${world_model.text_mode}
+      wm_use_text: ${world_model.wm_use_text}
+      policy_use_text: ${world_model.policy_use_text}
+      predict_text_tokens: ${world_model.predict_text_tokens}

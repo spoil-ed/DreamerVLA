@@ -1,0 +1,27 @@
+# @package _global_
+defaults:
+  - eval_libero_vla
+  - override /task: pi05_libero
+  - _self_
+
+run:
+  name: eval_pi05_libero
+
+init:
+  # The generic eval runner retains this field for OpenVLA compatibility;
+  # π0.5 owns its raw-observation extractor and uses this only as provenance.
+  vla_ckpt_path: ${task.pi05.ckpt_path}
+
+eval:
+  ckpt_path: null
+  ckpt_kind: vla_policy
+  cotrain_diagnostics: false
+  task_suite_name: ${task.suite}
+  task_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  num_episodes_per_task: 10
+  num_envs: 25
+  action_steps: ${task.pi05.replan_steps}
+  max_steps: 480
+  scheme: rlinf_chunk
+  reconfigure_per_episode: true
+  action_postprocess: none

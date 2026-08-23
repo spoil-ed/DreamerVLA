@@ -1,0 +1,24 @@
+# @package _global_
+# Chunk world model over RLinf-aligned pi0.5 PaliGemma prefix outputs.
+defaults:
+  - dreamer-wm
+  - _self_
+
+world_model:
+  _target_: dreamervla.models.embodiment.world_model.wm_chunk.ChunkAwareWorldModel
+  chunk_size: ${task.observation_latent.chunk_size}
+  obs_dim: ${task.observation_latent.wm_obs_dim}
+  token_count: ${task.observation_latent.token_count}
+  token_dim: ${task.observation_latent.token_dim}
+  time_horizon: ${task.observation_latent.chunk_size}
+  latent_stage: ${task.observation_latent.latent_stage}
+  latent_source: ${task.observation_latent.latent_source}
+  action_emb_dim: ${task.observation_latent.action_emb_dim}
+  num_action_repeat: ${task.observation_latent.num_action_repeat}
+  proprio_dim: ${task.observation_latent.proprio_dim}
+  proprio_emb_dim: ${task.observation_latent.proprio_emb_dim}
+  num_proprio_repeat: ${task.observation_latent.num_proprio_repeat}
+  lang_dim: ${task.observation_latent.lang_dim}
+  lang_emb_dim: ${task.observation_latent.lang_emb_dim}
+  num_lang_repeat: ${task.observation_latent.num_lang_repeat}
+  model_dim: ${task.observation_latent.model_dim}

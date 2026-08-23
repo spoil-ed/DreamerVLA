@@ -1,0 +1,97 @@
+# Official Physical Intelligence π0.5 LIBERO SFT/evaluation task.
+
+name: pi05_libero
+suite: libero_10
+task_name: libero_10
+image_resolution: 256
+image_size: 64
+image_keys: [agentview_rgb, eye_in_hand_rgb]
+action_dim: 7
+action_horizon: ${task.pi05.action_horizon}
+time_horizon: ${task.pi05.action_horizon}
+
+collected_rollout_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/pi05_${task.suite}
+collected_reward_dir: ${task.collected_rollout_dir}/reward
+collected_latent_dir: ${task.collected_rollout_dir}/latent
+
+# Producer-neutral observation boundary consumed by collection, replay and WM.
+# Geometry matches RLinf's RLT image-only prefix selection exactly.
+observation_latent:
+  policy_family: pi05
+  obs_hidden_source: pi05_prefix_output
+  action_head_type: flow_matching
+  token_count: 768
+  token_dim: 2048
+  wm_obs_dim: ${dvla_mul:${task.observation_latent.token_count},${task.observation_latent.token_dim}}
+  chunk_size: ${task.pi05.action_horizon}
+  history: 1
+  include_state: true
+  prompt_style: openpi
+  rotate_images_180: ${task.pi05.rotate_images_180}
+  prefix_selection: image_only
+  alignment_source: rlinf_rlt_prefix
+  latent_stage: query_after
+  latent_source: RLinf-aligned pi0.5 PaliGemma image-only prefix output [768,2048]
+  proprio_dim: 8
+  proprio_emb_dim: 10
+  num_proprio_repeat: 1
+  lang_dim: 0
+  lang_emb_dim: 0
+  num_lang_repeat: 1
+  action_emb_dim: 10
+  num_action_repeat: 1
+  model_dim: 2068
+
+# Native OpenPI prefix embeddings before the PaliGemma transformer. This is a
+# separate contract from observation_latent/pi05_prefix_output above.
+prefix_input_latent:
+  policy_family: pi05
+  obs_hidden_source: prefix_input_latent
+  action_head_type: flow_matching
+  token_count: 968
+  token_dim: 2048
+  image_token_count: 768
+  text_token_count: 200
+  wm_obs_dim: ${dvla_mul:${task.prefix_input_latent.token_count},${task.prefix_input_latent.token_dim}}
+  chunk_size: ${task.pi05.action_horizon}
+  history: 1
+  include_state: true
+  prompt_style: openpi
+  rotate_images_180: ${task.pi05.rotate_images_180}
+  prefix_selection: image_language
+  alignment_source: openpi_prefix_input
+  latent_stage: prefix_input
+  latent_source: OpenPI pi0.5 pre-PaliGemma prefix input embeddings [968,2048]
+  text_mode: exact
+  wm_use_text: true
+  policy_use_text: true
+  predict_text_tokens: false
+  prefix_attention_mask_key: prefix_attention_mask
+  proprio_dim: 8
+  proprio_emb_dim: 10
+  num_proprio_repeat: 1
+  lang_dim: 0
+  lang_emb_dim: 0
+  num_lang_repeat: 1
+  action_emb_dim: 10
+  num_action_repeat: 1
+  model_dim: 2068
+
+pi05:
+  # SFT starts from the upstream/RLinf π0.5 base weights. Evaluation and
+  # collection keep using the task-specific trained policy below. Source:
+  # lerobot/pi05_base@b211f3d44c36b6acfcf7ae94a64e8e96f75a64ba.
+  base_ckpt_path: ${oc.env:PI05_BASE_CKPT,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/pi05_base}
+  # The directory contains model.safetensors and LIBERO normalization stats.
+  ckpt_path: ${oc.env:PI05_LIBERO_CKPT,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/checkpoints/RLinf-Pi05-LIBERO-SFT}
+  # The upstream base repo has no task statistics. Reuse the official LIBERO
+  # statistics from the released SFT repo without modifying either snapshot.
+  assets_path: ${oc.env:PI05_ASSETS_CKPT,${task.pi05.ckpt_path}}
+  config_name: pi05_libero
+  action_horizon: 10
+  replan_steps: 10
+  num_denoise_steps: 5
+  rotate_images_180: true
+  base_image_key: agentview_rgb
+  wrist_image_key: eye_in_hand_rgb
+  state_key: state

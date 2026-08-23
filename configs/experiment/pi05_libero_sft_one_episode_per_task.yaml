@@ -1,0 +1,35 @@
+# @package _global_
+defaults:
+  - pi05_libero_sft
+  - _self_
+
+run:
+  name: pi05_libero_sft_one_episode_per_task
+
+task:
+  pi05:
+    # One checkpoint jointly covers all four LIBERO suites (40 tasks).
+    action_horizon: 50
+
+data:
+  loader:
+    batch_size: 32
+
+actor:
+  # 8 GPUs: micro-batch 32 x accumulation 1 = 32/GPU, 256 globally.
+  micro_batch_size: 32
+  global_batch_size: 256
+  optim:
+    # The 40-episode set is repeated over 80k optimizer steps.
+    lr: 5.0e-6
+    total_training_steps: 80000
+  distributed:
+    strategy: ddp
+    # The unused continuous-action lm_head is frozen before DDP wrapping.
+    find_unused_parameters: false
+
+training:
+  max_steps: 80000
+  # Retain evaluation candidates instead of selecting only the final/latest loss.
+  milestone_steps: [2000, 5000, 10000, 20000, 40000, 80000]
+  distributed_strategy: ddp

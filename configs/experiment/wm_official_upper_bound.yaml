@@ -1,0 +1,25 @@
+# @package _global_
+# Pre-mainline WM capacity test trained only from official LIBERO data.
+defaults:
+  - wm_full_dataset_train
+  - override /pre_mainline: libero_goal_official
+  - _self_
+
+pre_mainline:
+  stage: wm_upper_bound
+
+run:
+  name: wm_official_upper_bound
+
+training:
+  classifier_warmup_steps: 0
+  warmup_replay_epochs: 100
+
+offline_warmup:
+  data_dir: ${task.hdf5_reward_dir}
+  hidden_dir: ${task.openvla_oft.hidden_token_dir}
+  required_task_ids: ${pre_mainline.official_task_ids}
+  require_reference_complete: false
+
+online_rollout:
+  total_env_steps: 0

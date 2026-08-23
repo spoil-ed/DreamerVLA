@@ -1,0 +1,21 @@
+defaults:
+  - openvla_onetraj_libero
+  - _self_
+
+name: OpenVLA_Onetraj_ColdStart_LIBERO
+
+# Single source of truth for cold-start collection AND discrete-WM consumption:
+# DISCRETE one-trajectory OFT, single-frame history (h1), no VLA-side proprio state.
+# Query-before WM routes still read reward-HDF5 proprio as an external observation.
+# Used by experiment=collect_rollouts (write) and cotrain
+# recipes (read) via task=...
+# ckpt_path / dataset_statistics_key and the remaining expected_*
+# (obs_hidden_source=hidden_token, prompt_style=vla_policy,
+# rotate_images_180=true)
+# are inherited from OpenVLA_Onetraj_LIBERO -> libero_goal.
+#
+# Collected (model-generated) rollouts are re-rooted under data/collected_rollouts/
+# (NOT processed_data/, which holds offline-preprocessed demos) so the generated
+# data is marked at the folder level and never collides with the offline namespace.
+hdf5_dir: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/collected_rollouts/${task.artifact_name}/no_noops_t_256
+hdf5_reward_dir: ${task.hdf5_dir}_remaining_reward

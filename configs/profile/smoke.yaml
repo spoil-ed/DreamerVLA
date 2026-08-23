@@ -1,0 +1,48 @@
+# @package _global_
+# Smallest complete two-GPU cotrain geometry. It still includes real and WM env
+# workers and preserves the actor grouping/window contracts.
+profile:
+  name: smoke
+
+training:
+  debug: true
+  num_epochs: 1
+  max_train_steps: 1
+  checkpoint_every: 1
+  checkpoint_every_epochs: 1
+  wm_warmup_steps: 1
+  classifier_warmup_steps: 1
+  warmup_replay_epochs: 0
+
+dataloader:
+  batch_size: 1
+
+cluster:
+  num_nodes: 1
+  num_gpus: 2
+  component_placement: null
+
+manual_cotrain:
+  ngpu: 2
+  global_steps: 1
+  checkpoint_every: 1
+  eval_interval_global_steps: 0
+  eval_initial_global_step: false
+  real_env_workers: 1
+  real_envs_per_worker: 1
+  envs_per_worker: 1
+  wm_envs_per_worker: 8
+  real_rollout_epoch: 1
+  wm_rollout_epoch: 1
+  real_rollout_target_trajectories: 1
+  wm_rollout_target_trajectories: 8
+  max_steps_per_rollout_epoch: 64
+  real_max_steps_per_rollout_epoch: 64
+
+actor:
+  train_cfg:
+    global_batch_size: 64
+    micro_batch_size: 1
+    encoder_sft:
+      batch_size: 1
+      reencode_batch_size: 1

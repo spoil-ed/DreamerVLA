@@ -1,0 +1,123 @@
+# @package _global_
+# DINO-WM architecture and data protocol over persisted OpenVLA-OFT hidden tokens.
+defaults:
+  - /task: openvla_onetraj_libero
+  - override /pre_mainline: libero_goal_official
+  - override /worldmodel: dino-wm
+  - _self_
+
+_target_: dreamervla.runners.DinoTokenWorldModelTrainingRunner
+seed: 0
+
+run:
+  name: wm_dino_token_official
+
+launch:
+  distributed: true
+  ngpu: 8
+  gpus: null
+  master_port: 29500
+  python: python
+  write_libero_config: true
+  required_target_values: []
+  env:
+    PYTHONUNBUFFERED: 1
+    OMP_NUM_THREADS: 8
+    MALLOC_ARENA_MAX: 4
+    CUDA_MODULE_LOADING: LAZY
+    PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    NCCL_NVLS_ENABLE: 0
+    NCCL_DEBUG: WARN
+    TORCH_NCCL_ASYNC_ERROR_HANDLING: 1
+
+init:
+  world_model_state_ckpt: null
+
+training:
+  device: cuda
+  distributed_strategy: ddp
+  fsdp_mixed_precision: fp32
+  enable_activation_checkpointing: false
+  checkpoint_format: torch
+  num_epochs: 100
+  max_steps: 0
+  eval_every: 1
+  checkpoint_every: 1
+
+checkpoint:
+  topk:
+    monitor_key: eval/loss
+    metric_name: loss
+    mode: min
+    k: 3
+
+dino_wm:
+  frameskip: 5
+  train_fraction: 0.9
+  split_seed: 42
+  slice_seed: ${seed}
+  normalize_action: true
+  normalize_proprio: true
+  max_episodes: null
+
+dataset:
+  train:
+    _target_: dreamervla.dataset.DinoTokenTrajectoryDataset
+    raw_dir: ${task.hdf5_reward_dir}
+    hidden_dir: ${task.openvla_oft.hidden_token_dir}
+    split: train
+    num_hist: ${world_model.num_hist}
+    num_pred: ${world_model.num_pred}
+    frameskip: ${dino_wm.frameskip}
+    train_fraction: ${dino_wm.train_fraction}
+    split_seed: ${dino_wm.split_seed}
+    slice_seed: ${dino_wm.slice_seed}
+    normalize_action: ${dino_wm.normalize_action}
+    normalize_proprio: ${dino_wm.normalize_proprio}
+    max_episodes: ${dino_wm.max_episodes}
+  valid:
+    _target_: dreamervla.dataset.DinoTokenTrajectoryDataset
+    raw_dir: ${task.hdf5_reward_dir}
+    hidden_dir: ${task.openvla_oft.hidden_token_dir}
+    split: valid
+    num_hist: ${world_model.num_hist}
+    num_pred: ${world_model.num_pred}
+    frameskip: ${dino_wm.frameskip}
+    train_fraction: ${dino_wm.train_fraction}
+    split_seed: ${dino_wm.split_seed}
+    slice_seed: ${dino_wm.slice_seed}
+    normalize_action: ${dino_wm.normalize_action}
+    normalize_proprio: ${dino_wm.normalize_proprio}
+    max_episodes: ${dino_wm.max_episodes}
+
+dataloader:
+  # Per-rank batch, aligned with the Dreamer-WM official-data recipe.
+  batch_size: 16
+  shuffle: false
+  drop_last: false
+  num_workers: 16
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 2
+
+optim:
+  param_precision: fp32
+  precision: fp32
+  predictor:
+    name: adamw
+    lr: 1.0e-4
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+    weight_decay: 0.01
+  conditioning:
+    name: adamw
+    lr: 1.0e-4
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+    weight_decay: 0.01
+
+runner:
+  logger:
+    logger_backends: [tensorboard, wandb]
+    wandb_mode: online
+    wandb_proxy: null

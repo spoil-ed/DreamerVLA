@@ -1,0 +1,14 @@
+# @package _global_
+defaults:
+  - wm_pi05_collected_train
+  - override /worldmodel: pi05-prefix-input-wm
+  - _self_
+
+run:
+  name: wm_pi05_prefix_input_train
+
+offline_warmup:
+  online_latent:
+    encoder_method: encode_raw_observation_prefix_input_batch
+    encoder_kwargs:
+      text_mode: ${task.prefix_input_latent.text_mode}

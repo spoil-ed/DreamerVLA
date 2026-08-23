@@ -1,0 +1,156 @@
+# @package _global_
+_target_: dreamervla.runners.LIBEROVLAEvaluationRunner
+seed: 7
+
+launch:
+  distributed: false
+  ngpu: 1
+  gpus: 0
+  master_port: 29503
+  python: python
+  write_libero_config: true
+  required_target_values: []
+  env: {}
+
+trainer:
+  device: cuda:0
+  debug: false
+
+training:
+  # Evaluation owns a stable task-level run root; it never creates a timestamp
+  # layer or writes training checkpoints into this input-independent directory.
+  out_dir: ${run.output_root}/eval/${eval.task_suite_name}
+  device: cuda:0
+  debug: false
+  distributed_strategy: ddp
+  fsdp_mixed_precision: bf16
+  enable_activation_checkpointing: false
+  num_epochs: 0
+  gradient_accumulate_every: 1
+  tqdm_interval_sec: 1.0
+  max_train_steps: null
+  use_ema: false
+  checkpoint_every: 1
+  lr_scheduler: constant
+  lr_warmup_steps: 0
+
+init:
+  vla_ckpt_path: ${task.openvla_oft.ckpt_path}
+  encoder_state_ckpt: null
+
+eval:
+  # Standalone torchrun evaluation opts in per experiment. Inline training
+  # evaluation retains its historical rank-0-only behavior.
+  distributed: false
+  ckpt_path: ${task.openvla_oft.ckpt_path}
+  ckpt_kind: vla
+  # Optional generic fail-closed load contract. The pre-mainline proof enables
+  # this for both sides; existing evaluation recipes retain permissive loading.
+  require_strict_component_load: false
+  # Post-update manual-cotrain evaluation can load the checkpoint's WM/CLS and
+  # score the same fixed real trajectories without replay, optimizer or threshold
+  # recalibration. Baseline HF-VLA evaluation leaves this disabled.
+  cotrain_diagnostics: false
+  cotrain_expected_trajectories: null
+  cotrain_encode_batch_size: 4
+  seed: ${seed}
+  task_suite_name: libero_goal
+  num_episodes_per_task: 3
+  num_envs: 64
+  # Rebuild the LIBERO env per episode (RLinf reconfigure semantics): makes the
+  # parallel SR K-invariant (num_envs 2==4) by removing cross-episode subprocess
+  # state leakage, and matches the ~0.55 OFT-traj1 baseline. Verified 2026-07-05.
+  reconfigure_per_episode: true
+  enumerate_all_init_states: false
+  # Parallel eval scheme. rlinf_chunk uses the RLinf-style LiberoEnv substrate:
+  # ReconfigureSubprocEnv subprocesses plus LiberoEnv.chunk_step action chunks.
+  scheme: rlinf_chunk
+  libero_env:
+    reset_wait_steps: 10      # == sequential num_steps_wait oracle (RLinf uses 15)
+    reset_gripper_open: true
+    auto_reset: false
+    ignore_terminations: false
+    group_size: 1
+  num_steps_wait: 10
+  render_backend: osmesa
+  render_gpu_pool: null
+  render_shard_id: 0
+  task_start: 0
+  task_ids: null
+  max_tasks: null
+  max_steps: null
+  action_steps: 8
+  history_length: 1
+  action_postprocess: none
+  save_video: false
+  video_max_episodes: 1
+  dreamer_deterministic: true
+  dreamer_policy_source: ckpt
+  dreamer_action_repeat: 1
+  dreamer_clip_actions: true
+  dreamer_unnorm_actions: auto
+  dreamer_latent_action_source: env
+  dreamer_rollout_mode: stateless
+  dreamer_actor_input_source: latent
+  dreamer_wm_history_length: 2
+  dreamer_wm_rotate_images: true
+  dreamer_wm_prompt_style: vla_policy
+  dreamer_wm_include_state: false
+  obs_hidden_source: hidden_token
+  target_token_id: 10004
+  dreamer_which_image_block: -2
+  dreamer_which_image_blocks: [-2, -1]
+  log_action_stats: false
+  log_action_stats_limit: 8
+  log_hidden_action_compare: false
+  hidden_action_compare_limit: 300
+  hidden_action_compare_unnorm_policy_outputs: true
+  trace_policy_debug: false
+  trace_policy_debug_limit: 64
+  trace_policy_debug_verbose: false
+  empty_cuda_cache_each_step: false
+  export_real_relabel: false
+  real_relabel_dir: null
+  tdmpc_mpc:
+    enabled: false
+    use_target_critic: true
+    horizon: 3
+    iterations: 6
+    num_samples: 512
+    num_elites: 64
+    num_pi_trajs: 24
+    action_dim: 7
+    min_std: 0.05
+    max_std: 2.0
+    temperature: 0.5
+    gamma: 0.995
+    terminal_value_scale: 1.0
+    reward_scale: 1.0
+    value_mode: state
+    execute_steps: ${eval.action_steps}
+    eval_mode: true
+    warm_start: true
+    seed: ${seed}
+
+ema:
+  decay: 0.9999
+  update_after_step: 0
+
+optim:
+  grad_clip_norm: 4.0
+  zero_grad_set_to_none: true
+  vla:
+    name: adam
+    lr: 0.0
+    betas: [0.9, 0.95]
+    eps: 1.0e-8
+    weight_decay: 0.0
+
+checkpoint:
+  save_last_snapshot: false
+  save_hf_encoder: true
+  topk:
+    monitor_key: eval_success_rate
+    metric_name: accuracy
+    mode: max
+    k: 1

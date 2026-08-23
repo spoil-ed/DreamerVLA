@@ -1,0 +1,37 @@
+# @package _global_
+name: reproduce_train_dreamer_success_sft_probe
+mode: train_dreamer
+data_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}
+dry_run: false
+supported_tasks: [libero_goal]
+
+profile:
+  id: cu124-h100-libero-goal-success-sft-probe-v1
+  task: libero_goal
+  num_gpus: 8
+  gpus: 0,1,2,3,4,5,6,7
+
+asset_manifest_path: ${data_root}/reproduction/manifests/assets.json
+state_path: ${data_root}/reproduction/manifests/training_state_success_sft_probe.json
+output_root: ${data_root}/outputs/reproduction/libero_goal/openvla_libero_success_sft_probe
+
+require_component_checkpoints: true
+component_checkpoints:
+  world_model: null
+  classifier: null
+
+stages:
+  dreamer:
+    launcher: scripts/experiments/cotrain/train.sh
+    experiment: openvla_libero_success_sft_probe
+    run_root: ${output_root}/dreamer
+    budget_key: manual_cotrain.global_steps
+    budget: 1
+    overrides: []
+
+frozen_assertions:
+  _target_: dreamervla.runners.DreamerRunner
+  manual_cotrain:
+    training_mode: imagined_success_sft
+    learner_updates_enabled: false
+    initial_condition_selector: episode_start

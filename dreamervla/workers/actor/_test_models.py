@@ -1,0 +1,392 @@
+"""Tiny trainable actor models for Ray learner e2e tests."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import ray
+import torch
+import torch.nn.functional as F
+from torch import nn
+
+
+class TinyTrainablePolicy(nn.Linear):
+    """Linear policy with a stable constructor signature for tests."""
+
+    def __init__(self, hidden_dim: int = 4, action_dim: int = 7) -> None:
+        super().__init__(int(hidden_dim), int(action_dim))
+        nn.init.zeros_(self.weight)
+        nn.init.zeros_(self.bias)
+
+    def predict(self, hidden: torch.Tensor) -> torch.Tensor:
+        return self(hidden.float())
+
+
+class TinySharedPolicy(TinyTrainablePolicy):
+    """Policy usable by both LearnerWorker and InferenceWorker."""
+
+    def forward(self, batch):  # type: ignore[override]
+        if isinstance(batch, dict):
+            hidden = batch["hidden"].float()
+            action = super().forward(hidden).unsqueeze(1)
+            return action, None, None
+        return super().forward(batch.float())
+
+
+class TinyLumosPolicy(nn.Module):
+    """Tiny policy implementing the LUMOS sample/evaluate protocol."""
+
+    def __init__(
+        self,
+        hidden_dim: int = 4,
+        action_dim: int = 7,
+        chunk_size: int = 1,
+    ) -> None:
+        super().__init__()
+        self.hidden_dim = int(hidden_dim)
+        self.action_dim = int(action_dim)
+        self.chunk_size = int(chunk_size)
+        self.linear = nn.Linear(self.hidden_dim, self.action_dim)
+        nn.init.zeros_(self.linear.weight)
+        nn.init.zeros_(self.linear.bias)
+
+    def forward(self, batch):  # type: ignore[override]
+        if not isinstance(batch, dict):
+            return self.linear(batch.float())
+        hidden = batch["hidden"].float()
+        mean = (
+            self.linear(hidden)
+            .unsqueeze(1)
+            .expand(
+                -1,
+                self.chunk_size,
+                -1,
+            )
+        )
+        mode = str(batch.get("mode", "sample"))
+        if mode == "sample":
+            action = mean
+            log_prob = -((action - mean) ** 2).mean(dim=(1, 2))
+            return action, log_prob, {"action_chunk": action}
+        if mode == "evaluate":
+            action = batch["action"].float()
+            if action.ndim == 2:
+                mean_for_action = mean[:, 0, :]
+                reduce_dims = 1
+            else:
+                mean_for_action = mean
+                reduce_dims = (1, 2)
+            log_prob = -((action - mean_for_action) ** 2).mean(dim=reduce_dims)
+            entropy = torch.ones_like(log_prob) * 0.5
+            return log_prob, entropy, {}
+        raise ValueError(f"unknown TinyLumosPolicy mode {mode!r}")
+
+
+class TinyStagedLumosPolicy(TinyLumosPolicy):
+    """Tiny LUMOS policy with the raw-encoder boundary used by staged cotrain."""
+
+    def __init__(
+        self,
+        hidden_dim: int = 4,
+        action_dim: int = 7,
+        chunk_size: int = 1,
+    ) -> None:
+        super().__init__(
+            hidden_dim=hidden_dim,
+            action_dim=action_dim,
+            chunk_size=chunk_size,
+        )
+        self.encoder = nn.Linear(1, self.hidden_dim)
+        nn.init.constant_(self.encoder.weight, 0.25)
+        nn.init.zeros_(self.encoder.bias)
+
+    def encoder_parameter_names(self) -> tuple[str, ...]:
+        """Return the tiny raw encoder parameters used by staged cotrain."""
+
+        return tuple(name for name, _ in self.named_parameters() if name.startswith("encoder."))
+
+    def prepare_raw_batch(self, transitions: list[dict]) -> dict[str, torch.Tensor]:
+        """Convert tiny image observations into the production raw-batch keys."""
+
+        values = [float(torch.as_tensor(item["image"]).float().mean()) for item in transitions]
+        batch_size = len(values)
+        return {
+            "pixel_values": torch.tensor(values, dtype=torch.float32).reshape(-1, 1),
+            "input_ids": torch.ones(batch_size, 1, dtype=torch.long),
+            "attention_mask": torch.ones(batch_size, 1, dtype=torch.long),
+        }
+
+    def forward(self, batch):  # type: ignore[override]
+        mode = str(batch.get("mode", "sample")) if isinstance(batch, dict) else "sample"
+        if mode not in {"encoder_sft", "encode_raw"}:
+            return super().forward(batch)
+        hidden = self.encoder(batch["pixel_values"].float())
+        encoded = hidden.unsqueeze(1)
+        extras = {
+            "hidden": encoded,
+            "lang_emb": torch.zeros(hidden.shape[0], 1, device=hidden.device),
+        }
+        if mode == "encode_raw":
+            return encoded, torch.zeros((), device=hidden.device), extras
+        logits = self.linear(hidden).unsqueeze(1).expand(-1, self.chunk_size, -1)
+        labels = batch["action_token_ids"].long().reshape(hidden.shape[0], -1)
+        if int(labels.shape[1]) != self.chunk_size:
+            raise ValueError(
+                "TinyStagedLumosPolicy action-token count must match its configured chunk size"
+            )
+        loss = F.cross_entropy(logits.reshape(-1, logits.shape[-1]), labels.reshape(-1))
+        extras["action_label_logprobs"] = (
+            torch.log_softmax(logits, dim=-1).gather(-1, labels.unsqueeze(-1)).squeeze(-1)
+        )
+        extras["action_logits"] = logits
+        return loss, torch.zeros((), device=hidden.device), extras
+
+
+class TinyStagedVLAPolicy(nn.Module):
+    """Tiny raw-encoder/native-actor policy for staged cotrain unit tests."""
+
+    def __init__(self, num_bins: int = 3) -> None:
+        super().__init__()
+        self.encoder = nn.Linear(1, 2, bias=False)
+        self.actor = nn.Linear(2, int(num_bins), bias=False)
+        nn.init.constant_(self.encoder.weight, 0.25)
+        nn.init.constant_(self.actor.weight, 0.1)
+
+    def encoder_parameter_names(self) -> tuple[str, ...]:
+        return tuple(name for name, _ in self.named_parameters() if name.startswith("encoder."))
+
+    def prepare_raw_batch(self, transitions: list[dict]) -> dict[str, torch.Tensor]:
+        values = [float(torch.as_tensor(item["image"]).float().mean()) for item in transitions]
+        return {
+            "pixel_values": torch.tensor(values, dtype=torch.float32).reshape(-1, 1),
+            "input_ids": torch.ones(len(values), 1, dtype=torch.long),
+            "attention_mask": torch.ones(len(values), 1, dtype=torch.long),
+        }
+
+    def forward(self, batch):  # type: ignore[override]
+        mode = str(batch.get("mode", "sample"))
+        if mode in {"encoder_sft", "encode_raw"}:
+            hidden = self.encoder(batch["pixel_values"].float())
+            extras = {
+                "hidden": hidden.unsqueeze(1),
+                "lang_emb": torch.zeros(hidden.shape[0], 1, device=hidden.device),
+            }
+            if mode == "encode_raw":
+                return hidden.unsqueeze(1), torch.zeros((), device=hidden.device), extras
+            logits = self.actor(hidden).unsqueeze(1)
+            labels = batch["action_token_ids"].long().reshape(hidden.shape[0], -1)
+            if int(labels.shape[1]) != 1:
+                raise ValueError("TinyStagedVLAPolicy expects one action token")
+            loss = F.cross_entropy(logits.reshape(-1, logits.shape[-1]), labels.reshape(-1))
+            extras["action_label_logprobs"] = (
+                torch.log_softmax(
+                    logits,
+                    dim=-1,
+                )
+                .gather(-1, labels.unsqueeze(-1))
+                .squeeze(-1)
+            )
+            extras["action_logits"] = logits
+            return loss, torch.zeros((), device=hidden.device), extras
+        hidden = batch["hidden"].float()
+        if hidden.ndim == 3:
+            hidden = hidden[:, 0]
+        logits = self.actor(hidden)
+        logprob = torch.log_softmax(logits, dim=-1)[:, 0]
+        return logprob, torch.zeros_like(logprob), {}
+
+
+class CountingTinyLumosPolicy(TinyLumosPolicy):
+    """Tiny LUMOS policy that counts forward calls for rollout batching tests."""
+
+    def __init__(
+        self,
+        hidden_dim: int = 4,
+        action_dim: int = 7,
+        chunk_size: int = 1,
+    ) -> None:
+        super().__init__(
+            hidden_dim=hidden_dim,
+            action_dim=action_dim,
+            chunk_size=chunk_size,
+        )
+        self.register_buffer("forward_calls", torch.zeros((), dtype=torch.long))
+
+    def forward(self, batch):  # type: ignore[override]
+        self.forward_calls += 1
+        return super().forward(batch)
+
+
+class TinyCheckpointPolicy(TinyTrainablePolicy):
+    """Policy exposing the gradient-checkpointing hook used by FSDP tests."""
+
+    def __init__(self, hidden_dim: int = 4, action_dim: int = 7) -> None:
+        super().__init__(hidden_dim=hidden_dim, action_dim=action_dim)
+        self.register_buffer("checkpoint_flag", torch.zeros((), dtype=torch.long))
+
+    def gradient_checkpointing_enable(self) -> None:
+        self.checkpoint_flag.fill_(1)
+
+
+class TinyScalarModel(nn.Module):
+    """Small trainable component for phase-updater tests."""
+
+    def __init__(self, hidden_dim: int = 4) -> None:
+        super().__init__()
+        self.linear = nn.Linear(int(hidden_dim), 1)
+        nn.init.zeros_(self.linear.weight)
+        nn.init.zeros_(self.linear.bias)
+
+    def forward(self, hidden: torch.Tensor) -> torch.Tensor:
+        return self.linear(hidden.float()).squeeze(-1)
+
+
+class TinyTrainableWorldModel(TinyScalarModel):
+    """Small trainable world-model stand-in for learner routing tests."""
+
+
+class TinyLumosWorldModel(nn.Module):
+    """Tiny world model implementing the production DreamerVLA step protocol."""
+
+    def __init__(self, hidden_dim: int = 4, action_dim: int = 7) -> None:
+        super().__init__()
+        self.hidden_dim = int(hidden_dim)
+        self.action_dim = int(action_dim)
+        self.obs_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.action_proj = nn.Linear(self.action_dim, self.hidden_dim)
+        nn.init.eye_(self.obs_proj.weight)
+        nn.init.zeros_(self.obs_proj.bias)
+        nn.init.zeros_(self.action_proj.weight)
+        nn.init.zeros_(self.action_proj.bias)
+
+    def forward(self, batch: dict) -> dict[str, torch.Tensor] | torch.Tensor:  # type: ignore[override]
+        mode = batch.get("mode")
+        if mode is None:
+            if "latent" in batch and "action" in batch:
+                latent = self._latent_hidden(batch["latent"])
+                action_signal = self.action_proj(batch["action"].float())
+                return latent + action_signal
+            obs = batch["obs_embedding"].float()
+            pred = self.obs_proj(obs)
+            target = batch["current_actions"].float().mean(dim=-1, keepdim=True)
+            target = target.expand_as(pred)
+            loss = torch.mean((pred - target) ** 2)
+            return {"loss": loss, "_loss": loss}
+        if mode == "encode_latent":
+            return self.obs_proj(batch["hidden"].float())
+        if mode == "observe_next":
+            hidden = self.obs_proj(batch["hidden"].float())
+            latent = self._latent_hidden(batch["latent"])
+            action_signal = self.action_proj(batch["actions"].float())
+            return hidden + 0.1 * latent + 0.01 * action_signal
+        if mode == "observe_sequence":
+            return {"latent": self.obs_proj(batch["obs_embedding"].float())}
+        if mode == "actor_input":
+            return self._latent_hidden(batch["latent"])
+        if mode == "predict_next":
+            latent = self._latent_hidden(batch["latent"])
+            action = batch.get("action", batch.get("actions")).float()
+            if action.ndim == 3:
+                action = action[:, -1]
+            return latent + self.action_proj(action)
+        if mode == "predict_next_chunk":
+            latent = self._latent_hidden(batch["latent"])
+            actions = batch["actions"].float()
+            action_signal = self.action_proj(actions)
+            hidden_seq = latent.unsqueeze(1) + action_signal
+            return {
+                "hidden_seq": hidden_seq,
+                "history": hidden_seq,
+                "actions": actions,
+                "hidden": hidden_seq[:, -1],
+            }
+        raise ValueError(f"unknown TinyLumosWorldModel mode {mode!r}")
+
+    @staticmethod
+    def _latent_hidden(latent) -> torch.Tensor:
+        if isinstance(latent, dict):
+            return latent["hidden"].float()
+        return latent.float()
+
+
+class TinyValueCritic(TinyScalarModel):
+    """Small trainable critic stand-in for learner routing tests."""
+
+
+class TinySuccessClassifier(nn.Module):
+    """Tiny classifier with the cfg attributes used by online classifier updates."""
+
+    def __init__(self, hidden_dim: int = 4, window: int = 3) -> None:
+        super().__init__()
+        self.cfg = SimpleNamespace(
+            window=int(window),
+            chunk_size=1,
+            chunk_pool="last",
+            granularity="action",
+        )
+        self.linear = nn.Linear(int(hidden_dim), 2)
+        nn.init.zeros_(self.linear.weight)
+        nn.init.zeros_(self.linear.bias)
+
+    def forward(self, windows: torch.Tensor, **_: object) -> torch.Tensor:
+        if windows.ndim == 2:
+            hidden = windows.float()
+        else:
+            temporal_dims = tuple(range(1, windows.ndim - 1))
+            hidden = windows.float().mean(dim=temporal_dims)
+        return self.linear(hidden)
+
+    def predict_success(
+        self,
+        video: torch.Tensor,
+        *,
+        threshold: float,
+        stride: int,
+        min_steps: int,
+    ) -> dict[str, torch.Tensor]:
+        del stride
+        logits = self.linear(video.float())
+        probs = torch.softmax(logits, dim=-1)[..., 1]
+        scan_start = max(0, int(min_steps) - 1)
+        scanned = probs[:, scan_start:]
+        above = scanned >= float(threshold)
+        has_success = above.any(dim=1)
+        first = above.float().argmax(dim=1) + scan_start
+        fallback = torch.full_like(first, int(video.shape[1]) - 1)
+        finish_step = torch.where(has_success, first, fallback)
+        return {"complete": has_success, "finish_step": finish_step}
+
+
+class TinyWorldModelPhaseUpdater:
+    """Configurable phase updater matching LearnerWorker's real-update boundary."""
+
+    def update(
+        self,
+        *,
+        phase: str,
+        num_steps: int,
+        modules: dict[str, nn.Module],
+        optimizers: dict[str, torch.optim.Optimizer],
+        replay,
+        device: torch.device,
+        train_cfg: dict,
+        precision,
+    ) -> dict[str, float]:
+        if phase != "wm":
+            return {f"train/{phase}_loss": 0.0}
+        world_model = modules["world_model"]
+        optimizer = optimizers["world_model"]
+        batch_size = int(train_cfg.get("batch_size", 2))
+        last_loss = 0.0
+        for _ in range(int(num_steps)):
+            batch = ray.get(replay.sample.remote(batch_size))
+            hidden = batch["obs_embedding"].to(device).float().mean(dim=1)
+            target = batch["current_actions"].to(device).float().mean(dim=(1, 2))
+            optimizer.zero_grad(set_to_none=True)
+            with precision.context():
+                pred = world_model(hidden)
+                loss = torch.mean((pred - target) ** 2)
+            loss.backward()
+            optimizer.step()
+            last_loss = float(loss.detach().cpu().item())
+        return {"train/wm_loss": last_loss}

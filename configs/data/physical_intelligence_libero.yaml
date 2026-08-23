@@ -1,0 +1,6 @@
+# Pinned official LeRobot source. OpenPI/RLinf owns sampling and transforms.
+source: ${oc.env:PI05_LIBERO_DATA,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/datasets/lerobot/physical-intelligence/libero}
+repo_id: physical-intelligence/libero
+revision: a4336d589d589045d1c56423ffdf3b88a0e19b1f
+format: lerobot_v2
+noops_filtered: true

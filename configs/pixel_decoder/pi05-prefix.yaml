@@ -1,0 +1,15 @@
+# @package _global_
+# Pixel decoder for WM-normalized π0.5 image-prefix tokens.
+pixel_decoder:
+  _target_: dreamervla.models.embodiment.world_model.LatentTokenPixelDecoder
+  token_dim: ${task.observation_latent.token_dim}
+  token_count: ${task.observation_latent.token_count}
+  tokens_per_view: 256
+  # π0.5 prefix slots: base, left wrist, padded right wrist.
+  view_indices: [0, 1]
+  image_size: 224
+  base_channels: 256
+  channel_schedule: [192, 128, 96, 64]
+  upsample_sizes: [28, 56, 112, 224]
+  token_normalization: layer_norm
+  token_norm_eps: 1.0e-6

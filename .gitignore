@@ -1,0 +1,65 @@
+# Python bytecode / build artefacts
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual envs / OS
+.venv/
+.venv-pi05/
+venv/
+.rlinf-runtime/
+.DS_Store
+.libero/
+
+# Third-party local checkouts/wheels (installed in editable mode)
+third_party/
+
+# Runtime data: downloaded weights, datasets, preprocessed tokens, training outputs.
+# Everything under the repository-root data/ is generated or downloaded per README.
+/data/
+
+# Local training / experiment logs
+log/
+logs/
+train.log
+*.log
+wandb/
+.env.wandb
+
+# Local agent/editor workspaces and planning drafts
+.local/
+.agents/
+.claude/
+.codex/
+.cursor/
+.planning/
+.worktrees/
+docs/TODO.md
+docs/task_plan.md
+docs/*_plan.md
+docs/findings.md
+docs/history.md
+docs/graveyard_candidates_*.md
+
+# LaTeX build artifacts under docs/papers/ (the .tex/.sty/.bib sources stay tracked)
+docs/papers/**/*.pdf
+docs/papers/**/*.aux
+docs/papers/**/*.out
+docs/papers/**/*.bbl
+docs/papers/**/*.blg
+docs/papers/**/*.toc
+docs/papers/**/*.lof
+docs/papers/**/*.lot
+docs/papers/**/*.fls
+docs/papers/**/*.fdb_latexmk
+docs/papers/**/*.synctex.gz
+
+# other
+CLAUDE.local.md
+AGENTS.local.md
+tutorial_of_git.md

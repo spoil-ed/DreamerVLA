@@ -1,0 +1,2178 @@
+"""Offline world-model and success-classifier warmup runner.
+
+Pre-seeds the OnlineReplay buffer from previously-collected cold-start
+trajectory HDF5, warms up the world model + success classifier on that unified
+buffer, and saves independent WM/classifier checkpoints for strict epoch resume.
+Online cotrain is owned by the Ray ``CotrainRunner`` route.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import threading
+import time
+import warnings
+from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Any
+
+import hydra
+import numpy as np
+import torch
+from omegaconf import OmegaConf
+
+from dreamervla.algorithms.dreamervla import world_model_pretrain_step
+from dreamervla.constants import CHECKPOINT_FORMAT_VERSION
+from dreamervla.runners.base_runner import _atomic_torch_save, _materialize_checkpoint_copy
+from dreamervla.runners.success_classifier_training_runner import _success_probabilities_from_logits
+from dreamervla.runtime.classifier_metrics import sweep_threshold_metrics
+from dreamervla.runtime.classifier_update import online_classifier_update_step
+from dreamervla.runtime.distributed import unwrap_module as _unwrap
+from dreamervla.runtime.offline_seed import seed_replay_from_offline
+from dreamervla.runtime.world_model_training_common import _WorldModelTrainingCommon
+from dreamervla.utils.checkpoint_util import TopKCheckpointManager
+from dreamervla.utils.console import count_trainable
+from dreamervla.utils.hf_checkpoint import load_runner_payload
+from dreamervla.utils.hf_module import load_module_pretrained, save_module_pretrained
+from dreamervla.utils.seed import capture_rng_state, restore_rng_state, select_rank_rng_state
+
+_WARMUP_PROGRESS_RE = re.compile(r"^(?P<component>wm|classifier)_step_(?P<step>\d+)\.ckpt$")
+_LEGACY_WARMUP_RNG_WARNING_EMITTED = False
+_LEGACY_WARMUP_RNG_WARNING_LOCK = threading.Lock()
+
+
+def _cpu_tree(value: Any) -> Any:
+    if isinstance(value, torch.Tensor):
+        return value.detach().cpu()
+    if isinstance(value, dict):
+        return {key: _cpu_tree(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_cpu_tree(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_cpu_tree(item) for item in value)
+    return value
+
+
+def _assert_offline_seed_present(*, data_dir: Any, hidden_dir: Any) -> None:
+    """Fail fast if the collected cold-start dump is missing — BEFORE loading models.
+
+    Warmup seeds the replay buffer from collected reward + hidden shards. Without
+    this guard, ``run()`` would build the heavy WM/encoder/classifier first and only
+    then crash inside ``seed_replay_from_offline``. Checking up front turns "load
+    everything, then fail" into an immediate, actionable error.
+    """
+    reward = Path(str(data_dir)).expanduser()
+    hidden = Path(str(hidden_dir)).expanduser()
+    if not reward.is_dir() or not any(reward.glob("*.hdf5")):
+        raise FileNotFoundError(
+            f"offline warmup needs collected reward shards but found none under {reward} — "
+            "run cold-start collection first, or set training.resume with existing warmup "
+            "checkpoints to skip seeding."
+        )
+    if not hidden.is_dir() or not any(hidden.glob("*.hdf5")):
+        raise FileNotFoundError(
+            f"offline warmup needs collected hidden sidecars but found none under {hidden} — "
+            "run cold-start collection first."
+        )
+
+
+def _assert_offline_reward_present(*, data_dir: Any) -> None:
+    """Fail fast for RGB-only warmup before loading either large model."""
+
+    reward = Path(str(data_dir)).expanduser()
+    if not reward.is_dir() or not any(reward.glob("*.hdf5")):
+        raise FileNotFoundError(
+            f"online-latent warmup needs collected RGB reward shards under {reward}"
+        )
+
+
+def _apply_collected_latent_spec(cfg: Any) -> dict[str, Any]:
+    """Derive WM input geometry from the collected sidecar manifest."""
+
+    hidden_dir = Path(str(OmegaConf.select(cfg, "offline_warmup.hidden_dir"))).expanduser()
+    config_path = hidden_dir / "preprocess_config.json"
+    if not config_path.is_file():
+        raise FileNotFoundError(f"observation-latent metadata is missing: {config_path}")
+    with config_path.open("r", encoding="utf-8") as handle:
+        latent = json.load(handle)
+    from dreamervla.preprocess.sidecar_schema import (
+        validate_observation_latent_preprocess_config,
+    )
+
+    validate_observation_latent_preprocess_config(latent, context=str(config_path))
+    token_count = int(latent["token_count"])
+    token_dim = int(latent["token_dim"])
+    obs_dim = token_count * token_dim
+    chunk_size = int(latent.get("chunk_size", latent.get("time_horizon", 1)))
+    for path, value in (
+        ("world_model.token_count", token_count),
+        ("world_model.token_dim", token_dim),
+        ("world_model.obs_dim", obs_dim),
+        ("world_model.chunk_size", chunk_size),
+        ("world_model.time_horizon", chunk_size),
+        ("world_model.latent_source", str(latent["obs_hidden_source"])),
+        ("ray_components.world_model.kwargs.token_count", token_count),
+        ("ray_components.world_model.kwargs.token_dim", token_dim),
+        ("ray_components.world_model.kwargs.obs_dim", obs_dim),
+        ("ray_components.world_model.kwargs.chunk_size", chunk_size),
+        ("ray_components.world_model.kwargs.time_horizon", chunk_size),
+        ("ray_components.world_model.kwargs.latent_source", str(latent["obs_hidden_source"])),
+    ):
+        if OmegaConf.select(cfg, path, default=None) is not None:
+            OmegaConf.update(cfg, path, value, force_add=True)
+    OmegaConf.update(
+        cfg,
+        "env.obs_hidden_source",
+        str(latent["obs_hidden_source"]),
+        force_add=True,
+    )
+    return latent
+
+
+class WorldModelTrainingRunner(_WorldModelTrainingCommon):
+    """Offline-seeded world-model and classifier warmup."""
+
+    runner_name = "world_model_training"
+    runner_status = "current"
+    runner_family = "world_model"
+
+    # ------------------------------------------------------------------ warmup
+    def _log_replay_warmup_metrics(self, metrics: dict[str, float], *, step: int) -> None:
+        """Log replay-warmup progress under the training namespace."""
+        if hasattr(self, "log_metrics"):
+            self.log_metrics(metrics, step=int(step))
+
+    def _replay_warmup_log_every(self) -> int:
+        """Return the configured replay-warmup metric cadence in learner updates."""
+        cfg = getattr(self, "cfg", None)
+        if cfg is None:
+            return 1
+        value = OmegaConf.select(cfg, "training.replay_warmup_log_every", default=1)
+        return max(1, int(value))
+
+    def _wm_profile_steps(self) -> int:
+        """Return the WM profile budget; ``-1`` profiles every warmup update."""
+        cfg = getattr(self, "cfg", None)
+        if cfg is None:
+            return 0
+        value = OmegaConf.select(cfg, "training.wm_profile_steps", default=0)
+        return int(value)
+
+    def _record_wm_profile(self, timings: dict[str, float], *, step: int, total_steps: int) -> None:
+        device_stages = ("h2d", "forward", "backward", "grad_clip", "optimizer")
+        device_active = sum(float(timings.get(name, 0.0)) for name in device_stages)
+        total = float(timings.get("total", 0.0))
+        enriched = dict(timings)
+        enriched["device_active"] = device_active
+        enriched["host_or_wait"] = max(0.0, total - device_active)
+        enriched["device_active_fraction"] = device_active / max(total, 1.0e-12)
+        metrics = {
+            f"time/wm_warmup_{name}_ms": float(value) * 1000.0
+            for name, value in enriched.items()
+            if name != "device_active_fraction"
+        }
+        metrics["time/wm_warmup_device_active_fraction"] = enriched["device_active_fraction"]
+        self._log_replay_warmup_metrics(metrics, step=int(step))
+        if not self.is_main_process:
+            return
+        order = (
+            "data_wait",
+            "sample",
+            "batch_build",
+            "h2d",
+            "forward",
+            "backward",
+            "grad_clip",
+            "optimizer",
+            "metrics",
+            "total",
+        )
+        parts = [
+            f"{name}={float(enriched[name]) * 1000.0:.1f}ms" for name in order if name in enriched
+        ]
+        parts.append(f"device_active={float(enriched['device_active_fraction']) * 100.0:.1f}%")
+        print(
+            f"[pipeline][wm-profile] step={int(step)}/{int(total_steps)} " + " ".join(parts),
+            flush=True,
+        )
+
+    def _print_pipeline_event(self, message: str) -> None:
+        """Print one pipeline progress line from rank 0 only."""
+        distributed = getattr(self, "distributed", None)
+        if distributed is not None and not bool(getattr(distributed, "is_main_process", True)):
+            return
+        print(message, flush=True)
+
+    def _wm_prefetch_workers(self) -> int:
+        cfg = getattr(self, "cfg", None)
+        if cfg is None:
+            return 0
+        value = OmegaConf.select(cfg, "training.wm_prefetch_workers", default=0) or 0
+        return max(0, int(value))
+
+    def _wm_diagnostics_every(self) -> int:
+        """Return the update cadence for expensive optimizer-state diagnostics."""
+
+        cfg = getattr(self, "cfg", None)
+        if cfg is None:
+            return 0
+        value = OmegaConf.select(cfg, "training.wm_diagnostics_every", default=0) or 0
+        return max(0, int(value))
+
+    def _wm_learning_rate(self) -> float | None:
+        """Return the active WM learning rate when the optimizer exposes it."""
+
+        groups = getattr(self.world_model_optimizer, "param_groups", ())
+        for group in groups:
+            if "lr" in group:
+                return float(group["lr"])
+        return None
+
+    def _wm_optimizer_diagnostics(self) -> dict[str, torch.Tensor]:
+        """Measure WM parameters and Adam moments without changing optimizer state."""
+
+        parameters = [
+            parameter.detach()
+            for parameter in self.world_model.parameters()
+            if parameter.requires_grad
+        ]
+        if not parameters:
+            return {}
+        device = parameters[0].device
+
+        def combined_norm(tensors: list[torch.Tensor]) -> torch.Tensor:
+            if not tensors:
+                return torch.zeros((), device=device, dtype=torch.float32)
+            norms = torch._foreach_norm(tensors)
+            return torch.linalg.vector_norm(torch.stack([value.float() for value in norms]))
+
+        first_moments: list[torch.Tensor] = []
+        second_moments: list[torch.Tensor] = []
+        optimizer_steps: list[torch.Tensor] = []
+        for state in self.world_model_optimizer.state.values():
+            exp_avg = state.get("exp_avg")
+            if isinstance(exp_avg, torch.Tensor):
+                first_moments.append(exp_avg.detach())
+            exp_avg_sq = state.get("exp_avg_sq")
+            if isinstance(exp_avg_sq, torch.Tensor):
+                second_moments.append(exp_avg_sq.detach())
+            step = state.get("step")
+            if isinstance(step, torch.Tensor):
+                optimizer_steps.append(step.detach().to(device=device, dtype=torch.float32))
+            elif step is not None:
+                optimizer_steps.append(torch.tensor(float(step), device=device))
+
+        return {
+            "parameter_norm": combined_norm(parameters),
+            "optimizer_exp_avg_norm": combined_norm(first_moments),
+            "optimizer_exp_avg_sq_norm": combined_norm(second_moments),
+            "optimizer_step": (
+                torch.stack(optimizer_steps).max()
+                if optimizer_steps
+                else torch.zeros((), device=device)
+            ),
+        }
+
+    def _sample_wm_pretrain_batch(
+        self,
+        replay,
+        batch_size: int,
+        *,
+        profile: bool,
+    ) -> tuple[Any | None, dict[str, float] | None]:
+        profile_timings: dict[str, float] | None = {} if profile else None
+        profile_stage_start = time.perf_counter()
+        replay_batch = replay.sample(int(batch_size), include_images=False)
+        if profile_timings is not None:
+            now = time.perf_counter()
+            profile_timings["sample"] = now - profile_stage_start
+            profile_stage_start = now
+        wm_batch = self._build_wm_pretrain_batch(replay_batch)
+        if profile_timings is not None:
+            now = time.perf_counter()
+            profile_timings["batch_build"] = now - profile_stage_start
+        return wm_batch, profile_timings
+
+    def _run_wm_warmup_batch(
+        self,
+        wm_batch: Any,
+        *,
+        optim_cfg: Any,
+        profile_timings: dict[str, float] | None,
+    ) -> dict[str, Any]:
+        return world_model_pretrain_step(
+            policy=self.policy,
+            world_model=self.world_model,
+            optimizer=self.world_model_optimizer,
+            batch=wm_batch,
+            device=self.device,
+            optim_cfg=optim_cfg,
+            profile_timings=profile_timings,
+            metrics_mode="loss_tensor",
+        )
+
+    @staticmethod
+    def _progress_status(
+        metrics: Mapping[str, Any],
+        *,
+        global_step: int,
+    ) -> str:
+        """Format loss and detached cosine diagnostics for every WM horizon."""
+
+        loss = float(metrics.get("loss", float("nan")))
+        one_step = float(metrics.get("one_step_cosine_similarity", float("nan")))
+        chunk = float(metrics.get("chunk_cosine_similarity", float("nan")))
+        rollout = float(metrics.get("rollout_cosine_similarity", float("nan")))
+        persistence = float(metrics.get("persistence_cosine_similarity", float("nan")))
+        grad_norm = float(metrics.get("grad_norm", float("nan")))
+        learning_rate = float(metrics.get("learning_rate", float("nan")))
+        return (
+            f"global_step={int(global_step)} loss={loss:.6f} "
+            f"grad_norm={grad_norm:.6f} lr={learning_rate:.3e} "
+            f"one_step_cos={one_step:.6f} chunk_cos={chunk:.6f} "
+            f"rollout_cos={rollout:.6f} persistence_cos={persistence:.6f}"
+        )
+
+    def _reduce_wm_warmup_metrics(
+        self,
+        metrics: Mapping[str, Any],
+    ) -> dict[str, float]:
+        """Average detached scalar diagnostics across ranks once per update."""
+
+        tensors = {
+            key: value.detach().float()
+            for key, value in metrics.items()
+            if isinstance(value, torch.Tensor) and value.numel() == 1
+        }
+        distributed = getattr(self, "distributed", None)
+        if distributed is not None and hasattr(distributed, "reduce_mean_dict"):
+            reduced = distributed.reduce_mean_dict(tensors)
+        else:
+            reduced = tensors
+        output = {key: float(value) for key, value in reduced.items()}
+        rank_diagnostic_keys = {
+            "grad_norm",
+            "parameter_norm",
+            "optimizer_exp_avg_norm",
+            "optimizer_exp_avg_sq_norm",
+            "optimizer_step",
+        }
+        rank_diagnostics = {
+            key: value for key, value in tensors.items() if key in rank_diagnostic_keys
+        }
+        if (
+            rank_diagnostics
+            and distributed is not None
+            and hasattr(distributed, "reduce_min_max_dict")
+        ):
+            output.update(distributed.reduce_min_max_dict(rank_diagnostics))
+        for key, value in metrics.items():
+            if key in output or isinstance(value, torch.Tensor):
+                continue
+            try:
+                output[key] = float(value)
+            except (TypeError, ValueError):
+                continue
+        return output
+
+    def _wm_warmup_progress(
+        self,
+        replay: Any,
+        *,
+        step_index: int,
+        total_steps: int,
+        batch_size: int,
+    ) -> tuple[int, int, str, str]:
+        """Map replay-update budgets onto epoch-style progress coordinates."""
+
+        cfg = getattr(self, "cfg", None)
+        replay_epochs = (
+            int(
+                OmegaConf.select(
+                    cfg,
+                    "training.warmup_replay_epochs",
+                    default=0,
+                )
+                or 0
+            )
+            if cfg is not None
+            else 0
+        )
+        count_fn = getattr(replay, "sampleable_window_count", None)
+        if replay_epochs <= 0 or not callable(count_fn):
+            return (
+                int(step_index) + 1,
+                int(total_steps),
+                "wm-warmup",
+                "update",
+            )
+        windows = int(count_fn())
+        world_size = max(1, int(getattr(self, "_world_size", 1)))
+        global_batch = int(batch_size) * world_size
+        steps_per_epoch = max(1, (windows + global_batch - 1) // global_batch)
+        epoch = min(replay_epochs, int(step_index) // steps_per_epoch + 1)
+        step_in_epoch = int(step_index) % steps_per_epoch + 1
+        return (
+            step_in_epoch,
+            steps_per_epoch,
+            f"dreamer-wm epoch {epoch}/{replay_epochs}",
+            "step",
+        )
+
+    def _offline_warmup_wm(
+        self,
+        replay,
+        *,
+        steps: int,
+        batch_size: int,
+        optim_cfg,
+        start_step: int = 0,
+    ) -> float:
+        self.world_model.train()
+        last = 0.0
+        profile_steps = self._wm_profile_steps()
+        start_i = int(start_step)
+        total_steps = int(steps)
+        prefetch_workers = self._wm_prefetch_workers()
+        seek_update = getattr(replay, "seek_update", None)
+        if callable(seek_update):
+            seek_update(start_i, batch_size=int(batch_size))
+
+        def should_profile(step_idx: int) -> bool:
+            return profile_steps < 0 or int(step_idx) < profile_steps
+
+        def consume_batch(
+            i: int,
+            wm_batch: Any | None,
+            profile_timings: dict[str, float] | None,
+            update_started_at: float,
+        ) -> None:
+            nonlocal last
+            progress_current, progress_total, progress_desc, progress_unit = (
+                self._wm_warmup_progress(
+                    replay,
+                    step_index=i,
+                    total_steps=total_steps,
+                    batch_size=batch_size,
+                )
+            )
+            if wm_batch is None:
+                self.console_progress(
+                    progress_current,
+                    progress_total,
+                    progress_desc,
+                    unit=progress_unit,
+                )
+                return
+            raw_metrics = self._run_wm_warmup_batch(
+                wm_batch,
+                optim_cfg=optim_cfg,
+                profile_timings=profile_timings,
+            )
+            learning_rate = self._wm_learning_rate()
+            if learning_rate is not None:
+                raw_metrics["learning_rate"] = torch.tensor(
+                    learning_rate,
+                    device=self.device,
+                    dtype=torch.float32,
+                )
+            diagnostics_every = self._wm_diagnostics_every()
+            if diagnostics_every > 0 and (i + 1) % diagnostics_every == 0:
+                raw_metrics.update(self._wm_optimizer_diagnostics())
+            metrics = self._reduce_wm_warmup_metrics(raw_metrics)
+            last = float(metrics.get("loss", 0.0))
+            if profile_timings is not None:
+                profile_timings["total"] = time.perf_counter() - update_started_at
+                self._record_wm_profile(
+                    profile_timings,
+                    step=i,
+                    total_steps=total_steps,
+                )
+            if i % self._replay_warmup_log_every() == 0:
+                log_metrics = {"train/wm_warmup_loss": last}
+                for name in metrics:
+                    if name == "loss":
+                        continue
+                    log_metrics[f"train/wm_{name}"] = metrics[name]
+                self._log_replay_warmup_metrics(log_metrics, step=i)
+                cosine_suffix = (
+                    f" cos={metrics['one_step_cosine_similarity']:.4f}"
+                    if "one_step_cosine_similarity" in metrics
+                    else ""
+                )
+                diagnostic_parts = []
+                for key, label, format_spec in (
+                    ("grad_norm", "grad", ".4f"),
+                    ("learning_rate", "lr", ".3e"),
+                    ("parameter_norm", "param", ".3e"),
+                    ("optimizer_exp_avg_norm", "adam_m1", ".3e"),
+                    ("optimizer_exp_avg_sq_norm", "adam_m2", ".3e"),
+                    ("optimizer_step", "opt_step", ".0f"),
+                    ("grad_norm_rank_min", "grad_min", ".3e"),
+                    ("grad_norm_rank_max", "grad_max", ".3e"),
+                    ("parameter_norm_rank_min", "param_min", ".3e"),
+                    ("parameter_norm_rank_max", "param_max", ".3e"),
+                    ("optimizer_step_rank_min", "opt_min", ".0f"),
+                    ("optimizer_step_rank_max", "opt_max", ".0f"),
+                    ("next_latent_mse", "one_mse", ".3e"),
+                    ("rollout_loss", "rollout_loss", ".3e"),
+                    ("hidden_pred_norm", "pred_norm", ".3e"),
+                    ("hidden_target_norm", "target_norm", ".3e"),
+                ):
+                    if key in metrics:
+                        diagnostic_parts.append(
+                            f"{label}={format(float(metrics[key]), format_spec)}"
+                        )
+                diagnostic_suffix = " " + " ".join(diagnostic_parts) if diagnostic_parts else ""
+                self._print_pipeline_event(
+                    f"[pipeline][wm-warmup] step={i}/{total_steps} loss={last:.4f}"
+                    f"{diagnostic_suffix}{cosine_suffix}"
+                )
+            self.console_progress(
+                progress_current,
+                progress_total,
+                progress_desc,
+                unit=progress_unit,
+                status=self._progress_status(metrics, global_step=i + 1),
+            )
+
+        if prefetch_workers > 0 and start_i < total_steps:
+            with ThreadPoolExecutor(max_workers=prefetch_workers) as executor:
+                future = executor.submit(
+                    self._sample_wm_pretrain_batch,
+                    replay,
+                    int(batch_size),
+                    profile=should_profile(start_i),
+                )
+                for i in range(start_i, total_steps):
+                    update_started_at = time.perf_counter()
+                    wait_started_at = time.perf_counter()
+                    wm_batch, profile_timings = future.result()
+                    if profile_timings is not None:
+                        profile_timings["data_wait"] = time.perf_counter() - wait_started_at
+                    if i + 1 < total_steps:
+                        future = executor.submit(
+                            self._sample_wm_pretrain_batch,
+                            replay,
+                            int(batch_size),
+                            profile=should_profile(i + 1),
+                        )
+                    consume_batch(
+                        i,
+                        wm_batch,
+                        profile_timings,
+                        update_started_at,
+                    )
+            return float(last)
+
+        for i in range(start_i, total_steps):
+            update_started_at = time.perf_counter()
+            wm_batch, profile_timings = self._sample_wm_pretrain_batch(
+                replay,
+                int(batch_size),
+                profile=should_profile(i),
+            )
+            if profile_timings is not None:
+                profile_timings["data_wait"] = time.perf_counter() - update_started_at
+            consume_batch(
+                i,
+                wm_batch,
+                profile_timings,
+                update_started_at,
+            )
+        return float(last)
+
+    def _offline_warmup_classifier(
+        self,
+        replay,
+        *,
+        steps: int,
+        batch_size: int,
+        early_neg_stride: int,
+        grad_clip: float,
+        loss_type: str | None = None,
+        sampling_protocol: str = "lumos",
+        balance_batches: bool = False,
+        log_step_offset: int = 0,
+        start_step: int = 0,
+        calibrate: bool = False,
+        min_val_f1: float = 0.0,
+        val_num_batches: int = 4,
+        val_thresh_min: float = 0.05,
+        val_thresh_max: float = 0.95,
+        val_thresh_steps: int = 19,
+    ) -> float:
+        last_acc = 0.0
+        last_metrics = {"loss": 0.0, "acc": 0.0, "f1": 0.0, "pos_frac": 0.0}
+        for i in range(int(start_step), int(steps)):
+            m = online_classifier_update_step(
+                classifier=self.classifier,
+                optimizer=self.classifier_optimizer,
+                replay=replay,
+                device=self.device,
+                batch_size=batch_size,
+                early_neg_stride=early_neg_stride,
+                grad_clip=grad_clip,
+                loss_type=loss_type,
+                sampling_protocol=sampling_protocol,
+                balance_batches=balance_batches,
+            )
+            last_acc = float(m["acc"])
+            last_metrics = {
+                "loss": float(m["loss"]),
+                "acc": last_acc,
+                "f1": float(m.get("f1", 0.0)),
+                "pos_frac": float(m.get("pos_frac", 0.0)),
+            }
+            if i % self._replay_warmup_log_every() == 0:
+                self._log_replay_warmup_metrics(
+                    {
+                        "train/classifier_warmup_loss": float(m["loss"]),
+                        "train/classifier_warmup_acc": last_acc,
+                        "train/classifier_warmup_f1": float(m.get("f1", 0.0)),
+                        "train/classifier_warmup_pos_frac": float(m.get("pos_frac", 0.0)),
+                    },
+                    step=int(log_step_offset) + i,
+                )
+                self._print_pipeline_event(
+                    f"[pipeline][cls-warmup] step={i}/{steps} "
+                    f"loss={float(m['loss']):.4f} acc={last_acc:.3f} "
+                    f"f1={float(m.get('f1', 0.0)):.3f} "
+                    f"pos={float(m.get('pos_frac', 0.0)):.3f}"
+                )
+            self.console_progress(i + 1, int(steps), "classifier-warmup", unit="update")
+        # B1/B2: optional held-out threshold calibration + warmup val gate.
+        # Both are OFF by default (calibrate=False, min_val_f1=0.0), so the
+        # default warmup path is numerically unchanged — no extra replay draws,
+        # no threshold mutation.
+        if calibrate or float(min_val_f1) > 0.0:
+            probs, ys = self._collect_classifier_val_probs(
+                replay,
+                batch_size=batch_size,
+                early_neg_stride=early_neg_stride,
+                num_batches=val_num_batches,
+                sampling_protocol=sampling_protocol,
+                balance_batches=balance_batches,
+            )
+            val_step = int(log_step_offset) + int(steps)
+            if calibrate:
+                grid = np.linspace(
+                    float(val_thresh_min), float(val_thresh_max), int(val_thresh_steps)
+                )
+                swept = sweep_threshold_metrics(probs, ys, grid, "warmup_val")
+                self.classifier_threshold = float(swept["best_thresh"])
+                self._log_replay_warmup_metrics(
+                    {
+                        "eval/classifier_warmup_best_f1": float(swept["best_f1"]),
+                        "eval/classifier_warmup_best_thresh": float(swept["best_thresh"]),
+                    },
+                    step=val_step,
+                )
+            if float(min_val_f1) > 0.0:
+                # Val F1 at the ACTIVE threshold (the freshly calibrated best if
+                # calibrate ran, else the config default). Reuse sweep_threshold_metrics
+                # with a single-point grid to avoid re-deriving f1_score here.
+                gate = sweep_threshold_metrics(
+                    probs,
+                    ys,
+                    np.asarray([float(self.classifier_threshold)]),
+                    "warmup_val_gate",
+                )
+                val_f1 = float(gate["best_f1"])
+                self._log_replay_warmup_metrics(
+                    {"eval/classifier_warmup_val_f1": val_f1}, step=val_step
+                )
+                if val_f1 < float(min_val_f1):
+                    raise RuntimeError(
+                        f"warmup classifier held-out val F1 {val_f1:.3f} < "
+                        f"warmup_min_val_f1 {float(min_val_f1):.3f} "
+                        f"(threshold={float(self.classifier_threshold):.3f}); "
+                        "raise data/steps or lower the gate."
+                    )
+        self._last_classifier_warmup_metrics = last_metrics
+        return last_acc
+
+    def _collect_classifier_val_probs(
+        self,
+        replay,
+        *,
+        batch_size: int,
+        early_neg_stride: int,
+        num_batches: int,
+        sampling_protocol: str = "lumos",
+        balance_batches: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Forward-only held-out pass mirroring ``online_classifier_update_step``.
+
+        Samples classifier windows from ``replay`` with the same window/chunk/
+        conditioning contract used during training, runs the frozen classifier in
+        eval mode, and returns ``(P(success), labels)`` as numpy arrays.
+
+        NOTE: ``replay.sample_classifier_windows`` draws random windows, so this
+        is a *sampled* evaluation set, not a disjoint train/val split. A strict
+        held-out partition would need replay-side index partitioning (TODO: add a
+        `held_out=True` sampling mode on OnlineReplay so calibration never sees
+        windows the warmup trained on).
+        """
+        module = _unwrap(self.classifier)
+        cfg = module.cfg
+        self.classifier.eval()
+        module.eval()
+        probs_all: list[np.ndarray] = []
+        ys_all: list[np.ndarray] = []
+        for _ in range(max(1, int(num_batches))):
+            cls_batch = replay.sample_classifier_windows(
+                int(batch_size),
+                window=int(cfg.window),
+                chunk_size=int(getattr(cfg, "chunk_size", 1)),
+                chunk_pool=str(getattr(cfg, "chunk_pool", "last")),
+                early_neg_stride=int(early_neg_stride),
+                sampling_protocol=str(sampling_protocol),
+                balance_batches=bool(balance_batches),
+            )
+            windows = cls_batch["windows"].to(self.device, non_blocking=True)
+            labels = cls_batch["labels"].to(self.device, non_blocking=True)
+            task_ids = cls_batch.get("task_ids")
+            forward_kwargs: dict[str, Any] = {}
+            if bool(getattr(module, "supports_proprio_conditioning", False)):
+                forward_kwargs["proprio"] = cls_batch["proprio"].to(self.device, non_blocking=True)
+            if bool(getattr(module, "supports_language_conditioning", False)):
+                forward_kwargs["lang_emb"] = cls_batch["lang_emb"].to(
+                    self.device, non_blocking=True
+                )
+            with torch.no_grad():
+                if bool(getattr(module, "supports_task_conditioning", False)) and isinstance(
+                    task_ids, torch.Tensor
+                ):
+                    logits = self.classifier(
+                        windows,
+                        task_ids=task_ids.to(self.device, non_blocking=True),
+                        **forward_kwargs,
+                    )
+                else:
+                    logits = self.classifier(windows, **forward_kwargs)
+                probs = _success_probabilities_from_logits(logits)
+            probs_all.append(probs.detach().cpu().numpy())
+            ys_all.append(labels.detach().cpu().numpy())
+        return np.concatenate(probs_all), np.concatenate(ys_all)
+
+    def _warmup_calibration_kwargs(self) -> dict[str, Any]:
+        """Read the (default-off) B1/B2 calibration + gate knobs from config."""
+        cfg = getattr(self, "cfg", None)
+
+        def sel(key: str, default):
+            if cfg is None:
+                return default
+            value = OmegaConf.select(cfg, key, default=default)
+            return default if value is None else value
+
+        return {
+            "calibrate": bool(sel("algorithm.lumos.calibrate_threshold", False)),
+            "min_val_f1": float(sel("algorithm.lumos.warmup_min_val_f1", 0.0)),
+            "val_num_batches": int(sel("algorithm.lumos.calibrate_val_batches", 4)),
+            "val_thresh_min": float(sel("algorithm.lumos.calibrate_thresh_min", 0.05)),
+            "val_thresh_max": float(sel("algorithm.lumos.calibrate_thresh_max", 0.95)),
+            "val_thresh_steps": int(sel("algorithm.lumos.calibrate_thresh_steps", 19)),
+        }
+
+    @staticmethod
+    def _steps_for_replay_epochs(replay, *, replay_epochs: int, batch_size: int) -> int:
+        epochs = int(replay_epochs)
+        if epochs <= 0:
+            return 0
+        windows = int(replay.sampleable_window_count())
+        if windows <= 0:
+            return 0
+        return int(epochs) * max(1, (windows + int(batch_size) - 1) // int(batch_size))
+
+    @staticmethod
+    def _steps_for_classifier_replay_epochs(
+        replay,
+        *,
+        replay_epochs: int,
+        batch_size: int,
+        window: int,
+        chunk_size: int,
+    ) -> int:
+        epochs = int(replay_epochs)
+        if epochs <= 0:
+            return 0
+        windows = int(
+            replay.classifier_window_count(
+                window=int(window),
+                chunk_size=int(chunk_size),
+            )
+        )
+        if windows <= 0:
+            return 0
+        return epochs * max(1, (windows + int(batch_size) - 1) // int(batch_size))
+
+    @staticmethod
+    def _global_batch_size(*, per_rank_batch_size: int, world_size: int) -> int:
+        """Return the effective DDP batch size used for replay epoch budgets."""
+
+        local_batch = int(per_rank_batch_size)
+        if local_batch <= 0:
+            raise ValueError("per_rank_batch_size must be positive")
+        return local_batch * max(1, int(world_size))
+
+    @staticmethod
+    def _per_rank_batch_size(
+        *,
+        configured_batch_size: int,
+        global_batch_size: int | None,
+        world_size: int,
+        gradient_accumulate_every: int,
+    ) -> int:
+        """Resolve a Hydra global batch into the replay batch sampled per rank."""
+
+        configured = int(configured_batch_size)
+        if configured <= 0:
+            raise ValueError("dataloader.batch_size must be positive")
+        if global_batch_size is None:
+            return configured
+        accumulation = int(gradient_accumulate_every)
+        if accumulation != 1:
+            raise ValueError(
+                "WorldModelTrainingRunner does not implement gradient accumulation; "
+                "training.gradient_accumulate_every must be 1 when "
+                "training.global_batch_size is set"
+            )
+        processes = max(1, int(world_size))
+        global_batch = int(global_batch_size)
+        if global_batch <= 0 or global_batch % processes != 0:
+            raise ValueError(
+                "training.global_batch_size must be positive and divisible by "
+                f"world_size ({global_batch} % {processes})"
+            )
+        return global_batch // processes
+
+    @classmethod
+    def _resolve_warmup_steps(
+        cls,
+        replay,
+        *,
+        wm_steps: int,
+        cls_steps: int,
+        replay_epochs: int,
+        replay_max_steps: int,
+        wm_batch_size: int,
+        cls_batch_size: int,
+        cls_window: int,
+        cls_chunk_size: int,
+    ) -> tuple[int, int]:
+        epoch_count = int(replay_epochs)
+        if epoch_count <= 0:
+            return int(wm_steps), int(cls_steps)
+        resolved_wm = (
+            cls._steps_for_replay_epochs(
+                replay,
+                replay_epochs=epoch_count,
+                batch_size=int(wm_batch_size),
+            )
+            if int(wm_steps) > 0
+            else 0
+        )
+        resolved_cls = (
+            cls._steps_for_classifier_replay_epochs(
+                replay,
+                replay_epochs=epoch_count,
+                batch_size=int(cls_batch_size),
+                window=int(cls_window),
+                chunk_size=int(cls_chunk_size),
+            )
+            if int(cls_steps) > 0
+            else 0
+        )
+        max_steps = int(replay_max_steps)
+        if max_steps > 0:
+            resolved_wm = min(resolved_wm, max_steps)
+            resolved_cls = min(resolved_cls, max_steps)
+        return resolved_wm, resolved_cls
+
+    def _offline_warmup_alternating(
+        self,
+        replay,
+        *,
+        wm_steps: int,
+        cls_steps: int,
+        wm_batch_size: int,
+        cls_batch_size: int,
+        optim_cfg,
+        early_neg_stride: int,
+        grad_clip: float,
+        loss_type: str | None = None,
+        sampling_protocol: str = "lumos",
+        balance_batches: bool = False,
+    ) -> tuple[float, float]:
+        self.world_model.train()
+        wm_last = 0.0
+        cls_last = 0.0
+        cls_loss = 0.0
+        cls_f1 = 0.0
+        cls_pos_frac = 0.0
+        total = max(int(wm_steps), int(cls_steps))
+        for i in range(total):
+            if i < int(wm_steps):
+                wm_batch = self._build_wm_pretrain_batch(
+                    replay.sample(wm_batch_size, include_images=False)
+                )
+                if wm_batch is not None:
+                    wm_metrics = world_model_pretrain_step(
+                        policy=self.policy,
+                        world_model=self.world_model,
+                        optimizer=self.world_model_optimizer,
+                        batch=wm_batch,
+                        device=self.device,
+                        optim_cfg=optim_cfg,
+                    )
+                    wm_last = float(wm_metrics.get("loss", 0.0))
+            if i < int(cls_steps):
+                cls_metrics = online_classifier_update_step(
+                    classifier=self.classifier,
+                    optimizer=self.classifier_optimizer,
+                    replay=replay,
+                    device=self.device,
+                    batch_size=cls_batch_size,
+                    early_neg_stride=early_neg_stride,
+                    grad_clip=grad_clip,
+                    loss_type=loss_type,
+                    sampling_protocol=sampling_protocol,
+                    balance_batches=balance_batches,
+                )
+                cls_loss = float(cls_metrics.get("loss", 0.0))
+                cls_last = float(cls_metrics["acc"])
+                cls_f1 = float(cls_metrics.get("f1", 0.0))
+                cls_pos_frac = float(cls_metrics.get("pos_frac", 0.0))
+            if i % self._replay_warmup_log_every() == 0:
+                self._log_replay_warmup_metrics(
+                    {
+                        "train/wm_warmup_loss": wm_last,
+                        "train/classifier_warmup_loss": cls_loss,
+                        "train/classifier_warmup_acc": cls_last,
+                        "train/classifier_warmup_f1": cls_f1,
+                        "train/classifier_warmup_pos_frac": cls_pos_frac,
+                    },
+                    step=i,
+                )
+                print(
+                    f"[pipeline][replay-warmup] learner_update={i}/{total} "
+                    f"wm_loss={wm_last:.4f} cls_loss={cls_loss:.4f} "
+                    f"cls_acc={cls_last:.3f} cls_f1={cls_f1:.3f} "
+                    f"cls_pos={cls_pos_frac:.3f}",
+                    flush=True,
+                )
+            self.console_progress(i + 1, total, "replay-warmup", unit="update")
+        return wm_last, cls_last
+
+    # ------------------------------------------------------------ split ckpts
+    def _wm_warmup_ckpt(self) -> str:
+        return str(self.get_checkpoint_path())
+
+    def _cls_warmup_ckpt(self) -> str:
+        return str(self.get_checkpoint_path())
+
+    def _wm_warmup_hf_dir(self) -> str:
+        return str(self.get_hf_checkpoint_path())
+
+    def _cls_warmup_hf_dir(self) -> str:
+        return str(self.get_hf_checkpoint_path())
+
+    def _warmup_progress_dir(self) -> Path:
+        return self.get_checkpoint_dir() / "warmup_progress"
+
+    def _warmup_topk_dir(self, component: str) -> Path:
+        del component
+        return self.get_checkpoint_dir()
+
+    def _warmup_checkpoint_candidates(self, name: str) -> tuple[Path, ...]:
+        return (
+            self.get_checkpoint_path(),
+            self.get_checkpoint_dir() / str(name),
+            self.get_compat_checkpoint_dir() / str(name),
+        )
+
+    def _existing_warmup_checkpoint(self, name: str) -> Path | None:
+        expected_component = "wm" if str(name).startswith("wm_") else "classifier"
+        for path in self._warmup_checkpoint_candidates(name):
+            if not path.is_file():
+                continue
+            if path == self.get_checkpoint_path():
+                payload = load_runner_payload(path)
+                component = payload.get("component")
+                if component is None:
+                    state_dicts = payload.get("state_dicts", payload)
+                    component_key = "world_model" if expected_component == "wm" else "classifier"
+                    if not isinstance(state_dicts, Mapping) or component_key not in state_dicts:
+                        continue
+                elif str(component) != expected_component:
+                    continue
+            return path
+        return None
+
+    def _existing_warmup_hf_dir(self, name: str) -> Path | None:
+        candidates = (
+            self.get_hf_checkpoint_path(),
+            *self._warmup_checkpoint_candidates(name),
+        )
+        return next((path for path in candidates if path.is_dir()), None)
+
+    def _latest_warmup_progress_path(self, component: str) -> Path | None:
+        latest_step = -1
+        latest_path: Path | None = None
+        progress_dirs = (
+            self._warmup_progress_dir(),
+            self.get_compat_checkpoint_dir() / "warmup_progress",
+        )
+        for progress_dir in progress_dirs:
+            if not progress_dir.is_dir():
+                continue
+            for path in progress_dir.glob(f"{component}_step_*.ckpt"):
+                match = _WARMUP_PROGRESS_RE.match(path.name)
+                if match is None or match.group("component") != component:
+                    continue
+                step = int(match.group("step"))
+                if step > latest_step:
+                    latest_step = step
+                    latest_path = path
+        return latest_path
+
+    def _make_warmup_topk_manager(
+        self, *, component: str, k: int | None = None
+    ) -> TopKCheckpointManager | None:
+        topk_cfg = OmegaConf.select(self.cfg, "checkpoint.topk", default=None)
+        configured_k = (
+            OmegaConf.select(topk_cfg, "k", default=None) if topk_cfg is not None else None
+        )
+        k_value = int(k) if k is not None else int(configured_k or 0)
+        if k_value <= 0:
+            return None
+        if component == "wm":
+            defaults = {"monitor_key": "loss", "metric_name": "loss", "mode": "min"}
+        elif component == "classifier":
+            defaults = {"monitor_key": "f1", "metric_name": "f1", "mode": "max"}
+        else:
+            raise ValueError(f"unknown warmup component: {component}")
+        if topk_cfg is not None:
+            configured = dict(OmegaConf.to_container(topk_cfg, resolve=True))
+            defaults.update(
+                {
+                    key: configured[key]
+                    for key in ("monitor_key", "metric_name", "mode")
+                    if key in configured
+                }
+            )
+        manager = TopKCheckpointManager(
+            save_dir=str(self.get_checkpoint_dir()),
+            k=k_value,
+            **defaults,
+        )
+        self._restore_warmup_topk_manager(manager)
+        return manager
+
+    @staticmethod
+    def _restore_warmup_topk_manager(manager: TopKCheckpointManager) -> None:
+        save_dir = Path(manager.save_dir)
+        if not save_dir.is_dir():
+            return
+        candidates: list[tuple[Path, float]] = []
+        invalid: list[Path] = []
+        metric_marker = f"-{manager.metric_name}="
+        for path in sorted(save_dir.glob("epoch=*.ckpt")):
+            if metric_marker not in path.name:
+                continue
+            payload = load_runner_payload(path)
+            metrics = payload.get("metrics", {})
+            value = metrics.get(manager.monitor_key) if isinstance(metrics, dict) else None
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                candidates.append((path, float(value)))
+            else:
+                invalid.append(path)
+        reverse = manager.mode == "max"
+        ranked = sorted(candidates, key=lambda item: (item[1], item[0].name), reverse=reverse)
+        keep = ranked[: manager.k]
+        remove = [path for path, _value in ranked[manager.k :]] + invalid
+        manager.path_value_map = {str(path): value for path, value in keep}
+        for path in remove:
+            path.unlink(missing_ok=True)
+
+    @staticmethod
+    def _save_warmup_topk(
+        latest_path: Path,
+        *,
+        metrics: dict[str, float],
+        epoch: int,
+        topk_manager: TopKCheckpointManager | None,
+    ) -> None:
+        if topk_manager is None:
+            return
+        if topk_manager.monitor_key not in metrics:
+            return
+        data = {"epoch": int(epoch)}
+        data.update({key: float(value) for key, value in metrics.items()})
+        path = topk_manager.get_ckpt_path(data)
+        if path is not None:
+            _materialize_checkpoint_copy(latest_path, Path(path))
+
+    def _gather_checkpoint_rng(self) -> list[dict[str, Any]]:
+        local_state = capture_rng_state()
+        distributed = getattr(self, "distributed", None)
+        gather = None if distributed is None else getattr(distributed, "all_gather_objects", None)
+        return gather(local_state) if callable(gather) else [local_state]
+
+    def _save_wm_warmup_checkpoint(
+        self,
+        *,
+        step: int,
+        epoch: int,
+        complete: bool,
+        metrics: dict[str, float],
+        steps_per_epoch: int,
+        total_steps: int,
+        topk_manager: TopKCheckpointManager | None = None,
+    ) -> Path:
+        path = Path(self._wm_warmup_ckpt())
+        if not self.checkpoint_save_torch():
+            return path
+        payload = {
+            "format_version": CHECKPOINT_FORMAT_VERSION,
+            "component": "wm",
+            "global_step": int(self.global_step),
+            "warmup_epoch": int(epoch),
+            "warmup_step": int(step),
+            "warmup_steps_per_epoch": int(steps_per_epoch),
+            "warmup_total_steps": int(total_steps),
+            "complete": bool(complete),
+            "metrics": {key: float(value) for key, value in metrics.items()},
+            "state_dicts": {
+                "world_model": _cpu_tree(_unwrap(self.world_model).state_dict()),
+                "world_model_optimizer": _cpu_tree(self.world_model_optimizer.state_dict()),
+            },
+            "rng_by_rank": self._gather_checkpoint_rng(),
+        }
+        if self.is_main_process:
+            _atomic_torch_save(payload, path)
+            self._save_warmup_topk(
+                path,
+                metrics=metrics,
+                epoch=int(epoch),
+                topk_manager=topk_manager,
+            )
+        return path
+
+    def _save_cls_warmup_checkpoint(
+        self,
+        *,
+        step: int,
+        epoch: int,
+        complete: bool,
+        metrics: dict[str, float],
+        steps_per_epoch: int,
+        total_steps: int,
+        topk_manager: TopKCheckpointManager | None = None,
+    ) -> Path:
+        path = Path(self._cls_warmup_ckpt())
+        if not self.checkpoint_save_torch():
+            return path
+        payload = {
+            "format_version": CHECKPOINT_FORMAT_VERSION,
+            "component": "classifier",
+            "global_step": int(self.global_step),
+            "warmup_epoch": int(epoch),
+            "warmup_step": int(step),
+            "warmup_steps_per_epoch": int(steps_per_epoch),
+            "warmup_total_steps": int(total_steps),
+            "complete": bool(complete),
+            "metrics": {key: float(value) for key, value in metrics.items()},
+            "state_dicts": {
+                "classifier": _cpu_tree(_unwrap(self.classifier).state_dict()),
+                "classifier_optimizer": _cpu_tree(self.classifier_optimizer.state_dict()),
+            },
+            "rng_by_rank": self._gather_checkpoint_rng(),
+            "classifier_threshold": float(self.classifier_threshold),
+            "best_metric": getattr(self, "best_classifier_f1", None),
+            "best_checkpoint_path": getattr(self, "best_classifier_ckpt_path", None),
+        }
+        if self.is_main_process:
+            _atomic_torch_save(payload, path)
+            self._save_warmup_topk(
+                path,
+                metrics=metrics,
+                epoch=int(epoch),
+                topk_manager=topk_manager,
+            )
+        return path
+
+    def _restore_warmup_rng(self, payload: dict[str, Any], *, strict: bool) -> None:
+        version = payload.get("format_version")
+        distributed = getattr(self, "distributed", None)
+        rank = 0 if distributed is None else int(getattr(distributed, "rank", 0))
+        state = select_rank_rng_state(payload.get("rng_by_rank", payload.get("rng")), rank)
+        if isinstance(version, int) and version >= CHECKPOINT_FORMAT_VERSION:
+            if state is None:
+                raise RuntimeError("format v2 warmup checkpoint is missing rng_by_rank")
+            restore_rng_state(state, strict=True)
+            return
+        if state is not None:
+            restore_rng_state(state, strict=False)
+            return
+        if not strict:
+            return
+        global _LEGACY_WARMUP_RNG_WARNING_EMITTED
+        if not _LEGACY_WARMUP_RNG_WARNING_EMITTED:
+            with _LEGACY_WARMUP_RNG_WARNING_LOCK:
+                if not _LEGACY_WARMUP_RNG_WARNING_EMITTED:
+                    warnings.warn(
+                        "legacy warmup checkpoint has no RNG state; continuing from current seed",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+                    _LEGACY_WARMUP_RNG_WARNING_EMITTED = True
+
+    @staticmethod
+    def _validate_v2_warmup_progress(
+        payload: dict[str, Any],
+        *,
+        component: str,
+    ) -> dict[str, int | bool]:
+        required = {
+            "component",
+            "warmup_epoch",
+            "warmup_step",
+            "warmup_steps_per_epoch",
+            "warmup_total_steps",
+            "complete",
+            "state_dicts",
+            "rng_by_rank",
+        }
+        missing = sorted(required.difference(payload))
+        if missing:
+            raise RuntimeError(f"format v2 {component} warmup checkpoint is missing {missing}")
+        if payload["component"] != component:
+            raise RuntimeError(
+                f"warmup checkpoint component mismatch: {payload['component']!r} != {component!r}"
+            )
+        epoch = int(payload["warmup_epoch"])
+        step = int(payload["warmup_step"])
+        steps_per_epoch = int(payload["warmup_steps_per_epoch"])
+        total_steps = int(payload["warmup_total_steps"])
+        if steps_per_epoch <= 0 or total_steps <= 0:
+            raise RuntimeError(f"format v2 {component} warmup geometry must be positive")
+        complete = bool(payload["complete"])
+        expected_epoch = int(total_steps) // int(steps_per_epoch) if complete else epoch
+        if epoch != expected_epoch:
+            raise RuntimeError(
+                f"format v2 {component} warmup epoch mismatch: "
+                f"warmup_epoch={epoch}, expected {expected_epoch}"
+            )
+        expected_step = int(total_steps) if complete else epoch * int(steps_per_epoch)
+        if step != expected_step:
+            raise RuntimeError(
+                f"format v2 {component} warmup progress mismatch: "
+                f"warmup_step={step}, expected {expected_step} from warmup_epoch={epoch}"
+            )
+        return {"epoch": epoch, "step": step, "complete": complete}
+
+    def _load_wm_warmup_checkpoint(
+        self,
+        path: str | Path,
+        *,
+        strict: bool,
+        restore_rng: bool = True,
+    ) -> dict[str, int | bool]:
+        payload = load_runner_payload(path)
+        version = payload.get("format_version")
+        is_v2 = isinstance(version, int) and version >= CHECKPOINT_FORMAT_VERSION
+        state_dicts = payload.get("state_dicts")
+        if is_v2:
+            progress = self._validate_v2_warmup_progress(
+                payload,
+                component="wm",
+            )
+            if not isinstance(state_dicts, dict) or "world_model" not in state_dicts:
+                raise RuntimeError("format v2 WM warmup checkpoint is missing world_model state")
+            if "world_model_optimizer" not in state_dicts:
+                raise RuntimeError(
+                    "format v2 WM warmup checkpoint is missing world_model_optimizer state"
+                )
+            _unwrap(self.world_model).load_state_dict(state_dicts["world_model"])
+            self.world_model_optimizer.load_state_dict(state_dicts["world_model_optimizer"])
+        else:
+            progress = {
+                "epoch": int(payload.get("warmup_epoch", 0)),
+                "step": int(payload.get("warmup_step", 0)),
+                "complete": bool(payload.get("complete", False)),
+            }
+            if "world_model" not in payload:
+                raise RuntimeError("legacy WM warmup checkpoint is missing world_model state")
+            if strict and "world_model_optimizer" not in payload:
+                raise RuntimeError("legacy WM warmup checkpoint is missing world_model_optimizer")
+            _unwrap(self.world_model).load_state_dict(payload["world_model"])
+            if "world_model_optimizer" in payload:
+                self.world_model_optimizer.load_state_dict(payload["world_model_optimizer"])
+        if restore_rng:
+            self._restore_warmup_rng(payload, strict=strict)
+        return progress
+
+    def _load_cls_warmup_checkpoint(
+        self,
+        path: str | Path,
+        *,
+        strict: bool,
+        restore_rng: bool = True,
+    ) -> dict[str, int | bool]:
+        payload = load_runner_payload(path)
+        version = payload.get("format_version")
+        is_v2 = isinstance(version, int) and version >= CHECKPOINT_FORMAT_VERSION
+        state_dicts = payload.get("state_dicts")
+        if is_v2:
+            progress = self._validate_v2_warmup_progress(
+                payload,
+                component="classifier",
+            )
+            if not isinstance(state_dicts, dict) or "classifier" not in state_dicts:
+                raise RuntimeError("format v2 classifier warmup checkpoint is missing classifier")
+            if "classifier_optimizer" not in state_dicts:
+                raise RuntimeError(
+                    "format v2 classifier warmup checkpoint is missing classifier_optimizer"
+                )
+            _unwrap(self.classifier).load_state_dict(state_dicts["classifier"])
+            self.classifier_optimizer.load_state_dict(state_dicts["classifier_optimizer"])
+        else:
+            progress = {
+                "epoch": int(payload.get("warmup_epoch", 0)),
+                "step": int(payload.get("warmup_step", 0)),
+                "complete": bool(payload.get("complete", False)),
+            }
+            if "classifier" not in payload:
+                raise RuntimeError(
+                    "legacy classifier warmup checkpoint is missing classifier state"
+                )
+            if strict and "classifier_optimizer" not in payload:
+                raise RuntimeError(
+                    "legacy classifier warmup checkpoint is missing classifier_optimizer"
+                )
+            _unwrap(self.classifier).load_state_dict(payload["classifier"])
+            if "classifier_optimizer" in payload:
+                self.classifier_optimizer.load_state_dict(payload["classifier_optimizer"])
+        if "classifier_threshold" in payload:
+            self.classifier_threshold = float(payload["classifier_threshold"])
+        if payload.get("best_metric") is not None:
+            self.best_classifier_f1 = float(payload["best_metric"])
+        if payload.get("best_checkpoint_path") is not None:
+            self.best_classifier_ckpt_path = str(payload["best_checkpoint_path"])
+        if restore_rng:
+            self._restore_warmup_rng(payload, strict=strict)
+        return progress
+
+    def _load_latest_wm_warmup_progress(
+        self, *, steps_per_epoch: int | None = None, total_steps: int | None = None
+    ) -> dict[str, int | bool]:
+        del total_steps
+        path = self._existing_warmup_checkpoint("wm_warmup.ckpt")
+        if path is None:
+            path = self._latest_warmup_progress_path("wm")
+        if path is None:
+            raise RuntimeError("training.resume requested but no WM warmup checkpoint exists")
+        progress = self._load_wm_warmup_checkpoint(
+            path,
+            strict=True,
+        )
+        if int(progress["epoch"]) <= 0 and int(progress["step"]) > 0:
+            progress["epoch"] = (
+                int(progress["step"]) // int(steps_per_epoch) if steps_per_epoch else 0
+            )
+        self._print_pipeline_event(
+            f"[pipeline][wm-warmup] resumed progress step={progress['step']} from {path}"
+        )
+        return progress
+
+    def _load_latest_cls_warmup_progress(
+        self, *, steps_per_epoch: int | None = None, total_steps: int | None = None
+    ) -> dict[str, int | bool]:
+        del total_steps
+        path = self._existing_warmup_checkpoint("classifier_warmup.ckpt")
+        if path is None:
+            path = self._latest_warmup_progress_path("classifier")
+        if path is None:
+            raise RuntimeError(
+                "training.resume requested but no classifier warmup checkpoint exists"
+            )
+        progress = self._load_cls_warmup_checkpoint(
+            path,
+            strict=True,
+        )
+        if int(progress["epoch"]) <= 0 and int(progress["step"]) > 0:
+            progress["epoch"] = (
+                int(progress["step"]) // int(steps_per_epoch) if steps_per_epoch else 0
+            )
+        self._print_pipeline_event(
+            f"[pipeline][classifier-warmup] resumed progress step={progress['step']} from {path}"
+        )
+        return progress
+
+    def _save_wm_warmup(
+        self,
+        *,
+        completed_steps: int,
+        completed_epochs: int = 1,
+        metrics: dict[str, float] | None = None,
+        topk_manager: TopKCheckpointManager | None = None,
+        steps_per_epoch: int | None = None,
+    ) -> None:
+        completed_steps = int(completed_steps)
+        if completed_steps <= 0:
+            raise ValueError(f"completed WM warmup steps must be positive, got {completed_steps}")
+        if self.checkpoint_save_torch():
+            self._save_wm_warmup_checkpoint(
+                step=completed_steps,
+                epoch=completed_epochs,
+                complete=True,
+                metrics=dict(metrics or {}),
+                steps_per_epoch=int(steps_per_epoch or completed_steps),
+                total_steps=completed_steps,
+                topk_manager=topk_manager,
+            )
+        if self.checkpoint_save_hf() and self.is_main_process:
+            wm_cfg = OmegaConf.to_container(OmegaConf.select(self.cfg, "world_model"), resolve=True)
+            target = wm_cfg.pop("_target_")
+            save_module_pretrained(
+                _unwrap(self.world_model), self._wm_warmup_hf_dir(), target=target, init_args=wm_cfg
+            )
+
+    def _save_cls_warmup(
+        self,
+        *,
+        completed_steps: int = 0,
+        completed_epochs: int = 1,
+        metrics: dict[str, float] | None = None,
+        topk_manager: TopKCheckpointManager | None = None,
+        steps_per_epoch: int | None = None,
+    ) -> None:
+        if self.checkpoint_save_torch():
+            self._save_cls_warmup_checkpoint(
+                step=completed_steps,
+                epoch=completed_epochs,
+                complete=True,
+                metrics=dict(metrics or {}),
+                steps_per_epoch=int(steps_per_epoch or max(1, completed_steps)),
+                total_steps=completed_steps,
+                topk_manager=topk_manager,
+            )
+        if self.checkpoint_save_hf() and self.is_main_process:
+            cls_kwargs = getattr(self, "_classifier_cls_kwargs", {})
+            save_module_pretrained(
+                _unwrap(self.classifier),
+                self._cls_warmup_hf_dir(),
+                target=str(
+                    getattr(
+                        self,
+                        "_classifier_target",
+                        "dreamervla.algorithms.critic.LatentSuccessClassifier",
+                    )
+                ),
+                init_args=cls_kwargs,
+            )
+
+    def _canonical_warmup_is_complete(self, component: str) -> bool:
+        name = "wm_warmup.ckpt" if component == "wm" else "classifier_warmup.ckpt"
+        path = self._existing_warmup_checkpoint(name)
+        if path is None:
+            return False
+        payload = load_runner_payload(path)
+        version = payload.get("format_version")
+        if isinstance(version, int) and version >= CHECKPOINT_FORMAT_VERSION:
+            required = {
+                "component",
+                "warmup_epoch",
+                "warmup_step",
+                "warmup_steps_per_epoch",
+                "warmup_total_steps",
+                "complete",
+                "state_dicts",
+                "rng_by_rank",
+            }
+            missing = sorted(required.difference(payload))
+            if missing:
+                raise RuntimeError(f"format v2 {component} warmup checkpoint is missing {missing}")
+            expected_component = "wm" if component == "wm" else "classifier"
+            if payload["component"] != expected_component:
+                raise RuntimeError(
+                    "warmup checkpoint component mismatch: "
+                    f"{payload['component']!r} != {expected_component!r}"
+                )
+        return bool(payload.get("complete", True))
+
+    @staticmethod
+    def _warmup_epoch_count(*, total_steps: int, steps_per_epoch: int) -> int:
+        return max(1, (int(total_steps) + int(steps_per_epoch) - 1) // int(steps_per_epoch))
+
+    def _run_wm_warmup_epochs(
+        self,
+        replay: Any,
+        *,
+        total_steps: int,
+        steps_per_epoch: int,
+        start_step: int,
+        start_epoch: int,
+        batch_size: int,
+        optim_cfg: Any,
+        checkpoint_every_epochs: int,
+        topk_manager: TopKCheckpointManager | None,
+    ) -> float:
+        last = 0.0
+        total_epochs = self._warmup_epoch_count(
+            total_steps=total_steps, steps_per_epoch=steps_per_epoch
+        )
+        current_step = int(start_step)
+        for epoch_index in range(int(start_epoch), total_epochs):
+            epoch_end = min(int(total_steps), (epoch_index + 1) * int(steps_per_epoch))
+            last = self._offline_warmup_wm(
+                replay,
+                steps=epoch_end,
+                batch_size=batch_size,
+                optim_cfg=optim_cfg,
+                start_step=current_step,
+            )
+            current_step = epoch_end
+            completed_epoch = epoch_index + 1
+            if (
+                current_step < int(total_steps)
+                and int(checkpoint_every_epochs) > 0
+                and completed_epoch % int(checkpoint_every_epochs) == 0
+            ):
+                self._save_wm_warmup_checkpoint(
+                    step=current_step,
+                    epoch=completed_epoch,
+                    complete=False,
+                    metrics={"loss": float(last)},
+                    steps_per_epoch=steps_per_epoch,
+                    total_steps=total_steps,
+                    topk_manager=topk_manager,
+                )
+        self._save_wm_warmup(
+            completed_steps=int(total_steps),
+            completed_epochs=int(total_steps) // int(steps_per_epoch),
+            metrics={"loss": float(last)},
+            topk_manager=topk_manager,
+            steps_per_epoch=steps_per_epoch,
+        )
+        return float(last)
+
+    def _run_cls_warmup_epochs(
+        self,
+        replay: Any,
+        *,
+        total_steps: int,
+        steps_per_epoch: int,
+        start_step: int,
+        start_epoch: int,
+        batch_size: int,
+        early_neg_stride: int,
+        grad_clip: float,
+        loss_type: str | None,
+        sampling_protocol: str,
+        balance_batches: bool,
+        log_step_offset: int,
+        checkpoint_every_epochs: int,
+        topk_manager: TopKCheckpointManager | None,
+        calibration_kwargs: dict[str, Any],
+    ) -> float:
+        last = 0.0
+        last_metrics: dict[str, float] = {"acc": 0.0, "f1": 0.0}
+        total_epochs = self._warmup_epoch_count(
+            total_steps=total_steps, steps_per_epoch=steps_per_epoch
+        )
+        current_step = int(start_step)
+        for epoch_index in range(int(start_epoch), total_epochs):
+            epoch_end = min(int(total_steps), (epoch_index + 1) * int(steps_per_epoch))
+            is_final_epoch = epoch_end >= int(total_steps)
+            last = self._offline_warmup_classifier(
+                replay,
+                steps=epoch_end,
+                batch_size=batch_size,
+                early_neg_stride=early_neg_stride,
+                grad_clip=grad_clip,
+                loss_type=loss_type,
+                sampling_protocol=sampling_protocol,
+                balance_batches=balance_batches,
+                log_step_offset=log_step_offset,
+                start_step=current_step,
+                **(calibration_kwargs if is_final_epoch else {}),
+            )
+            current_step = epoch_end
+            last_metrics = dict(
+                getattr(
+                    self,
+                    "_last_classifier_warmup_metrics",
+                    {"acc": float(last), "f1": 0.0},
+                )
+            )
+            completed_epoch = epoch_index + 1
+            if (
+                not is_final_epoch
+                and int(checkpoint_every_epochs) > 0
+                and completed_epoch % int(checkpoint_every_epochs) == 0
+            ):
+                self._save_cls_warmup_checkpoint(
+                    step=current_step,
+                    epoch=completed_epoch,
+                    complete=False,
+                    metrics=last_metrics,
+                    steps_per_epoch=steps_per_epoch,
+                    total_steps=total_steps,
+                    topk_manager=topk_manager,
+                )
+        self._save_cls_warmup(
+            completed_steps=int(total_steps),
+            completed_epochs=int(total_steps) // int(steps_per_epoch),
+            metrics=last_metrics,
+            topk_manager=topk_manager,
+            steps_per_epoch=steps_per_epoch,
+        )
+        return float(last)
+
+    # ------------------------------------------------------------------ main
+    def run(self) -> list[dict[str, Any]]:
+        import copy
+
+        from dreamervla.runtime.online_replay import OnlineReplay
+
+        cfg = copy.deepcopy(self.cfg)
+        resolved_batch_size = self._per_rank_batch_size(
+            configured_batch_size=int(OmegaConf.select(cfg, "dataloader.batch_size", default=4)),
+            global_batch_size=OmegaConf.select(
+                cfg,
+                "training.global_batch_size",
+                default=None,
+            ),
+            world_size=self._world_size,
+            gradient_accumulate_every=int(
+                OmegaConf.select(
+                    cfg,
+                    "training.gradient_accumulate_every",
+                    default=1,
+                )
+                or 1
+            ),
+        )
+        OmegaConf.update(
+            cfg,
+            "dataloader.batch_size",
+            resolved_batch_size,
+            force_add=True,
+        )
+        env_image_keys = OmegaConf.select(cfg, "env.image_keys", default=["agentview_rgb"])
+        self._num_views = len(list(env_image_keys)) if env_image_keys is not None else 1
+
+        # Identify that the collected cold-start dump exists BEFORE loading the heavy
+        # WM/encoder/classifier. When warmup will seed from offline shards (i.e. no full
+        # warmup-ckpt resume), fail fast here instead of paying the model load only to
+        # crash in seeding. A full resume needs no seeding, so the check is skipped.
+        resume = bool(OmegaConf.select(cfg, "training.resume", default=False))
+        need_wm = not (resume and self._canonical_warmup_is_complete("wm"))
+        need_cls = not (resume and self._canonical_warmup_is_complete("classifier"))
+        if (
+            int(
+                OmegaConf.select(
+                    cfg,
+                    "training.classifier_warmup_steps",
+                    default=0,
+                )
+                or 0
+            )
+            <= 0
+        ):
+            need_cls = False
+        latent_metadata: dict[str, Any] | None = None
+        online_latent = bool(
+            OmegaConf.select(cfg, "offline_warmup.online_latent.enabled", default=False)
+        )
+        if online_latent and need_cls:
+            raise ValueError(
+                "offline_warmup.online_latent is a WM-only stream; "
+                "set training.classifier_warmup_steps=0"
+            )
+        hidden_dir = Path(
+            str(OmegaConf.select(cfg, "offline_warmup.hidden_dir", default=""))
+        ).expanduser()
+        metadata_path = hidden_dir / "preprocess_config.json"
+        if need_wm or need_cls:
+            if online_latent:
+                _assert_offline_reward_present(
+                    data_dir=OmegaConf.select(cfg, "offline_warmup.data_dir")
+                )
+            else:
+                _assert_offline_seed_present(
+                    data_dir=OmegaConf.select(cfg, "offline_warmup.data_dir"),
+                    hidden_dir=hidden_dir,
+                )
+                if metadata_path.is_file():
+                    latent_metadata = _apply_collected_latent_spec(cfg)
+                elif bool(
+                    OmegaConf.select(
+                        cfg,
+                        "offline_warmup.require_latent_metadata",
+                        default=False,
+                    )
+                ):
+                    raise FileNotFoundError(
+                        f"observation-latent metadata is missing: {metadata_path}"
+                    )
+        elif not online_latent and metadata_path.is_file():
+            latent_metadata = _apply_collected_latent_spec(cfg)
+        if latent_metadata is not None:
+            self._print_pipeline_event(
+                "[pipeline][latent] "
+                f"producer={latent_metadata.get('policy_family', 'openvla_oft')} "
+                f"source={latent_metadata['obs_hidden_source']} "
+                f"shape=[{latent_metadata['token_count']},{latent_metadata['token_dim']}]"
+            )
+
+        self._build_components(cfg)
+        latent_producer = None
+        if online_latent and need_wm:
+            producer_cfg = OmegaConf.select(
+                cfg,
+                "offline_warmup.online_latent.policy",
+                default=None,
+            )
+            if producer_cfg is None:
+                raise ValueError("online latent warmup requires online_latent.policy")
+            latent_producer = hydra.utils.instantiate(producer_cfg).to(self.device).eval()
+            for parameter in latent_producer.parameters():
+                parameter.requires_grad_(False)
+            encoder_method = str(
+                OmegaConf.select(
+                    cfg,
+                    "offline_warmup.online_latent.encoder_method",
+                    default="encode_raw_observation_prefix_batch",
+                )
+            )
+            if not callable(getattr(latent_producer, encoder_method, None)):
+                raise TypeError(f"online latent policy must implement {encoder_method}")
+        if self.distributed.is_main_process:
+            trainable = {
+                "world_model": count_trainable(self.world_model),
+                "policy": count_trainable(self.policy),
+                "critic": count_trainable(self.critic),
+                "classifier": count_trainable(self.classifier),
+            }
+            total = sum(trainable.values())
+            self.append_model_summary(
+                {
+                    "total_trainable": total,
+                    "trainable_params": trainable,
+                    "model_step_frames": 1,
+                }
+            )
+            print(f"[ok] model ready · {total / 1e6:.1f}M trainable", flush=True)
+        self.get_checkpoint_dir().mkdir(parents=True, exist_ok=True)
+
+        # Warmup budgets are fully resolved by Hydra profiles before the runner starts.
+        wm_steps = int(OmegaConf.select(cfg, "training.wm_warmup_steps", default=2000))
+        cls_steps = int(OmegaConf.select(cfg, "training.classifier_warmup_steps", default=2000))
+        warmup_replay_epochs = int(
+            OmegaConf.select(cfg, "training.warmup_replay_epochs", default=0) or 0
+        )
+        warmup_replay_max_steps = int(
+            OmegaConf.select(cfg, "training.warmup_replay_max_steps", default=0) or 0
+        )
+        warmup_checkpoint_every_epochs = int(
+            OmegaConf.select(cfg, "training.warmup_checkpoint_every_epochs", default=1) or 0
+        )
+        bs = int(OmegaConf.select(cfg, "dataloader.batch_size", default=4))
+        cls_bs = int(OmegaConf.select(cfg, "training.classifier_batch_size", default=16))
+        optim_cfg = OmegaConf.select(cfg, "optim")
+        early_neg_stride = int(
+            OmegaConf.select(cfg, "online_rollout.classifier_early_neg_stride", default=8)
+        )
+        classifier_loss_type = OmegaConf.select(
+            cfg, "online_rollout.classifier_loss_type", default=None
+        )
+        if classifier_loss_type is not None and str(classifier_loss_type).lower() == "auto":
+            classifier_loss_type = None
+        classifier_sampling_protocol = str(
+            OmegaConf.select(
+                cfg,
+                "online_rollout.classifier_sampling_protocol",
+                default="lumos",
+            )
+        )
+        classifier_balance_batches = bool(
+            OmegaConf.select(
+                cfg,
+                "online_rollout.classifier_balance_batches",
+                default=False,
+            )
+        )
+        grad_clip = float(OmegaConf.select(optim_cfg, "grad_clip_norm", default=1.0))
+        seq_len = int(OmegaConf.select(cfg, "online_rollout.sequence_length", default=24))
+        buffer_size = int(OmegaConf.select(cfg, "online_rollout.buffer_size", default=20000))
+        replay_capacity_mode = str(
+            OmegaConf.select(cfg, "online_rollout.replay_capacity_mode", default="per_task")
+        )
+        env_task_ids = tuple(
+            int(x) for x in (OmegaConf.select(cfg, "env.task_ids", default=[0]) or [0])
+        )
+        default_task_id = OmegaConf.select(cfg, "offline_warmup.task_id", default=None)
+        infer_task_id_from_shard = bool(
+            OmegaConf.select(cfg, "offline_warmup.infer_task_id_from_shard", default=False)
+        )
+        max_seed_eps = OmegaConf.select(cfg, "offline_warmup.max_episodes_per_task", default=None)
+        # resume / need_wm / need_cls were computed above (before the heavy build) so the
+        # offline-data existence check could fail fast; reuse them here.
+
+        if online_latent and need_wm:
+            from dreamervla.runtime.pi05_trajectory_replay import Pi05TrajectoryReplay
+
+            warmup_replay = Pi05TrajectoryReplay(
+                data_dir=OmegaConf.select(cfg, "offline_warmup.data_dir"),
+                sequence_length=seq_len,
+                encoder=latent_producer,
+                encode_batch_size=int(
+                    OmegaConf.select(
+                        cfg,
+                        "offline_warmup.online_latent.encode_batch_size",
+                        default=4,
+                    )
+                ),
+                rank=self._rank,
+                world_size=self._world_size,
+                seed=int(OmegaConf.select(cfg, "seed", default=0)),
+                task_ids=env_task_ids,
+                rotate_images_180=bool(
+                    OmegaConf.select(
+                        cfg,
+                        "offline_warmup.online_latent.rotate_images_180",
+                        default=True,
+                    )
+                ),
+                base_image_key=str(
+                    OmegaConf.select(
+                        cfg,
+                        "offline_warmup.online_latent.base_image_key",
+                        default="agentview_rgb",
+                    )
+                ),
+                wrist_image_key=str(
+                    OmegaConf.select(
+                        cfg,
+                        "offline_warmup.online_latent.wrist_image_key",
+                        default="eye_in_hand_rgb",
+                    )
+                ),
+                max_episodes_per_task=(int(max_seed_eps) if max_seed_eps is not None else None),
+                encoder_method=str(
+                    OmegaConf.select(
+                        cfg,
+                        "offline_warmup.online_latent.encoder_method",
+                        default="encode_raw_observation_prefix_batch",
+                    )
+                ),
+                encoder_kwargs=dict(
+                    OmegaConf.to_container(
+                        OmegaConf.select(
+                            cfg,
+                            "offline_warmup.online_latent.encoder_kwargs",
+                            default=None,
+                        )
+                        or OmegaConf.create({}),
+                        resolve=True,
+                    )
+                    or {}
+                ),
+            )
+        else:
+            warmup_replay = OnlineReplay(
+                capacity=buffer_size,
+                sequence_length=seq_len,
+                task_ids=env_task_ids,
+                capacity_mode=replay_capacity_mode,
+                rank=self._rank,
+            )
+        if need_wm or need_cls:
+            data_dir = OmegaConf.select(cfg, "offline_warmup.data_dir")
+            hidden_dir = OmegaConf.select(cfg, "offline_warmup.hidden_dir")
+            max_seed_label = "all" if max_seed_eps is None else f"<= {int(max_seed_eps)}/task"
+            self._print_pipeline_event(
+                "[pipeline][replay] loading offline shards "
+                f"data_dir={data_dir} hidden_dir={hidden_dir} "
+                f"tasks={list(env_task_ids)} seq_len={seq_len} "
+                f"capacity={buffer_size} capacity_mode={replay_capacity_mode} "
+                f"episodes={max_seed_label}"
+            )
+            replay_load_start = time.perf_counter()
+            if online_latent:
+                n = int(sum(warmup_replay.task_episode_counts().values()))
+            else:
+                n = seed_replay_from_offline(
+                    warmup_replay,
+                    data_dir=data_dir,
+                    hidden_dir=hidden_dir,
+                    default_task_id=(int(default_task_id) if default_task_id is not None else None),
+                    infer_task_id_from_shard=infer_task_id_from_shard,
+                    max_episodes_per_task=(int(max_seed_eps) if max_seed_eps is not None else None),
+                    require_reference_complete=bool(
+                        OmegaConf.select(
+                            cfg,
+                            "offline_warmup.require_reference_complete",
+                            default=True,
+                        )
+                    ),
+                )
+            replay_load_s = time.perf_counter() - replay_load_start
+            sampleable_windows = int(warmup_replay.sampleable_window_count())
+            self._print_pipeline_event(
+                "[pipeline][replay] loaded complete "
+                f"episodes={n} transitions={warmup_replay.num_transitions} "
+                f"sampleable_windows={sampleable_windows} "
+                f"elapsed_s={replay_load_s:.1f}"
+            )
+            raw_windows = getattr(warmup_replay, "raw_window_count", None)
+            if raw_windows is not None:
+                self._print_pipeline_event(
+                    "[pipeline][replay] online π0.5 prefix stream "
+                    f"raw_windows={int(raw_windows)} "
+                    f"ddp_padded_windows={sampleable_windows}"
+                )
+            if self.distributed.is_main_process:
+                cap_msg = "all" if max_seed_eps is None else f"<= {int(max_seed_eps)}/task"
+                print(
+                    f"[pipeline] seeded {n} offline episodes ({cap_msg}), "
+                    f"{warmup_replay.num_transitions} transitions, "
+                    f"capacity_mode={replay_capacity_mode}",
+                    flush=True,
+                )
+            if n == 0 or warmup_replay.num_transitions == 0:
+                raise RuntimeError("offline seeding produced an empty replay buffer")
+            required_task_ids_raw = OmegaConf.select(
+                cfg,
+                "offline_warmup.required_task_ids",
+                default=None,
+            )
+            if required_task_ids_raw is not None:
+                required_task_ids = tuple(int(task_id) for task_id in required_task_ids_raw)
+                missing_task_ids = sorted(
+                    set(required_task_ids).difference(warmup_replay.task_episode_counts())
+                )
+                if missing_task_ids:
+                    raise RuntimeError(
+                        "offline warmup replay has no sampleable sequence for "
+                        f"required task IDs {missing_task_ids}"
+                    )
+            classifier_cfg = (
+                getattr(_unwrap(self.classifier), "cfg", None)
+                if self.classifier is not None
+                else None
+            )
+            default_cls_window = int(
+                getattr(
+                    self,
+                    "_cls_window",
+                    OmegaConf.select(
+                        cfg,
+                        "classifier.window",
+                        default=OmegaConf.select(
+                            cfg,
+                            "ray_components.classifier.kwargs.window",
+                            default=4,
+                        ),
+                    )
+                    or 4,
+                )
+            )
+            cls_window = int(getattr(classifier_cfg, "window", default_cls_window))
+            default_cls_chunk_size = int(
+                OmegaConf.select(
+                    cfg,
+                    "classifier.chunk_size",
+                    default=OmegaConf.select(
+                        cfg,
+                        "ray_components.classifier.kwargs.chunk_size",
+                        default=1,
+                    ),
+                )
+                or 1
+            )
+            cls_chunk_size = int(getattr(classifier_cfg, "chunk_size", default_cls_chunk_size))
+            classifier_windows = int(
+                warmup_replay.classifier_window_count(
+                    window=cls_window,
+                    chunk_size=cls_chunk_size,
+                )
+            )
+            wm_global_bs = self._global_batch_size(
+                per_rank_batch_size=bs,
+                world_size=self._world_size,
+            )
+            cls_global_bs = self._global_batch_size(
+                per_rank_batch_size=cls_bs,
+                world_size=self._world_size,
+            )
+            wm_steps, cls_steps = self._resolve_warmup_steps(
+                warmup_replay,
+                wm_steps=wm_steps,
+                cls_steps=cls_steps,
+                replay_epochs=warmup_replay_epochs,
+                replay_max_steps=warmup_replay_max_steps,
+                wm_batch_size=wm_global_bs,
+                cls_batch_size=cls_global_bs,
+                cls_window=cls_window,
+                cls_chunk_size=cls_chunk_size,
+            )
+            wm_steps_per_epoch = (
+                max(1, (sampleable_windows + wm_global_bs - 1) // wm_global_bs)
+                if warmup_replay_epochs > 0
+                else max(1, int(wm_steps))
+            )
+            cls_steps_per_epoch = (
+                max(1, (classifier_windows + cls_global_bs - 1) // cls_global_bs)
+                if warmup_replay_epochs > 0
+                else max(1, int(cls_steps))
+            )
+            # A WM-only recipe must not calibrate, update, or checkpoint a
+            # randomly initialized classifier merely because no classifier
+            # checkpoint exists yet.
+            if int(cls_steps) <= 0:
+                need_cls = False
+            self._print_pipeline_event(
+                "[pipeline][warmup] resolved replay warmup "
+                f"epochs={warmup_replay_epochs} wm_updates={wm_steps} "
+                f"cls_updates={cls_steps} wm_batch_per_rank={bs} "
+                f"wm_global_batch={wm_global_bs} "
+                f"cls_batch_per_rank={cls_bs} cls_global_batch={cls_global_bs} "
+                f"classifier_window={cls_window} chunk_size={cls_chunk_size} "
+                f"classifier_windows={classifier_windows}"
+            )
+            wm_start_step = cls_start_step = 0
+            wm_start_epoch = cls_start_epoch = 0
+        else:
+            wm_start_step = 0
+            cls_start_step = 0
+            wm_start_epoch = 0
+            cls_start_epoch = 0
+            wm_steps_per_epoch = max(1, int(wm_steps))
+            cls_steps_per_epoch = max(1, int(cls_steps))
+
+        wm_topk_manager = (
+            self._make_warmup_topk_manager(component="wm")
+            if self.distributed.is_main_process
+            else None
+        )
+        cls_topk_manager = (
+            self._make_warmup_topk_manager(component="classifier")
+            if self.distributed.is_main_process
+            else None
+        )
+        warmup_metric_resume_step_set = False
+        cls_resume_checkpoint = None
+        if resume and need_cls:
+            cls_resume_checkpoint = self._existing_warmup_checkpoint("classifier_warmup.ckpt")
+            if cls_resume_checkpoint is None:
+                cls_resume_checkpoint = self._latest_warmup_progress_path("classifier")
+
+        if need_wm:
+            if resume:
+                wm_progress = self._load_latest_wm_warmup_progress(
+                    steps_per_epoch=wm_steps_per_epoch,
+                    total_steps=wm_steps,
+                )
+                wm_start_step = min(int(wm_progress["step"]), int(wm_steps))
+                wm_start_epoch = int(wm_progress["epoch"])
+                self.set_metric_resume_step(wm_start_step)
+                warmup_metric_resume_step_set = True
+            self.console_banner("[1/2] WM WARMUP", subtitle=f"{wm_steps} steps")
+            wm_last = self._run_wm_warmup_epochs(
+                warmup_replay,
+                total_steps=wm_steps,
+                steps_per_epoch=wm_steps_per_epoch,
+                start_step=wm_start_step,
+                start_epoch=wm_start_epoch,
+                batch_size=bs,
+                optim_cfg=optim_cfg,
+                checkpoint_every_epochs=warmup_checkpoint_every_epochs,
+                topk_manager=wm_topk_manager,
+            )
+            if self.distributed.is_main_process:
+                self.console_banner("[1/2] WM WARMUP", subtitle=f"wm_loss {wm_last:.3f}", done=True)
+        if not need_wm:
+            wm_checkpoint = self._existing_warmup_checkpoint("wm_warmup.ckpt")
+            wm_hf_dir = self._existing_warmup_hf_dir("wm_warmup_hf")
+            if wm_checkpoint is not None:
+                payload = load_runner_payload(wm_checkpoint)
+                self._load_wm_warmup_checkpoint(
+                    wm_checkpoint,
+                    strict=resume,
+                    restore_rng=bool(resume and need_cls and cls_resume_checkpoint is None),
+                )
+                self.global_step = max(
+                    int(self.global_step),
+                    int(payload.get("global_step", 0) or 0),
+                )
+            elif wm_hf_dir is not None and not resume:
+                src = load_module_pretrained(wm_hf_dir)
+                _unwrap(self.world_model).load_state_dict(src.state_dict())
+
+        if need_cls:
+            if resume and cls_resume_checkpoint is not None:
+                cls_progress = self._load_latest_cls_warmup_progress(
+                    steps_per_epoch=cls_steps_per_epoch,
+                    total_steps=cls_steps,
+                )
+                cls_start_step = min(int(cls_progress["step"]), int(cls_steps))
+                cls_start_epoch = int(cls_progress["epoch"])
+                if not warmup_metric_resume_step_set:
+                    self.set_metric_resume_step(int(wm_steps) + cls_start_step)
+            elif resume and not warmup_metric_resume_step_set:
+                self.set_metric_resume_step(int(wm_steps))
+                self._print_pipeline_event(
+                    "[pipeline][classifier-warmup] no classifier checkpoint; "
+                    "starting at step=0 after restored WM"
+                )
+            self.console_banner("[2/2] CLASSIFIER WARMUP", subtitle=f"{cls_steps} steps")
+            cls_last = self._run_cls_warmup_epochs(
+                warmup_replay,
+                total_steps=cls_steps,
+                steps_per_epoch=cls_steps_per_epoch,
+                start_step=cls_start_step,
+                start_epoch=cls_start_epoch,
+                batch_size=cls_bs,
+                early_neg_stride=early_neg_stride,
+                grad_clip=grad_clip,
+                loss_type=classifier_loss_type,
+                sampling_protocol=classifier_sampling_protocol,
+                balance_batches=classifier_balance_batches,
+                log_step_offset=wm_steps,
+                checkpoint_every_epochs=warmup_checkpoint_every_epochs,
+                topk_manager=cls_topk_manager,
+                calibration_kwargs=self._warmup_calibration_kwargs(),
+            )
+            if self.distributed.is_main_process:
+                self.console_banner(
+                    "[2/2] CLASSIFIER WARMUP", subtitle=f"acc {cls_last:.3f}", done=True
+                )
+        if not need_cls:
+            cls_checkpoint = self._existing_warmup_checkpoint("classifier_warmup.ckpt")
+            cls_hf_dir = self._existing_warmup_hf_dir("classifier_warmup_hf")
+            if cls_checkpoint is not None:
+                payload = load_runner_payload(cls_checkpoint)
+                self._load_cls_warmup_checkpoint(
+                    cls_checkpoint,
+                    strict=resume,
+                    restore_rng=False,
+                )
+                self.global_step = max(
+                    int(self.global_step),
+                    int(payload.get("global_step", 0) or 0),
+                )
+            elif cls_hf_dir is not None and not resume:
+                src = load_module_pretrained(cls_hf_dir)
+                _unwrap(self.classifier).load_state_dict(src.state_dict())
+
+        self.cfg = cfg
+        if self.distributed.is_main_process:
+            self.console_banner("WARMUP COMPLETE", done=True)
+        return []

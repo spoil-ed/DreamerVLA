@@ -1,0 +1,141 @@
+name: embodied-system
+
+x-system-build: &system-build
+  context: ../..
+  dockerfile: docker/system/Dockerfile
+  args:
+    CUDA_BASE_IMAGE: ${CUDA_BASE_IMAGE:-m.daocloud.io/docker.io/nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04}
+    UBUNTU_APT_MIRROR: ${UBUNTU_APT_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/ubuntu}
+    MINICONDA_BASE_URL: ${MINICONDA_BASE_URL:-https://mirror.nju.edu.cn/anaconda/miniconda}
+    PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://mirror.nju.edu.cn/pypi/web/simple}
+    HTTP_PROXY: ""
+    HTTPS_PROXY: ""
+    ALL_PROXY: ""
+    http_proxy: ""
+    https_proxy: ""
+    all_proxy: ""
+
+x-system-runtime: &system-runtime
+  gpus: all
+  ipc: host
+  shm_size: 8gb
+  stdin_open: true
+  tty: true
+  environment:
+    HTTP_PROXY: ""
+    HTTPS_PROXY: ""
+    ALL_PROXY: ""
+    http_proxy: ""
+    https_proxy: ""
+    all_proxy: ""
+    NO_PROXY: "*"
+    no_proxy: "*"
+    NVIDIA_VISIBLE_DEVICES: all
+    NVIDIA_DRIVER_CAPABILITIES: compute,graphics,utility,video
+  volumes:
+    - ../..:/workspace
+    - ${DVLA_DATA_ROOT:-../../data}:/data
+
+services:
+  mujoco-system:
+    <<: *system-runtime
+    image: ${MUJOCO_SYSTEM_IMAGE:-mujoco-system:cu128-ubuntu2204-v1}
+    build:
+      <<: *system-build
+      target: mujoco
+    environment:
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      ALL_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      all_proxy: ""
+      NO_PROXY: "*"
+      no_proxy: "*"
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,graphics,utility,video
+      MUJOCO_GL: egl
+      PYOPENGL_PLATFORM: egl
+      __EGL_VENDOR_LIBRARY_FILENAMES: /usr/share/glvnd/egl_vendor.d/10_nvidia.json
+
+  sapien-system:
+    <<: *system-runtime
+    image: ${SAPIEN_SYSTEM_IMAGE:-sapien-system:cu128-ubuntu2204-v1}
+    build:
+      <<: *system-build
+      target: sapien
+    environment:
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      ALL_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      all_proxy: ""
+      NO_PROXY: "*"
+      no_proxy: "*"
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,graphics,utility,video
+      VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/nvidia_icd.json
+      XDG_RUNTIME_DIR: /tmp/runtime-sim
+
+  mujoco-vla:
+    <<: *system-runtime
+    image: ${MUJOCO_VLA_IMAGE:-mujoco-vla:cu124-h100-v1}
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+      additional_contexts:
+        third_party_source: ../../third_party
+      args:
+        MUJOCO_SYSTEM_IMAGE: ${MUJOCO_SYSTEM_IMAGE:-simat-acr-bj-registry.cn-beijing.cr.aliyuncs.com/cloud-platform/mujoco-system:cu128-ubuntu2204-v1}
+        DEPENDENCY_SOURCE_STAGE: third-party-local
+        DVLA_GIT_COMMIT: ${DVLA_GIT_COMMIT:-unknown}
+        DVLA_IMAGE_VERSION: ${DVLA_IMAGE_VERSION:-cu124-h100-v1}
+        DVLA_BUILD_TIME: ${DVLA_BUILD_TIME:-unknown}
+        PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://mirror.nju.edu.cn/pypi/web/simple}
+        GITHUB_MIRROR_PREFIX: ${GITHUB_MIRROR_PREFIX:-https://gh-proxy.com/}
+        FLASH_ATTN_WHEEL_URL: ${FLASH_ATTN_WHEEL_URL:-https://ghfast.top/https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.1.post1/flash_attn-2.7.1.post1+cu12torch2.5cxx11abiFALSE-cp311-cp311-linux_x86_64.whl}
+        DLIMP_OPENVLA_SRC: ${DLIMP_OPENVLA_SRC:-https://github.com/moojink/dlimp_openvla/archive/040105d256bd28866cc6620621a3d5f7b6b91b46.tar.gz}
+        TRANSFORMERS_OFT_FORK_SRC: ${TRANSFORMERS_OFT_FORK_SRC:-https://github.com/moojink/transformers-openvla-oft/archive/bc339d9ad707454c0c115970db43c260067c61ab.tar.gz}
+        HTTP_PROXY: ""
+        HTTPS_PROXY: ""
+        ALL_PROXY: ""
+        http_proxy: ""
+        https_proxy: ""
+        all_proxy: ""
+    working_dir: /opt/dreamervla
+    environment:
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      ALL_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      all_proxy: ""
+      NO_PROXY: "*"
+      no_proxy: "*"
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,graphics,utility,video
+      MUJOCO_GL: egl
+      PYOPENGL_PLATFORM: egl
+      __EGL_VENDOR_LIBRARY_FILENAMES: /usr/share/glvnd/egl_vendor.d/10_nvidia.json
+
+  mujoco-smoke:
+    extends: mujoco-system
+    profiles: [smoke]
+    stdin_open: false
+    tty: false
+    command: ["/usr/local/bin/smoke-mujoco-system"]
+
+  sapien-smoke:
+    extends: sapien-system
+    profiles: [smoke]
+    stdin_open: false
+    tty: false
+    command: ["/usr/local/bin/smoke-sapien-system"]
+
+  mujoco-vla-smoke:
+    extends: mujoco-vla
+    profiles: [full-smoke]
+    stdin_open: false
+    tty: false
+    command: ["/usr/local/bin/smoke-mujoco-vla"]

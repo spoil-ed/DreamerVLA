@@ -1,0 +1,17 @@
+# @package _global_
+defaults:
+  - /task: openvla_onetraj_coldstart_libero
+  - override /dreamervla: openvla_onetraj_libero_cotrain
+  - override /worldmodel: dreamer-wm
+  - override /classifier: dreamer-cls
+  - override /launch: cotrain
+  - _self_
+
+run:
+  name: openvla_onetraj_libero_cotrain
+
+runner:
+  logger:
+    logger_backends: [tensorboard, wandb]
+    wandb_mode: online
+    wandb_proxy: null

@@ -1,0 +1,126 @@
+\section{Method}
+
+\subsection{Overview}
+
+DreamerVLA couples a one-trajectory OpenVLA-OFT policy with a token-space
+world model and a success classifier.  The system uses one external observation
+representation throughout collection, replay, warm-up, and online cotraining:
+the projected visual hidden tokens produced before the language-model action
+positions.  For each environment step $t$,
+\[
+E_t = f_{\mathrm{OFT}}^{\mathrm{vision}}(I_t,\ell)
+    \in \mathbb{R}^{256\times4096},
+\]
+where $I_t$ is the current agent-view image and $\ell$ is the task instruction.
+The 256 visual tokens are persisted under the HDF5 key
+\texttt{obs\_embedding}; action-decoder states are never used as world-model
+observations.
+
+The trainable system contains three components: (i) a chunk-aware Transformer
+world model that predicts future hidden-token grids, (ii) a spatial success
+classifier trained on windows of the same token grids, and (iii) an actor bridge
+that maps predicted hidden tokens to OpenVLA-OFT's internal discrete action
+positions.  The bridge creates action positions only inside the decoder; they
+are not stored in replay and do not define a second observation interface.
+
+\subsection{Cold-Start and Online Cotraining Pipeline}
+
+Training follows four stages.  First, the one-trajectory OpenVLA-OFT checkpoint
+collects real LIBERO rollouts.  Each rollout produces a reward shard and a
+shape-aligned hidden-token sidecar.  Before reuse, the loader verifies the source
+name, token count, token width, storage format, and every per-demo tensor shape.
+
+Second, collected episodes seed a shared online replay.  Third, the world model
+and success classifier are warmed up from this replay using exactly the update
+functions used online.  Finally, real and imagined trajectories are interleaved
+during cotraining.  In the synchronous route one runner owns the loop.  In the
+asynchronous route, the actor group owns FSDP policy updates, the rollout group
+owns no-gradient policy inference, the environment group owns real and imagined
+stepping, and the learner group owns world-model and classifier updates.
+
+\subsection{Hidden-Token Observation Contract}
+
+For an episode of length $T$, the sidecar stores
+\[
+\mathcal{E}=[E_1,\ldots,E_T]
+    \in \mathbb{R}^{T\times256\times4096}.
+\]
+The contract fixes one image, one-frame policy history, 256 patches, and a token
+width of 4096.  Its flattened size, $1{,}048{,}576$, is metadata only; model
+interfaces retain the two token axes.  Reward and sidecar shards must have the
+same files, demonstrations, and frame lengths.  This validation is performed
+before collection resume, replay seeding, standalone classifier training, and
+standalone world-model training.
+
+Language and proprioception remain distinct conditioning signals.  They are
+projected to compact embeddings and concatenated to token channels inside the
+world model and classifier; they do not alter the persisted visual-token
+schema.
+
+\subsection{Chunk-Aware Token World Model}
+
+Let $a_t\in\mathbb{R}^{7}$ denote the robot action and let $K=8$ be the action
+chunk length.  The world model embeds the action and concatenates it to every
+visual token.  Optional language and proprioceptive embeddings are concatenated
+in the same role-separated manner.  Given a history of $H$ token grids, a
+Transformer transition predicts the next grid,
+\[
+\widehat{E}_{t+1}
+  = F_\theta(E_{t-H+1:t},a_t,p_t,\ell).
+\]
+Multi-step prediction is autoregressive: each predicted grid is appended to
+the history before the next action is applied.  For $J$ predicted chunks, the
+training loss is
+\[
+\mathcal{L}_{\mathrm{WM}}
+ = \sum_{j=1}^{JK} \alpha_j
+   \left\|\widehat{E}_{t+j}-E_{t+j}\right\|_2^2
+   + \lambda_{\cos}
+   \bigl(1-\cos(\widehat{E}_{t+j},E_{t+j})\bigr),
+\]
+with optional auxiliary reward and proprioceptive reconstruction terms.  The
+mainline keeps the visual tokens explicit rather than accepting flattened
+observation vectors.
+
+\subsection{Spatial Success Classifier}
+
+The classifier receives a window
+$E_{t-W+1:t}\in\mathbb{R}^{W\times256\times4096}$.
+Each visual token is projected to the classifier width, augmented with temporal
+and spatial position embeddings, and processed by a Transformer encoder with a
+classification token.  A binary head estimates
+\[
+q_\phi(y_t=1\mid E_{t-W+1:t},p_{t-W+1:t},\ell),
+\]
+where $y_t$ indicates task success.  Warm-up and online updates share the same
+balanced WMPO sampling protocol and binary cross-entropy objective.  During
+imagined rollout, this score supplies the success signal used by policy
+optimization.
+
+\subsection{OpenVLA Discrete-Action Bridge}
+
+The actor consumes a predicted token grid
+$\widehat{E}_t\in\mathbb{R}^{256\times4096}$.  A Transformer decoder attends a
+set of $K\times7=56$ learned action positions to the 256 source tokens, producing
+4096-dimensional states only inside the OpenVLA decoder.  The frozen or
+finetuned language-model head converts those states into categorical action
+tokens, which are mapped to continuous controls.  For action dimension $d$ and
+chunk step $k$,
+\[
+\pi_\psi(z_{k,d}\mid\widehat{E}_t)
+  = \operatorname{softmax}\bigl(W_{\mathrm{LM}}h_{k,d}\bigr).
+\]
+The policy objective operates on token-level log probabilities.  This decoder
+construction preserves OpenVLA-OFT's action vocabulary while maintaining a
+single, unambiguous world-model observation state.
+
+\subsection{Cotraining Objective}
+
+World-model and classifier parameters are optimized from replay, while actor
+parameters are optimized from grouped real and imagined trajectories.  The
+actor update combines relative advantages, clipped likelihood ratios, entropy
+regularization, and a reference-policy KL penalty.  Parameter ownership is
+explicit: the rollout replica periodically pulls actor weights, and imagined
+environment workers periodically receive world-model and classifier weights.
+All reported task quality is measured in the real LIBERO environment; imagined
+success is a training signal rather than an evaluation substitute.

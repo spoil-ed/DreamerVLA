@@ -1,0 +1,84 @@
+# @package _global_
+defaults:
+  - /task: openvla_onetraj_libero
+  - override /classifier: dreamer-cls
+  - _self_
+
+_target_: dreamervla.runners.SuccessClassifierTrainingRunner
+seed: 7
+
+run:
+  name: wmpo_token_classifier_openvla_onetraj_libero_goal_h1
+
+launch:
+  distributed: true
+  ngpu: 8
+  gpus: null
+  master_port: 29501
+  python: python
+  write_libero_config: true
+  required_target_values: []
+  env:
+    PYTHONUNBUFFERED: 1
+    OMP_NUM_THREADS: 8
+    MALLOC_ARENA_MAX: 4
+    CUDA_MODULE_LOADING: LAZY
+    PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    NCCL_NVLS_ENABLE: 0
+    NCCL_DEBUG: WARN
+    TORCH_NCCL_ASYNC_ERROR_HANDLING: 1
+
+training:
+  seed: 7
+  device: cuda
+  checkpoint_format: torch
+  num_epochs: 8
+  steps_per_epoch: 0
+  batch_size: 4
+  val_batch_size: 32
+  num_workers: 0
+  lr: 3.0e-5
+  weight_decay: 1.0e-4
+  loss_type: bce
+  label_smoothing: 0.0
+  class_balanced: false
+  log_every: 10
+  eval_every: 250
+  checkpoint_every_epochs: 1
+  final_selection_metric: window_f1
+  thresh_min: 0.05
+  thresh_max: 0.95
+  thresh_steps: 19
+  episode_eval_enabled: true
+  episode_eval_min_steps: 0
+  episode_eval_stride: 1
+  episode_eval_batch: 32
+
+checkpoint:
+  topk:
+    monitor_key: f1
+    metric_name: f1
+    mode: max
+    k: 3
+
+runner:
+  logger:
+    project_name: dreamervla
+    logger_backends: [tensorboard, wandb]
+    log_path: ${training.out_dir}
+
+data:
+  success_dir_raw: ${task.collected_reward_dir}
+  success_dir_hidden: ${task.collected_hidden_token_dir}
+  failure_dir_raw: null
+  failure_dir_hidden: null
+  window: 8
+  stride_train: 8
+  stride_val: 8
+  chunk_subsample: ${task.openvla_oft.hidden_token.chunk_size}
+  chunk_pool: last
+  proprio_keys: ${task.openvla_oft.hidden_token.proprio_keys}
+  lang_emb_dir: __source_hidden__
+  lang_emb_key: lang_emb
+  sampling_protocol: wmpo
+  balance_batches: true

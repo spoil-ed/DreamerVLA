@@ -1,0 +1,8 @@
+# @package _global_
+defaults:
+  - /task: openvla_onetraj_libero
+  - override /evaluation: libero_vla
+  - _self_
+
+run:
+  name: eval_libero_vla

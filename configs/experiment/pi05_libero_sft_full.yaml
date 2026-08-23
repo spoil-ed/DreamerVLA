@@ -1,0 +1,27 @@
+# @package _global_
+defaults:
+  - pi05_libero_sft
+  - _self_
+
+run:
+  name: pi05_libero_sft_full
+
+data:
+  loader:
+    batch_size: 1
+
+actor:
+  # 8 GPUs: micro-batch 1 x accumulation 32 = 32/GPU, 256 globally.
+  micro_batch_size: 1
+  global_batch_size: 256
+  optim:
+    lr: 2.5e-5
+    total_training_steps: 30000
+  distributed:
+    strategy: ddp
+    # The unused continuous-action lm_head is frozen before DDP wrapping.
+    find_unused_parameters: false
+
+training:
+  max_steps: 30000
+  distributed_strategy: ddp

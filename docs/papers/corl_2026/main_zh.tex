@@ -1,0 +1,145 @@
+\documentclass{article}
+
+\usepackage{corl_2026}
+\usepackage[UTF8]{ctex}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{url}
+
+\renewcommand{\abstractname}{摘要}
+\def\keywords#1{%
+  \ifdefined\isaccepted \else
+    \begin{quote}
+    \textbf{关键词：} #1%
+    \end{quote}
+  \fi
+}
+
+\title{DreamerVLA：基于 OpenVLA 输入 token 的世界模型协同训练}
+\author{匿名作者}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+视觉--语言--动作模型具备较强的语义先验，但通常缺少对动作长期后果的显式建模；潜在世界模型支持多步想象，却难以直接继承大规模 VLA 的感知与动作知识。本文提出 DreamerVLA，将 OpenVLA-OFT one-trajectory 策略、token 空间世界模型与成功分类器连接为统一的冷启动和在线协同训练流程。系统从当前图像提取固定的 $256\times4096$ 投影视觉输入 token，并在采集、回放、世界模型、分类器和 actor 之间使用同一观测契约。世界模型自回归预测未来 token 网格；分类器在多帧 token 上估计任务成功；actor 仅在解码器内部将预测 token 桥接到 OpenVLA 离散动作位置。该设计消除了观测表示歧义，并支持同步与单机 Ray 异步协同训练。
+\end{abstract}
+
+\keywords{视觉--语言--动作模型，世界模型，机器人学习，在线强化学习}
+
+\section{引言}
+
+机器人策略需要联合理解视觉观测、语言指令和本体状态，并预测能够完成长时程任务的动作序列。OpenVLA 等视觉--语言--动作模型可以从大规模预训练中获得语义和控制先验，但监督模仿学习通常不会显式预测未来状态，也难以判断一次动作更新会如何影响后续成功概率。世界模型通过学习动作条件动力学提供多步想象能力，却容易受限于像素预测成本和弱语义表示。
+
+DreamerVLA 的目标是把两者连接在一个可验证的数据契约上。我们不把动作 head 的内部状态当作世界模型观测，而是使用 OpenVLA-OFT 在语言模型动作位置之前生成的当前帧投影视觉输入 token。采集、离线预处理、回放、世界模型 warm-up、分类器训练和在线协同训练均使用这一表示。这样，训练组件共享相同语义边界，旧数据也能在进入优化器之前通过元数据和 HDF5 形状校验被明确拒绝。
+
+本文的主要贡献包括：
+\begin{enumerate}
+  \item 提出单一的 OpenVLA 输入-token 世界模型观测契约，并贯通真实 rollout 与同步/异步训练；
+  \item 设计动作条件的 chunk Transformer 世界模型，在显式 token 网格上执行自回归多步预测；
+  \item 使用同一 token 序列训练空间成功分类器，并通过 OpenVLA 离散动作桥接器优化策略；
+  \item 给出冷启动采集、世界模型与分类器 warm-up、在线协同训练和真实环境评估的完整实现。
+\end{enumerate}
+
+\section{相关工作}
+
+\paragraph{视觉--语言--动作模型。}
+VLA 模型把图像、语言和机器人状态映射为可执行动作，为跨任务控制提供统一接口。其优势来自视觉语言预训练和大规模机器人数据，但常见的监督目标对失败恢复、长期信用分配和动作后果建模仍然有限。
+
+\paragraph{潜在世界模型。}
+Dreamer 类方法在紧凑表示中学习动作条件转移，并使用想象 rollout 提高真实数据利用率。DreamerVLA 与像素重构路线不同，直接预测冻结 VLA 产生的视觉 token，使动力学学习与下游策略共享语义状态。
+
+\paragraph{VLA 在线后训练。}
+近期工作将策略梯度、组相对优势、稀疏成功奖励和学习到的模拟器用于 VLA 后训练。DreamerVLA 进一步把真实 rollout、token 动力学、成功分类器和 actor 权重同步组织成同一训练闭环。
+
+\section{方法}
+
+\subsection{总体框架}
+
+在时间步 $t$，OpenVLA-OFT 接收当前 agent-view 图像 $I_t$ 和语言指令 $\ell$，得到投影视觉输入 token：
+\[
+E_t=f_{\mathrm{OFT}}^{\mathrm{vision}}(I_t,\ell)
+  \in\mathbb{R}^{256\times4096}.
+\]
+长度为 $T$ 的轨迹将其保存为
+$\mathcal{E}\in\mathbb{R}^{T\times256\times4096}$。HDF5 数据集键固定为 \texttt{obs\_embedding}；元数据固定记录来源、token 数量、token 宽度、历史长度、图像数量和存储格式。所有消费者保留两个 token 轴，不接受展平观测。
+
+系统包含三个可训练组件：chunk 世界模型 $F_\theta$、成功分类器 $q_\phi$ 和 OpenVLA 离散动作 actor $\pi_\psi$。语言和本体信号分别投影为紧凑条件向量，只在模型内部与视觉 token 通道拼接，不改变外部 sidecar 形状。
+
+\subsection{冷启动与在线协同训练}
+
+主线依次执行：真实 LIBERO rollout 采集、回放初始化、世界模型与分类器 warm-up、在线协同训练和真实环境评估。reward shard 与 hidden-token sidecar 必须具有相同的文件集合、demo 集合和帧长度。系统在续采、回放初始化以及两个独立训练入口之前验证所有 demo 的形状。
+
+同步路线由一个 pipeline runner 管理更新。异步路线显式拆分 ActorGroup、RolloutGroup、EnvGroup 和 LearnerGroup：ActorGroup 负责 FSDP 策略训练；RolloutGroup 使用策略副本进行无梯度推理；EnvGroup 执行真实与想象环境；LearnerGroup 更新世界模型和成功分类器。权重按照组件所有权定期同步。
+
+\subsection{Chunk Token 世界模型}
+
+令 $a_t\in\mathbb{R}^{7}$ 为动作。世界模型将动作嵌入复制到每个视觉 token，并与可选语言、本体条件共同构造 Transformer 输入。给定长度为 $H$ 的历史，模型预测
+\[
+\widehat{E}_{t+1}
+ =F_\theta(E_{t-H+1:t},a_t,p_t,\ell).
+\]
+多步 rollout 采用自回归递推：预测结果进入下一步历史，再施加下一动作。对 $J$ 个长度为 $K=8$ 的动作 chunk，基本目标为
+\[
+\mathcal{L}_{\mathrm{WM}}
+=\sum_{j=1}^{JK}\alpha_j
+  \|\widehat{E}_{t+j}-E_{t+j}\|_2^2
++\lambda_{\cos}\bigl(1-\cos(\widehat{E}_{t+j},E_{t+j})\bigr),
+\]
+并可加入奖励和本体重构辅助项。
+
+\subsection{空间成功分类器}
+
+分类器接收窗口
+$E_{t-W+1:t}\in\mathbb{R}^{W\times256\times4096}$。每个 token 经线性投影后加入时间和空间位置编码，再由 Transformer 编码器及分类 token 输出成功 logit：
+\[
+q_\phi(y_t=1\mid E_{t-W+1:t},p_{t-W+1:t},\ell).
+\]
+warm-up 与在线阶段共享同一更新函数、WMPO 平衡采样协议和二元交叉熵损失，避免离线/在线训练语义漂移。
+
+\subsection{OpenVLA 离散动作桥接}
+
+actor 从预测 token 网格 $\widehat{E}_t$ 生成动作。Transformer decoder 在内部创建 $K\times7=56$ 个动作位置，并令这些位置交叉注意 256 个源 token。输出保持 4096 维，以便复用 OpenVLA 的 language-model head：
+\[
+\pi_\psi(z_{k,d}\mid\widehat{E}_t)
+=\operatorname{softmax}(W_{\mathrm{LM}}h_{k,d}).
+\]
+内部动作位置只用于离散动作解码，不会写入 sidecar，也不会成为世界模型或分类器的观测接口。actor 更新使用 token 级 log-probability、组相对优势、clipped ratio、熵正则和参考策略 KL。
+
+\section{实验}
+
+\subsection{实验设置}
+
+实验在 LIBERO Goal、Object、Spatial 和 LIBERO-10 上进行。每个 suite 使用对应的 OpenVLA-OFT one-trajectory checkpoint。报告真实环境成功率，并单独记录世界模型预测误差、分类器指标、回放组成和权重同步开销；想象环境成功分数不替代真实评估。
+
+\subsection{主要结果}
+
+\begin{table}[t]
+\centering
+\caption{在 LIBERO 上与代表性方法的比较。数值待完整实验后填写。}
+\label{tab:libero_main_simple_zh}
+\setlength{\tabcolsep}{6pt}
+\begin{tabular}{lccccc}
+\toprule
+方法 & Spatial & Object & Goal & Long & Avg. \\
+\midrule
+OpenVLA-OFT & -- & -- & -- & -- & -- \\
+仅在线策略更新 & -- & -- & -- & -- & -- \\
+\textbf{DreamerVLA} & -- & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{消融实验}
+
+关键消融包括：去除世界模型、去除成功分类器、仅使用真实 rollout、改变自回归预测深度，以及冻结或训练 OpenVLA action bridge。所有消融保持同一 $256\times4096$ 外部观测契约，避免把表示变更与算法变更混为一谈。
+
+\section{结论}
+
+DreamerVLA 通过统一的 OpenVLA 投影视觉输入 token，把语义策略、动作条件动力学、成功估计与在线策略优化连接起来。固定数据契约既降低了组件间的歧义，也使采集数据、独立 warm-up 和在线协同训练可以由相同验证器与更新函数覆盖。后续工作将评估更长想象 horizon、模型不确定性与真实机器人迁移。
+
+\end{document}

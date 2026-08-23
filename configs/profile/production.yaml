@@ -1,0 +1,8 @@
+# @package _global_
+# Production is intentionally non-prescriptive: the selected experiment owns
+# all budgets and topology values.
+profile:
+  name: production
+
+training:
+  debug: false

@@ -1,0 +1,14 @@
+# @package _global_
+name: validate_libero_data
+data_root: ${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}
+python: python
+dry_run: false
+only: []
+tasks: ${oc.env:LIBERO_SUITES,libero_goal libero_object libero_spatial libero_10}
+env: {}
+steps:
+  - id: validate_suite
+    script: scripts/preprocess/20_validate.sh
+    for_each: ${tasks}
+    env:
+      TASK: "{item}"

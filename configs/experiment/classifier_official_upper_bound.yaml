@@ -1,0 +1,32 @@
+# @package _global_
+# Pre-mainline CLS capacity test trained only from official LIBERO data.
+defaults:
+  - wmpo_token_classifier_openvla_onetraj_libero_goal_h1
+  - override /classifier: dreamer-cls
+  - override /pre_mainline: libero_goal_official
+  - _self_
+
+pre_mainline:
+  stage: classifier_upper_bound
+
+run:
+  name: classifier_official_upper_bound
+
+training:
+  episode_eval_enabled: false
+  final_selection_metric: window_f1
+  precision: bf16
+  update_profile_steps: 8
+
+data:
+  success_dir_raw: ${task.hdf5_reward_dir}
+  success_dir_hidden: ${task.openvla_oft.hidden_token_dir}
+  failure_dir_raw: null
+  failure_dir_hidden: null
+  train_split: train
+  val_split: val
+  val_fraction: 0.2
+  split_seed: ${training.seed}
+  require_sidecar_contract: true
+  require_reference_complete: false
+  required_filenames: ${pre_mainline.official_reward_filenames}

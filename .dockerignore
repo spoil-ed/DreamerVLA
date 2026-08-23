@@ -1,0 +1,30 @@
+# Version-control and isolated working trees
+.git
+.gitignore
+.worktrees
+
+# Runtime assets and outputs belong in the /data mount
+data
+logs
+log
+wandb
+*.log
+
+# Host-only third-party checkouts are installed afresh at pinned revisions
+third_party
+
+# Python/editor caches and local environments
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.venv
+venv
+.local
+.agents
+.codex
+.claude
+.cursor
+.planning
+.DS_Store

@@ -1,0 +1,16 @@
+# @package _global_
+defaults:
+  - _self_
+  - run: default
+  - VLA: null
+  - worldmodel: null
+  - pixel_decoder: null
+  - classifier: null
+  - pre_mainline: null
+  - dreamervla: null
+  - evaluation: null
+  - logger: tensorboard_wandb
+  - launch: null
+  - experiment: null
+  # Profiles load after experiments so their explicit budgets take precedence.
+  - profile: production

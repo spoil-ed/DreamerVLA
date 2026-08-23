@@ -1,0 +1,18 @@
+# @package _global_
+# One invocation owns one timestamped run root. Set training.out_dir directly
+# only when an exact, non-default run root is required.
+run:
+  output_root: ${oc.env:RUN_ROOT,${oc.env:DVLA_DATA_ROOT,${oc.env:DVLA_ROOT,.}/data}/outputs}
+  name: run
+  timestamp: ${now:%Y%m%d_%H%M%S}
+
+training:
+  out_dir: ${run.output_root}/${run.name}/${run.timestamp}
+  resume: false
+  resume_dir: null
+  resume_path: null
+
+hydra:
+  run:
+    dir: ${training.out_dir}
+  output_subdir: .hydra
