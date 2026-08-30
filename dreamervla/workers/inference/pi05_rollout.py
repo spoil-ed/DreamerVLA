@@ -18,6 +18,7 @@ class Pi05RolloutBundle:
     def __init__(
         self,
         model_path: str,
+        assets_path: str | None = None,
         policy_ckpt_path: str | None = None,
         config_name: str = "pi05_libero",
         action_chunk: int = 10,
@@ -36,6 +37,7 @@ class Pi05RolloutBundle:
         self._rotate = bool(rotate_images_180)
         self._policy = Pi05Policy(
             model_path=str(model_path),
+            assets_path=(None if assets_path in (None, "") else str(assets_path)),
             config_name=str(config_name),
             action_chunk=int(action_chunk),
             action_dim=int(action_dim),

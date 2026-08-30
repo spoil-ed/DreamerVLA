@@ -18,6 +18,10 @@ def test_pi05_collection_plan_is_target_injected_and_rlinf_aligned() -> None:
     manifest = plan["dump"]["preprocess_config"]
     assert plan["inference"]["decoder"]["target"].endswith("pi05_rollout:Pi05RolloutBundle")
     assert plan["inference"]["action_steps"] == 10
+    assert plan["inference"]["decoder"]["kwargs"]["action_chunk"] == 10
+    assert plan["inference"]["decoder"]["kwargs"]["assets_path"].endswith(
+        "data/checkpoints/RLinf-Pi05-LIBERO-SFT"
+    )
     assert manifest["policy_family"] == "pi05"
     assert manifest["obs_hidden_source"] == "pi05_prefix_output"
     assert manifest["obs_embedding_shape"] == [768, 2048]
@@ -86,9 +90,11 @@ def test_pi05_rollout_bundle_returns_env_actions_and_prefix(monkeypatch) -> None
 
     from dreamervla.workers.inference import pi05_rollout
 
+    policy_kwargs = {}
+
     class _Policy:
-        def __init__(self, **_kwargs) -> None:
-            return None
+        def __init__(self, **kwargs) -> None:
+            policy_kwargs.update(kwargs)
 
         def eval(self):
             return self
@@ -101,7 +107,11 @@ def test_pi05_rollout_bundle_returns_env_actions_and_prefix(monkeypatch) -> None
             return torch.zeros(batch, 10, 7), torch.zeros(batch, 768, 2048)
 
     monkeypatch.setattr(pi05_rollout, "Pi05Policy", _Policy)
-    bundle = pi05_rollout.Pi05RolloutBundle(model_path="unused", device="cpu")
+    bundle = pi05_rollout.Pi05RolloutBundle(
+        model_path="unused",
+        assets_path="normalization-assets",
+        device="cpu",
+    )
     result = bundle.predict_batch([{"prompt": "one"}, {"prompt": "two"}])
 
     assert bundle.actions_are_env_ready is True
@@ -109,6 +119,8 @@ def test_pi05_rollout_bundle_returns_env_actions_and_prefix(monkeypatch) -> None
     assert result[0][0].shape == (10, 7)
     assert result[0][1].shape == (768, 2048)
     assert result[0][1].dtype == torch.float32
+    assert policy_kwargs["model_path"] == "unused"
+    assert policy_kwargs["assets_path"] == "normalization-assets"
 
 
 def test_pi05_policy_loads_sft_delta_from_run_root(tmp_path) -> None:

@@ -43,12 +43,21 @@ collect:
   # Set to a pi05_libero_sft run root, checkpoints/, or latest.ckpt to collect
   # with the learned SFT delta. null intentionally uses the immutable RLinf base.
   policy_ckpt_path: null
+  # Policy construction and environment execution are separate contracts.
+  # The immutable released LIBERO policy is the default producer; learned SFT
+  # recipes override policy_model_path to the exact base recorded by the delta.
+  policy_model_path: ${task.pi05.ckpt_path}
+  policy_assets_path: ${task.pi05.assets_path}
+  action_steps: ${task.pi05.replan_steps}
   hdf5_reward_dir: ${task.collected_reward_dir}
   hidden_dir: ${task.collected_latent_dir}
   latent_spec: ${task.observation_latent}
   producer_metadata:
-    model_path: ${task.pi05.ckpt_path}
+    model_path: ${collect.policy_model_path}
+    assets_path: ${collect.policy_assets_path}
     policy_ckpt_path: ${collect.policy_ckpt_path}
+    policy_action_horizon: ${task.pi05.action_horizon}
+    action_steps: ${collect.action_steps}
     config_name: ${task.pi05.config_name}
     task_suite_name: ${task.suite}
     resolution: ${task.image_resolution}
@@ -57,7 +66,8 @@ collect:
   rollout_bundle:
     target: dreamervla.workers.inference.pi05_rollout:Pi05RolloutBundle
     kwargs:
-      model_path: ${task.pi05.ckpt_path}
+      model_path: ${collect.policy_model_path}
+      assets_path: ${collect.policy_assets_path}
       policy_ckpt_path: ${collect.policy_ckpt_path}
       config_name: ${task.pi05.config_name}
       action_chunk: ${task.pi05.action_horizon}

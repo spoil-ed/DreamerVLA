@@ -160,6 +160,14 @@ def build_vla_collect_config(cfg: DictConfig) -> dict[str, Any]:
     )
     if reward_dir is None or hidden_dir is None:
         raise ValueError("collection reward and observation-latent directories are required")
+    action_steps = int(OmegaConf.select(cfg, "collect.action_steps", default=latent.chunk_size))
+    if action_steps <= 0:
+        raise ValueError("collect.action_steps must be positive")
+    if action_steps > latent.chunk_size:
+        raise ValueError(
+            "collect.action_steps cannot exceed the policy action chunk: "
+            f"{action_steps} > {latent.chunk_size}"
+        )
     return {
         "policy_family": latent.policy_family,
         "task_suite_name": str(cfg.task.suite),
@@ -187,6 +195,7 @@ def build_vla_collect_config(cfg: DictConfig) -> dict[str, Any]:
         "resolution": int(cfg.task.image_resolution),
         "action_dim": int(cfg.task.action_dim),
         "chunk_size": latent.chunk_size,
+        "action_steps": action_steps,
         "expected_history": latent.history,
         "expected_include_state": latent.include_state,
         "expected_obs_hidden_source": latent.obs_hidden_source,
@@ -472,7 +481,7 @@ class _RayRolloutCollection(BaseRunner):
             "env": env_cfg,
             "inference": {
                 "action_dim": collect_cfg["action_dim"],
-                "action_steps": collect_cfg["chunk_size"],
+                "action_steps": collect_cfg["action_steps"],
                 "device": inference_device,
                 "decoder": decoder,
                 "emit_hidden_sidecar": collect_cfg["store_latent"],
