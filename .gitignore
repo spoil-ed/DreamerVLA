@@ -23,6 +23,9 @@ third_party/
 # Everything under the repository-root data/ is generated or downloaded per README.
 /data/
 
+# Local experiment launchers and configs.
+/experiments/
+
 # Local training / experiment logs
 log/
 logs/
