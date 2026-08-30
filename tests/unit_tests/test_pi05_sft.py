@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 import tomllib
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +16,7 @@ from dreamervla.dataset.pi05_sft import (
     OFFICIAL_PI05_LIBERO_REPO,
     OFFICIAL_PI05_LIBERO_REVISION,
     LeRobotLIBERODataLoaderFactory,
+    configure_openpi_pytorch_runtime,
     resolve_lerobot_source,
 )
 from dreamervla.models.embodiment.pi05.policy import (
@@ -25,6 +28,39 @@ from dreamervla.runners.vla_sft_training_runner import (
     _strip_legacy_unused_lm_head_optimizer_state,
 )
 from dreamervla.train import _auto_apply_distributed
+from dreamervla.utils.openpi_imports import configure_openpi_jax_runtime
+
+
+def test_pi05_pytorch_loader_keeps_jax_off_cuda(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("JAX_PLATFORMS", raising=False)
+    monkeypatch.delenv("XLA_PYTHON_CLIENT_PREALLOCATE", raising=False)
+    monkeypatch.delitem(sys.modules, "jax", raising=False)
+
+    configure_openpi_pytorch_runtime()
+
+    assert os.environ["JAX_PLATFORMS"] == "cpu"
+    assert os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] == "false"
+
+
+def test_pi05_pytorch_loader_rejects_jax_cuda(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("JAX_PLATFORMS", "cuda")
+
+    with pytest.raises(RuntimeError, match="requires JAX_PLATFORMS=cpu"):
+        configure_openpi_pytorch_runtime()
+
+
+def test_openpi_runtime_rejects_jax_imported_before_backend_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("JAX_PLATFORMS", raising=False)
+    monkeypatch.setitem(sys.modules, "jax", object())
+
+    with pytest.raises(RuntimeError, match="JAX was imported before"):
+        configure_openpi_jax_runtime()
 
 
 @pytest.mark.parametrize(

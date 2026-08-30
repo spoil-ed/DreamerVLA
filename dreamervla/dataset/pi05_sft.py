@@ -26,10 +26,19 @@ from dreamervla.models.embodiment.pi05.openpi_config import (
     PI05_LIBERO_REPO_ID,
     get_pi05_libero_config,
 )
-from dreamervla.utils.openpi_imports import ensure_openpi_on_path
+from dreamervla.utils.openpi_imports import (
+    configure_openpi_jax_runtime,
+    ensure_openpi_on_path,
+)
 
 OFFICIAL_PI05_LIBERO_REPO = PI05_LIBERO_REPO_ID
 OFFICIAL_PI05_LIBERO_REVISION = "a4336d589d589045d1c56423ffdf3b88a0e19b1f"
+
+
+def configure_openpi_pytorch_runtime() -> None:
+    """Apply the shared OpenPI/JAX isolation contract for SFT callers."""
+
+    configure_openpi_jax_runtime()
 
 
 @dataclass(frozen=True)
@@ -109,6 +118,7 @@ def build_official_openpi_sft_dataloader(
     """Build the same official OpenPI loader used by RLinf for LeRobot data."""
 
     del rank
+    configure_openpi_pytorch_runtime()
     if str(config_name) != PI05_LIBERO_CONFIG_NAME:
         raise ValueError(
             f"this migrated route only supports {PI05_LIBERO_CONFIG_NAME}; got {config_name!r}"
@@ -233,6 +243,7 @@ __all__ = [
     "LeRobotLIBERODataLoaderFactory",
     "OpenPISFTDataLoaderBundle",
     "build_official_openpi_sft_dataloader",
+    "configure_openpi_pytorch_runtime",
     "configured_download_endpoint",
     "get_official_openpi_sft_num_batches",
     "is_official_openpi_sft_dataloader",

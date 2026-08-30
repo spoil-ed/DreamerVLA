@@ -9,6 +9,27 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 VENDORED_OPENPI_ROOT = PROJECT_ROOT / "third_party" / "openpi"
 
 
+def configure_openpi_jax_runtime() -> None:
+    """Keep OpenPI's configuration-only JAX imports on the CPU.
+
+    DreamerVLA's π0.5 model and optimizer are PyTorch/CUDA.  OpenPI still
+    imports JAX for configuration, transforms, and pytree helpers, none of
+    which need a JAX CUDA client on this route.  This guard must run before
+    even discovering/importing OpenPI so training and standalone inference
+    share the same isolation contract.
+    """
+
+    requested = os.environ.get("JAX_PLATFORMS")
+    if requested is not None and requested.strip().lower() != "cpu":
+        raise RuntimeError(
+            f"DreamerVLA's OpenPI PyTorch route requires JAX_PLATFORMS=cpu; got {requested!r}"
+        )
+    if "jax" in sys.modules and requested is None:
+        raise RuntimeError("JAX was imported before DreamerVLA could select its CPU backend")
+    os.environ["JAX_PLATFORMS"] = "cpu"
+    os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+
+
 def _candidate_roots() -> list[Path]:
     roots: list[Path] = []
     configured = os.environ.get("OPENPI_ROOT")
@@ -25,6 +46,7 @@ def _is_openpi_tree(root: Path) -> bool:
 def ensure_openpi_on_path() -> Path:
     """Put an official Physical Intelligence ``openpi`` checkout on ``sys.path``."""
 
+    configure_openpi_jax_runtime()
     installed = importlib.util.find_spec("openpi")
     if installed is not None and installed.origin:
         return Path(installed.origin).resolve().parent.parent
@@ -44,4 +66,4 @@ def ensure_openpi_on_path() -> Path:
     )
 
 
-__all__ = ["ensure_openpi_on_path"]
+__all__ = ["configure_openpi_jax_runtime", "ensure_openpi_on_path"]

@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import importlib
 import importlib.metadata
+import os
 import sys
 from collections.abc import Callable
+
+from dreamervla.utils.openpi_imports import ensure_openpi_on_path
 
 CRITICAL_PI05_DISTRIBUTION_VERSIONS = {
     "bddl": "3.6.0",
@@ -59,6 +62,11 @@ def main() -> int:
             f"[verify_pi05_runtime] Python {sys.version.split()[0]} is active; expected Python 3.11"
         )
     verify_pi05_distribution_versions()
+    ensure_openpi_on_path()
+    if os.environ.get("JAX_PLATFORMS") != "cpu":
+        raise SystemExit("[verify_pi05_runtime] OpenPI JAX backend is not isolated to CPU")
+    if os.environ.get("XLA_PYTHON_CLIENT_PREALLOCATE") != "false":
+        raise SystemExit("[verify_pi05_runtime] JAX preallocation must be disabled")
     for module_name in ("future", "lerobot", "openpi", "torch"):
         importlib.import_module(module_name)
     importlib.import_module("libero.libero.envs")
