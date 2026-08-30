@@ -1,0 +1,8 @@
+# Spatial-suite boundary for the shared pi0.5 LIBERO policy adapter.
+defaults:
+  - pi05_libero
+  - _self_
+
+name: pi05_libero_spatial
+suite: libero_spatial
+task_name: libero_spatial

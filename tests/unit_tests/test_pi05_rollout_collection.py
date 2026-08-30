@@ -59,6 +59,48 @@ def test_pi05_dump_workers_follow_multi_gpu_inference_count() -> None:
     assert plan["dump"]["num_workers"] == 8
 
 
+def test_pi05_spatial_sft_collection_is_model_bound_and_rgb_only() -> None:
+    from hydra import compose, initialize_config_dir
+
+    from dreamervla.config import validate_cfg
+    from dreamervla.runners import RolloutCollectionRunner
+
+    config_dir = str(Path(__file__).resolve().parents[2] / "configs")
+    with initialize_config_dir(config_dir=config_dir, version_base=None):
+        cfg = compose(
+            config_name="train",
+            overrides=[
+                "experiment=collect_rollouts_pi05_spatial",
+                "collect.policy_ckpt_path=/tmp/pi05-spatial-sft",
+            ],
+        )
+
+    validate_cfg(cfg)
+    plan = RolloutCollectionRunner(cfg).build_vla_worker_plan()
+    assert cfg.task.suite == "libero_spatial"
+    assert str(cfg.task.collected_reward_dir).endswith("pi05_libero_spatial/reward")
+    assert cfg.collect.episodes_per_task == 100
+    assert cfg.collect.num_inference_workers == 2
+    assert cfg.collect.num_dump_workers == 2
+    assert cfg.env.num_workers == 8
+    assert cfg.rollout.target_episodes == 1000
+    assert cfg.launch.required_target_values == ["collect.policy_ckpt_path"]
+    assert plan["collect"]["task_suite_name"] == "libero_spatial"
+    assert plan["collect"]["episodes_per_task"] == 100
+    assert plan["inference"]["action_steps"] == 10
+    assert plan["inference"]["decoder"]["kwargs"]["action_chunk"] == 50
+    assert plan["inference"]["decoder"]["kwargs"]["model_path"].endswith(
+        "data/checkpoints/pi05_base"
+    )
+    assert plan["inference"]["decoder"]["kwargs"]["assets_path"].endswith(
+        "data/checkpoints/RLinf-Pi05-LIBERO-SFT"
+    )
+    assert plan["inference"]["decoder"]["target"].endswith("pi05_rollout:Pi05RolloutBundle")
+    assert plan["inference"]["decoder"]["kwargs"]["policy_ckpt_path"] == "/tmp/pi05-spatial-sft"
+    assert plan["inference"]["emit_hidden_sidecar"] is False
+    assert plan["dump"]["write_hidden_sidecar"] is False
+
+
 def test_pi05_prefix_extractor_uses_two_libero_cameras_and_state() -> None:
     from dreamervla.workers.inference.pi05_rollout import Pi05PrefixExtractor
 

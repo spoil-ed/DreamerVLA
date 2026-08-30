@@ -1,0 +1,31 @@
+# @package _global_
+# Two-GPU pi0.5 SFT collection over all ten LIBERO-Spatial tasks.
+defaults:
+  - collect_rollouts_pi05
+  - override /task: pi05_libero_spatial
+  - _self_
+
+run:
+  name: collect_rollouts_pi05_spatial
+
+task:
+  pi05:
+    action_horizon: 50
+
+launch:
+  ngpu: 2
+  # This recipe is specifically for the learned SFT policy. Refuse to launch
+  # through dreamervla.launchers.train when the delta checkpoint is omitted.
+  required_target_values: [collect.policy_ckpt_path]
+
+collect:
+  episodes_per_task: 100
+  num_inference_workers: 2
+  policy_model_path: ${task.pi05.base_ckpt_path}
+
+env:
+  # Four CPU LIBERO env actors feed each inference GPU.
+  num_workers: 8
+
+rollout:
+  target_episodes: 1000

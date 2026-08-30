@@ -1,0 +1,37 @@
+# @package _global_
+# Eight-GPU pi0.5 one-trajectory SFT collection over all ten LIBERO-Object tasks.
+defaults:
+  - collect_rollouts_pi05
+  - override /task: pi05_libero_object
+  - _self_
+
+run:
+  name: collect_rollouts_pi05_object
+
+# This recipe restores the h50 one-trajectory checkpoint exactly: construct
+# the learned delta on its original pi05_base backbone, sample 50 actions, and
+# execute only the first 10 before replanning.
+task:
+  pi05:
+    action_horizon: 50
+
+launch:
+  ngpu: 8
+  # This recipe is specifically for the learned SFT policy. Refuse to launch
+  # through dreamervla.launchers.train when the delta checkpoint is omitted.
+  required_target_values: [collect.policy_ckpt_path]
+
+collect:
+  episodes_per_task: 200
+  num_inference_workers: 8
+  # Keep the recipe portable while allowing submission commands to select the
+  # exact one-trajectory SFT run without a Hydra command-line override.
+  policy_ckpt_path: ${oc.env:PI05_SFT_CKPT,null}
+  policy_model_path: ${task.pi05.base_ckpt_path}
+
+env:
+  # Four CPU LIBERO env actors feed each inference GPU.
+  num_workers: 32
+
+rollout:
+  target_episodes: 2000

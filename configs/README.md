@@ -37,6 +37,8 @@ python -m dreamervla.train experiment=openvla_onetraj_libero_cotrain profile=pro
 bash scripts/experiments/collect_rollouts/train.sh task=openvla_onetraj_coldstart_libero
 torchrun --standalone --nproc-per-node=8 -m dreamervla.train experiment=pi05_libero_sft
 python -m dreamervla.train experiment=collect_rollouts_pi05
+python -m dreamervla.launchers.train --config collect_rollouts_pi05_spatial gpus=6,7 \
+  collect.policy_ckpt_path=/path/to/pi05-sft-run
 torchrun --standalone --nproc-per-node=8 -m dreamervla.train experiment=wm_pi05_collected_train
 torchrun --standalone --nproc-per-node=8 -m dreamervla.train experiment=wm_pi05_prefix_input_train
 torchrun --standalone --nproc-per-node=2 -m dreamervla.train experiment=pi05_pixel_decoder
@@ -89,6 +91,7 @@ wandb beta sync --live /path/to/run_root/wandb
 | --- | --- |
 | `collect_rollouts` | Ray rollout collection |
 | `collect_rollouts_pi05` | Ray π0.5 rollout collection with compressed RGB-only shards |
+| `collect_rollouts_pi05_spatial` | Two-GPU π0.5 SFT collection of 100 RGB-only trajectories for each LIBERO-Spatial task |
 | `pi05_libero_sft` | RLinf-aligned π0.5 flow-matching SFT on `physical-intelligence/libero` |
 | `wm_pi05_collected_train` | DDP Chunk-WM warmup with online frozen π0.5 prefixes |
 | `wm_pi05_prefix_input_train` | DDP visual-only WM over native pre-PaliGemma `[968,2048]` prefix inputs |
@@ -132,6 +135,7 @@ task/libero_object.yaml
 task/libero_spatial.yaml
 task/libero_10.yaml
 task/pi05_libero.yaml
+task/pi05_libero_spatial.yaml
 task/openvla_onetraj_libero.yaml
 task/openvla_onetraj_libero_object.yaml
 task/openvla_onetraj_libero_spatial.yaml
@@ -165,12 +169,21 @@ and keeps only the current trajectory's float16 latent in host memory. One repla
 epoch visits every full sequence window from both successful and failed episodes.
 After SFT, set `collect.policy_ckpt_path=/path/to/pi05-sft-run` (a run root,
 `checkpoints/`, or `latest.ckpt`) so collection restores the learned delta on top
-of the immutable RLinf-aligned base checkpoint.
+of the immutable RLinf-aligned base checkpoint. The Object collection recipe also
+accepts the same path through `PI05_SFT_CKPT`, which keeps remote launch commands
+free of experiment-level Hydra overrides.
+
 Collection shards use lossless time-major HDF5 `gzip` compression selected by
 `collect.hdf5_compression`; `collect.num_dump_workers` defaults to the inference
 worker count so multi-GPU jobs compress independent environment-rank shards in
 parallel. Set `collect.hdf5_compression.codec=none` only for an explicit
 uncompressed throughput diagnostic.
+
+`collect_rollouts_pi05_spatial` reuses that model-bound collector with the
+LIBERO-Spatial task registry. It requires an explicit SFT run/checkpoint, uses two
+inference GPUs and eight CPU env actors, and collects 100 trajectories for each of
+the ten tasks (1000 total). It keeps `store_latent=false`, so WM warmup extracts
+the frozen π0.5 prefix online from the compressed RGB/state/action shards.
 
 `wm_pi05_prefix_input_train` is a separate, opt-in representation contract. It
 extracts `prefix_input_latent [968,2048]` before the PaliGemma transformer:

@@ -1,0 +1,8 @@
+# Object-suite boundary for the shared pi0.5 LIBERO policy adapter.
+defaults:
+  - pi05_libero
+  - _self_
+
+name: pi05_libero_object
+suite: libero_object
+task_name: libero_object
