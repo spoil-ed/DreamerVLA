@@ -9,14 +9,20 @@ build the helper directly with ``world_size > 1`` and monkeypatch the
 
 from __future__ import annotations
 
+import os
 from datetime import timedelta
 
+import pytest
 import torch
 
 from dreamervla.runtime.distributed import NopretokenizeSFTDistributedHelper
 
 
-def _make_helper(world_size: int) -> NopretokenizeSFTDistributedHelper:
+def _make_helper(
+    world_size: int,
+    *,
+    backend: str = "nccl",
+) -> NopretokenizeSFTDistributedHelper:
     return NopretokenizeSFTDistributedHelper(
         rank=0,
         local_rank=0,
@@ -24,6 +30,7 @@ def _make_helper(world_size: int) -> NopretokenizeSFTDistributedHelper:
         strategy="ddp",
         fsdp_mixed_precision="bf16",
         enable_activation_checkpointing=False,
+        backend=backend,
     )
 
 
@@ -152,6 +159,15 @@ def test_wrap_trainable_module_static_graph_optimizations_are_opt_in(monkeypatch
     }
 
 
+def test_wrap_trainable_module_init_sync_is_opt_in(monkeypatch):
+    _patch_ddp(monkeypatch)
+    helper = _make_helper(world_size=2)
+
+    wrapped = helper.wrap_trainable_module(torch.nn.Linear(2, 2), init_sync=False)
+
+    assert wrapped.kwargs["init_sync"] is False
+
+
 # ── wrap_world_model: untouched, must keep the hardcoded OFT defaults ─────────
 
 
@@ -195,11 +211,13 @@ def _patch_init(monkeypatch, captured: dict) -> None:
 def test_initialize_passes_nccl_timeout_when_set(monkeypatch):
     captured: dict = {}
     _patch_init(monkeypatch, captured)
+    monkeypatch.delenv("TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC", raising=False)
 
     NopretokenizeSFTDistributedHelper.initialize(nccl_timeout_seconds=1234)
 
     assert captured.get("backend") == "nccl"
     assert captured.get("timeout") == timedelta(seconds=1234)
+    assert os.environ["TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC"] == "1234"
 
 
 def test_initialize_omits_timeout_by_default(monkeypatch):
@@ -211,6 +229,26 @@ def test_initialize_omits_timeout_by_default(monkeypatch):
 
     assert captured.get("backend") == "nccl"
     assert "timeout" not in captured
+
+
+def test_initialize_supports_gloo_without_nccl_heartbeat(monkeypatch):
+    captured: dict = {}
+    _patch_init(monkeypatch, captured)
+    monkeypatch.delenv("TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC", raising=False)
+
+    helper = NopretokenizeSFTDistributedHelper.initialize(
+        backend="gloo",
+        nccl_timeout_seconds=1234,
+    )
+
+    assert captured["backend"] == "gloo"
+    assert helper.backend == "gloo"
+    assert "TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC" not in os.environ
+
+
+def test_initialize_rejects_unknown_backend() -> None:
+    with pytest.raises(ValueError, match="Unsupported distributed backend"):
+        NopretokenizeSFTDistributedHelper.initialize(backend="mpi")
 
 
 def test_initialize_treats_single_process_strategy_as_unwrapped_ddp(monkeypatch):
@@ -240,3 +278,20 @@ def test_object_barrier_uses_cpu_collective_group(monkeypatch):
     helper.object_barrier()
 
     assert captured == {"group": object_group}
+
+
+def test_gloo_barrier_does_not_pass_cuda_device_ids(monkeypatch):
+    helper = _make_helper(world_size=4, backend="gloo")
+    captured: dict = {}
+    monkeypatch.setattr("dreamervla.runtime.distributed.dist.is_available", lambda: True)
+    monkeypatch.setattr("dreamervla.runtime.distributed.dist.is_initialized", lambda: True)
+    monkeypatch.setattr("dreamervla.runtime.distributed.torch.cuda.is_available", lambda: True)
+
+    def _fake_barrier(**kwargs):  # noqa: ANN003
+        captured.update(kwargs)
+
+    monkeypatch.setattr("dreamervla.runtime.distributed.dist.barrier", _fake_barrier)
+
+    helper.barrier()
+
+    assert captured == {}

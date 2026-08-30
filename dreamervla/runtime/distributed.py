@@ -55,6 +55,7 @@ class NopretokenizeSFTDistributedHelper:
     fsdp_mixed_precision: str
     enable_activation_checkpointing: bool
     object_group: Any | None = None
+    backend: str = "nccl"
 
     @classmethod
     def initialize(
@@ -63,19 +64,34 @@ class NopretokenizeSFTDistributedHelper:
         fsdp_mixed_precision: str = "bf16",
         enable_activation_checkpointing: bool = True,
         nccl_timeout_seconds: int | None = None,
+        backend: str = "nccl",
     ) -> NopretokenizeSFTDistributedHelper:
         normalized_strategy = str(strategy).lower()
         if normalized_strategy == "single":
             normalized_strategy = "ddp"
         if normalized_strategy not in {"ddp", "fsdp"}:
             raise ValueError(f"Unsupported distributed strategy: {strategy}")
+        normalized_backend = str(backend).lower()
+        if normalized_backend not in {"nccl", "gloo"}:
+            raise ValueError(f"Unsupported distributed backend: {backend}")
+
+        if normalized_backend == "nccl" and nccl_timeout_seconds is not None:
+            # PyTorch's NCCL heartbeat defaults to eight minutes, independent
+            # of the process-group timeout.  Model/data cold starts may exceed
+            # that while no collective is active, so keep both timeouts under
+            # the same Hydra-owned contract unless the launcher explicitly
+            # provides a stricter heartbeat value.
+            os.environ.setdefault(
+                "TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC",
+                str(int(nccl_timeout_seconds)),
+            )
 
         if dist.is_available() and not dist.is_initialized():
             world_size = int(os.environ.get("WORLD_SIZE", "1"))
             if world_size > 1:
                 if torch.cuda.is_available():
                     torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", "0")))
-                init_kwargs: dict[str, Any] = {"backend": "nccl"}
+                init_kwargs: dict[str, Any] = {"backend": normalized_backend}
                 if nccl_timeout_seconds is not None:
                     init_kwargs["timeout"] = timedelta(seconds=int(nccl_timeout_seconds))
                 dist.init_process_group(**init_kwargs)
@@ -86,7 +102,7 @@ class NopretokenizeSFTDistributedHelper:
             int(dist.get_world_size()) if dist.is_available() and dist.is_initialized() else 1
         )
         object_group = None
-        if world_size > 1:
+        if world_size > 1 and normalized_backend != "gloo":
             group_timeout = (
                 timedelta(seconds=int(nccl_timeout_seconds))
                 if nccl_timeout_seconds is not None
@@ -105,6 +121,7 @@ class NopretokenizeSFTDistributedHelper:
             fsdp_mixed_precision=str(fsdp_mixed_precision).lower(),
             enable_activation_checkpointing=bool(enable_activation_checkpointing),
             object_group=object_group,
+            backend=normalized_backend,
         )
 
     @property
@@ -181,6 +198,7 @@ class NopretokenizeSFTDistributedHelper:
         broadcast_buffers: bool | None = None,
         static_graph: bool | None = None,
         gradient_as_bucket_view: bool | None = None,
+        init_sync: bool | None = None,
     ) -> Any:
         if not self.is_distributed or module is None:
             return module
@@ -194,6 +212,7 @@ class NopretokenizeSFTDistributedHelper:
             broadcast_buffers=broadcast_buffers,
             static_graph=static_graph,
             gradient_as_bucket_view=gradient_as_bucket_view,
+            init_sync=init_sync,
         )
 
     def unwrap_module(self, module: torch.nn.Module) -> torch.nn.Module:
@@ -296,7 +315,7 @@ class NopretokenizeSFTDistributedHelper:
         if not self.is_distributed:
             return value
         object_list = [value]
-        dist.broadcast_object_list(object_list, src=0)
+        dist.broadcast_object_list(object_list, src=0, group=self.object_group)
         return object_list[0]
 
     def all_gather_objects(self, value: Any) -> list[Any]:
@@ -360,6 +379,7 @@ class NopretokenizeSFTDistributedHelper:
         broadcast_buffers: bool | None = None,
         static_graph: bool | None = None,
         gradient_as_bucket_view: bool | None = None,
+        init_sync: bool | None = None,
     ) -> DDP:
         kwargs: dict[str, Any] = {
             "device_ids": [self.local_rank],
@@ -376,6 +396,8 @@ class NopretokenizeSFTDistributedHelper:
             kwargs["static_graph"] = bool(static_graph)
         if gradient_as_bucket_view is not None:
             kwargs["gradient_as_bucket_view"] = bool(gradient_as_bucket_view)
+        if init_sync is not None:
+            kwargs["init_sync"] = bool(init_sync)
         return DDP(module, **kwargs)
 
     def _wrap_with_fsdp(self, module: torch.nn.Module) -> FSDP:
@@ -432,7 +454,7 @@ class NopretokenizeSFTDistributedHelper:
         )
 
     def _reduce_device(self) -> torch.device:
-        if self.is_distributed and torch.cuda.is_available():
+        if self.is_distributed and self.backend == "nccl" and torch.cuda.is_available():
             return torch.device(f"cuda:{self.local_rank}")
         return torch.device("cpu")
 
@@ -444,7 +466,7 @@ class NopretokenizeSFTDistributedHelper:
 
     def barrier(self) -> None:
         if dist.is_available() and dist.is_initialized():
-            if torch.cuda.is_available():
+            if self.backend == "nccl" and torch.cuda.is_available():
                 dist.barrier(device_ids=[self.local_rank])
             else:
                 dist.barrier()

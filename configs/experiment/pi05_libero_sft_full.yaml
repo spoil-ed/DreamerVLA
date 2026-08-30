@@ -19,6 +19,7 @@ actor:
     total_training_steps: 30000
   distributed:
     strategy: ddp
+    init_sync: false
     # The unused continuous-action lm_head is frozen before DDP wrapping.
     find_unused_parameters: false
 

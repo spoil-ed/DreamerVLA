@@ -132,6 +132,7 @@ class VLASFTTrainingRunner(BaseRunner):
         self._data_epoch = 0
         self._data_iter_offset = 0
         self._data_generator_state: torch.Tensor | None = None
+        self._first_batch_synchronized = False
 
     def setup(self) -> None:
         actor_cfg = self.cfg.actor
@@ -146,6 +147,7 @@ class VLASFTTrainingRunner(BaseRunner):
                 distributed_cfg.get("gradient_checkpointing", False)
             ),
             nccl_timeout_seconds=int(distributed_cfg.get("nccl_timeout_seconds", 1800)),
+            backend=str(distributed_cfg.get("backend", "nccl")),
         )
         self.device = self.distributed.resolve_device(str(self.cfg.training.device))
         seed = int(self.cfg.seed) + int(self.distributed.rank)
@@ -180,6 +182,7 @@ class VLASFTTrainingRunner(BaseRunner):
             find_unused_parameters=bool(distributed_cfg.get("find_unused_parameters", False)),
             broadcast_buffers=bool(distributed_cfg.get("broadcast_buffers", False)),
             gradient_as_bucket_view=bool(distributed_cfg.get("gradient_as_bucket_view", True)),
+            init_sync=bool(distributed_cfg.get("init_sync", True)),
         )
 
         trainable = [parameter for parameter in self.policy.parameters() if parameter.requires_grad]
@@ -208,12 +211,16 @@ class VLASFTTrainingRunner(BaseRunner):
                 "frozen_unused_parameters": int(getattr(policy, "frozen_unused_parameters", 0)),
                 "dataset": source,
                 "download_endpoint": configured_download_endpoint(),
-                "distributed_backend": strategy_name,
+                "distributed_strategy": strategy_name,
+                "distributed_backend": self.distributed.backend,
                 "sft_alignment_source": getattr(policy, "alignment_source", None),
             }
         )
         self.resume(self.cfg)
         self._restore_data_iterator()
+        # Rank 0 writes the manifest while other ranks can finish setup much
+        # sooner.  Do not let them enter the first CUDA forward independently.
+        self.distributed.object_barrier()
 
     @property
     def gradient_accumulation(self) -> int:
@@ -253,6 +260,15 @@ class VLASFTTrainingRunner(BaseRunner):
             batch = next(self.data_iterator)
         self._data_iter_offset += 1
         return batch
+
+    def _synchronize_first_batch(self) -> None:
+        """Align the one-time OpenPI worker cold start across DDP ranks."""
+
+        assert self.distributed is not None
+        if self._first_batch_synchronized:
+            return
+        self.distributed.object_barrier()
+        self._first_batch_synchronized = True
 
     def _start_next_data_epoch(self) -> None:
         """Advance OpenPI's infinite wrapper with explicit sampler epoch state."""
@@ -302,6 +318,10 @@ class VLASFTTrainingRunner(BaseRunner):
             step_start = time.perf_counter()
             for micro_step in range(accumulation):
                 batch = self._next_batch()
+                # The first OpenPI batch starts spawned video workers and can
+                # have substantial one-time rank skew.  Align ranks after
+                # every process owns a batch and before DDP forward.
+                self._synchronize_first_batch()
                 last_micro = micro_step + 1 == accumulation
                 no_sync = getattr(self.policy, "no_sync", None)
                 sync_context = (
@@ -485,6 +505,10 @@ class VLASFTTrainingRunner(BaseRunner):
         try:
             super().teardown()
         finally:
+            close_loader = getattr(self.data_loader, "close", None)
+            if callable(close_loader):
+                close_loader()
+            self.data_iterator = None
             if self.distributed is not None:
                 self.distributed.cleanup()
 

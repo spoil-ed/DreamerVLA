@@ -465,6 +465,25 @@ def test_pi05_sft_tracks_epochs_around_openpi_infinite_wrapper() -> None:
     assert inner.sampler.epochs == [1]
 
 
+def test_pi05_sft_synchronizes_only_the_first_loaded_batch() -> None:
+    class DistributedStub:
+        def __init__(self) -> None:
+            self.barrier_calls = 0
+
+        def object_barrier(self) -> None:
+            self.barrier_calls += 1
+
+    runner = object.__new__(VLASFTTrainingRunner)
+    runner.distributed = DistributedStub()
+    runner._first_batch_synchronized = False
+
+    runner._synchronize_first_batch()
+    runner._synchronize_first_batch()
+
+    assert runner.distributed.barrier_calls == 1
+    assert runner._first_batch_synchronized is True
+
+
 def test_pi05_sft_checkpoint_uses_canonical_trainable_policy_keys(tmp_path: Path) -> None:
     import torch
     import torch.distributed as dist
