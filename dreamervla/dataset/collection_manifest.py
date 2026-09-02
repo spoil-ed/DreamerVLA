@@ -14,6 +14,7 @@ import math
 import os
 import re
 import shutil
+import time
 import warnings
 from pathlib import Path
 from typing import Any
@@ -336,6 +337,185 @@ def summarize_collection(
         "num_tasks": int(num_tasks),
         "remaining": remaining,
         "complete": complete,
+    }
+
+
+def collection_episode_records(
+    reward_dir: str | Path,
+    hidden_dir: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """Read complete episode metadata directly from collection HDF5 shards.
+
+    Empty or interrupted shards are ignored. When ``hidden_dir`` is provided,
+    only reward episodes with a complete matching hidden sidecar are returned.
+    The HDF5 data is the source of truth; ``episode_index.jsonl`` remains the
+    append-only audit/index used by resume and external inspection.
+    """
+
+    import h5py
+
+    reward = Path(reward_dir).expanduser()
+    hidden = Path(hidden_dir).expanduser() if hidden_dir is not None else None
+    if not reward.is_dir() or (hidden is not None and not hidden.is_dir()):
+        return []
+
+    records_by_identity: dict[tuple[int, int], dict[str, Any]] = {}
+    fallback_index: dict[int, int] = {}
+    for shard in sorted(reward.glob("*.hdf5")):
+        hidden_shard = hidden / shard.name if hidden is not None else None
+        if hidden_shard is not None and not hidden_shard.is_file():
+            continue
+        try:
+            with h5py.File(str(shard), "r") as reward_file:
+                reward_data = reward_file.get("data")
+                if reward_data is None:
+                    continue
+                if hidden_shard is None:
+                    hidden_file = None
+                    hidden_data = None
+                else:
+                    hidden_file = h5py.File(str(hidden_shard), "r")
+                    hidden_data = hidden_file.get("data")
+                try:
+                    if hidden_shard is not None and hidden_data is None:
+                        continue
+                    for demo_key in sorted(reward_data.keys()):
+                        reward_demo = reward_data[demo_key]
+                        length = _complete_reward_length(reward_demo)
+                        if length is None:
+                            continue
+                        if hidden_data is not None:
+                            hidden_demo = hidden_data.get(demo_key)
+                            if hidden_demo is None or not _complete_hidden_demo(
+                                hidden_demo, length
+                            ):
+                                continue
+                        task_id = int(reward_demo.attrs.get("task_id", -1))
+                        if task_id < 0:
+                            continue
+                        if "episode_id" in reward_demo.attrs:
+                            episode_id = int(reward_demo.attrs["episode_id"])
+                        else:
+                            episode_id = fallback_index.get(task_id, 0)
+                            fallback_index[task_id] = episode_id + 1
+                        record: dict[str, Any] = {
+                            "file": shard.name,
+                            "task_id": task_id,
+                            "episode_id": episode_id,
+                            "horizon": int(length),
+                        }
+                        if "init_state_index" in reward_demo.attrs:
+                            record["init_state_index"] = int(reward_demo.attrs["init_state_index"])
+                        if "success" in reward_demo.attrs:
+                            record["success"] = bool(reward_demo.attrs["success"])
+                        records_by_identity[(task_id, episode_id)] = record
+                finally:
+                    if hidden_file is not None:
+                        hidden_file.close()
+        except (OSError, KeyError, TypeError, ValueError) as exc:
+            warnings.warn(f"skipping unreadable shard {shard}: {exc}", stacklevel=2)
+
+    return [records_by_identity[key] for key in sorted(records_by_identity)]
+
+
+def build_collection_manifest(
+    *,
+    task_suite_name: str,
+    mode: str,
+    profile: str | None,
+    reward_dir: str | Path,
+    hidden_dir: str | Path | None,
+    task_ids: list[int],
+    episodes_per_task: int,
+    write_hidden_sidecar: bool,
+    collect_config: dict[str, Any],
+    preprocess_config: dict[str, Any],
+    data_attrs: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the canonical cold-start manifest from completed on-disk data."""
+
+    normalized_task_ids = [int(task_id) for task_id in task_ids]
+    target_per_task = int(episodes_per_task)
+    records = collection_episode_records(
+        reward_dir,
+        hidden_dir if write_hidden_sidecar else None,
+    )
+    records_by_task: dict[int, list[dict[str, Any]]] = {
+        task_id: [] for task_id in normalized_task_ids
+    }
+    for record in records:
+        task_id = int(record["task_id"])
+        if task_id in records_by_task:
+            records_by_task[task_id].append(record)
+
+    episodes_by_task = {task_id: len(records_by_task[task_id]) for task_id in normalized_task_ids}
+    outcomes_by_task: dict[int, dict[str, int | float | None]] = {}
+    recorded_outcomes = 0
+    successes = 0
+    failures = 0
+    for task_id in normalized_task_ids:
+        task_records = records_by_task[task_id]
+        task_successes = sum(record.get("success") is True for record in task_records)
+        task_failures = sum(record.get("success") is False for record in task_records)
+        task_outcomes = task_successes + task_failures
+        recorded_outcomes += task_outcomes
+        successes += task_successes
+        failures += task_failures
+        outcomes_by_task[task_id] = {
+            "episodes": len(task_records),
+            "successes": task_successes,
+            "failures": task_failures,
+            "unknown": len(task_records) - task_outcomes,
+            "success_rate": (task_successes / task_outcomes if task_outcomes > 0 else None),
+        }
+
+    expected_ids = set(range(target_per_task))
+    episode_ids_by_task = {
+        task_id: {int(record["episode_id"]) for record in records_by_task[task_id]}
+        for task_id in normalized_task_ids
+    }
+    complete = all(
+        expected_ids.issubset(episode_ids_by_task[task_id]) for task_id in normalized_task_ids
+    )
+    target_episodes = target_per_task * len(normalized_task_ids)
+    collected_episodes = sum(episodes_by_task.values())
+    remaining_episodes = sum(
+        len(expected_ids - episode_ids_by_task[task_id]) for task_id in normalized_task_ids
+    )
+    active_shards = sorted(
+        {
+            str(record["file"])
+            for records_for_task in records_by_task.values()
+            for record in records_for_task
+        }
+    )
+    return {
+        "schema_version": 2,
+        "task": str(task_suite_name),
+        "mode": str(mode),
+        "profile": profile,
+        "reward_dir": str(Path(reward_dir).expanduser()),
+        "hidden_dir": (str(Path(hidden_dir).expanduser()) if hidden_dir is not None else None),
+        "write_hidden_sidecar": bool(write_hidden_sidecar),
+        "task_ids": normalized_task_ids,
+        "num_tasks": len(normalized_task_ids),
+        "target_episodes": target_episodes,
+        "target_episodes_per_task": target_per_task,
+        "collected_episodes": collected_episodes,
+        "episodes_per_task": episodes_by_task,
+        "remaining_episodes": remaining_episodes,
+        "recorded_outcomes": recorded_outcomes,
+        "successes": successes,
+        "failures": failures,
+        "unknown_outcomes": collected_episodes - recorded_outcomes,
+        "success_rate": successes / recorded_outcomes if recorded_outcomes > 0 else None,
+        "outcomes_per_task": outcomes_by_task,
+        "shards": active_shards,
+        "status": "complete" if complete else "in_progress",
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "collect_config": collect_config,
+        "preprocess_config": preprocess_config,
+        "data_attrs": data_attrs,
     }
 
 
@@ -701,10 +881,18 @@ def read_manifest(root: str | Path) -> dict[str, Any] | None:
 
 
 def write_manifest(root: str | Path, data: dict[str, Any]) -> Path:
+    """Atomically write ``collection_manifest.json`` beneath ``root``."""
+
     directory = Path(root).expanduser()
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / MANIFEST_NAME
-    path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8") as stream:
+        json.dump(data, stream, indent=2, sort_keys=True)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    temporary.replace(path)
     return path
 
 

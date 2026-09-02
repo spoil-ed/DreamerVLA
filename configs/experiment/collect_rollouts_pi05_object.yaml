@@ -10,10 +10,11 @@ run:
 
 # This recipe restores the h50 one-trajectory checkpoint exactly: construct
 # the learned delta on its original pi05_base backbone, sample 50 actions, and
-# execute only the first 10 before replanning.
+# execute the first 10 before replanning.
 task:
   pi05:
     action_horizon: 50
+    replan_steps: 10
 
 launch:
   ngpu: 8

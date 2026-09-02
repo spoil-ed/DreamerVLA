@@ -11,7 +11,8 @@ from typing import Any
 import hydra
 import numpy as np
 import torch
-from omegaconf import DictConfig
+import torch.nn.functional as F
+from omegaconf import DictConfig, OmegaConf
 from PIL import Image
 from torch.utils._pytree import tree_map
 
@@ -54,9 +55,47 @@ class LatentPixelDecoderTrainingRunner(BaseRunner):
         self.lr_scheduler: torch.optim.lr_scheduler.LRScheduler | None = None
         self.data_loader: Any | None = None
         self.data_iterator: Any | None = None
+        self.trajectory_replay: Any | None = None
         self._data_epoch = 0
         self._data_iter_offset = 0
         self._data_generator_state: torch.Tensor | None = None
+        self._checkpoint_world_size: int | None = None
+
+    def _checkpoint_metadata(self) -> dict[str, Any]:
+        """Persist the DDP size needed to resume the data cursor safely."""
+
+        metadata = super()._checkpoint_metadata()
+        world_size = 1 if self.distributed is None else int(self.distributed.world_size)
+        return {**metadata, "world_size": world_size}
+
+    def load_payload(
+        self,
+        payload: dict[str, Any],
+        exclude_keys: tuple[str, ...] | None = None,
+        include_keys: tuple[str, ...] | None = None,
+        restore_rng: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        """Load a decoder checkpoint, tolerating an intentional DDP resize."""
+
+        checkpoint_world_size = payload.get("world_size")
+        if not isinstance(checkpoint_world_size, int) or checkpoint_world_size <= 0:
+            rng_by_rank = payload.get("rng_by_rank")
+            checkpoint_world_size = (
+                len(rng_by_rank) if isinstance(rng_by_rank, (list, tuple)) else None
+            )
+        self._checkpoint_world_size = checkpoint_world_size
+        current_world_size = 1 if self.distributed is None else int(self.distributed.world_size)
+        world_size_changed = (
+            checkpoint_world_size is not None and checkpoint_world_size != current_world_size
+        )
+        super().load_payload(
+            payload=payload,
+            exclude_keys=exclude_keys,
+            include_keys=include_keys,
+            restore_rng=restore_rng and not world_size_changed,
+            **kwargs,
+        )
 
     def setup(self) -> None:
         distributed_cfg = self.cfg.decoder_training.distributed
@@ -76,21 +115,6 @@ class LatentPixelDecoderTrainingRunner(BaseRunner):
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
 
-        loader_factory = hydra.utils.instantiate(self.cfg.data.loader)
-        build_loader = getattr(loader_factory, "build", None)
-        if not callable(build_loader):
-            raise TypeError("data.loader must instantiate RLinf's OpenPI loader factory")
-        loader_bundle = build_loader(
-            rank=int(self.distributed.rank),
-            world_size=int(self.distributed.world_size),
-        )
-        self.data_loader = getattr(loader_bundle, "data_loader", None)
-        source = getattr(loader_bundle, "source", None)
-        if self.data_loader is None or not isinstance(source, str):
-            raise TypeError("RLinf OpenPI loader factory returned an invalid bundle")
-        generator = getattr(openpi_torch_loader(self.data_loader), "generator", None)
-        self._data_generator_state = None if generator is None else generator.get_state().clone()
-
         policy_cfg = _policy_hydra_config(self.cfg.latent_producer.policy_cfg)
         policy = hydra.utils.instantiate(policy_cfg)
         if not isinstance(policy, torch.nn.Module):
@@ -101,6 +125,47 @@ class LatentPixelDecoderTrainingRunner(BaseRunner):
         if not callable(getattr(policy, "encode_observation_prefix", None)):
             raise TypeError("latent producer must implement encode_observation_prefix(observation)")
         self.policy = policy
+
+        replay_cfg = OmegaConf.select(self.cfg, "data.replay", default=None)
+        if replay_cfg is not None:
+            self.trajectory_replay = hydra.utils.instantiate(
+                replay_cfg,
+                encoder=policy,
+                rank=int(self.distributed.rank),
+                world_size=int(self.distributed.world_size),
+            )
+            source = str(getattr(self.trajectory_replay, "data_dir", ""))
+            counts = self.trajectory_replay.task_episode_counts()
+            expected_episodes = int(
+                OmegaConf.select(
+                    self.cfg,
+                    "decoder_training.expected_episodes",
+                    default=0,
+                )
+                or 0
+            )
+            if expected_episodes > 0 and sum(counts.values()) != expected_episodes:
+                raise RuntimeError(
+                    "collected pixel replay episode count mismatch: "
+                    f"expected {expected_episodes}, found {sum(counts.values())}"
+                )
+        else:
+            loader_factory = hydra.utils.instantiate(self.cfg.data.loader)
+            build_loader = getattr(loader_factory, "build", None)
+            if not callable(build_loader):
+                raise TypeError("data.loader must instantiate RLinf's OpenPI loader factory")
+            loader_bundle = build_loader(
+                rank=int(self.distributed.rank),
+                world_size=int(self.distributed.world_size),
+            )
+            self.data_loader = getattr(loader_bundle, "data_loader", None)
+            source = getattr(loader_bundle, "source", None)
+            if self.data_loader is None or not isinstance(source, str):
+                raise TypeError("RLinf OpenPI loader factory returned an invalid bundle")
+            generator = getattr(openpi_torch_loader(self.data_loader), "generator", None)
+            self._data_generator_state = (
+                None if generator is None else generator.get_state().clone()
+            )
 
         decoder = hydra.utils.instantiate(self.cfg.pixel_decoder)
         if not isinstance(decoder, torch.nn.Module):
@@ -139,7 +204,19 @@ class LatentPixelDecoderTrainingRunner(BaseRunner):
                 "latent_producer": type(policy).__name__,
                 "latent_producer_frozen": True,
                 "dataset": source,
-                "download_endpoint": configured_download_endpoint(),
+                "dataset_episodes": (
+                    None
+                    if self.trajectory_replay is None
+                    else sum(self.trajectory_replay.task_episode_counts().values())
+                ),
+                "dataset_frames": (
+                    None
+                    if self.trajectory_replay is None
+                    else int(self.trajectory_replay.num_transitions)
+                ),
+                "download_endpoint": (
+                    configured_download_endpoint() if self.trajectory_replay is None else None
+                ),
                 "distributed_backend": "torch.nn.parallel.DistributedDataParallel",
             }
         )
@@ -161,7 +238,22 @@ class LatentPixelDecoderTrainingRunner(BaseRunner):
         return numerator // denominator
 
     def _restore_data_iterator(self) -> None:
+        if self.trajectory_replay is not None:
+            micro_updates = int(self.global_step) * int(self.gradient_accumulation)
+            batch_size = int(self.cfg.decoder_training.micro_batch_size)
+            self.trajectory_replay.seek_update(micro_updates, batch_size=batch_size)
+            steps_per_epoch = int(self.trajectory_replay.steps_per_epoch(batch_size=batch_size))
+            self._data_epoch, self._data_iter_offset = divmod(
+                micro_updates,
+                steps_per_epoch,
+            )
+            self.epoch = self._data_epoch
+            self.data_iterator = None
+            self._data_generator_state = None
+            return
         assert self.data_loader is not None
+        num_batches = get_official_openpi_sft_num_batches(self.data_loader)
+        self._normalize_resume_cursor(num_batches)
         torch_loader = openpi_torch_loader(self.data_loader)
         generator = getattr(torch_loader, "generator", None)
         if generator is not None and self._data_generator_state is not None:
@@ -174,7 +266,32 @@ class LatentPixelDecoderTrainingRunner(BaseRunner):
         for _ in range(int(self._data_iter_offset)):
             next(self.data_iterator)
 
+    def _normalize_resume_cursor(self, num_batches: int) -> None:
+        """Map the logical optimizer step to the active DDP data-loader shape."""
+
+        if num_batches <= 0:
+            raise ValueError("decoder data loader must contain at least one batch")
+        current_world_size = 1 if self.distributed is None else int(self.distributed.world_size)
+        if self._checkpoint_world_size in (None, current_world_size):
+            return
+        micro_batches_consumed = int(self.global_step) * int(self.gradient_accumulation)
+        self._data_epoch, self._data_iter_offset = divmod(micro_batches_consumed, num_batches)
+        self.epoch = self._data_epoch
+        # Rank-local generator states are topology-specific. The new ranks use
+        # setup's deterministic seed and advance to the normalized cursor.
+        self._data_generator_state = None
+
     def _next_batch(self) -> Any:
+        if self.trajectory_replay is not None:
+            batch_size = int(self.cfg.decoder_training.micro_batch_size)
+            batch = self.trajectory_replay.sample(batch_size, include_images=True)
+            steps_per_epoch = int(self.trajectory_replay.steps_per_epoch(batch_size=batch_size))
+            self._data_iter_offset += 1
+            if self._data_iter_offset >= steps_per_epoch:
+                self._data_epoch += 1
+                self._data_iter_offset = 0
+            self.epoch = self._data_epoch
+            return batch
         assert self.data_iterator is not None and self.data_loader is not None
         num_batches = get_official_openpi_sft_num_batches(self.data_loader)
         if self._data_iter_offset >= num_batches:
@@ -212,7 +329,7 @@ class LatentPixelDecoderTrainingRunner(BaseRunner):
         register_pytree_dataclasses(observation)
         observation = tree_map(
             lambda value: (
-                torch.as_tensor(value, device=self.device, non_blocking=True).contiguous()
+                torch.as_tensor(value).to(device=self.device, non_blocking=True).contiguous()
                 if value is not None
                 else None
             ),
@@ -225,6 +342,59 @@ class LatentPixelDecoderTrainingRunner(BaseRunner):
         target = torch.stack([observation.images[key] for key in image_keys], dim=1)
         # OpenPI's model-space pixels use [-1, 1]. Decoder output is [0, 1].
         return observation, ((target.float() + 1.0) * 0.5).clamp(0.0, 1.0)
+
+    def _encode_frozen_prefix(self, observation: Any) -> torch.Tensor:
+        """Encode one prefix with the runner's frozen latent producer."""
+
+        assert self.policy is not None
+        prefix = self.policy.encode_observation_prefix(observation)
+        if not isinstance(prefix, torch.Tensor):
+            raise TypeError("latent producer must return a tensor prefix")
+        return prefix
+
+    def _prepare_replay_batch(self, batch: Any) -> tuple[torch.Tensor, torch.Tensor]:
+        """Move one single-frame collected replay batch to decoder model space."""
+
+        if not isinstance(batch, dict):
+            raise TypeError("collected pixel replay must return a dictionary batch")
+        prefix = batch.get("obs_embedding")
+        images = batch.get("images")
+        if not isinstance(prefix, torch.Tensor) or not isinstance(images, torch.Tensor):
+            raise TypeError("collected pixel replay requires obs_embedding and images tensors")
+        if prefix.ndim != 4 or int(prefix.shape[1]) != 1:
+            raise ValueError(
+                f"collected pixel replay prefix must be [B,1,N,D], got {tuple(prefix.shape)}"
+            )
+        if images.ndim != 6 or int(images.shape[1]) != 1 or int(images.shape[-1]) != 3:
+            raise ValueError(
+                f"collected pixel replay images must be [B,1,V,H,W,3], got {tuple(images.shape)}"
+            )
+        prefix = prefix[:, 0].to(device=self.device, non_blocking=True).contiguous()
+        target = (
+            images[:, 0]
+            .to(device=self.device, dtype=torch.float32, non_blocking=True)
+            .permute(0, 1, 4, 2, 3)
+            .contiguous()
+            .div_(255.0)
+        )
+        image_size = int(self.cfg.pixel_decoder.image_size)
+        if tuple(target.shape[-2:]) != (image_size, image_size):
+            target = F.interpolate(
+                target.flatten(0, 1),
+                size=(image_size, image_size),
+                mode="bilinear",
+                align_corners=False,
+                antialias=True,
+            ).unflatten(0, (-1, int(target.shape[1])))
+        return prefix, target
+
+    def _prepare_training_batch(self, batch: Any) -> tuple[torch.Tensor, torch.Tensor]:
+        """Resolve either an official OpenPI batch or an encoded RGB replay batch."""
+
+        if self.trajectory_replay is not None:
+            return self._prepare_replay_batch(batch)
+        observation, target = self._prepare_observation(batch)
+        return self._encode_frozen_prefix(observation), target
 
     def run(self) -> list[dict[str, float]]:
         assert self.policy is not None
@@ -260,9 +430,7 @@ class LatentPixelDecoderTrainingRunner(BaseRunner):
             latest_prediction: torch.Tensor | None = None
             latest_target: torch.Tensor | None = None
             for micro_step in range(accumulation):
-                observation, target = self._prepare_observation(self._next_batch())
-                with torch.inference_mode():
-                    prefix = self.policy.encode_observation_prefix(observation)
+                prefix, target = self._prepare_training_batch(self._next_batch())
                 last_micro = micro_step + 1 == accumulation
                 no_sync = getattr(self.pixel_decoder, "no_sync", None)
                 sync_context = (

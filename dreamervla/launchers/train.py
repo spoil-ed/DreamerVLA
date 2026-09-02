@@ -29,6 +29,7 @@ _LAUNCHER_KEYS = {
     "distributed",
     "dry_run",
     "gpus",
+    "master_addr",
     "master_port",
     "ngpu",
     "print_config",
@@ -306,14 +307,16 @@ def _command(
     distributed = bool(_launch_value(cfg, launcher, "distributed", False))
     command = [python, "-m"]
     if distributed and ngpu > 1:
+        master_addr = str(_launch_value(cfg, launcher, "master_addr", "127.0.0.1"))
         port = int(_launch_value(cfg, launcher, "master_port", 29500))
         command.extend(
             [
                 "torch.distributed.run",
-                "--standalone",
                 "--nnodes=1",
+                "--node-rank=0",
                 f"--nproc-per-node={ngpu}",
-                f"--master_port={port}",
+                f"--master-addr={master_addr}",
+                f"--master-port={port}",
                 "-m",
             ]
         )

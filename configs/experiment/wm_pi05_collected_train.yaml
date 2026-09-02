@@ -15,6 +15,7 @@ launch:
   distributed: true
   ngpu: 8
   gpus: null
+  master_addr: 127.0.0.1
   master_port: 29500
   python: python
   write_libero_config: true
@@ -48,6 +49,7 @@ training:
   classifier_warmup_steps: 0
   warmup_replay_epochs: 1
   warmup_checkpoint_every_epochs: 1
+  wm_warmup_checkpoint_every_steps: 1000
   wm_profile_steps: 8
   # Sampling runs the frozen prefix producer on this rank's GPU.
   wm_prefetch_workers: 0

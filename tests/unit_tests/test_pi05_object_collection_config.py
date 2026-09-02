@@ -39,6 +39,7 @@ def test_pi05_object_sft_collection_covers_all_tasks_and_outcomes() -> None:
     assert plan["collect"]["episodes_per_task"] == 200
     assert plan["inference"]["action_steps"] == 10
     assert plan["inference"]["decoder"]["kwargs"]["action_chunk"] == 50
+    assert plan["dump"]["preprocess_config"]["action_steps"] == 10
     assert plan["inference"]["decoder"]["kwargs"]["model_path"].endswith(
         "data/checkpoints/pi05_base"
     )
@@ -70,3 +71,56 @@ def test_pi05_object_sft_checkpoint_can_come_from_environment(monkeypatch) -> No
         )
 
     assert cfg.collect.policy_ckpt_path == checkpoint
+
+
+def test_pi05_object_sinfra_profile_owns_remote_runtime_configuration(
+    monkeypatch,
+) -> None:
+    from dreamervla.launchers.train import build_launch
+
+    for key in (
+        "DVLA_DATA_ROOT",
+        "RUN_ROOT",
+        "LIBERO_CONFIG_PATH",
+        "PI05_BASE_CKPT",
+        "PI05_LIBERO_CKPT",
+        "PI05_ASSETS_CKPT",
+        "PI05_SFT_CKPT",
+        "OPENPI_ROOT",
+        "JAX_PLATFORMS",
+        "XLA_PYTHON_CLIENT_PREALLOCATE",
+        "MUJOCO_GL",
+        "PYOPENGL_PLATFORM",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    launch = build_launch(
+        [
+            "--config",
+            "collect_rollouts_pi05_object",
+            "profile=sinfra_pi05_object",
+            "dry_run=true",
+        ]
+    )
+
+    assert launch.cfg.profile.name == "sinfra_pi05_object"
+    assert launch.cfg.run.output_root == "/jfs/oss-import/xinglei/pi05_outputs"
+    assert launch.cfg.launch.write_libero_config is False
+    assert launch.cfg.task.pi05.base_ckpt_path.endswith("/lerobot/pi05_base")
+    assert launch.cfg.task.pi05.assets_path.endswith("/RLinf-Pi05-LIBERO-SFT")
+    assert launch.cfg.task.pi05.action_horizon == 50
+    assert launch.cfg.task.pi05.replan_steps == 10
+    assert launch.cfg.collect.action_steps == 10
+    assert str(launch.cfg.collect.policy_ckpt_path).endswith(
+        "/pi05_libero_sft_one_episode_per_task/20260823_162557/checkpoints/latest.ckpt"
+    )
+    assert launch.cfg.runner.logger.logger_backends == ["tensorboard", "wandb"]
+    assert launch.cfg.runner.logger.wandb_mode == "online"
+    assert launch.env["DVLA_DATA_ROOT"] == "/jfs/oss-import/xinglei/DreamerVLA/data"
+    assert launch.env["PYTHONUNBUFFERED"] == "1"
+    assert launch.env["JAX_PLATFORMS"] == "cpu"
+    assert launch.env["XLA_PYTHON_CLIENT_PREALLOCATE"] == "false"
+    assert launch.env["MUJOCO_GL"] == "osmesa"
+    assert launch.env["PYOPENGL_PLATFORM"] == "osmesa"
+    assert launch.command[0] == "/jfs/oss-import/xinglei/DreamerVLA/.venv-pi05/bin/python"
+    assert "profile=sinfra_pi05_object" in launch.command

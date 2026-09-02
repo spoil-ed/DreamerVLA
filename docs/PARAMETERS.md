@@ -43,6 +43,7 @@ Shell launchers expose a small set of convenience keys and pass remaining
 | `training.classifier_warmup_steps` | classifier update budget |
 | `training.warmup_replay_epochs` | replay-pass derived update budget |
 | `training.warmup_checkpoint_every_epochs` | warmup checkpoint cadence in complete replay epochs |
+| `training.wm_warmup_checkpoint_every_steps` | optional WM warmup checkpoint cadence in optimizer steps; `0` disables step checkpoints |
 | `training.wm_profile_steps` | bounded WM update profile budget; `-1` is diagnostic-only all-step profiling |
 | `training.wm_prefetch_workers` | CPU replay batches built ahead of the current WM update |
 | `training.world_model_ddp.*` | opt-in WM-only DDP flags; the offline fixed-graph recipe enables `static_graph` and `gradient_as_bucket_view` |

@@ -1261,17 +1261,26 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         if steps_per_epoch <= 0 or total_steps <= 0:
             raise RuntimeError(f"format v2 {component} warmup geometry must be positive")
         complete = bool(payload["complete"])
-        expected_epoch = int(total_steps) // int(steps_per_epoch) if complete else epoch
+        expected_epoch = (
+            int(total_steps) // int(steps_per_epoch)
+            if complete
+            else int(step) // int(steps_per_epoch)
+        )
         if epoch != expected_epoch:
+            mismatch = "epoch mismatch" if complete else "progress mismatch"
             raise RuntimeError(
-                f"format v2 {component} warmup epoch mismatch: "
+                f"format v2 {component} warmup {mismatch}: "
                 f"warmup_epoch={epoch}, expected {expected_epoch}"
             )
-        expected_step = int(total_steps) if complete else epoch * int(steps_per_epoch)
-        if step != expected_step:
+        if complete and step != int(total_steps):
             raise RuntimeError(
                 f"format v2 {component} warmup progress mismatch: "
-                f"warmup_step={step}, expected {expected_step} from warmup_epoch={epoch}"
+                f"warmup_step={step}, expected {int(total_steps)} for complete checkpoint"
+            )
+        if not complete and not 0 <= step <= int(total_steps):
+            raise RuntimeError(
+                f"format v2 {component} warmup progress mismatch: "
+                f"warmup_step={step} is outside [0, {int(total_steps)}]"
             )
         return {"epoch": epoch, "step": step, "complete": complete}
 
@@ -1521,6 +1530,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         optim_cfg: Any,
         checkpoint_every_epochs: int,
         topk_manager: TopKCheckpointManager | None,
+        checkpoint_every_steps: int = 0,
     ) -> float:
         last = 0.0
         total_epochs = self._warmup_epoch_count(
@@ -1529,29 +1539,43 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         current_step = int(start_step)
         for epoch_index in range(int(start_epoch), total_epochs):
             epoch_end = min(int(total_steps), (epoch_index + 1) * int(steps_per_epoch))
-            last = self._offline_warmup_wm(
-                replay,
-                steps=epoch_end,
-                batch_size=batch_size,
-                optim_cfg=optim_cfg,
-                start_step=current_step,
-            )
-            current_step = epoch_end
-            completed_epoch = epoch_index + 1
-            if (
-                current_step < int(total_steps)
-                and int(checkpoint_every_epochs) > 0
-                and completed_epoch % int(checkpoint_every_epochs) == 0
-            ):
-                self._save_wm_warmup_checkpoint(
-                    step=current_step,
-                    epoch=completed_epoch,
-                    complete=False,
-                    metrics={"loss": float(last)},
-                    steps_per_epoch=steps_per_epoch,
-                    total_steps=total_steps,
-                    topk_manager=topk_manager,
+            while current_step < epoch_end:
+                segment_end = epoch_end
+                if int(checkpoint_every_steps) > 0:
+                    next_step_checkpoint = (current_step // int(checkpoint_every_steps) + 1) * int(
+                        checkpoint_every_steps
+                    )
+                    segment_end = min(segment_end, next_step_checkpoint)
+                last = self._offline_warmup_wm(
+                    replay,
+                    steps=segment_end,
+                    batch_size=batch_size,
+                    optim_cfg=optim_cfg,
+                    start_step=current_step,
                 )
+                current_step = segment_end
+                checkpoint_due_by_step = (
+                    int(checkpoint_every_steps) > 0
+                    and current_step % int(checkpoint_every_steps) == 0
+                )
+                completed_epoch = current_step // int(steps_per_epoch)
+                checkpoint_due_by_epoch = (
+                    current_step == epoch_end
+                    and int(checkpoint_every_epochs) > 0
+                    and completed_epoch % int(checkpoint_every_epochs) == 0
+                )
+                if current_step < int(total_steps) and (
+                    checkpoint_due_by_step or checkpoint_due_by_epoch
+                ):
+                    self._save_wm_warmup_checkpoint(
+                        step=current_step,
+                        epoch=completed_epoch,
+                        complete=False,
+                        metrics={"loss": float(last)},
+                        steps_per_epoch=steps_per_epoch,
+                        total_steps=total_steps,
+                        topk_manager=topk_manager,
+                    )
         self._save_wm_warmup(
             completed_steps=int(total_steps),
             completed_epochs=int(total_steps) // int(steps_per_epoch),
@@ -1782,6 +1806,14 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
         )
         warmup_checkpoint_every_epochs = int(
             OmegaConf.select(cfg, "training.warmup_checkpoint_every_epochs", default=1) or 0
+        )
+        wm_warmup_checkpoint_every_steps = int(
+            OmegaConf.select(
+                cfg,
+                "training.wm_warmup_checkpoint_every_steps",
+                default=0,
+            )
+            or 0
         )
         bs = int(OmegaConf.select(cfg, "dataloader.batch_size", default=4))
         cls_bs = int(OmegaConf.select(cfg, "training.classifier_batch_size", default=16))
@@ -2095,6 +2127,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                 optim_cfg=optim_cfg,
                 checkpoint_every_epochs=warmup_checkpoint_every_epochs,
                 topk_manager=wm_topk_manager,
+                checkpoint_every_steps=wm_warmup_checkpoint_every_steps,
             )
             if self.distributed.is_main_process:
                 self.console_banner("[1/2] WM WARMUP", subtitle=f"wm_loss {wm_last:.3f}", done=True)

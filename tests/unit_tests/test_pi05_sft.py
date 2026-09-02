@@ -30,6 +30,23 @@ from dreamervla.runners.vla_sft_training_runner import (
 from dreamervla.train import _auto_apply_distributed
 from dreamervla.utils.openpi_imports import configure_openpi_jax_runtime
 
+_LOCAL_EXPERIMENT_NAMES = {
+    "pi05_libero_sft_one_episode_per_task",
+    "pi05_libero_sft_five_episodes_per_task",
+}
+
+
+def _experiment_overrides(experiment: str) -> list[str]:
+    overrides = [f"experiment={experiment}"]
+    if experiment not in _LOCAL_EXPERIMENT_NAMES:
+        return overrides
+    root = Path(__file__).resolve().parents[2]
+    local_config_root = root / "experiments" / "configs"
+    config_path = local_config_root / "experiment" / f"{experiment}.yaml"
+    if not config_path.is_file():
+        pytest.skip(f"local ignored experiment config is absent: {config_path}")
+    return [f"hydra.searchpath=[file://{local_config_root}]", *overrides]
+
 
 def test_pi05_pytorch_loader_keeps_jax_off_cuda(
     monkeypatch: pytest.MonkeyPatch,
@@ -64,21 +81,28 @@ def test_openpi_runtime_rejects_jax_imported_before_backend_selection(
 
 
 @pytest.mark.parametrize(
-    "script_name",
-    ["train_full.sh", "train_one_episode_per_task.sh"],
+    ("script_name", "processes"),
+    [
+        ("train_one_episode_per_task.sh", 8),
+        ("train_five_episodes_per_task.sh", 8),
+    ],
 )
 def test_pi05_sft_launchers_use_single_node_loopback_rendezvous(
     script_name: str,
+    processes: int,
 ) -> None:
     root = Path(__file__).resolve().parents[2]
-    text = (root / "experiments" / "pi05_sft" / script_name).read_text(encoding="utf-8")
+    script_path = root / "experiments" / "pi05_sft" / script_name
+    if not script_path.is_file():
+        pytest.skip(f"local ignored experiment launcher is absent: {script_path}")
+    text = script_path.read_text(encoding="utf-8")
 
     assert "--standalone" not in text
     assert "--nnodes=1" in text
     assert "--node-rank=0" in text
     assert "--master-addr=127.0.0.1" in text
     assert "--master-port=29500" in text
-    assert "--nproc-per-node=8" in text
+    assert f"--nproc-per-node={processes}" in text
     assert "exec python -m torch.distributed.run" in text
     assert ".rlinf-runtime" not in text
     assert "site-packages" not in text
@@ -125,7 +149,16 @@ def test_pi05_sft_experiment_composes_migrated_rlinf_fsdp_recipe() -> None:
 
 
 @pytest.mark.parametrize(
-    ("experiment", "run_name", "learning_rate", "micro_batch_size", "accumulation"),
+    (
+        "experiment",
+        "run_name",
+        "learning_rate",
+        "micro_batch_size",
+        "accumulation",
+        "training_steps",
+        "action_horizon",
+        "world_size",
+    ),
     [
         (
             "pi05_libero_sft_full",
@@ -133,6 +166,9 @@ def test_pi05_sft_experiment_composes_migrated_rlinf_fsdp_recipe() -> None:
             2.5e-5,
             1,
             32,
+            30000,
+            10,
+            8,
         ),
         (
             "pi05_libero_sft_one_episode_per_task",
@@ -140,6 +176,19 @@ def test_pi05_sft_experiment_composes_migrated_rlinf_fsdp_recipe() -> None:
             5.0e-6,
             32,
             1,
+            30000,
+            50,
+            8,
+        ),
+        (
+            "pi05_libero_sft_five_episodes_per_task",
+            "pi05_libero_sft_five_episodes_per_task",
+            5.0e-6,
+            32,
+            1,
+            30000,
+            50,
+            8,
         ),
     ],
 )
@@ -149,31 +198,48 @@ def test_pi05_sft_eight_gpu_recipes_use_global_batch_256(
     learning_rate: float,
     micro_batch_size: int,
     accumulation: int,
+    training_steps: int,
+    action_horizon: int,
+    world_size: int,
 ) -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        cfg = compose(config_name="train", overrides=[f"experiment={experiment}"])
+        cfg = compose(config_name="train", overrides=_experiment_overrides(experiment))
     OmegaConf.resolve(cfg)
 
     assert cfg.run.name == run_name
     assert cfg.data.loader.batch_size == micro_batch_size
     assert cfg.actor.micro_batch_size == micro_batch_size
     assert cfg.actor.global_batch_size == 256
-    assert cfg.actor.global_batch_size // (micro_batch_size * 8) == accumulation
+    assert cfg.actor.global_batch_size // (micro_batch_size * world_size) == accumulation
     assert cfg.actor.optim.lr == pytest.approx(learning_rate)
-    expected_steps = 80000 if "one_episode_per_task" in experiment else 30000
-    expected_horizon = 50 if "one_episode_per_task" in experiment else 10
-    assert cfg.actor.optim.total_training_steps == expected_steps
-    assert cfg.training.max_steps == expected_steps
-    assert cfg.task.pi05.action_horizon == expected_horizon
-    assert cfg.task.action_horizon == expected_horizon
-    assert cfg.data.loader.action_horizon == expected_horizon
-    assert cfg.actor.policy_cfg.kwargs.action_chunk == expected_horizon
+    assert cfg.actor.optim.total_training_steps == training_steps
+    assert cfg.training.max_steps == training_steps
+    assert cfg.task.pi05.action_horizon == action_horizon
+    assert cfg.task.action_horizon == action_horizon
+    assert cfg.data.loader.action_horizon == action_horizon
+    assert cfg.actor.policy_cfg.kwargs.action_chunk == action_horizon
     assert cfg.actor.distributed.strategy == "ddp"
+    assert cfg.actor.distributed.backend == "nccl"
+    assert cfg.actor.distributed.init_sync is False
     assert cfg.actor.policy_cfg.kwargs.batch_size == 256
     assert cfg.actor.distributed.find_unused_parameters is False
     assert cfg.training.distributed_strategy == "ddp"
-    validate_cfg(cfg, world_size=8)
+    validate_cfg(cfg, world_size=world_size)
+
+
+def test_pi05_five_episode_recipe_uses_balanced_subset_and_milestones() -> None:
+    config_dir = Path(__file__).resolve().parents[2] / "configs"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        cfg = compose(
+            config_name="train",
+            overrides=_experiment_overrides("pi05_libero_sft_five_episodes_per_task"),
+        )
+    OmegaConf.resolve(cfg)
+
+    assert "pi05_libero_five_episodes_per_task" in cfg.data.source
+    assert cfg.data.loader.source == cfg.data.source
+    assert list(cfg.training.milestone_steps) == [2000, 5000, 10000, 20000, 30000]
 
 
 def test_pi05_one_trajectory_recipe_retains_eval_milestones() -> None:
@@ -181,7 +247,7 @@ def test_pi05_one_trajectory_recipe_retains_eval_milestones() -> None:
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         cfg = compose(
             config_name="train",
-            overrides=["experiment=pi05_libero_sft_one_episode_per_task"],
+            overrides=_experiment_overrides("pi05_libero_sft_one_episode_per_task"),
         )
     OmegaConf.resolve(cfg)
     runner = object.__new__(VLASFTTrainingRunner)
@@ -194,8 +260,7 @@ def test_pi05_one_trajectory_recipe_retains_eval_milestones() -> None:
         5000,
         10000,
         20000,
-        40000,
-        80000,
+        30000,
     ]
     assert runner._milestone_checkpoint_paths(4000) == ()
     assert runner._milestone_checkpoint_paths(5000) == (

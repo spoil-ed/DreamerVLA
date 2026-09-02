@@ -1878,6 +1878,31 @@ def test_wm_warmup_resume_restores_next_epoch_and_requires_optimizer(tmp_path):
         runner._load_wm_warmup_checkpoint(path, strict=True)
 
 
+def test_wm_warmup_resume_accepts_checkpoint_inside_epoch(tmp_path):
+    from omegaconf import OmegaConf
+
+    from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
+
+    runner = WorldModelTrainingRunner.__new__(WorldModelTrainingRunner)
+    runner._output_dir = str(tmp_path)
+    runner.global_step = 0
+    runner.cfg = OmegaConf.create({"world_model": {}})
+    runner.world_model = torch.nn.Linear(2, 2)
+    runner.world_model_optimizer = torch.optim.AdamW(runner.world_model.parameters(), lr=1e-3)
+    path = runner._save_wm_warmup_checkpoint(
+        step=3,
+        epoch=0,
+        complete=False,
+        metrics={"loss": 0.2},
+        steps_per_epoch=7,
+        total_steps=20,
+    )
+
+    restored = runner._load_wm_warmup_checkpoint(path, strict=True)
+
+    assert restored == {"epoch": 0, "step": 3, "complete": False}
+
+
 def test_strict_warmup_resume_rejects_hf_only_without_torch_progress(tmp_path):
     import pytest
     from omegaconf import OmegaConf
@@ -2053,6 +2078,37 @@ def test_partial_final_warmup_keeps_completed_epoch_floor_and_final_metrics():
     assert saved["completed_steps"] == 12
     assert saved["metrics"] == {"loss": 12.0}
     assert saved["topk_manager"] is not None
+
+
+def test_wm_warmup_saves_at_step_cadence_and_resumes_from_exact_step():
+    from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
+
+    runner = WorldModelTrainingRunner.__new__(WorldModelTrainingRunner)
+    calls: list[tuple[int, int]] = []
+    checkpoints: list[dict[str, object]] = []
+    final: dict[str, object] = {}
+    runner._offline_warmup_wm = lambda _replay, *, steps, start_step, **_kwargs: (
+        calls.append((start_step, steps)) or float(steps)
+    )
+    runner._save_wm_warmup_checkpoint = lambda **kwargs: checkpoints.append(kwargs)
+    runner._save_wm_warmup = lambda **kwargs: final.update(kwargs)
+
+    runner._run_wm_warmup_epochs(
+        object(),
+        total_steps=12,
+        steps_per_epoch=12,
+        start_step=4,
+        start_epoch=0,
+        batch_size=1,
+        optim_cfg=None,
+        checkpoint_every_epochs=1,
+        topk_manager=None,
+        checkpoint_every_steps=4,
+    )
+
+    assert calls == [(4, 8), (8, 12)]
+    assert [(checkpoint["step"], checkpoint["epoch"]) for checkpoint in checkpoints] == [(8, 0)]
+    assert final["completed_steps"] == 12
 
 
 def test_classifier_final_topk_uses_f1_not_accuracy():

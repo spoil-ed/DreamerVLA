@@ -4,3 +4,6 @@ logger_backends: [tensorboard, wandb]
 log_path: ${training.out_dir}
 wandb_mode: online
 wandb_proxy: null
+# W&B rewind is a private-preview server feature. Keep ordinary checkpoint
+# resume on the stable run ID without requesting a remote-history rewrite.
+wandb_rewind_on_resume: false

@@ -134,6 +134,43 @@ def test_forward_batch_executes_action_chunk_open_loop() -> None:
     third = w.forward_batch([{"seed": 20}], [0])
 
     assert [int(out["actions"][0][0]) for out in (first, second, third)] == [0, 1, 2]
+    assert [int(out["obs_embedding"][0][0]) for out in (first, second, third)] == [0, 10, 20]
+
+
+def test_hidden_disabled_infers_only_for_action_queue_refills() -> None:
+    class _CountingActionOnlyBundle(_LangBundle):
+        def __init__(self) -> None:
+            self.calls: list[list[int]] = []
+
+        def predict_batch(self, preps):
+            raise AssertionError("hidden-producing path must not run")
+
+        def predict_actions_batch(self, preps):
+            seeds = [int(prep["seed"]) for prep in preps]
+            self.calls.append(seeds)
+            return [
+                np.stack([np.full((7,), float(seed + step), dtype=np.float32) for step in range(8)])
+                for seed in seeds
+            ]
+
+    cfg = _cfg()
+    cfg["action_steps"] = 3
+    cfg["emit_hidden_sidecar"] = False
+    w = RolloutInferenceWorker(cfg, {}, num_envs=2)
+    w._bundle = _CountingActionOnlyBundle()
+    w._extractors = [w._bundle.make_extractor() for _ in range(2)]
+
+    first = w.forward_batch([{"seed": 0}, {"seed": 10}], [0, 1])
+    second = w.forward_batch([{"seed": 100}, {"seed": 110}], [0, 1])
+    w.reset_states([1])
+    third = w.forward_batch([{"seed": 200}, {"seed": 210}], [0, 1])
+    fourth = w.forward_batch([{"seed": 300}, {"seed": 310}], [0, 1])
+
+    assert [int(value[0]) for value in first["actions"]] == [0, 10]
+    assert [int(value[0]) for value in second["actions"]] == [1, 11]
+    assert [int(value[0]) for value in third["actions"]] == [2, 210]
+    assert [int(value[0]) for value in fourth["actions"]] == [300, 211]
+    assert w._bundle.calls == [[0, 10], [210], [300]]
 
 
 def test_forward_batch_can_disable_hidden_sidecar() -> None:

@@ -156,11 +156,13 @@ def _validate_latent_pixel_decoder_contract(cfg: DictConfig, *, world_size: int)
     global_batch = int(OmegaConf.select(cfg, "decoder_training.global_batch_size", default=0) or 0)
     if micro <= 0 or global_batch <= 0:
         raise ValueError("pixel decoder micro_batch_size and global_batch_size must be positive")
-    loader_batch = int(OmegaConf.select(cfg, "data.loader.batch_size", default=0) or 0)
-    if loader_batch != micro:
-        raise ValueError(
-            "pixel decoder data.loader.batch_size must match decoder_training.micro_batch_size"
-        )
+    replay_target = str(OmegaConf.select(cfg, "data.replay._target_", default="") or "")
+    if not replay_target:
+        loader_batch = int(OmegaConf.select(cfg, "data.loader.batch_size", default=0) or 0)
+        if loader_batch != micro:
+            raise ValueError(
+                "pixel decoder data.loader.batch_size must match decoder_training.micro_batch_size"
+            )
     divisor = micro * max(1, int(world_size))
     if global_batch % divisor:
         raise ValueError(
@@ -169,7 +171,39 @@ def _validate_latent_pixel_decoder_contract(cfg: DictConfig, *, world_size: int)
         )
     if str(OmegaConf.select(cfg, "decoder_training.distributed.strategy", default="")) != "ddp":
         raise ValueError("pixel decoder training requires native torch DDP")
-    _validate_pi05_training_data_pipeline(cfg, route="pixel decoder")
+    if replay_target:
+        if not replay_target.endswith("Pi05TrajectoryReplay"):
+            raise ValueError("collected pixel decoder requires data.replay=Pi05TrajectoryReplay")
+        if int(OmegaConf.select(cfg, "data.replay.sequence_length", default=0) or 0) != 1:
+            raise ValueError("collected pixel decoder replay requires sequence_length=1")
+        if int(OmegaConf.select(cfg, "data.replay.encode_batch_size", default=0) or 0) <= 0:
+            raise ValueError("collected pixel decoder encode_batch_size must be positive")
+        task_ids = [
+            int(value)
+            for value in (OmegaConf.select(cfg, "data.replay.task_ids", default=[]) or [])
+        ]
+        if not task_ids or len(task_ids) != len(set(task_ids)):
+            raise ValueError("collected pixel decoder task_ids must be non-empty and unique")
+        episodes_per_task = int(
+            OmegaConf.select(cfg, "data.replay.max_episodes_per_task", default=0) or 0
+        )
+        expected_episodes = int(
+            OmegaConf.select(cfg, "decoder_training.expected_episodes", default=0) or 0
+        )
+        if episodes_per_task <= 0 or expected_episodes != episodes_per_task * len(task_ids):
+            raise ValueError(
+                "collected pixel decoder expected_episodes must equal "
+                "max_episodes_per_task * task count"
+            )
+        if not str(OmegaConf.select(cfg, "data.replay.data_dir", default="") or ""):
+            raise ValueError("collected pixel decoder requires data.replay.data_dir")
+        if (
+            str(OmegaConf.select(cfg, "data.replay.encoder_method", default="") or "")
+            != "encode_raw_observation_prefix_batch"
+        ):
+            raise ValueError("collected pixel decoder requires encode_raw_observation_prefix_batch")
+    else:
+        _validate_pi05_training_data_pipeline(cfg, route="pixel decoder")
     token_count = int(OmegaConf.select(cfg, "pixel_decoder.token_count", default=0) or 0)
     token_dim = int(OmegaConf.select(cfg, "pixel_decoder.token_dim", default=0) or 0)
     if token_count != int(
@@ -187,6 +221,15 @@ def _validate_latent_pixel_decoder_contract(cfg: DictConfig, *, world_size: int)
     )
     if len(view_indices) != len(image_keys):
         raise ValueError("pixel decoder view_indices must align one-to-one with target_image_keys")
+    if replay_target:
+        replay_image_keys = [
+            str(OmegaConf.select(cfg, "data.replay.base_image_key", default="") or ""),
+            str(OmegaConf.select(cfg, "data.replay.wrist_image_key", default="") or ""),
+        ]
+        if [str(value) for value in image_keys] != replay_image_keys:
+            raise ValueError(
+                "collected pixel decoder target_image_keys must match replay camera keys"
+            )
     if int(OmegaConf.select(cfg, "training.max_steps", default=0) or 0) <= 0:
         raise ValueError("pixel decoder training.max_steps must be positive")
 
@@ -1265,6 +1308,7 @@ def _validate_world_model_training_pipeline(cfg: DictConfig) -> None:
         "warmup_replay_epochs",
         "warmup_replay_max_steps",
         "warmup_checkpoint_every_epochs",
+        "wm_warmup_checkpoint_every_steps",
     ):
         val = int(OmegaConf.select(cfg, f"training.{key}", default=0))
         if val < 0:
@@ -1285,6 +1329,18 @@ def _validate_epoch_checkpoint_cadence(cfg: DictConfig) -> None:
         cadence = int(OmegaConf.select(cfg, "training.warmup_checkpoint_every_epochs", default=1))
         if cadence < 0:
             raise ValueError(f"training.warmup_checkpoint_every_epochs must be >= 0, got {cadence}")
+        step_cadence = int(
+            OmegaConf.select(
+                cfg,
+                "training.wm_warmup_checkpoint_every_steps",
+                default=0,
+            )
+            or 0
+        )
+        if step_cadence < 0:
+            raise ValueError(
+                f"training.wm_warmup_checkpoint_every_steps must be >= 0, got {step_cadence}"
+            )
         epochs = int(OmegaConf.select(cfg, "training.warmup_replay_epochs", default=0) or 0)
         if epochs > 1 and cadence == 0:
             raise ValueError(

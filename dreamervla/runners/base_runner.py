@@ -65,7 +65,17 @@ _SOURCE_HASH_DIRECTORIES = (
     "spec",
     "tests",
 )
-_SOURCE_HASH_SKIP_PARTS = {".mypy_cache", ".pytest_cache", ".ruff_cache", "__pycache__"}
+_SOURCE_HASH_SKIP_PARTS = {
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+    ".venv",
+    "__pycache__",
+    "node_modules",
+    "venv",
+}
 
 
 @functools.lru_cache(maxsize=1)
@@ -77,7 +87,16 @@ def _source_tree_sha256(root: pathlib.Path) -> str:
     for directory in _SOURCE_HASH_DIRECTORIES:
         candidate = root / directory
         if candidate.is_dir():
-            candidates.extend(candidate.rglob("*"))
+            for current_root, directory_names, file_names in os.walk(candidate):
+                directory_names[:] = [
+                    name for name in directory_names if name not in _SOURCE_HASH_SKIP_PARTS
+                ]
+                current_path = pathlib.Path(current_root)
+                candidates.extend(
+                    current_path / name
+                    for name in file_names
+                    if name not in _SOURCE_HASH_SKIP_PARTS
+                )
     paths = sorted(
         path
         for path in candidates
@@ -1128,6 +1147,11 @@ class BaseRunner(ABC):
         the current training loops.
         """
         self.write_run_artifacts()
+        distributed = getattr(self, "distributed", None)
+        if bool(getattr(distributed, "is_distributed", False)):
+            object_barrier = getattr(distributed, "object_barrier", None)
+            if callable(object_barrier):
+                object_barrier()
         return None
 
     def execute(self) -> object:

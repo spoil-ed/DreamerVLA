@@ -42,6 +42,9 @@ python -m dreamervla.launchers.train --config collect_rollouts_pi05_spatial gpus
 torchrun --standalone --nproc-per-node=8 -m dreamervla.train experiment=wm_pi05_collected_train
 torchrun --standalone --nproc-per-node=8 -m dreamervla.train experiment=wm_pi05_prefix_input_train
 torchrun --standalone --nproc-per-node=2 -m dreamervla.train experiment=pi05_pixel_decoder
+python -m dreamervla.launchers.train --config pi05_pixel_decoder_collected
+python -m dreamervla.launchers.train --config pi05_pixel_decoder_collected \
+  pixel_decoder=pi05-prefix-spatial run.name=pi05_pixel_decoder_collected_spatial
 python -m dreamervla.train experiment=wm_full_dataset_train task=openvla_onetraj_coldstart_libero
 bash scripts/experiments/world_model_training/train.sh --config dino-wm
 bash scripts/experiments/world_model_training/train.sh --config dreamer-wm
@@ -55,9 +58,10 @@ backend with `logger=tensorboard` / `logger=wandb`.
 Logger resume follows the checkpoint-owning run root. TensorBoard writes another
 event file in the same `tensorboard/` directory and purges the abandoned tail at
 the restored step. W&B persists its stable ID in `wandb/run_id.txt`; online mode
-resumes that run directly and, on SDKs with `resume_from`, truncates its abandoned
-tail at the restored step. Offline mode writes one local `offline-run-*` segment per
-process with the same ID. On a networked CPU host that shares the run directory,
+resumes that run directly. Remote tail rewind requires W&B private-preview server
+support and is therefore opt-in with `runner.logger.wandb_rewind_on_resume=true`.
+Offline mode writes one local `offline-run-*` segment per process with the same ID.
+On a networked CPU host that shares the run directory,
 stream the active logical run with the official W&B CLI:
 
 ```bash
@@ -84,6 +88,7 @@ wandb beta sync --live /path/to/run_root/wandb
 | π0.5 online-prefix WM warmup | `torchrun --standalone --nproc-per-node=8 -m dreamervla.train experiment=wm_pi05_collected_train` | `wm_pi05_collected_train` |
 | π0.5 native prefix-input WM warmup | `torchrun --standalone --nproc-per-node=8 -m dreamervla.train experiment=wm_pi05_prefix_input_train` | `wm_pi05_prefix_input_train` |
 | π0.5 latent-to-pixel decoder | `torchrun --standalone --nproc-per-node=2 -m dreamervla.train experiment=pi05_pixel_decoder` | `pi05_pixel_decoder` |
+| π0.5 collected-data decoder ablation | `python -m dreamervla.launchers.train --config pi05_pixel_decoder_collected` | `pi05_pixel_decoder_collected` |
 
 ## Experiments
 
@@ -96,6 +101,7 @@ wandb beta sync --live /path/to/run_root/wandb
 | `wm_pi05_collected_train` | DDP Chunk-WM warmup with online frozen π0.5 prefixes |
 | `wm_pi05_prefix_input_train` | DDP visual-only WM over native pre-PaliGemma `[968,2048]` prefix inputs |
 | `pi05_pixel_decoder` | DDP pixel reconstruction from frozen π0.5 prefix tokens |
+| `pi05_pixel_decoder_collected` | DDP baseline/spatial decoder training over all 2,000 collected Object trajectories |
 | `openvla_onetraj_libero_cotrain` | canonical Ray cotrain base recipe |
 | `wm_full_dataset_train` | full-replay WM warmup |
 | `wm_official_upper_bound` | pre-mainline WM training from official data |
@@ -173,6 +179,13 @@ of the immutable RLinf-aligned base checkpoint. The Object collection recipe als
 accepts the same path through `PI05_SFT_CKPT`, which keeps remote launch commands
 free of experiment-level Hydra overrides.
 
+The xinglei Sinfra deployment selects
+`profile=sinfra_pi05_object`. That profile binds the portable Object recipe to
+the mounted JFS data, output, OpenPI, LIBERO, base/assets, and one-trajectory SFT
+paths, and declares its subprocess environment and online logger mode. The remote
+wrapper remains responsible only for loading the selected W&B credential before
+starting the Hydra launcher.
+
 Collection shards use lossless time-major HDF5 `gzip` compression selected by
 `collect.hdf5_compression`; `collect.num_dump_workers` defaults to the inference
 worker count so multi-GPU jobs compress independent environment-rank shards in
@@ -216,6 +229,14 @@ as Chunk-WM, selects the real base/wrist slots from `[768,2048]`, and reconstruc
 the OpenPI model-space 224×224 RGB targets. Reconstructions are written under
 `video/train/`; the saved decoder accepts both raw prefixes and Chunk-WM
 `hidden_seq` predictions (extra proprio-conditioning width is ignored).
+
+`pi05_pixel_decoder_collected` streams all 2,000 collected LIBERO-Object
+trajectories (617,010 frames) and extracts frozen π0.5 prefixes one trajectory at
+a time, without materializing a multi-terabyte latent copy. The default
+`pi05-prefix` decoder is the checkpoint-compatible 2.56M baseline; select
+`pixel_decoder=pi05-prefix-spatial` for the 27.33M, six-layer spatial-mixing
+variant. Both use the same 10,000-step/global-batch-128 objective so their
+reconstruction metrics are directly comparable.
 
 ## Runtime Artifacts
 

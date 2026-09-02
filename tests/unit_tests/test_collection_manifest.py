@@ -11,6 +11,8 @@ import h5py
 import numpy as np
 
 from dreamervla.dataset.collection_manifest import (
+    build_collection_manifest,
+    collection_episode_records,
     complete_episode_ids_per_task,
     count_collected_episodes,
     count_episodes_per_task,
@@ -89,6 +91,8 @@ def _write_reward_hidden_pair(
             rgrp.attrs["num_samples"] = str(length)
             rgrp.attrs["task_id"] = int(spec["task_id"])
             rgrp.attrs["episode_id"] = int(spec["episode_id"])
+            if "success" in spec:
+                rgrp.attrs["success"] = bool(spec["success"])
             if "complete" in spec:
                 rgrp.attrs["complete"] = bool(spec["complete"])
             if spec.get("hidden", True):
@@ -250,6 +254,84 @@ def test_manifest_roundtrips(tmp_path):
     assert loaded["task"] == "libero_goal"
     assert loaded["target"] == 500
     assert loaded["collected"] == 360
+
+
+def test_build_collection_manifest_uses_complete_hdf5_episodes(tmp_path):
+    root = tmp_path / "pi05_libero_object"
+    reward = root / "reward"
+    hidden = root / "hidden"
+    _write_reward_hidden_pair(
+        reward / "traj.hdf5",
+        hidden / "traj.hdf5",
+        [
+            {"task_id": 0, "episode_id": 0, "success": True},
+            {"task_id": 1, "episode_id": 0, "success": False},
+        ],
+    )
+    with h5py.File(reward / "empty.hdf5", "w") as handle:
+        handle.create_group("data")
+
+    records = collection_episode_records(reward, hidden)
+    manifest = build_collection_manifest(
+        task_suite_name="libero_object",
+        mode="vla",
+        profile="test",
+        reward_dir=reward,
+        hidden_dir=hidden,
+        task_ids=[0, 1],
+        episodes_per_task=1,
+        write_hidden_sidecar=True,
+        collect_config={"action_steps": 10, "chunk_size": 50},
+        preprocess_config={"action_steps": 10, "chunk_size": 50},
+        data_attrs={"task_suite_name": "libero_object"},
+    )
+    path = write_manifest(root, manifest)
+    loaded = read_manifest(root)
+
+    assert [(record["task_id"], record["episode_id"]) for record in records] == [
+        (0, 0),
+        (1, 0),
+    ]
+    assert path == root / "collection_manifest.json"
+    assert loaded["schema_version"] == 2
+    assert loaded["status"] == "complete"
+    assert loaded["collected_episodes"] == 2
+    assert loaded["successes"] == 1
+    assert loaded["failures"] == 1
+    assert loaded["success_rate"] == 0.5
+    assert loaded["episodes_per_task"] == {"0": 1, "1": 1}
+    assert loaded["shards"] == ["traj.hdf5"]
+    assert loaded["collect_config"]["action_steps"] == 10
+    assert not (root / "collection_manifest.json.tmp").exists()
+
+
+def test_build_collection_manifest_requires_target_episode_ids(tmp_path):
+    root = tmp_path / "pi05_libero_object"
+    reward = root / "reward"
+    hidden = root / "hidden"
+    _write_reward_hidden_pair(
+        reward / "traj.hdf5",
+        hidden / "traj.hdf5",
+        [{"task_id": 0, "episode_id": 1, "success": True}],
+    )
+
+    manifest = build_collection_manifest(
+        task_suite_name="libero_object",
+        mode="vla",
+        profile=None,
+        reward_dir=reward,
+        hidden_dir=hidden,
+        task_ids=[0],
+        episodes_per_task=1,
+        write_hidden_sidecar=True,
+        collect_config={},
+        preprocess_config={},
+        data_attrs={},
+    )
+
+    assert manifest["collected_episodes"] == 1
+    assert manifest["remaining_episodes"] == 1
+    assert manifest["status"] == "in_progress"
 
 
 def test_read_manifest_missing_returns_none(tmp_path):

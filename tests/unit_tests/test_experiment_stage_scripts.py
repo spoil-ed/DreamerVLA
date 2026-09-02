@@ -183,6 +183,27 @@ def test_world_model_training_config_switch_selects_expected_recipe() -> None:
         assert f"experiment={experiment}" in result.stdout
 
 
+def test_distributed_launcher_uses_single_node_loopback_rendezvous() -> None:
+    from dreamervla.launchers.train import build_launch
+
+    launch = build_launch(
+        [
+            "--config",
+            "wm_pi05_collected_train",
+            "task=pi05_libero_object",
+            "profile=sinfra_pi05_object",
+            "dry_run=true",
+        ]
+    )
+
+    assert "--standalone" not in launch.command
+    assert "--nnodes=1" in launch.command
+    assert "--node-rank=0" in launch.command
+    assert "--master-addr=127.0.0.1" in launch.command
+    assert "--master-port=29500" in launch.command
+    assert "--nproc-per-node=8" in launch.command
+
+
 def test_world_model_training_launcher_rejects_batch_alias() -> None:
     from dreamervla.launchers.train import build_launch
 

@@ -232,7 +232,51 @@ def test_metric_logger_resumes_existing_online_wandb_identity(
     assert calls[0]["resume"] == "allow"
 
 
-def test_metric_logger_truncates_online_wandb_tail_when_sdk_supports_resume_from(
+def test_metric_logger_only_rewinds_online_wandb_tail_when_explicitly_enabled(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class FakeWandb:
+        @staticmethod
+        def init(*, resume_from=None, **kwargs) -> None:
+            calls.append({**kwargs, "resume_from": resume_from})
+
+        @staticmethod
+        def finish() -> None:
+            return None
+
+    log_root = tmp_path / "logs"
+    identity = log_root / "wandb" / "run_id.txt"
+    identity.parent.mkdir(parents=True)
+    identity.write_text("same1234\n", encoding="utf-8")
+    cfg = OmegaConf.create(
+        {
+            "runner": {
+                "logger": {
+                    "log_path": str(log_root),
+                    "project_name": "dreamervla",
+                    "experiment_name": "resume-online",
+                    "logger_backends": ["wandb"],
+                    "wandb_mode": "online",
+                    "wandb_rewind_on_resume": True,
+                }
+            },
+            "training": {"out_dir": str(tmp_path / "out"), "resume": True},
+        }
+    )
+    monkeypatch.setitem(sys.modules, "wandb", FakeWandb)
+
+    logger = MetricLogger(cfg, resume=True, resume_step=6000)
+    logger.finish()
+
+    assert calls[0]["id"] == "same1234"
+    assert calls[0]["resume_from"] == "same1234?_step=6000"
+    assert "resume" not in calls[0]
+
+
+def test_metric_logger_does_not_request_private_wandb_rewind_by_default(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -271,8 +315,8 @@ def test_metric_logger_truncates_online_wandb_tail_when_sdk_supports_resume_from
     logger.finish()
 
     assert calls[0]["id"] == "same1234"
-    assert calls[0]["resume_from"] == "same1234?_step=6000"
-    assert "resume" not in calls[0]
+    assert calls[0]["resume"] == "allow"
+    assert calls[0]["resume_from"] is None
 
 
 def test_metric_logger_offline_resume_reuses_legacy_id_without_sdk_resume(

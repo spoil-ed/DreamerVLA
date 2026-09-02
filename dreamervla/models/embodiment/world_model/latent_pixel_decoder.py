@@ -66,6 +66,11 @@ class LatentTokenPixelDecoder(nn.Module):
         upsample_sizes: Sequence[int] = (28, 56, 112, 224),
         token_normalization: str = "layer_norm",
         token_norm_eps: float = 1.0e-6,
+        spatial_mixer_depth: int = 0,
+        spatial_mixer_heads: int = 8,
+        spatial_mixer_mlp_ratio: float = 4.0,
+        spatial_mixer_dropout: float = 0.0,
+        separate_view_heads: bool = False,
     ) -> None:
         super().__init__()
         self.token_dim = int(token_dim)
@@ -107,16 +112,60 @@ class LatentTokenPixelDecoder(nn.Module):
         self.view_embedding = nn.Parameter(
             torch.zeros(len(self.view_indices), int(base_channels), 1, 1)
         )
+        mixer_depth = int(spatial_mixer_depth)
+        if mixer_depth < 0:
+            raise ValueError("spatial_mixer_depth must be non-negative")
+        if mixer_depth > 0:
+            mixer_heads = int(spatial_mixer_heads)
+            if mixer_heads <= 0 or int(base_channels) % mixer_heads:
+                raise ValueError(
+                    "spatial_mixer_heads must divide base_channels when the mixer is enabled"
+                )
+            mixer_hidden = int(round(int(base_channels) * float(spatial_mixer_mlp_ratio)))
+            if mixer_hidden <= 0:
+                raise ValueError("spatial_mixer_mlp_ratio must produce a positive hidden width")
+            mixer_layer = nn.TransformerEncoderLayer(
+                d_model=int(base_channels),
+                nhead=mixer_heads,
+                dim_feedforward=mixer_hidden,
+                dropout=float(spatial_mixer_dropout),
+                activation="gelu",
+                batch_first=True,
+                norm_first=True,
+            )
+            self.spatial_position = nn.Parameter(
+                torch.empty(1, self.tokens_per_view, int(base_channels))
+            )
+            nn.init.trunc_normal_(self.spatial_position, std=0.02)
+            self.spatial_mixer = nn.TransformerEncoder(
+                mixer_layer,
+                num_layers=mixer_depth,
+                norm=nn.LayerNorm(int(base_channels)),
+                enable_nested_tensor=False,
+            )
+        else:
+            self.register_parameter("spatial_position", None)
+            self.spatial_mixer = nn.Identity()
         stages: list[nn.Module] = []
         in_channels = int(base_channels)
         for out_channels, output_size in zip(channels, sizes, strict=True):
             stages.append(_UpsampleStage(in_channels, out_channels, output_size))
             in_channels = out_channels
         self.stages = nn.Sequential(*stages)
-        self.output = nn.Sequential(
-            nn.GroupNorm(min(32, in_channels), in_channels),
+        self.separate_view_heads = bool(separate_view_heads)
+        if self.separate_view_heads:
+            self.output = nn.ModuleList(
+                [self._output_head(in_channels) for _ in range(self.num_views)]
+            )
+        else:
+            self.output = self._output_head(in_channels)
+
+    @staticmethod
+    def _output_head(in_channels: int) -> nn.Sequential:
+        return nn.Sequential(
+            nn.GroupNorm(min(32, int(in_channels)), int(in_channels)),
             nn.SiLU(),
-            nn.Conv2d(in_channels, 3, kernel_size=3, padding=1),
+            nn.Conv2d(int(in_channels), 3, kernel_size=3, padding=1),
             nn.Sigmoid(),
         )
 
@@ -149,6 +198,10 @@ class LatentTokenPixelDecoder(nn.Module):
         )
         selected = self.token_norm(selected)
         value = self.token_proj(selected)
+        if self.spatial_position is not None:
+            value = value.flatten(0, 1)
+            value = self.spatial_mixer(value + self.spatial_position)
+            value = value.unflatten(0, (-1, self.num_views))
         value = value.reshape(
             -1,
             self.num_views,
@@ -157,8 +210,15 @@ class LatentTokenPixelDecoder(nn.Module):
             value.shape[-1],
         ).permute(0, 1, 4, 2, 3)
         value = value + self.view_embedding.unsqueeze(0)
-        value = value.flatten(0, 1)
-        value = self.output(self.stages(value))
+        value = self.stages(value.flatten(0, 1))
+        if self.separate_view_heads:
+            value = value.unflatten(0, (-1, self.num_views))
+            value = torch.stack(
+                [head(value[:, index]) for index, head in enumerate(self.output)],
+                dim=1,
+            ).flatten(0, 1)
+        else:
+            value = self.output(value)
         return value.reshape(*leading_shape, self.num_views, 3, self.image_size, self.image_size)
 
 

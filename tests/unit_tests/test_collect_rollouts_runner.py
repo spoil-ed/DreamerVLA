@@ -99,3 +99,38 @@ def test_build_collect_cfg_forwards_ray_worker_controls() -> None:
 
     assert resolved["demos_per_shard"] == 25
     assert resolved["num_inference_workers"] == 2
+
+
+def test_successful_vla_collection_writes_manifest(monkeypatch) -> None:
+    import dreamervla.runtime.rollout_collection_ray as collection_module
+
+    cfg = _fake_cfg()
+    cfg.mode = "vla"
+    runner = RolloutCollectionRunner(cfg)
+    calls: list[str] = []
+
+    class _Cluster:
+        def __init__(self, _cfg) -> None:
+            pass
+
+        def require_single_node(self) -> None:
+            calls.append("require_single_node")
+
+        def shutdown(self) -> None:
+            calls.append("shutdown")
+
+    monkeypatch.setattr(collection_module, "Cluster", _Cluster)
+    monkeypatch.setattr(runner, "_build_components", lambda _cluster: {"workers": True})
+    monkeypatch.setattr(
+        runner,
+        "_run_loop",
+        lambda _groups: {"rollout/episodes": 2},
+    )
+    monkeypatch.setattr(
+        runner,
+        "write_collection_manifest",
+        lambda: calls.append("write_manifest"),
+    )
+
+    assert runner.run() == {"rollout/episodes": 2}
+    assert calls == ["require_single_node", "shutdown", "write_manifest"]

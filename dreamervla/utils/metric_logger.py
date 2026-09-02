@@ -124,6 +124,7 @@ class MetricLogger:
 
         self.wandb_proxy = _cfg_get(logger_cfg, "wandb_proxy", None)
         self.wandb_mode = str(_cfg_get(logger_cfg, "wandb_mode", "online"))
+        self.wandb_rewind_on_resume = bool(_cfg_get(logger_cfg, "wandb_rewind_on_resume", False))
         self.resume = bool(resume)
         self.resume_step = int(resume_step) if resume_step is not None else None
         self.swanlab_mode = str(_cfg_get(logger_cfg, "swanlab_mode", "cloud"))
@@ -176,7 +177,8 @@ class MetricLogger:
             # resumes directly against the server.
             if self.resume and existing_run and self.wandb_mode == "online":
                 if (
-                    self.resume_step is not None
+                    self.wandb_rewind_on_resume
+                    and self.resume_step is not None
                     and "resume_from" in inspect.signature(wandb.init).parameters
                 ):
                     init_kwargs["resume_from"] = f"{wandb_run_id}?_step={self.resume_step}"

@@ -111,6 +111,7 @@ class Pi05TrajectoryReplay:
         self._ordered_refs: list[_TrajectoryRef] = []
         self._cumulative_windows: list[int] = []
         self._cache_identity: tuple[str, str] | None = None
+        self._cache_includes_images = False
         self._cache: dict[str, np.ndarray] | None = None
         self._reset_epoch_order()
 
@@ -129,6 +130,19 @@ class Pi05TrajectoryReplay:
 
     def task_episode_counts(self) -> Counter[int]:
         return Counter(self._task_episode_counts)
+
+    @property
+    def epoch(self) -> int:
+        """Current deterministic replay epoch."""
+
+        return int(self._epoch)
+
+    def steps_per_epoch(self, *, batch_size: int) -> int:
+        """Return synchronized rank-local sample calls in one replay epoch."""
+
+        self._configure_batch_size(batch_size)
+        assert self._steps_per_epoch is not None
+        return int(self._steps_per_epoch)
 
     def classifier_window_count(self, *, window: int, chunk_size: int) -> int:
         del window, chunk_size
@@ -152,20 +166,25 @@ class Pi05TrajectoryReplay:
         staleness_threshold: int | None = None,
         include_images: bool = False,
     ) -> dict[str, torch.Tensor]:
-        del staleness_threshold, include_images
+        del staleness_threshold
         self._configure_batch_size(batch_size)
         assert self._steps_per_epoch is not None
         epoch_capacity = self._steps_per_epoch * int(batch_size)
         local_windows = self._cumulative_windows[-1]
         slots = [int((self._position + offset) % local_windows) for offset in range(batch_size)]
-        samples = [self._window_at(slot) for slot in slots]
+        samples = [self._window_at(slot, include_images=include_images) for slot in slots]
         self._position += int(batch_size)
         if self._position >= epoch_capacity:
             self._epoch += 1
             self._position = 0
             self._drop_cache()
             self._reset_epoch_order()
-        return _stack_samples(samples, self.sequence_length, source_rank=self.rank)
+        return _stack_samples(
+            samples,
+            self.sequence_length,
+            source_rank=self.rank,
+            include_images=include_images,
+        )
 
     def _configure_batch_size(self, batch_size: int) -> None:
         value = int(batch_size)
@@ -193,12 +212,12 @@ class Pi05TrajectoryReplay:
             raise RuntimeError(f"DDP rank {self.rank} received no sampleable RGB trajectory")
         self._cumulative_windows = cumulative
 
-    def _window_at(self, slot: int) -> dict[str, Any]:
+    def _window_at(self, slot: int, *, include_images: bool) -> dict[str, Any]:
         ref_index = bisect.bisect_right(self._cumulative_windows, int(slot))
         previous = self._cumulative_windows[ref_index - 1] if ref_index > 0 else 0
         start = int(slot) - int(previous)
         ref = self._ordered_refs[ref_index]
-        cache = self._trajectory_cache(ref)
+        cache = self._trajectory_cache(ref, include_images=include_images)
         stop = start + self.sequence_length
         sample = {
             "obs_embedding": cache["obs_embedding"][start:stop],
@@ -215,10 +234,21 @@ class Pi05TrajectoryReplay:
         }
         if "prefix_attention_mask" in cache:
             sample["prefix_attention_mask"] = cache["prefix_attention_mask"][start:stop]
+        if include_images:
+            sample["images"] = cache["images"][start:stop]
         return sample
 
-    def _trajectory_cache(self, ref: _TrajectoryRef) -> dict[str, np.ndarray]:
-        if self._cache_identity == ref.identity and self._cache is not None:
+    def _trajectory_cache(
+        self,
+        ref: _TrajectoryRef,
+        *,
+        include_images: bool,
+    ) -> dict[str, np.ndarray]:
+        if (
+            self._cache_identity == ref.identity
+            and self._cache is not None
+            and (not include_images or self._cache_includes_images)
+        ):
             return self._cache
         self._drop_cache()
         with h5py.File(ref.path, "r") as handle:
@@ -286,10 +316,17 @@ class Pi05TrajectoryReplay:
                     "π0.5 encoder returned prefix masks for only part of a trajectory"
                 )
             self._cache["prefix_attention_mask"] = np.concatenate(encoded_masks, axis=0)
+        if include_images:
+            images = np.stack([base_images, wrist_images], axis=1)
+            if self.rotate_images_180:
+                images = images[:, :, ::-1, ::-1]
+            self._cache["images"] = np.ascontiguousarray(images)
+        self._cache_includes_images = bool(include_images)
         return self._cache
 
     def _drop_cache(self) -> None:
         self._cache_identity = None
+        self._cache_includes_images = False
         self._cache = None
 
 
@@ -392,6 +429,7 @@ def _stack_samples(
     sequence_length: int,
     *,
     source_rank: int,
+    include_images: bool = False,
 ) -> dict[str, torch.Tensor]:
     current_actions = np.stack([item["current_actions"] for item in samples], axis=0)
     actions = np.zeros_like(current_actions, dtype=np.float32)
@@ -433,6 +471,10 @@ def _stack_samples(
         ).to(dtype=torch.bool)
     elif any("prefix_attention_mask" in item for item in samples):
         raise RuntimeError("sample batch mixes π0.5 latents with and without prefix masks")
+    if include_images:
+        if not all("images" in item for item in samples):
+            raise RuntimeError("image replay batch is missing one or more pixel windows")
+        batch["images"] = torch.from_numpy(np.stack([item["images"] for item in samples], axis=0))
     return batch
 
 

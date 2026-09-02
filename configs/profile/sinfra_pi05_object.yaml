@@ -1,0 +1,39 @@
+# @package _global_
+# xinglei JFS deployment profile for the eight-GPU LIBERO-Object collector.
+# Experiment geometry remains owned by collect_rollouts_pi05_object; this file
+# binds that portable recipe to Sinfra-mounted runtime paths and process env.
+profile:
+  name: sinfra_pi05_object
+
+run:
+  output_root: /jfs/oss-import/xinglei/pi05_outputs
+
+launch:
+  data_root: /jfs/oss-import/xinglei/DreamerVLA/data
+  python: /jfs/oss-import/xinglei/DreamerVLA/.venv-pi05/bin/python
+  # Reuse the prewritten JFS LIBERO config, whose third_party paths point to
+  # the persistent checkout rather than the extracted /workspace source tree.
+  write_libero_config: false
+  env:
+    PYTHONUNBUFFERED: "1"
+    LIBERO_CONFIG_PATH: /jfs/oss-import/xinglei/DreamerVLA/data/.libero_sinfra_object
+    OPENPI_ROOT: /jfs/oss-import/xinglei/openpi
+    JAX_PLATFORMS: cpu
+    XLA_PYTHON_CLIENT_PREALLOCATE: "false"
+    MUJOCO_GL: osmesa
+    PYOPENGL_PLATFORM: osmesa
+
+task:
+  collected_rollout_dir: /jfs/oss-import/xinglei/DreamerVLA/data/collected_rollouts/pi05_${task.suite}
+  pi05:
+    base_ckpt_path: /jfs/oss-import/simate_pretrain_checkpoints/lerobot/pi05_base
+    ckpt_path: /jfs/oss-import/simate_pretrain_checkpoints/RLinf/RLinf-Pi05-LIBERO-SFT
+    assets_path: /jfs/oss-import/simate_pretrain_checkpoints/RLinf/RLinf-Pi05-LIBERO-SFT
+
+collect:
+  policy_ckpt_path: /jfs/oss-import/xinglei/DreamerVLA/data/outputs/pi05_libero_sft_one_episode_per_task/20260823_162557/checkpoints/latest.ckpt
+
+runner:
+  logger:
+    logger_backends: [tensorboard, wandb]
+    wandb_mode: online

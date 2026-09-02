@@ -19,6 +19,7 @@ def test_pi05_wm_recipe_streams_rgb_and_does_not_require_sidecars():
     assert cfg.training.wm_prefetch_workers == 0
     assert cfg.training.classifier_warmup_steps == 0
     assert cfg.training.warmup_replay_epochs == 1
+    assert cfg.training.wm_warmup_checkpoint_every_steps == 1000
     assert cfg.online_rollout.sequence_length == 44
 
 
@@ -277,6 +278,20 @@ def test_validate_cfg_warmup(tmp_path):
     )
     with pytest.raises(Exception, match="warmup_checkpoint_every_epochs"):
         validate_cfg(neg_ckpt_every)
+
+    neg_wm_step_ckpt_every = OmegaConf.create(
+        {
+            "_target_": "dreamervla.runners.WorldModelTrainingRunner",
+            "offline_warmup": {"data_dir": str(tmp_path), "hidden_dir": str(tmp_path)},
+            "training": {
+                "wm_warmup_steps": 10,
+                "classifier_warmup_steps": 0,
+                "wm_warmup_checkpoint_every_steps": -1,
+            },
+        }
+    )
+    with pytest.raises(Exception, match="wm_warmup_checkpoint_every_steps"):
+        validate_cfg(neg_wm_step_ckpt_every)
 
     removed_ckpt_every = OmegaConf.create(
         {

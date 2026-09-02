@@ -40,16 +40,62 @@ def test_source_tree_hash_ignores_untracked_runtime_directories(tmp_path: Path) 
     runtime = tmp_path / ".rlinf-runtime"
     runtime.mkdir()
     (runtime / "cache.bin").write_bytes(b"first")
+    environment = tmp_path / "environments" / "test"
+    virtualenv = environment / ".venv"
+    virtualenv.mkdir(parents=True)
+    (environment / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+    (virtualenv / "large-runtime-library.so").write_bytes(b"first")
 
     _source_tree_sha256.cache_clear()
     initial = _source_tree_sha256(tmp_path)
     (runtime / "cache.bin").write_bytes(b"second")
+    (virtualenv / "large-runtime-library.so").write_bytes(b"second")
     _source_tree_sha256.cache_clear()
     assert _source_tree_sha256(tmp_path) == initial
 
+    (environment / "pyproject.toml").write_text("[project]\nname = 'changed'\n", encoding="utf-8")
+    _source_tree_sha256.cache_clear()
+    assert _source_tree_sha256(tmp_path) != initial
+
+    initial = _source_tree_sha256(tmp_path)
     (source / "module.py").write_text("value = 2\n", encoding="utf-8")
     _source_tree_sha256.cache_clear()
     assert _source_tree_sha256(tmp_path) != initial
+
+
+def test_base_runner_setup_waits_for_rank_zero_artifacts(tmp_path: Path) -> None:
+    class _Distributed:
+        is_distributed = True
+        world_size = 8
+
+        def __init__(self, *, is_main_process: bool) -> None:
+            self.is_main_process = is_main_process
+            self.rank = 0 if is_main_process else 1
+            self.local_rank = self.rank
+            self.object_barrier_calls = 0
+
+        def object_barrier(self) -> None:
+            self.object_barrier_calls += 1
+
+    for is_main_process in (True, False):
+        out_dir = tmp_path / f"run-{is_main_process}"
+        runner = _ConcreteRunner(
+            OmegaConf.create(
+                {
+                    "seed": 7,
+                    "training": {
+                        "out_dir": str(out_dir),
+                        "distributed_strategy": "ddp",
+                    },
+                }
+            )
+        )
+        runner.distributed = _Distributed(is_main_process=is_main_process)
+
+        runner.setup()
+
+        assert (out_dir / "run_manifest.json").is_file() is is_main_process
+        assert runner.distributed.object_barrier_calls == 1
 
 
 def test_base_runner_uses_rlinf_style_run_artifact_dirs(tmp_path: Path) -> None:

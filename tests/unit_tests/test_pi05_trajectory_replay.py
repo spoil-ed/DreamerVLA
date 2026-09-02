@@ -131,3 +131,30 @@ def test_pi05_rgb_replay_carries_prefix_input_attention_mask(tmp_path: Path) -> 
     assert batch["obs_embedding"].shape == (1, 3, 968, 2048)
     assert batch["prefix_attention_mask"].shape == (1, 3, 968)
     assert batch["prefix_attention_mask"].dtype == torch.bool
+
+
+def test_pi05_rgb_replay_returns_encoder_aligned_images(tmp_path: Path) -> None:
+    from dreamervla.runtime.pi05_trajectory_replay import Pi05TrajectoryReplay
+
+    reward = tmp_path / "reward"
+    _write_rgb_trajectory(reward, episode_id=0, task_id=0)
+    replay = Pi05TrajectoryReplay(
+        data_dir=reward,
+        sequence_length=1,
+        encoder=_FakePrefixEncoder(),
+        encode_batch_size=2,
+        rank=0,
+        world_size=1,
+        seed=3,
+        task_ids=(0,),
+        rotate_images_180=True,
+    )
+
+    batch = replay.sample(2, include_images=True)
+
+    assert batch["images"].shape == (2, 1, 2, 2, 2, 3)
+    assert batch["images"].dtype == torch.uint8
+    # The second camera is one intensity level above the base camera and the
+    # target follows the same 180-degree transform as the prefix encoder.
+    torch.testing.assert_close(batch["images"][:, :, 1], batch["images"][:, :, 0] + 1)
+    assert replay.steps_per_epoch(batch_size=2) == 3

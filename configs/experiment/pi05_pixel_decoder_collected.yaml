@@ -1,0 +1,102 @@
+# @package _global_
+# Compare latent-to-pixel decoders on all 2,000 collected LIBERO-Object trajectories.
+defaults:
+  - /task: pi05_libero_object
+  - override /pixel_decoder: pi05-prefix
+  - _self_
+
+_target_: dreamervla.runners.LatentPixelDecoderTrainingRunner
+seed: 7
+
+run:
+  name: pi05_pixel_decoder_collected_baseline
+
+launch:
+  distributed: true
+  ngpu: 8
+  gpus: null
+  master_addr: 127.0.0.1
+  master_port: 29500
+  python: python
+  write_libero_config: false
+  required_target_values: []
+  env:
+    PYTHONUNBUFFERED: 1
+    OMP_NUM_THREADS: 8
+    MALLOC_ARENA_MAX: 4
+    CUDA_MODULE_LOADING: LAZY
+    PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    NCCL_NVLS_ENABLE: 0
+    NCCL_DEBUG: WARN
+    TORCH_NCCL_ASYNC_ERROR_HANDLING: 1
+
+data:
+  replay:
+    _target_: dreamervla.runtime.pi05_trajectory_replay.Pi05TrajectoryReplay
+    data_dir: ${task.collected_reward_dir}
+    sequence_length: 1
+    encode_batch_size: 4
+    seed: ${seed}
+    task_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    rotate_images_180: ${task.pi05.rotate_images_180}
+    base_image_key: ${task.pi05.base_image_key}
+    wrist_image_key: ${task.pi05.wrist_image_key}
+    max_episodes_per_task: 200
+    encoder_method: encode_raw_observation_prefix_batch
+
+latent_producer:
+  policy_cfg:
+    target: dreamervla.models.embodiment.Pi05Policy
+    kwargs:
+      model_path: ${task.pi05.ckpt_path}
+      assets_path: ${task.pi05.assets_path}
+      config_name: ${task.pi05.config_name}
+      action_chunk: ${task.pi05.action_horizon}
+      action_dim: ${task.action_dim}
+      num_steps: ${task.pi05.num_denoise_steps}
+      train_expert_only: true
+      add_value_head: false
+      rotate_images_180: ${task.pi05.rotate_images_180}
+
+decoder_training:
+  # 8 GPUs: micro 16 x 8 = global 128. The 617,010 collected frames
+  # produce 4,821 synchronized steps/epoch, so 10k steps is ~2.07 epochs.
+  micro_batch_size: 16
+  global_batch_size: 128
+  precision: bf16
+  expected_episodes: 2000
+  target_image_keys: [agentview_rgb, eye_in_hand_rgb]
+  visualize_every: 100
+  loss:
+    l1_weight: 0.85
+    ssim_weight: 0.15
+  optim:
+    lr: 3.0e-4
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_eps: 1.0e-8
+    weight_decay: 1.0e-4
+    clip_grad: 1.0
+    lr_warmup_steps: 500
+  distributed:
+    strategy: ddp
+    broadcast_buffers: false
+    find_unused_parameters: false
+    gradient_as_bucket_view: true
+    nccl_timeout_seconds: 1800
+
+training:
+  max_steps: 10000
+  checkpoint_every: 1000
+  save_at_end: true
+  log_every: 10
+  distributed_strategy: ddp
+  device: cuda
+
+checkpoint:
+  topk: null
+
+runner:
+  logger:
+    logger_backends: [tensorboard, wandb]
+    wandb_mode: online

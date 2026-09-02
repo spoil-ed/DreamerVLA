@@ -76,26 +76,53 @@ class RolloutInferenceWorker(Worker):
         env_ids: list[int],
     ) -> dict[str, list[Any]]:
         bundle = self._require_bundle()
-        preps = [
-            self._extractors[int(env_id)].prepare(obs, str(obs.get("task_description", "")))
-            for env_id, obs in zip(env_ids, obs_batch, strict=True)
+        if len(obs_batch) != len(env_ids):
+            raise ValueError("obs_batch and env_ids must have the same length")
+
+        refill_positions = [
+            position
+            for position, env_id in enumerate(env_ids)
+            if not self._action_queues[int(env_id)].has_pending
         ]
-        if not self._emit_hidden_sidecar and hasattr(bundle, "predict_actions_batch"):
-            action_chunks = bundle.predict_actions_batch(preps)
-            results = [(action_chunk, None) for action_chunk in action_chunks]
-        else:
-            results = bundle.predict_batch(preps)
+        # Hidden sidecars describe every environment step, so that route still
+        # needs one prediction per input observation.  Action-only collection can
+        # execute a cached open-loop chunk without rerunning the policy until the
+        # corresponding queue needs a refill.
+        prediction_positions = (
+            list(range(len(env_ids))) if self._emit_hidden_sidecar else refill_positions
+        )
+        preps = [
+            self._extractors[int(env_ids[position])].prepare(
+                obs_batch[position],
+                str(obs_batch[position].get("task_description", "")),
+            )
+            for position in prediction_positions
+        ]
+        results_by_position: dict[int, Any] = {}
+        if preps:
+            if not self._emit_hidden_sidecar and hasattr(bundle, "predict_actions_batch"):
+                action_chunks = bundle.predict_actions_batch(preps)
+                results = [(action_chunk, None) for action_chunk in action_chunks]
+            else:
+                results = bundle.predict_batch(preps)
+            results_by_position = dict(zip(prediction_positions, results, strict=True))
+
         actions: list[np.ndarray] = []
         hidden: list[np.ndarray] = []
         lang: list[np.ndarray | None] = []
         has_lang = False
-        for env_id, result in zip(env_ids, results, strict=True):
-            action_chunk, flat_hidden = result
+        for position, env_id in enumerate(env_ids):
             # Gripper post-process here (single point for the ray path); the EnvWorker
             # must NOT re-apply it. Without it grasping/success fails.
             env_index = int(env_id)
             queue = self._action_queues[env_index]
             if not queue.has_pending:
+                result = results_by_position.get(position)
+                if result is None:
+                    raise RuntimeError(
+                        f"missing action-chunk prediction for refill env_id={env_index}"
+                    )
+                action_chunk, _flat_hidden = result
                 queue.refill(np.asarray(action_chunk, dtype=np.float32))
             queued_action = queue.pop()
             action = (
@@ -105,18 +132,20 @@ class RolloutInferenceWorker(Worker):
             )[: self._action_dim]
             actions.append(action)
             if self._emit_hidden_sidecar:
+                result = results_by_position[position]
+                _action_chunk, flat_hidden = result
                 obs_embedding = (
                     flat_hidden.numpy()
                     if hasattr(flat_hidden, "numpy")
                     else np.asarray(flat_hidden)
                 )
                 hidden.append(obs_embedding.astype(np.float16, copy=False))
-            lang_emb = _optional_lang_emb(result)
-            if lang_emb is None:
-                lang.append(None)
-            else:
-                has_lang = True
-                lang.append(np.asarray(lang_emb, dtype=np.float16).reshape(-1))
+                lang_emb = _optional_lang_emb(result)
+                if lang_emb is None:
+                    lang.append(None)
+                else:
+                    has_lang = True
+                    lang.append(np.asarray(lang_emb, dtype=np.float16).reshape(-1))
         sidecars = {"obs_embedding": hidden} if self._emit_hidden_sidecar else {}
         if self._emit_hidden_sidecar and has_lang:
             sidecars["lang_emb"] = lang

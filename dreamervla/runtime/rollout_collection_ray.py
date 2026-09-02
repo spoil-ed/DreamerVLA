@@ -9,9 +9,11 @@ from typing import Any
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
 from dreamervla.dataset.collection_manifest import (
+    build_collection_manifest,
     complete_episode_ids_per_task,
     missing_episode_work_list,
     next_shard_index,
+    write_manifest,
 )
 from dreamervla.runners.base_runner import BaseRunner
 from dreamervla.runtime.observation_latent import ObservationLatentSpec
@@ -294,9 +296,42 @@ class _RayRolloutCollection(BaseRunner):
         try:
             cluster.require_single_node()
             groups = self._build_components(cluster)
-            return self._run_loop(groups)
+            result = self._run_loop(groups)
         finally:
             cluster.shutdown()
+        mode = str(self._select_first(("mode",), "synthetic")).lower()
+        if mode in {"oft", "vla"}:
+            self.write_collection_manifest()
+        return result
+
+    def write_collection_manifest(self) -> Path:
+        """Rebuild and atomically write the manifest for the configured data root."""
+
+        plan = self.build_worker_plan()
+        collect_cfg = dict(plan["collect"])
+        dump_cfg = dict(plan["dump"])
+        task_ids = _resolve_ray_task_ids(
+            collect_cfg.get("task_ids", 0),
+            num_tasks=collect_cfg.get("num_tasks"),
+            suite=str(collect_cfg.get("task_suite_name", "")),
+        )
+        reward_dir = Path(str(dump_cfg["reward_dir"])).expanduser()
+        hidden_dir = Path(str(dump_cfg["hidden_dir"])).expanduser()
+        profile = OmegaConf.select(self.cfg, "profile.name", default=None)
+        manifest = build_collection_manifest(
+            task_suite_name=str(collect_cfg["task_suite_name"]),
+            mode=str(self._select_first(("mode",), "oft")),
+            profile=str(profile) if profile not in (None, "") else None,
+            reward_dir=reward_dir,
+            hidden_dir=hidden_dir,
+            task_ids=task_ids,
+            episodes_per_task=int(collect_cfg["episodes_per_task"]),
+            write_hidden_sidecar=bool(dump_cfg.get("write_hidden_sidecar", True)),
+            collect_config=_plain(collect_cfg),
+            preprocess_config=_plain(dump_cfg.get("preprocess_config", {})),
+            data_attrs=_plain(dump_cfg.get("data_attrs", {})),
+        )
+        return write_manifest(reward_dir.parent, manifest)
 
     def _build_components(self, cluster: Cluster) -> dict[str, Any]:
         mode = str(self._select_first(("mode",), "synthetic")).lower()
