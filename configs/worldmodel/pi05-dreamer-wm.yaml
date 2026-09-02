@@ -22,3 +22,38 @@ world_model:
   lang_emb_dim: ${task.observation_latent.lang_emb_dim}
   num_lang_repeat: ${task.observation_latent.num_lang_repeat}
   model_dim: ${task.observation_latent.model_dim}
+  # Strict transition ablation on the existing π0.5 RGB-streaming route:
+  #   original/random       = the pre-migration baseline
+  #   vjepa2_ac/random      = AC architecture without transferred weights
+  #   vjepa2_ac/pretrained  = AC architecture with the official predictor
+  transition_type: original
+  transition_init: random
+  vjepa2_checkpoint_path: ${oc.env:VJEPA2_AC_CKPT,null}
+  vjepa2_predictor_dim: 1024
+  vjepa2_depth: 24
+  vjepa2_num_heads: 16
+  vjepa2_mlp_ratio: 4.0
+  vjepa2_dropout: 0.0
+  vjepa2_attention_dropout: 0.0
+  vjepa2_use_rope: true
+  # π0.5's 768 image-prefix outputs concatenate multiple image groups; they
+  # are not one HxW patch grid. Preserve temporal RoPE without inventing 2-D
+  # coordinates for this representation.
+  vjepa2_spatial_grid: null
+  vjepa2_pretrained_grid_size: 16
+
+ray_components:
+  world_model:
+    kwargs:
+      transition_type: ${world_model.transition_type}
+      transition_init: ${world_model.transition_init}
+      vjepa2_checkpoint_path: ${world_model.vjepa2_checkpoint_path}
+      vjepa2_predictor_dim: ${world_model.vjepa2_predictor_dim}
+      vjepa2_depth: ${world_model.vjepa2_depth}
+      vjepa2_num_heads: ${world_model.vjepa2_num_heads}
+      vjepa2_mlp_ratio: ${world_model.vjepa2_mlp_ratio}
+      vjepa2_dropout: ${world_model.vjepa2_dropout}
+      vjepa2_attention_dropout: ${world_model.vjepa2_attention_dropout}
+      vjepa2_use_rope: ${world_model.vjepa2_use_rope}
+      vjepa2_spatial_grid: ${world_model.vjepa2_spatial_grid}
+      vjepa2_pretrained_grid_size: ${world_model.vjepa2_pretrained_grid_size}

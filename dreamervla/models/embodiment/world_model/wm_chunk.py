@@ -7,6 +7,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
+from dreamervla.models.embodiment.world_model.vjepa2_ac_transition import (
+    VJEPA2ACLoadReport,
+    VJEPA2ACTransition,
+)
 from dreamervla.models.embodiment.world_model.wm import WorldModel
 
 
@@ -132,7 +136,7 @@ class _WMStyleTransformer(nn.Module):
 
 
 class ChunkAwareWorldModel(WorldModel):
-    """Chunk WM over OpenVLA-OFT hidden tokens with WM-style conditioning.
+    """Chunk WM over per-frame latent tokens with WM-style conditioning.
 
     The transition model keeps each observation token in source token space and
     concatenates an encoded action to every observation token channel, matching
@@ -163,13 +167,38 @@ class ChunkAwareWorldModel(WorldModel):
         token_normalization: str = "layer_norm",
         token_norm_eps: float = 1.0e-6,
         task_conditioning: dict | None = None,
+        transition_type: str = "original",
+        transition_init: str = "random",
+        vjepa2_checkpoint_path: str | None = None,
+        vjepa2_predictor_dim: int = 1024,
+        vjepa2_depth: int = 24,
+        vjepa2_num_heads: int = 16,
+        vjepa2_mlp_ratio: float = 4.0,
+        vjepa2_dropout: float = 0.0,
+        vjepa2_attention_dropout: float = 0.0,
+        vjepa2_use_rope: bool = True,
+        vjepa2_spatial_grid: list[int] | tuple[int, int] | None = None,
+        vjepa2_pretrained_grid_size: int = 16,
         **kwargs: Any,
     ) -> None:
+        self.transition_type = str(transition_type).strip().lower()
+        self.transition_init = str(transition_init).strip().lower()
+        if self.transition_type not in {"original", "vjepa2_ac"}:
+            raise ValueError("transition_type must be 'original' or 'vjepa2_ac'")
+        if self.transition_init not in {"random", "pretrained"}:
+            raise ValueError("transition_init must be 'random' or 'pretrained'")
+        if self.transition_type == "original" and self.transition_init != "random":
+            raise ValueError("transition_init='pretrained' requires transition_type='vjepa2_ac'")
         args_list = list(args)
         requested_model_dim = args_list[5] if len(args_list) > 5 else kwargs.get("model_dim")
         token_dim_hint = int(args_list[3] if len(args_list) > 3 else kwargs.get("token_dim", 4096))
         heads_hint = int(args_list[7] if len(args_list) > 7 else kwargs.get("heads", 8))
-        safe_parent_model_dim = max(token_dim_hint, heads_hint)
+        # The parent allocates a transition that this subclass replaces.  Keep
+        # its temporary allocation tiny on the V-JEPA route; the original path
+        # retains its historical construction exactly.
+        safe_parent_model_dim = (
+            heads_hint if self.transition_type == "vjepa2_ac" else max(token_dim_hint, heads_hint)
+        )
         if safe_parent_model_dim % heads_hint != 0:
             safe_parent_model_dim += heads_hint - (safe_parent_model_dim % heads_hint)
         if len(args_list) > 5:
@@ -336,22 +365,80 @@ class ChunkAwareWorldModel(WorldModel):
             final = self.success_return_head[-1]
             if isinstance(final, nn.Linear):
                 nn.init.constant_(final.bias, self.success_return_init_logit)
-        self.pos_embedding = nn.Parameter(
-            torch.randn(1, self.pos_context_len * self.slots_per_step, self.model_dim) * 0.02
-        )
-        self.predictor = _WMStyleTransformer(
-            dim=self.model_dim,
-            depth=int(kwargs.get("depth", 6) if len(args_list) <= 6 else args_list[6]),
-            heads=int(kwargs.get("heads", 8) if len(args_list) <= 7 else args_list[7]),
-            dim_head=self.dim_head,
-            mlp_dim=int(kwargs.get("mlp_dim", 2048) if len(args_list) <= 8 else args_list[8]),
-            dropout=float(kwargs.get("dropout", 0.1) if len(args_list) <= 9 else args_list[9]),
-            attn_impl=self.attn_impl,
-        )
+        self.vjepa2_transition: VJEPA2ACTransition | None = None
+        self.pretrained_load_report: VJEPA2ACLoadReport | None = None
+        self._vjepa2_token_input_dim = self.token_dim
+        self._vjepa2_context_dim = self.lang_condition_dim
+        self._vjepa2_state_dim = self.proprio_dim if self.proprio_dim > 0 else self.action_dim
+        if self.transition_type == "original":
+            self.pos_embedding: nn.Parameter | None = nn.Parameter(
+                torch.randn(1, self.pos_context_len * self.slots_per_step, self.model_dim) * 0.02
+            )
+            self.predictor = _WMStyleTransformer(
+                dim=self.model_dim,
+                depth=int(kwargs.get("depth", 6) if len(args_list) <= 6 else args_list[6]),
+                heads=int(kwargs.get("heads", 8) if len(args_list) <= 7 else args_list[7]),
+                dim_head=self.dim_head,
+                mlp_dim=int(kwargs.get("mlp_dim", 2048) if len(args_list) <= 8 else args_list[8]),
+                dropout=float(kwargs.get("dropout", 0.1) if len(args_list) <= 9 else args_list[9]),
+                attn_impl=self.attn_impl,
+            )
+        else:
+            self.register_parameter("pos_embedding", None)
+            self.predictor = nn.Identity()
+            # The AC route consumes raw actions with the pretrained
+            # action_encoder, so the baseline's projected-and-concatenated
+            # action embedding is intentionally out of graph.
+            for parameter in self.action_proj.parameters():
+                parameter.requires_grad = False
+            spatial_grid = (
+                None
+                if vjepa2_spatial_grid is None
+                else tuple(int(value) for value in vjepa2_spatial_grid)
+            )
+            self.vjepa2_transition = VJEPA2ACTransition(
+                input_dim=self._vjepa2_token_input_dim,
+                output_dim=self.token_dim,
+                action_dim=self.action_dim,
+                state_dim=self._vjepa2_state_dim,
+                token_count=self.token_count,
+                context_dim=self._vjepa2_context_dim,
+                state_output_dim=self.proprio_condition_dim,
+                predictor_dim=int(vjepa2_predictor_dim),
+                depth=int(vjepa2_depth),
+                num_heads=int(vjepa2_num_heads),
+                mlp_ratio=float(vjepa2_mlp_ratio),
+                dropout=float(vjepa2_dropout),
+                attention_dropout=float(vjepa2_attention_dropout),
+                use_rope=bool(vjepa2_use_rope),
+                spatial_grid=spatial_grid,
+                pretrained_grid_size=int(vjepa2_pretrained_grid_size),
+                use_activation_checkpointing=self.grad_checkpoint,
+            )
+            if self.transition_init == "pretrained":
+                if not vjepa2_checkpoint_path:
+                    raise ValueError("transition_init='pretrained' requires vjepa2_checkpoint_path")
+                self.pretrained_load_report = self.vjepa2_transition.load_pretrained(
+                    vjepa2_checkpoint_path
+                )
         self.out_norm = nn.Identity()
         self.out_proj = nn.Identity()
         if self.freeze_input_embeddings_requested:
             self.freeze_input_embeddings()
+            if self.vjepa2_transition is not None:
+                input_modules = (
+                    self.vjepa2_transition.input_adapter,
+                    self.vjepa2_transition.action_encoder,
+                    self.vjepa2_transition.state_input_adapter,
+                    self.vjepa2_transition.state_encoder,
+                    self.vjepa2_transition.context_encoder,
+                )
+                for module in input_modules:
+                    if module is None:
+                        continue
+                    module.eval()
+                    for parameter in module.parameters():
+                        parameter.requires_grad = False
 
     # ------------------------------------------------------------------ #
     # WM-style action concat transition                                  #
@@ -379,12 +466,12 @@ class ChunkAwareWorldModel(WorldModel):
         return obs_tokens + task_emb.to(obs_tokens.dtype)
 
     def _normalize_raw_vision_tokens(self, obs_embedding: torch.Tensor) -> torch.Tensor:
-        """Apply the configured per-token norm at the external sidecar boundary."""
+        """Apply the configured per-token norm at the external latent boundary."""
 
         return self.obs_norm(self.obs_to_tokens(obs_embedding))
 
     def encode_latent(self, hidden: torch.Tensor) -> dict[str, torch.Tensor]:
-        """Normalize a real sidecar observation before creating online state."""
+        """Normalize a real latent observation before creating online state."""
 
         tokens = self._normalize_raw_vision_tokens(hidden)
         batch_size = int(tokens.shape[0])
@@ -559,6 +646,43 @@ class ChunkAwareWorldModel(WorldModel):
         parts.append(action_tokens)
         return torch.cat(parts, dim=-1)
 
+    def _vjepa2_condition_tokens(
+        self,
+        obs_tokens: torch.Tensor,
+        lang_emb: torch.Tensor | None,
+        actions: torch.Tensor,
+        proprio_raw: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """Pack adapter inputs plus raw AC condition values without resizing weights."""
+
+        actions = self._validate_actions(actions, int(obs_tokens.shape[1]))
+        parts = [obs_tokens]
+        if self.lang_condition_dim > 0:
+            if lang_emb is None:
+                raise ValueError("lang_emb is required when lang_emb_dim>0")
+            if self.lang_proj is None:
+                raise RuntimeError("language projection is missing")
+            lang = lang_emb.to(device=self._module_device(), dtype=self._module_dtype())
+            encoded_lang = self.lang_proj(lang)
+            if self.num_lang_repeat > 1:
+                encoded_lang = encoded_lang.repeat(1, self.num_lang_repeat)
+            parts.append(
+                encoded_lang[:, None, None, :].expand(
+                    -1, obs_tokens.shape[1], obs_tokens.shape[2], -1
+                )
+            )
+
+        raw_action_tokens = actions[:, :, None, :].expand(-1, -1, obs_tokens.shape[2], -1)
+        parts.append(raw_action_tokens)
+        if self.proprio_dim > 0:
+            proprio = self._proprio_for_steps(proprio_raw, int(obs_tokens.shape[1]))
+            if proprio is None:
+                raise ValueError("proprio is required by the V-JEPA2-AC state adapter")
+        else:
+            proprio = actions.new_zeros(actions.shape[0], actions.shape[1], self._vjepa2_state_dim)
+        parts.append(proprio[:, :, None, :].expand(-1, -1, obs_tokens.shape[2], -1))
+        return torch.cat(parts, dim=-1)
+
     def observe_sequence(
         self, batch: dict[str, torch.Tensor]
     ) -> dict[str, dict[str, torch.Tensor]]:
@@ -608,9 +732,14 @@ class ChunkAwareWorldModel(WorldModel):
                 obs_tokens,
                 self._proprio_for_steps(proprio, int(obs_tokens.shape[1])),
             )
+        if self.transition_type == "vjepa2_ac":
+            z = self._vjepa2_condition_tokens(obs_tokens, lang, act, proprio)
+            return z
         z = self._condition_tokens(obs_tokens, lang, act)
         bsz, steps, slots, dim = z.shape
         flat = z.reshape(bsz, steps * slots, dim)
+        if self.pos_embedding is None:
+            raise RuntimeError("original transition is missing its positional embedding")
         if flat.shape[1] > self.pos_embedding.shape[1]:
             raise ValueError(
                 "ChunkAwareWorldModel WM predictor is configured for "
@@ -636,8 +765,40 @@ class ChunkAwareWorldModel(WorldModel):
         act: torch.Tensor,
         lang: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        if self.transition_type == "vjepa2_ac":
+            actions = self._validate_actions(act, int(z.shape[1]))
+            output = z.clone()
+            start = self.obs_token_dim + self._vjepa2_context_dim
+            stop = start + self.action_dim
+            output[..., start:stop] = actions[:, :, None, :]
+            return output
         obs_tokens = z[..., : self.obs_token_dim]
         return self._condition_tokens(obs_tokens, lang, act)
+
+    def predict(self, z: torch.Tensor) -> torch.Tensor:
+        """Run either the baseline transition or adapter-wrapped V-JEPA2-AC."""
+
+        if self.transition_type == "original":
+            return super().predict(z)
+        if self.vjepa2_transition is None:
+            raise RuntimeError("transition_type='vjepa2_ac' without a transition module")
+        if z.ndim != 4 or z.shape[2] != self.token_count:
+            raise ValueError(
+                f"V-JEPA2-AC z must be [B,T,{self.token_count},D], got {tuple(z.shape)}"
+            )
+        action_start = self.obs_token_dim + self._vjepa2_context_dim
+        action_stop = action_start + self.action_dim
+        state_stop = action_stop + self._vjepa2_state_dim
+        if z.shape[-1] != state_stop:
+            raise ValueError(f"V-JEPA2-AC z width is {z.shape[-1]}, expected {state_stop}")
+        tokens = z[..., : self._vjepa2_token_input_dim]
+        context = (
+            z[:, :, 0, self.obs_token_dim : action_start] if self._vjepa2_context_dim > 0 else None
+        )
+        actions = z[:, :, 0, action_start:action_stop]
+        states = z[:, :, 0, action_stop:state_stop]
+        prediction = self.vjepa2_transition(tokens, actions, states, context)
+        return torch.cat([prediction, z[..., self.obs_token_dim :]], dim=-1)
 
     def actor_input(self, latent: dict[str, torch.Tensor] | torch.Tensor) -> torch.Tensor:
         """Return the visual token segment consumed by VLA action actors."""
@@ -722,8 +883,13 @@ class ChunkAwareWorldModel(WorldModel):
                 model_history,
                 self._proprio_for_steps(proprio, int(model_history.shape[1])),
             )
+        encode_input: dict[str, torch.Tensor] | torch.Tensor = model_history
+        if self.transition_type == "vjepa2_ac":
+            encode_input = {"obs_embedding": model_history}
+            if proprio is not None:
+                encode_input["proprio"] = proprio
         z = self.encode(
-            model_history,
+            encode_input,
             action_history,
             lang,
             normalize_observations=False,
