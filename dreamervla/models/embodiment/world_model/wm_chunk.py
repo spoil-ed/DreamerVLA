@@ -179,10 +179,12 @@ class ChunkAwareWorldModel(WorldModel):
         vjepa2_use_rope: bool = True,
         vjepa2_spatial_grid: list[int] | tuple[int, int] | None = None,
         vjepa2_pretrained_grid_size: int = 16,
+        vjepa2_truncate_rollout_gradients: bool = True,
         **kwargs: Any,
     ) -> None:
         self.transition_type = str(transition_type).strip().lower()
         self.transition_init = str(transition_init).strip().lower()
+        self.vjepa2_truncate_rollout_gradients = bool(vjepa2_truncate_rollout_gradients)
         if self.transition_type not in {"original", "vjepa2_ac"}:
             raise ValueError("transition_type must be 'original' or 'vjepa2_ac'")
         if self.transition_init not in {"random", "pretrained"}:
@@ -986,6 +988,31 @@ class ChunkAwareWorldModel(WorldModel):
             out["proprio"] = proprio_out
         return out
 
+    def _truncate_vjepa2_rollout_state(
+        self,
+        state: dict[str, torch.Tensor],
+    ) -> dict[str, torch.Tensor]:
+        """Stop gradients between AC rollout steps without changing their values.
+
+        A chunk objective can invoke the 24-layer AC predictor dozens of times.
+        Backpropagating through that entire recurrent chain is both unnecessary
+        for the per-step supervised targets and numerically unstable in bf16.
+        Each prediction remains trainable; only its use as the next prediction's
+        input is detached.  The original transition never takes this path.
+        """
+
+        if not (
+            self.transition_type == "vjepa2_ac"
+            and self.vjepa2_truncate_rollout_gradients
+            and self.training
+            and torch.is_grad_enabled()
+        ):
+            return state
+        return {
+            key: value.detach() if isinstance(value, torch.Tensor) else value
+            for key, value in state.items()
+        }
+
     def predict_next_chunk(
         self,
         latent: dict[str, torch.Tensor] | torch.Tensor,
@@ -1034,6 +1061,10 @@ class ChunkAwareWorldModel(WorldModel):
             cur["prefix_attention_mask"] = latent["prefix_attention_mask"]
         if isinstance(latent, dict) and isinstance(latent.get("proprio"), torch.Tensor):
             cur["proprio"] = latent["proprio"].to(device=device, dtype=dtype)
+        # A previous chunk may have returned a live graph.  Detach it before
+        # beginning this chunk, then truncate again between its individual
+        # autoregressive steps below.
+        cur = self._truncate_vjepa2_rollout_state(cur)
         preds: list[torch.Tensor] = []
         proprio_preds: list[torch.Tensor] = []
         for step in range(K):
@@ -1041,6 +1072,8 @@ class ChunkAwareWorldModel(WorldModel):
             preds.append(cur["hidden"])
             if isinstance(cur.get("proprio"), torch.Tensor):
                 proprio_preds.append(cur["proprio"])
+            if step + 1 < K:
+                cur = self._truncate_vjepa2_rollout_state(cur)
         hidden_seq = torch.stack(preds, dim=1)
 
         out = {

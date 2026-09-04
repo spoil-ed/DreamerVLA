@@ -262,6 +262,69 @@ def test_vjepa_chunk_loss_trains_for_multiple_steps_without_nan() -> None:
     assert all(math_value == math_value for math_value in losses)
 
 
+def test_vjepa_rollout_truncation_preserves_values_and_stops_recurrent_gradient() -> None:
+    torch.manual_seed(29)
+    truncated = _tiny_chunk_wm(vjepa2_truncate_rollout_gradients=True).train()
+    full_bptt = _tiny_chunk_wm(vjepa2_truncate_rollout_gradients=False).train()
+    full_bptt.load_state_dict(truncated.state_dict())
+
+    history_truncated = torch.randn(
+        2,
+        truncated.num_hist,
+        truncated.token_count,
+        truncated.token_dim,
+        requires_grad=True,
+    )
+    history_full = history_truncated.detach().clone().requires_grad_(True)
+    actions = torch.randn(2, truncated.chunk_size, truncated.action_dim)
+
+    def rollout(model: ChunkAwareWorldModel, history: torch.Tensor) -> torch.Tensor:
+        latent = {
+            "hidden": history[:, -1],
+            "history": history,
+            "actions": torch.zeros(2, model.num_hist, model.action_dim),
+        }
+        return model.predict_next_chunk(latent, actions)["hidden_seq"]
+
+    truncated_output = rollout(truncated, history_truncated)
+    full_output = rollout(full_bptt, history_full)
+    assert torch.equal(truncated_output, full_output)
+
+    truncated_output[:, -1].square().mean().backward()
+    full_output[:, -1].square().mean().backward()
+    assert history_truncated.grad is None
+    assert history_full.grad is not None
+    assert torch.isfinite(history_full.grad).all()
+
+
+def test_vjepa_truncated_multichunk_loss_has_finite_gradients() -> None:
+    torch.manual_seed(31)
+    model = _tiny_chunk_wm(
+        chunk_rollout_chunks=4,
+        chunk_rollout_loss_scale=0.2,
+        vjepa2_truncate_rollout_gradients=True,
+    ).train()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1.0e-3)
+    time_steps = model.num_hist + model.chunk_rollout_chunks * model.chunk_size
+    batch = {
+        "obs_embedding": torch.randn(2, time_steps, model.token_count, model.token_dim),
+        "actions": torch.randn(2, time_steps, model.action_dim),
+    }
+
+    for _ in range(3):
+        optimizer.zero_grad(set_to_none=True)
+        loss = model.chunk_loss(batch)["_loss"]
+        assert torch.isfinite(loss)
+        loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            model.parameters(),
+            max_norm=1.0,
+            error_if_nonfinite=True,
+        )
+        assert torch.isfinite(grad_norm)
+        optimizer.step()
+
+
 def test_transition_ablation_rejects_pretrained_original_model() -> None:
     with pytest.raises(ValueError, match="requires transition_type='vjepa2_ac'"):
         _tiny_chunk_wm(transition_type="original", transition_init="pretrained")
@@ -306,6 +369,8 @@ def test_pi05_rgb_wm_config_declares_strict_transition_ablation_without_sidecars
     assert world_model.vjepa2_depth == 24
     assert world_model.vjepa2_num_heads == 16
     assert world_model.vjepa2_spatial_grid is None
+    assert world_model.vjepa2_truncate_rollout_gradients is True
     assert worker.transition_type == "vjepa2_ac"
     assert worker.transition_init == "random"
     assert worker.vjepa2_predictor_dim == world_model.vjepa2_predictor_dim
+    assert worker.vjepa2_truncate_rollout_gradients == world_model.vjepa2_truncate_rollout_gradients
