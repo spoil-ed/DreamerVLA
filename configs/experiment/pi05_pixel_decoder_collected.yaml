@@ -9,7 +9,7 @@ _target_: dreamervla.runners.LatentPixelDecoderTrainingRunner
 seed: 7
 
 run:
-  name: pi05_pixel_decoder_collected_baseline
+  name: pi05_pixel_decoder_collected
 
 launch:
   distributed: true
