@@ -1,0 +1,26 @@
+# SiPAI main@9672af6 Qwen3-VL + GR00T N1.7 embodiment model.
+_target_: dreamervla.models.embodiment.QwenGR00TPolicy
+model_path: ${oc.env:QWEN_GROOT_BASE_CKPT,/jfs/oss-import/simate_pretrain_checkpoints/Qwen/Qwen3-VL-4B-Instruct}
+input_cameras: [primary, left_wrist]
+camera_keys: [agentview_rgb, eye_in_hand_rgb]
+action_horizon: 8
+action_dim: 7
+state_dim: 7
+# This mirrors SiPAI's current LIBERO recipe: the state encoder exists for
+# checkpoint compatibility but receives zeros and remains frozen.
+include_state: false
+freeze_backbone: true
+freeze_state_encoder: true
+attn_implementation: sdpa
+cot_prompt: >-
+  Your task is {instruction}. To identify the key objects for your task.
+  Locate their bounding boxes in [x1,y1,x2,y2] format.
+action_head_cfg:
+  variant: DiT-L
+  # VL self-attention head width is derived from the loaded Qwen hidden size.
+  max_num_embodiments: 32
+  state_history_length: 1
+  repeated_diffusion_steps: 8
+  num_inference_timesteps: 4
+  use_alternate_vl_dit: true
+  attend_text_every_n_blocks: 2

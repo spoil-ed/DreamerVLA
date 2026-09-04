@@ -147,6 +147,20 @@ sft-revision = "45ccfcc4e28634f1576ebf78cab0fbe2fd82432d"
 dataset-repo = "physical-intelligence/libero"
 dataset-revision = "a4336d589d589045d1c56423ffdf3b88a0e19b1f"
 
+[tool.dreamervla.environments.qwen-groot]
+# Runtime contract migrated from SiPAI main. Keep it isolated from the
+# OpenVLA-OFT Transformers 4.40.1 fork.
+source-revision = "9672af693693ba7b3f8d33deacb71c2b2b525e6d"
+python = "3.11"
+torch = "2.11.0"
+transformers = "4.57.6"
+diffusers = "0.39.0"
+qwen-vl-utils = "0.0.14"
+
+[tool.dreamervla.checkpoints.qwen-groot]
+root = "/jfs/oss-import/simate_pretrain_checkpoints"
+base = "Qwen/Qwen3-VL-4B-Instruct"
+
 [tool.uv.sources]
 dlimp = { url = "https://ghfast.top/https://github.com/moojink/dlimp_openvla/archive/040105d256bd28866cc6620621a3d5f7b6b91b46.tar.gz" }
 egl-probe = { path = "third_party/egl_probe" }

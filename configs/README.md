@@ -10,6 +10,7 @@ configs/
 ├── experiment/
 ├── profile/
 ├── launch/
+├── VLA/
 ├── dreamervla/
 ├── worldmodel/
 ├── pixel_decoder/
@@ -165,6 +166,14 @@ checkout (or install OpenPI in the environment). SFT initializes from
 loaded separately from
 `task.pi05.assets_path/physical-intelligence/libero/norm_stats.json`. The default follows
 the RLinf LIBERO-10 route: sample a 10-action chunk and replan after 10 actions.
+
+`VLA=qwen_groot` selects the Qwen3-VL + GR00T N1.7 component migrated from
+SiPAI `main@9672af6`. The implementation is local under
+`dreamervla/models/embodiment/qwen_groot/` and retains SiPAI-compatible
+`backbone.*` and `action_head.*` state-dict keys. It requires a Qwen-capable
+Transformers runtime (the source environment uses `transformers==4.57.6`); do
+not try to load it in the incompatible OpenVLA-OFT Transformers fork. Override
+the default checkpoint with `QWEN_GROOT_BASE_CKPT` when needed.
 
 `collect_rollouts_pi05` runs 8 inference workers and 32 LIBERO env actors to
 collect 150 trajectories for each of the 10 tasks, with a 512-step trajectory

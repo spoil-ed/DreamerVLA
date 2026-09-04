@@ -7,6 +7,7 @@ from dreamervla.models.embodiment.protocol import (
     EncoderInputBatch,
     build_encoder_input_batch,
 )
+from dreamervla.models.embodiment.qwen_groot import QwenGR00TPolicy
 from dreamervla.models.embodiment.world_model import (
     ChunkAwareWorldModel,
     DinoTokenWorldModel,
@@ -22,6 +23,7 @@ __all__ = [
     "OpenVLAOFTPolicy",
     "Pi05Policy",
     "Pi05PrefixInputWorldModel",
+    "QwenGR00TPolicy",
     "WorldModel",
     "build_encoder_input_batch",
 ]
