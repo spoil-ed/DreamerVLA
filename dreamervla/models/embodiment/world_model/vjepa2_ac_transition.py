@@ -118,6 +118,7 @@ class _VJEPA2ACAttention(nn.Module):
         frames: int,
         tokens: int,
         spatial_grid: tuple[int, int] | None,
+        spatial_group_count: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if not self.use_rope:
             return q, k
@@ -136,8 +137,10 @@ class _VJEPA2ACAttention(nn.Module):
 
         height, width = spatial_grid
         spatial_id = token_ids - (tokens * frame_pos)
-        height_pos = (spatial_id // width) * (self.grid_size / height)
-        width_pos = (spatial_id % width) * (self.grid_size / width)
+        patches_per_group = height * width
+        patch_id = spatial_id % patches_per_group
+        height_pos = (patch_id // width) * (self.grid_size / height)
+        width_pos = (patch_id % width) * (self.grid_size / width)
         height_q = _rotate_queries_or_keys(q[..., offset : offset + self.h_dim], height_pos)
         height_k = _rotate_queries_or_keys(k[..., offset : offset + self.h_dim], height_pos)
         offset += self.h_dim
@@ -175,6 +178,7 @@ class _VJEPA2ACAttention(nn.Module):
         visual_tokens: int,
         condition_tokens: int,
         spatial_grid: tuple[int, int] | None,
+        spatial_group_count: int,
     ) -> torch.Tensor:
         batch, sequence, dim = x.shape
         expected = int(frames) * (int(condition_tokens) + int(visual_tokens))
@@ -199,6 +203,7 @@ class _VJEPA2ACAttention(nn.Module):
             frames=frames,
             tokens=visual_tokens,
             spatial_grid=spatial_grid,
+            spatial_group_count=spatial_group_count,
         )
 
         condition_q: list[torch.Tensor] = []
@@ -276,6 +281,7 @@ class _VJEPA2ACBlock(nn.Module):
         visual_tokens: int,
         condition_tokens: int,
         spatial_grid: tuple[int, int] | None,
+        spatial_group_count: int,
     ) -> torch.Tensor:
         x = x + self.attn(
             self.norm1(x),
@@ -284,6 +290,7 @@ class _VJEPA2ACBlock(nn.Module):
             visual_tokens=visual_tokens,
             condition_tokens=condition_tokens,
             spatial_grid=spatial_grid,
+            spatial_group_count=spatial_group_count,
         )
         return x + self.mlp(self.norm2(x))
 
@@ -332,8 +339,10 @@ class VJEPA2ACTransition(nn.Module):
         attention_dropout: float = 0.0,
         use_rope: bool = True,
         spatial_grid: tuple[int, int] | None = None,
+        spatial_group_count: int = 1,
         pretrained_grid_size: int = 16,
         use_activation_checkpointing: bool = False,
+        residual_prediction: bool = False,
     ) -> None:
         super().__init__()
         self.input_dim = int(input_dim)
@@ -350,10 +359,23 @@ class VJEPA2ACTransition(nn.Module):
         self.use_rope = bool(use_rope)
         self.pretrained_grid_size = int(pretrained_grid_size)
         self.use_activation_checkpointing = bool(use_activation_checkpointing)
+        self.residual_prediction = bool(residual_prediction)
+        if self.residual_prediction and self.input_dim != self.output_dim:
+            raise ValueError(
+                "residual_prediction requires input_dim == output_dim, got "
+                f"{self.input_dim} != {self.output_dim}"
+            )
         self.condition_tokens = 2 + int(self.context_dim > 0)
+        self.spatial_group_count = int(spatial_group_count)
         self.spatial_grid = self._validate_spatial_grid(spatial_grid)
 
         self.input_adapter = nn.Linear(self.input_dim, self.predictor_dim, bias=True)
+        self.action_input_adapter = nn.Linear(self.action_dim, self.action_dim, bias=True)
+        self.spatial_group_embedding = (
+            nn.Parameter(torch.zeros(self.spatial_group_count, self.predictor_dim))
+            if self.spatial_grid is not None and self.spatial_group_count > 1
+            else None
+        )
         self.action_encoder = nn.Linear(self.action_dim, self.predictor_dim, bias=True)
         # The released AC predictor uses the same 7-d input width for action
         # and state.  Preserve that state_encoder behind a small adapter when
@@ -393,21 +415,32 @@ class VJEPA2ACTransition(nn.Module):
         )
         self.pretrained_load_report: VJEPA2ACLoadReport | None = None
         self._init_weights()
+        with torch.no_grad():
+            self.action_input_adapter.weight.copy_(torch.eye(self.action_dim))
+            self.action_input_adapter.bias.zero_()
+            if self.residual_prediction:
+                self.output_adapter.weight.zero_()
+                self.output_adapter.bias.zero_()
 
     def _validate_spatial_grid(
         self, spatial_grid: tuple[int, int] | None
     ) -> tuple[int, int] | None:
         if spatial_grid is None:
+            if self.spatial_group_count != 1:
+                raise ValueError("spatial_group_count requires a genuine spatial_grid")
             return None
         if len(spatial_grid) != 2:
             raise ValueError("spatial_grid must be [height, width] or null")
         height, width = (int(value) for value in spatial_grid)
         if height < 1 or width < 1:
             raise ValueError("spatial_grid dimensions must be positive")
-        if height * width != self.token_count:
+        if self.spatial_group_count < 1:
+            raise ValueError("spatial_group_count must be positive")
+        if height * width * self.spatial_group_count != self.token_count:
             raise ValueError(
-                "spatial_grid may only be set for genuine spatial patch tokens: "
-                f"{height}*{width} != token_count={self.token_count}; use null for temporal-only RoPE"
+                "spatial_grid may only describe genuine spatial patch tokens or patch groups: "
+                f"{height}*{width}*{self.spatial_group_count} != "
+                f"token_count={self.token_count}; use null for temporal-only RoPE"
             )
         return height, width
 
@@ -485,9 +518,40 @@ class VJEPA2ACTransition(nn.Module):
         missing: list[str] = []
         mismatched: list[str] = []
         consumed_source_keys: set[str] = set()
+        blocked_adapter_prefixes: dict[str, str] = {}
+        for model_prefix, source_prefix in (
+            ("input_adapter.", "predictor_embed."),
+            ("output_adapter.", "predictor_proj."),
+        ):
+            model_weight = model_state[f"{model_prefix}weight"]
+            source_weight = checkpoint_state.get(f"{source_prefix}weight")
+            if source_weight is None:
+                blocked_adapter_prefixes[model_prefix] = "paired weight is missing"
+            elif tuple(source_weight.shape) != tuple(model_weight.shape):
+                blocked_adapter_prefixes[model_prefix] = (
+                    f"paired weight checkpoint{tuple(source_weight.shape)} "
+                    f"!= model{tuple(model_weight.shape)}"
+                )
         for model_key, model_value in model_state.items():
             source_key = self._source_key_for_model_key(model_key)
             source_value = checkpoint_state.get(source_key)
+            blocked_reason = next(
+                (
+                    reason
+                    for prefix, reason in blocked_adapter_prefixes.items()
+                    if model_key.startswith(prefix)
+                ),
+                None,
+            )
+            if blocked_reason is not None:
+                if source_value is None:
+                    missing.append(f"{model_key} <- {source_key}")
+                else:
+                    consumed_source_keys.add(source_key)
+                    mismatched.append(
+                        f"{model_key} <- {source_key}: skipped adapter atomically; {blocked_reason}"
+                    )
+                continue
             if source_value is None:
                 missing.append(f"{model_key} <- {source_key}")
                 continue
@@ -559,6 +623,7 @@ class VJEPA2ACTransition(nn.Module):
         actions: torch.Tensor,
         states: torch.Tensor,
         context: torch.Tensor | None = None,
+        token_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Predict latent tokens with the action/state-conditioned causal backbone."""
 
@@ -588,8 +653,22 @@ class VJEPA2ACTransition(nn.Module):
         elif context is not None:
             raise ValueError("context was provided but context_dim=0")
 
+        if token_mask is not None:
+            if token_mask.shape != (batch, frames, self.token_count):
+                raise ValueError(
+                    "token_mask must be "
+                    f"[{batch},{frames},{self.token_count}], got {tuple(token_mask.shape)}"
+                )
+            token_mask = token_mask.to(device=tokens.device, dtype=torch.bool)
+
         visual = self.input_adapter(tokens)
-        action = self.action_encoder(actions).unsqueeze(2)
+        if self.spatial_group_embedding is not None:
+            patches_per_group = self.spatial_grid[0] * self.spatial_grid[1]
+            group_ids = torch.arange(self.token_count, device=visual.device) // patches_per_group
+            visual = visual + self.spatial_group_embedding.index_select(0, group_ids)
+        if token_mask is not None:
+            visual = visual.masked_fill(~token_mask[..., None], 0)
+        action = self.action_encoder(self.action_input_adapter(actions)).unsqueeze(2)
         state = self.state_encoder(self.state_input_adapter(states)).unsqueeze(2)
         conditions = [action, state]
         if self.context_encoder is not None:
@@ -602,6 +681,16 @@ class VJEPA2ACTransition(nn.Module):
             self.condition_tokens + self.token_count,
             device=hidden.device,
         )
+        if token_mask is not None:
+            condition_mask = torch.ones(
+                batch,
+                frames,
+                self.condition_tokens,
+                dtype=torch.bool,
+                device=hidden.device,
+            )
+            sequence_mask = torch.cat([condition_mask, token_mask], dim=2).flatten(1, 2)
+            attention_mask = attention_mask[None, None] & sequence_mask[:, None, None, :]
         for block in self.predictor_blocks:
             kwargs = {
                 "attention_mask": attention_mask,
@@ -609,6 +698,7 @@ class VJEPA2ACTransition(nn.Module):
                 "visual_tokens": self.token_count,
                 "condition_tokens": self.condition_tokens,
                 "spatial_grid": self.spatial_grid,
+                "spatial_group_count": self.spatial_group_count,
             }
             if self.use_activation_checkpointing and self.training and torch.is_grad_enabled():
                 hidden = checkpoint(block, hidden, use_reentrant=False, **kwargs)
@@ -624,8 +714,12 @@ class VJEPA2ACTransition(nn.Module):
         state_hidden = hidden[:, :, 1]
         visual = hidden[:, :, self.condition_tokens :]
         output = self.output_adapter(self.predictor_norm(visual))
+        if self.residual_prediction:
+            output = output + tokens
         if self.state_output_adapter is not None:
             state_output = self.state_output_adapter(self.predictor_norm(state_hidden))
             state_output = state_output[:, :, None, :].expand(-1, -1, self.token_count, -1)
             output = torch.cat([output, state_output], dim=-1)
+        if token_mask is not None:
+            output = output.masked_fill(~token_mask[..., None], 0)
         return output

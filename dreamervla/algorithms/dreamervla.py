@@ -181,6 +181,7 @@ def world_model_pretrain_step(
             "return_to_go",
             "return_targets",
             "task_ids",
+            "prefix_attention_mask",
         ):
             value = batch.get(key)
             if isinstance(value, torch.Tensor):
@@ -209,6 +210,11 @@ def world_model_pretrain_step(
 
     with timer.device_stage("backward"):
         loss_tensor.backward()
+    for parameter_group in optimizer.param_groups:
+        if bool(parameter_group.get("update_enabled", True)):
+            continue
+        for parameter in parameter_group["params"]:
+            parameter.grad = None
     with timer.device_stage("grad_clip"):
         grad_norm = torch.nn.utils.clip_grad_norm_(
             world_model.parameters(),

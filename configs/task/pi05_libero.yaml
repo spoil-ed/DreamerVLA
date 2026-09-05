@@ -22,6 +22,8 @@ observation_latent:
   action_head_type: flow_matching
   token_count: 768
   token_dim: 2048
+  image_group_count: 3
+  image_patch_grid: [16, 16]
   wm_obs_dim: ${dvla_mul:${task.observation_latent.token_count},${task.observation_latent.token_dim}}
   chunk_size: ${task.pi05.action_horizon}
   history: 1

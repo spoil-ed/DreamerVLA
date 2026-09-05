@@ -236,6 +236,7 @@ class WorldModelTrainingBase(BaseRunner):
                     "task_ids",
                     "proprio",
                     "lang_emb",
+                    "prefix_attention_mask",
                 )
                 if (value := batch.get(key)) is not None
             }
@@ -257,6 +258,7 @@ class WorldModelTrainingBase(BaseRunner):
                     "return_to_go",
                     "return_targets",
                     "task_ids",
+                    "prefix_attention_mask",
                 )
                 if (value := batch.get(key)) is not None
             }

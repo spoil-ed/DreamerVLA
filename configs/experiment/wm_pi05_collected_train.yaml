@@ -77,6 +77,7 @@ offline_warmup:
   online_latent:
     enabled: true
     encode_batch_size: 4
+    encoder_method: encode_raw_observation_prefix_bundle_batch
     rotate_images_180: ${task.pi05.rotate_images_180}
     base_image_key: ${task.pi05.base_image_key}
     wrist_image_key: ${task.pi05.wrist_image_key}
@@ -111,6 +112,15 @@ optim:
   world_model:
     name: adamw
     lr: 1.0e-4
+    parameter_group_lrs:
+      default: 1.0e-4
+      adapter: 1.0e-4
+      pretrained_backbone: 1.0e-5
+    lr_scheduler: cosine
+    lr_warmup_steps: 250
+    adapter_alignment_steps: 500
+    pretrained_backbone_warmup_steps: 500
+    min_lr_ratio: 0.1
     betas: [0.9, 0.999]
     eps: 1.0e-8
     weight_decay: 0.0

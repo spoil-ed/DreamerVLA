@@ -7,6 +7,8 @@ from dataclasses import dataclass
 import torch
 
 PI05_IMAGE_TOKEN_COUNT = 768
+PI05_IMAGE_GROUP_COUNT = 3
+PI05_IMAGE_PATCH_GRID = (16, 16)
 PI05_TEXT_TOKEN_COUNT = 200
 PI05_PREFIX_INPUT_TOKEN_COUNT = PI05_IMAGE_TOKEN_COUNT + PI05_TEXT_TOKEN_COUNT
 PI05_PREFIX_INPUT_TOKEN_DIM = 2048
@@ -30,6 +32,29 @@ class Pi05PrefixInputLatent:
             self.position_ids,
             text_mode=self.text_mode,
         )
+
+
+@dataclass(frozen=True)
+class Pi05ImagePrefixLatent:
+    """Post-PaliGemma image-prefix outputs with exact image-slot validity."""
+
+    latent: torch.Tensor
+    attention_mask: torch.Tensor
+
+    def __post_init__(self) -> None:
+        if self.latent.ndim != 3 or self.latent.shape[1:] != (
+            PI05_IMAGE_TOKEN_COUNT,
+            PI05_PREFIX_INPUT_TOKEN_DIM,
+        ):
+            raise ValueError(
+                f"π0.5 image prefix latent must be [B,768,2048], got {tuple(self.latent.shape)}"
+            )
+        expected = (int(self.latent.shape[0]), PI05_IMAGE_TOKEN_COUNT)
+        if self.attention_mask.shape != expected:
+            raise ValueError(
+                f"π0.5 image prefix attention_mask must be {expected}, "
+                f"got {tuple(self.attention_mask.shape)}"
+            )
 
 
 def validate_text_mode(text_mode: str) -> str:
@@ -162,12 +187,15 @@ def validate_prefix_input_latent(
 
 
 __all__ = [
+    "PI05_IMAGE_GROUP_COUNT",
+    "PI05_IMAGE_PATCH_GRID",
     "PI05_IMAGE_TOKEN_COUNT",
     "PI05_PREFIX_INPUT_SOURCE",
     "PI05_PREFIX_INPUT_TOKEN_COUNT",
     "PI05_PREFIX_INPUT_TOKEN_DIM",
     "PI05_TEXT_MODES",
     "PI05_TEXT_TOKEN_COUNT",
+    "Pi05ImagePrefixLatent",
     "Pi05PrefixInputLatent",
     "build_prefix_input_latent",
     "prefix_attention_matrix",

@@ -36,6 +36,7 @@ from dreamervla.utils.checkpoint_util import TopKCheckpointManager
 from dreamervla.utils.console import count_trainable
 from dreamervla.utils.hf_checkpoint import load_runner_payload
 from dreamervla.utils.hf_module import load_module_pretrained, save_module_pretrained
+from dreamervla.utils.optim import apply_optimizer_lr_schedule
 from dreamervla.utils.seed import capture_rng_state, restore_rng_state, select_rank_rng_state
 
 _WARMUP_PROGRESS_RE = re.compile(r"^(?P<component>wm|classifier)_step_(?P<step>\d+)\.ckpt$")
@@ -229,6 +230,35 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             if "lr" in group:
                 return float(group["lr"])
         return None
+
+    def _apply_wm_learning_rate_schedule(
+        self,
+        *,
+        step: int,
+        total_steps: int,
+        optim_cfg: Any,
+    ) -> dict[str, float]:
+        if optim_cfg is None or not hasattr(self.world_model_optimizer, "param_groups"):
+            return {}
+        world_model_cfg = OmegaConf.select(optim_cfg, "world_model", default=None)
+        if world_model_cfg is None:
+            return {}
+        configured_total = int(getattr(self, "_wm_lr_schedule_total_steps", total_steps))
+        alignment_steps = int(world_model_cfg.get("adapter_alignment_steps", 0) or 0)
+        if alignment_steps >= configured_total and any(
+            str(group.get("group_name", "")) == "pretrained_backbone"
+            for group in self.world_model_optimizer.param_groups
+        ):
+            raise ValueError(
+                "optim.world_model.adapter_alignment_steps must be smaller than "
+                f"the resolved WM update count ({alignment_steps} >= {configured_total})"
+            )
+        return apply_optimizer_lr_schedule(
+            self.world_model_optimizer,
+            world_model_cfg,
+            step=int(step),
+            total_steps=configured_total,
+        )
 
     def _wm_optimizer_diagnostics(self) -> dict[str, torch.Tensor]:
         """Measure WM parameters and Adam moments without changing optimizer state."""
@@ -466,11 +496,22 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
                     unit=progress_unit,
                 )
                 return
+            lr_metrics = self._apply_wm_learning_rate_schedule(
+                step=i,
+                total_steps=total_steps,
+                optim_cfg=optim_cfg,
+            )
             raw_metrics = self._run_wm_warmup_batch(
                 wm_batch,
                 optim_cfg=optim_cfg,
                 profile_timings=profile_timings,
             )
+            for name, value in lr_metrics.items():
+                raw_metrics[name] = torch.tensor(
+                    value,
+                    device=self.device,
+                    dtype=torch.float32,
+                )
             learning_rate = self._wm_learning_rate()
             if learning_rate is not None:
                 raw_metrics["learning_rate"] = torch.tensor(
@@ -1537,6 +1578,7 @@ class WorldModelTrainingRunner(_WorldModelTrainingCommon):
             total_steps=total_steps, steps_per_epoch=steps_per_epoch
         )
         current_step = int(start_step)
+        self._wm_lr_schedule_total_steps = int(total_steps)
         for epoch_index in range(int(start_epoch), total_epochs):
             epoch_end = min(int(total_steps), (epoch_index + 1) * int(steps_per_epoch))
             while current_step < epoch_end:

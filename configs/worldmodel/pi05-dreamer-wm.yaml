@@ -39,11 +39,14 @@ world_model:
   # Keep every per-step AC prediction supervised, but do not backpropagate
   # recursively through 40 applications of the 24-layer predictor.
   vjepa2_truncate_rollout_gradients: true
-  # π0.5's 768 image-prefix outputs concatenate multiple image groups; they
-  # are not one HxW patch grid. Preserve temporal RoPE without inventing 2-D
-  # coordinates for this representation.
-  vjepa2_spatial_grid: null
+  # π0.5 emits three genuine 16x16 image-patch groups. Keep their separate
+  # grids and learn a view embedding instead of inventing one 768-token grid.
+  vjepa2_spatial_grid: ${task.observation_latent.image_patch_grid}
+  vjepa2_spatial_group_count: ${task.observation_latent.image_group_count}
   vjepa2_pretrained_grid_size: 16
+  # Learn a transition delta around persistence so the 1024-d adapter does not
+  # have to reconstruct every 2048-d PI0.5 feature component from scratch.
+  vjepa2_residual_prediction: true
 
 ray_components:
   world_model:
@@ -60,4 +63,6 @@ ray_components:
       vjepa2_use_rope: ${world_model.vjepa2_use_rope}
       vjepa2_truncate_rollout_gradients: ${world_model.vjepa2_truncate_rollout_gradients}
       vjepa2_spatial_grid: ${world_model.vjepa2_spatial_grid}
+      vjepa2_spatial_group_count: ${world_model.vjepa2_spatial_group_count}
       vjepa2_pretrained_grid_size: ${world_model.vjepa2_pretrained_grid_size}
+      vjepa2_residual_prediction: ${world_model.vjepa2_residual_prediction}

@@ -178,7 +178,9 @@ class ChunkAwareWorldModel(WorldModel):
         vjepa2_attention_dropout: float = 0.0,
         vjepa2_use_rope: bool = True,
         vjepa2_spatial_grid: list[int] | tuple[int, int] | None = None,
+        vjepa2_spatial_group_count: int = 1,
         vjepa2_pretrained_grid_size: int = 16,
+        vjepa2_residual_prediction: bool = False,
         vjepa2_truncate_rollout_gradients: bool = True,
         **kwargs: Any,
     ) -> None:
@@ -414,8 +416,10 @@ class ChunkAwareWorldModel(WorldModel):
                 attention_dropout=float(vjepa2_attention_dropout),
                 use_rope=bool(vjepa2_use_rope),
                 spatial_grid=spatial_grid,
+                spatial_group_count=int(vjepa2_spatial_group_count),
                 pretrained_grid_size=int(vjepa2_pretrained_grid_size),
                 use_activation_checkpointing=self.grad_checkpoint,
+                residual_prediction=bool(vjepa2_residual_prediction),
             )
             if self.transition_init == "pretrained":
                 if not vjepa2_checkpoint_path:
@@ -445,6 +449,33 @@ class ChunkAwareWorldModel(WorldModel):
     # ------------------------------------------------------------------ #
     # WM-style action concat transition                                  #
     # ------------------------------------------------------------------ #
+    def optimizer_parameter_groups(self) -> list[dict[str, Any]]:
+        """Separate transferred AC weights from representation adapters."""
+
+        trainable = [
+            (name, parameter)
+            for name, parameter in self.named_parameters()
+            if parameter.requires_grad
+        ]
+        if self.transition_type != "vjepa2_ac" or self.transition_init != "pretrained":
+            return [
+                {
+                    "group_name": "default",
+                    "params": [parameter for _, parameter in trainable],
+                }
+            ]
+        if self.pretrained_load_report is None:
+            raise RuntimeError("pretrained transition is missing its load report")
+        loaded_names = {
+            f"vjepa2_transition.{name}" for name in self.pretrained_load_report.loaded_keys
+        }
+        backbone = [parameter for name, parameter in trainable if name in loaded_names]
+        adapters = [parameter for name, parameter in trainable if name not in loaded_names]
+        return [
+            {"group_name": "adapter", "params": adapters},
+            {"group_name": "pretrained_backbone", "params": backbone},
+        ]
+
     def _module_dtype(self) -> torch.dtype:
         return self.action_proj[-1].weight.dtype
 
@@ -777,7 +808,11 @@ class ChunkAwareWorldModel(WorldModel):
         obs_tokens = z[..., : self.obs_token_dim]
         return self._condition_tokens(obs_tokens, lang, act)
 
-    def predict(self, z: torch.Tensor) -> torch.Tensor:
+    def predict(
+        self,
+        z: torch.Tensor,
+        token_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """Run either the baseline transition or adapter-wrapped V-JEPA2-AC."""
 
         if self.transition_type == "original":
@@ -799,8 +834,42 @@ class ChunkAwareWorldModel(WorldModel):
         )
         actions = z[:, :, 0, action_start:action_stop]
         states = z[:, :, 0, action_stop:state_stop]
-        prediction = self.vjepa2_transition(tokens, actions, states, context)
+        prediction = self.vjepa2_transition(
+            tokens,
+            actions,
+            states,
+            context,
+            token_mask=token_mask,
+        )
         return torch.cat([prediction, z[..., self.obs_token_dim :]], dim=-1)
+
+    def _history_token_mask(
+        self,
+        latent: dict[str, torch.Tensor] | torch.Tensor,
+        *,
+        batch_size: int,
+        frames: int,
+    ) -> torch.Tensor | None:
+        if not isinstance(latent, dict):
+            return None
+        mask = latent.get("prefix_attention_mask")
+        if not isinstance(mask, torch.Tensor):
+            return None
+        if mask.ndim == 2:
+            if mask.shape != (batch_size, self.token_count):
+                raise ValueError(
+                    "prefix_attention_mask must be "
+                    f"[{batch_size},{self.token_count}], got {tuple(mask.shape)}"
+                )
+            return mask[:, None].expand(-1, frames, -1).to(dtype=torch.bool)
+        if mask.ndim != 3 or mask.shape[0] != batch_size or mask.shape[2] != self.token_count:
+            raise ValueError(
+                f"prefix_attention_mask must be [B,N] or [B,T,N], got {tuple(mask.shape)}"
+            )
+        if mask.shape[1] < frames:
+            pad = mask[:, :1].expand(-1, frames - int(mask.shape[1]), -1)
+            mask = torch.cat([pad, mask], dim=1)
+        return mask[:, -frames:].to(dtype=torch.bool)
 
     def actor_input(self, latent: dict[str, torch.Tensor] | torch.Tensor) -> torch.Tensor:
         """Return the visual token segment consumed by VLA action actors."""
@@ -896,7 +965,12 @@ class ChunkAwareWorldModel(WorldModel):
             lang,
             normalize_observations=False,
         )
-        pred_z = self.predict(z)
+        token_mask = self._history_token_mask(
+            latent,
+            batch_size=bsz,
+            frames=int(model_history.shape[1]),
+        )
+        pred_z = self.predict(z, token_mask=token_mask)
         next_hidden = pred_z[:, -1][..., : self.obs_token_dim]
         next_proprio = (
             self._raw_proprio_from_obs_tokens(next_hidden)
@@ -925,10 +999,15 @@ class ChunkAwareWorldModel(WorldModel):
             "actions": next_action_history,
             "lang": lang,
         }
-        if isinstance(latent, dict) and isinstance(
-            latent.get("prefix_attention_mask"), torch.Tensor
-        ):
-            out["prefix_attention_mask"] = latent["prefix_attention_mask"]
+        if token_mask is not None:
+            next_mask = token_mask[:, -1]
+            if self.num_hist > 1:
+                out["prefix_attention_mask"] = torch.cat(
+                    [token_mask[:, 1:], next_mask[:, None]],
+                    dim=1,
+                )
+            else:
+                out["prefix_attention_mask"] = next_mask[:, None]
         if next_proprio is not None:
             out["proprio"] = next_proprio
         return out
@@ -1170,6 +1249,19 @@ class ChunkAwareWorldModel(WorldModel):
         history = obs_tokens[:, :H]
         chunk_actions = actions[:, H - 1 : H - 1 + K]
         hidden_target = obs_tokens[:, H : H + K].detach()
+        prefix_attention_mask = batch.get("prefix_attention_mask")
+        target_token_mask: torch.Tensor | None = None
+        history_token_mask: torch.Tensor | None = None
+        if isinstance(prefix_attention_mask, torch.Tensor):
+            if prefix_attention_mask.shape != (bsz, T, self.token_count):
+                raise ValueError(
+                    "prefix_attention_mask must match [B,T,N] = "
+                    f"[{bsz},{T},{self.token_count}], got "
+                    f"{tuple(prefix_attention_mask.shape)}"
+                )
+            prefix_attention_mask = prefix_attention_mask.to(dtype=torch.bool)
+            history_token_mask = prefix_attention_mask[:, :H]
+            target_token_mask = prefix_attention_mask[:, H : H + K]
 
         action_history = torch.zeros(
             bsz,
@@ -1188,15 +1280,19 @@ class ChunkAwareWorldModel(WorldModel):
             "actions": action_history,
             "lang": lang_emb,
         }
-        if isinstance(batch.get("prefix_attention_mask"), torch.Tensor):
-            latent["prefix_attention_mask"] = batch["prefix_attention_mask"]
+        if history_token_mask is not None:
+            latent["prefix_attention_mask"] = history_token_mask
         if isinstance(batch.get("proprio"), torch.Tensor):
             latent["proprio"] = batch["proprio"][:, H - 1]
         out = self.predict_next_chunk(latent, chunk_actions)
         hidden_pred = out["hidden_seq"]
         self._last_hidden_target_width = int(hidden_target.shape[-1])
 
-        loss, hidden_mse, hidden_cosine = self._hidden_loss_terms(hidden_pred, hidden_target)
+        loss, hidden_mse, hidden_cosine = self._hidden_loss_terms(
+            hidden_pred,
+            hidden_target,
+            token_mask=target_token_mask,
+        )
         # Comparable visual diagnostics deliberately exclude proprio/language
         # conditioning and never contribute to the optimized objective.  A
         # "model step" is one replay transition for Chunk-WM (environment
@@ -1204,21 +1300,38 @@ class ChunkAwareWorldModel(WorldModel):
         with torch.no_grad():
             visual_pred = hidden_pred.detach()[..., : self.token_dim].float()
             visual_target = hidden_target.detach()[..., : self.token_dim].float()
-            one_step_cosine_similarity = F.cosine_similarity(
+            one_step_cosine = F.cosine_similarity(
                 visual_pred[:, 0],
                 visual_target[:, 0],
                 dim=-1,
-            ).mean()
-            chunk_cosine_similarity = F.cosine_similarity(
+            )
+            chunk_cosine = F.cosine_similarity(
                 visual_pred,
                 visual_target,
                 dim=-1,
-            ).mean()
-            persistence_cosine_similarity = F.cosine_similarity(
+            )
+            persistence_cosine = F.cosine_similarity(
                 vision_tokens[:, H - 1].detach().float(),
                 vision_tokens[:, H].detach().float(),
                 dim=-1,
-            ).mean()
+            )
+            if target_token_mask is None:
+                one_step_cosine_similarity = one_step_cosine.mean()
+                chunk_cosine_similarity = chunk_cosine.mean()
+                persistence_cosine_similarity = persistence_cosine.mean()
+            else:
+                one_mask = target_token_mask[:, 0].to(dtype=one_step_cosine.dtype)
+                chunk_mask = target_token_mask.to(dtype=chunk_cosine.dtype)
+                persistence_mask = prefix_attention_mask[:, H].to(dtype=persistence_cosine.dtype)
+                one_step_cosine_similarity = (
+                    one_step_cosine * one_mask
+                ).sum() / one_mask.sum().clamp_min(1)
+                chunk_cosine_similarity = (
+                    chunk_cosine * chunk_mask
+                ).sum() / chunk_mask.sum().clamp_min(1)
+                persistence_cosine_similarity = (
+                    persistence_cosine * persistence_mask
+                ).sum() / persistence_mask.sum().clamp_min(1)
         proprio_out: dict[str, torch.Tensor] = {}
         if self.proprio_condition_dim > 0 and isinstance(out.get("proprio_seq"), torch.Tensor):
             proprio_target = batch.get("proprio")
@@ -1280,15 +1393,29 @@ class ChunkAwareWorldModel(WorldModel):
                     cur_latent["proprio"] = out_c["proprio"]
             rollout_pred = torch.cat(rollout_preds, dim=1)
             rollout_target = obs_tokens[:, H + K : H + N * K].detach()
+            rollout_token_mask = (
+                None
+                if prefix_attention_mask is None
+                else prefix_attention_mask[:, H + K : H + N * K]
+            )
             rollout_loss_total, rollout_mse, rollout_cosine = self._hidden_loss_terms(
-                rollout_pred, rollout_target
+                rollout_pred,
+                rollout_target,
+                token_mask=rollout_token_mask,
             )
             with torch.no_grad():
-                rollout_cosine_similarity = F.cosine_similarity(
+                rollout_cosine_values = F.cosine_similarity(
                     rollout_pred.detach()[..., : self.token_dim].float(),
                     rollout_target.detach()[..., : self.token_dim].float(),
                     dim=-1,
-                ).mean()
+                )
+                if rollout_token_mask is None:
+                    rollout_cosine_similarity = rollout_cosine_values.mean()
+                else:
+                    rollout_mask = rollout_token_mask.to(dtype=rollout_cosine_values.dtype)
+                    rollout_cosine_similarity = (
+                        rollout_cosine_values * rollout_mask
+                    ).sum() / rollout_mask.sum().clamp_min(1)
             loss = loss + self.chunk_rollout_loss_scale * rollout_loss_total
             rollout_out = {
                 "rollout_loss": rollout_loss_total.detach(),

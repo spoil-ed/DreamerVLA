@@ -182,6 +182,13 @@ the very large `[768,2048]` prefix tensor. `wm_pi05_collected_train` shards whol
 trajectories across its 8 DDP ranks, extracts the frozen π0.5 image prefix online,
 and keeps only the current trajectory's float16 latent in host memory. One replay
 epoch visits every full sequence window from both successful and failed episodes.
+The image prefix retains its native three 16x16 patch groups and per-slot validity
+mask; the padded third LIBERO camera slot is excluded from attention and loss. The
+V-JEPA2-AC pretrained recipe first aligns representation/action/state/output adapters,
+then fine-tunes the transferred predictor at a lower learning rate. Both parameter
+groups use independently offset linear-warmup/cosine schedules, and the residual
+output adapter starts from exact latent persistence instead of reconstructing all
+2048 channels through the 1024-d predictor bottleneck on the first update.
 After SFT, set `collect.policy_ckpt_path=/path/to/pi05-sft-run` (a run root,
 `checkpoints/`, or `latest.ckpt`) so collection restores the learned delta on top
 of the immutable RLinf-aligned base checkpoint. The Object collection recipe also

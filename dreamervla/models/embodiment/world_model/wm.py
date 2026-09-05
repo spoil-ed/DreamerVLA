@@ -653,12 +653,35 @@ class WorldModel(BaseWorldModel):
         return torch.ones_like(self.reward_from_latent(latent))
 
     def _hidden_loss_terms(
-        self, hidden_pred: torch.Tensor, hidden_target: torch.Tensor
+        self,
+        hidden_pred: torch.Tensor,
+        hidden_target: torch.Tensor,
+        token_mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        hidden_mse = F.mse_loss(hidden_pred.float(), hidden_target.float())
+        pred_float = hidden_pred.float()
+        target_float = hidden_target.float()
+        if token_mask is None:
+            hidden_mse = F.mse_loss(pred_float, target_float)
+        else:
+            if token_mask.shape != hidden_pred.shape[:-1]:
+                raise ValueError(
+                    f"token_mask must be {tuple(hidden_pred.shape[:-1])}, "
+                    f"got {tuple(token_mask.shape)}"
+                )
+            valid = token_mask.to(device=hidden_pred.device, dtype=torch.bool)
+            valid_count = valid.sum()
+            squared_error = (pred_float - target_float).square()
+            hidden_mse = (squared_error * valid[..., None]).sum() / (
+                valid_count.clamp_min(1) * int(hidden_pred.shape[-1])
+            )
         pred_norm = F.normalize(hidden_pred.float(), dim=-1)
         target_norm = F.normalize(hidden_target.float(), dim=-1)
-        hidden_cosine = 1.0 - (pred_norm * target_norm).sum(dim=-1).mean()
+        cosine = (pred_norm * target_norm).sum(dim=-1)
+        if token_mask is None:
+            hidden_cosine = 1.0 - cosine.mean()
+        else:
+            valid_float = token_mask.to(device=cosine.device, dtype=cosine.dtype)
+            hidden_cosine = 1.0 - (cosine * valid_float).sum() / valid_float.sum().clamp_min(1)
         hidden_loss = self.hidden_loss_scale * hidden_mse + self.cosine_loss_scale * hidden_cosine
         return hidden_loss, hidden_mse, hidden_cosine
 

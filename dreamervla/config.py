@@ -1316,6 +1316,29 @@ def _validate_world_model_training_pipeline(cfg: DictConfig) -> None:
     log_every = int(OmegaConf.select(cfg, "training.replay_warmup_log_every", default=1))
     if log_every < 1:
         raise ValueError(f"training.replay_warmup_log_every must be >= 1, got {log_every}")
+    wm_optim = OmegaConf.select(cfg, "optim.world_model", default=None)
+    if wm_optim is not None:
+        scheduler = str(wm_optim.get("lr_scheduler", "constant")).strip().lower()
+        if scheduler not in {"constant", "cosine"}:
+            raise ValueError("optim.world_model.lr_scheduler must be constant or cosine")
+        for key in (
+            "lr_warmup_steps",
+            "adapter_alignment_steps",
+            "pretrained_backbone_warmup_steps",
+        ):
+            value = int(wm_optim.get(key, 0) or 0)
+            if value < 0:
+                raise ValueError(f"optim.world_model.{key} must be >= 0, got {value}")
+        min_lr_ratio = float(wm_optim.get("min_lr_ratio", 0.0) or 0.0)
+        if not 0.0 <= min_lr_ratio <= 1.0:
+            raise ValueError("optim.world_model.min_lr_ratio must be within [0, 1]")
+        group_lrs = wm_optim.get("parameter_group_lrs")
+        if group_lrs is not None:
+            for group_name, group_lr in group_lrs.items():
+                if float(group_lr) <= 0.0:
+                    raise ValueError(
+                        f"optim.world_model.parameter_group_lrs.{group_name} must be positive"
+                    )
 
 
 def _validate_epoch_checkpoint_cadence(cfg: DictConfig) -> None:

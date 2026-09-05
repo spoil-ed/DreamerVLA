@@ -19,6 +19,7 @@ from dreamervla.models.embodiment.pi05.openpi_config import (
 from dreamervla.models.embodiment.pi05.prefix_input import (
     PI05_IMAGE_TOKEN_COUNT,
     PI05_TEXT_TOKEN_COUNT,
+    Pi05ImagePrefixLatent,
     Pi05PrefixInputLatent,
     build_prefix_input_latent,
     prefix_attention_matrix,
@@ -258,7 +259,7 @@ class Pi05Policy(nn.Module):
         return actions[0]
 
     @torch.no_grad()
-    def encode_observation_prefix(self, observation: Any) -> torch.Tensor:
+    def encode_observation_prefix_bundle(self, observation: Any) -> Pi05ImagePrefixLatent:
         """Encode an OpenPI loader observation into the RLinf image prefix.
 
         Unlike :meth:`infer_batch_with_prefix`, this path does not run the
@@ -307,7 +308,14 @@ class Pi05Policy(nn.Module):
                 "RLinf-aligned π0.5 image prefix must be [768,2048], got "
                 f"{tuple(image_prefix.shape[1:])}"
             )
-        return image_prefix
+        image_mask = prefix_pad_masks[:, :image_token_count].to(dtype=torch.bool)
+        return Pi05ImagePrefixLatent(latent=image_prefix, attention_mask=image_mask)
+
+    @torch.no_grad()
+    def encode_observation_prefix(self, observation: Any) -> torch.Tensor:
+        """Return only the image-prefix tensor for legacy feature consumers."""
+
+        return self.encode_observation_prefix_bundle(observation).latent
 
     @torch.no_grad()
     def encode_raw_observation_prefix_batch(
@@ -330,6 +338,28 @@ class Pi05Policy(nn.Module):
         )
         model_observation = openpi_model.Observation.from_dict(tensor_inputs)
         return self.encode_observation_prefix(model_observation)
+
+    @torch.no_grad()
+    def encode_raw_observation_prefix_bundle_batch(
+        self,
+        observations: list[dict[str, Any]],
+    ) -> Pi05ImagePrefixLatent:
+        """Encode image-prefix outputs together with native image-slot masks."""
+
+        if not observations:
+            raise ValueError("π0.5 prefix encoding requires at least one observation")
+        from openpi.models import model as openpi_model
+
+        transformed = [self._input_transform(copy.deepcopy(item)) for item in observations]
+        device = next(self.parameters()).device
+        tensor_inputs = tree_map(
+            lambda *values: torch.stack(
+                [torch.from_numpy(np.asarray(value)) for value in values], dim=0
+            ).to(device),
+            *transformed,
+        )
+        model_observation = openpi_model.Observation.from_dict(tensor_inputs)
+        return self.encode_observation_prefix_bundle(model_observation)
 
     @torch.no_grad()
     def encode_observation_prefix_input(

@@ -106,6 +106,57 @@ def test_non_spatial_tokens_must_not_be_assigned_a_fake_grid() -> None:
         _tiny_transition(spatial_grid=(1, 3))
 
 
+def test_grouped_spatial_rope_masks_padded_image_slots() -> None:
+    torch.manual_seed(9)
+    transition = _tiny_transition(
+        token_count=6,
+        spatial_grid=(1, 2),
+        spatial_group_count=3,
+    ).eval()
+    tokens = torch.randn(1, 2, 6, 5)
+    actions = torch.randn(1, 2, 2)
+    states = torch.randn(1, 2, 3)
+    token_mask = torch.tensor([[[1, 1, 1, 1, 0, 0], [1, 1, 1, 1, 0, 0]]], dtype=torch.bool)
+
+    reference = transition(tokens, actions, states, token_mask=token_mask)
+    changed = tokens.clone()
+    changed[:, :, 4:].add_(1000.0)
+    actual = transition(changed, actions, states, token_mask=token_mask)
+
+    assert transition.spatial_group_embedding is not None
+    torch.testing.assert_close(reference, actual)
+    assert torch.count_nonzero(actual[:, :, 4:]).item() == 0
+
+
+def test_residual_output_adapter_starts_from_exact_persistence() -> None:
+    transition = _tiny_transition(output_dim=5, residual_prediction=True).eval()
+    tokens = torch.randn(1, 2, 2, 5)
+    output = transition(
+        tokens,
+        torch.randn(1, 2, 2),
+        torch.randn(1, 2, 3),
+    )
+
+    torch.testing.assert_close(output, tokens)
+    torch.testing.assert_close(
+        transition.action_input_adapter.weight,
+        torch.eye(transition.action_dim),
+    )
+
+
+def test_masked_hidden_loss_ignores_padding_tokens() -> None:
+    model = _tiny_chunk_wm()
+    target = torch.randn(1, 2, 2, 4)
+    prediction = target.clone()
+    prediction[:, :, 1].add_(1000.0)
+    mask = torch.tensor([[[True, False], [True, False]]])
+
+    _loss, mse, cosine = model._hidden_loss_terms(prediction, target, token_mask=mask)
+
+    assert mse.item() == 0.0
+    assert cosine.item() == pytest.approx(0.0, abs=1e-7)
+
+
 def test_pretrained_load_is_explicit_and_never_resizes_weights(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -145,6 +196,9 @@ def test_pretrained_load_is_explicit_and_never_resizes_weights(
     assert "predictor_blocks.0.attn.qkv.weight" in report.loaded_keys
     assert any(
         "input_adapter.weight <- predictor_embed.weight" in key for key in report.mismatched_keys
+    )
+    assert any(
+        "input_adapter.bias <- predictor_embed.bias" in key for key in report.mismatched_keys
     )
     assert any(
         "output_adapter.weight <- predictor_proj.weight" in key for key in report.mismatched_keys
@@ -368,9 +422,16 @@ def test_pi05_rgb_wm_config_declares_strict_transition_ablation_without_sidecars
     assert world_model.vjepa2_predictor_dim == 1024
     assert world_model.vjepa2_depth == 24
     assert world_model.vjepa2_num_heads == 16
-    assert world_model.vjepa2_spatial_grid is None
+    assert list(world_model.vjepa2_spatial_grid) == [16, 16]
+    assert world_model.vjepa2_spatial_group_count == 3
+    assert world_model.vjepa2_residual_prediction is True
+    assert config.offline_warmup.online_latent.encoder_method.endswith("bundle_batch")
     assert world_model.vjepa2_truncate_rollout_gradients is True
     assert worker.transition_type == "vjepa2_ac"
     assert worker.transition_init == "random"
     assert worker.vjepa2_predictor_dim == world_model.vjepa2_predictor_dim
     assert worker.vjepa2_truncate_rollout_gradients == world_model.vjepa2_truncate_rollout_gradients
+    assert config.optim.world_model.lr_scheduler == "cosine"
+    assert config.optim.world_model.adapter_alignment_steps == 500
+    assert config.optim.world_model.parameter_group_lrs.adapter == 1.0e-4
+    assert config.optim.world_model.parameter_group_lrs.pretrained_backbone == 1.0e-5

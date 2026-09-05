@@ -27,6 +27,17 @@ class _FakePrefixInputEncoder:
         )
 
 
+class _FakeImagePrefixBundleEncoder:
+    def encode_raw_observation_prefix_bundle_batch(self, observations):
+        batch_size = len(observations)
+        mask = torch.ones(batch_size, 768, dtype=torch.bool)
+        mask[:, 512:] = False
+        return SimpleNamespace(
+            latent=torch.ones(batch_size, 768, 2048),
+            attention_mask=mask,
+        )
+
+
 def _step(index: int) -> dict:
     zeros = np.zeros
     return {
@@ -131,6 +142,32 @@ def test_pi05_rgb_replay_carries_prefix_input_attention_mask(tmp_path: Path) -> 
     assert batch["obs_embedding"].shape == (1, 3, 968, 2048)
     assert batch["prefix_attention_mask"].shape == (1, 3, 968)
     assert batch["prefix_attention_mask"].dtype == torch.bool
+
+
+def test_pi05_rgb_replay_carries_image_slot_attention_mask(tmp_path: Path) -> None:
+    from dreamervla.runtime.pi05_trajectory_replay import Pi05TrajectoryReplay
+
+    reward = tmp_path / "reward"
+    _write_rgb_trajectory(reward, episode_id=0, task_id=0)
+    replay = Pi05TrajectoryReplay(
+        data_dir=reward,
+        sequence_length=3,
+        encoder=_FakeImagePrefixBundleEncoder(),
+        encode_batch_size=2,
+        rank=0,
+        world_size=1,
+        seed=3,
+        task_ids=(0,),
+        rotate_images_180=False,
+        encoder_method="encode_raw_observation_prefix_bundle_batch",
+    )
+
+    batch = replay.sample(1, include_images=False)
+
+    assert batch["obs_embedding"].shape == (1, 3, 768, 2048)
+    assert batch["prefix_attention_mask"].shape == (1, 3, 768)
+    assert torch.all(batch["prefix_attention_mask"][..., :512])
+    assert not torch.any(batch["prefix_attention_mask"][..., 512:])
 
 
 def test_pi05_rgb_replay_returns_encoder_aligned_images(tmp_path: Path) -> None:
