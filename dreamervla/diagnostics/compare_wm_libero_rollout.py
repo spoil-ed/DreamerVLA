@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 """Render aligned collected/LIBERO/world-model trajectory comparisons.
 
 The diagnostic starts every branch from one collected rollout.  Stored raw
@@ -29,6 +30,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from dreamervla.utils.openpi_imports import configure_openpi_jax_runtime
+
+# The imports below can pull JAX in through LIBERO/OpenPI. Select its CPU
+# backend first; the policy and world model themselves remain on PyTorch/CUDA.
+configure_openpi_jax_runtime()
 
 import h5py
 import hydra
@@ -70,6 +77,14 @@ class CollectedTrajectory:
     @property
     def length(self) -> int:
         return int(self.actions.shape[0])
+
+
+@dataclass(frozen=True)
+class EncodedTrajectory:
+    """Frozen policy tokens and their native valid-slot mask."""
+
+    latent: torch.Tensor
+    attention_mask: torch.Tensor | None
 
 
 def _policy_hydra_config(value: Any) -> DictConfig:
@@ -142,6 +157,7 @@ def _rollout_closed_loop(
     num_chunks: int,
     *,
     proprio: torch.Tensor | None,
+    attention_mask: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Run the exact training-aligned autoregressive chunk protocol."""
 
@@ -178,6 +194,13 @@ def _rollout_closed_loop(
         "actions": action_history,
         "lang": None,
     }
+    if attention_mask is not None:
+        if attention_mask.shape != (time_steps, int(wm.token_count)):
+            raise ValueError(
+                "attention_mask must match [T,N] = "
+                f"[{time_steps},{wm.token_count}], got {tuple(attention_mask.shape)}"
+            )
+        current["prefix_attention_mask"] = attention_mask[:history_frames].unsqueeze(0)
     if proprio_batch is not None:
         current["proprio"] = proprio_batch[:, history_frames - 1]
 
@@ -196,6 +219,8 @@ def _rollout_closed_loop(
             "actions": output["actions"],
             "lang": output.get("lang"),
         }
+        if isinstance(output.get("prefix_attention_mask"), torch.Tensor):
+            current["prefix_attention_mask"] = output["prefix_attention_mask"]
         if isinstance(output.get("proprio"), torch.Tensor):
             current["proprio"] = output["proprio"]
     return torch.cat(predictions, dim=0), torch.cat(targets, dim=0)
@@ -310,17 +335,22 @@ def _encode_trajectories(
     policy_cfg: DictConfig,
     device: torch.device,
     batch_size: int,
-) -> list[torch.Tensor]:
+) -> list[EncodedTrajectory]:
     policy = hydra.utils.instantiate(_policy_hydra_config(policy_cfg))
     if not isinstance(policy, torch.nn.Module):
         raise TypeError("online_latent.policy did not instantiate torch.nn.Module")
-    encode = getattr(policy, "encode_raw_observation_prefix_batch", None)
+    encode = getattr(policy, "encode_raw_observation_prefix_bundle_batch", None)
     if not callable(encode):
-        raise TypeError("online_latent.policy must implement encode_raw_observation_prefix_batch")
+        encode = getattr(policy, "encode_raw_observation_prefix_batch", None)
+    if not callable(encode):
+        raise TypeError(
+            "online_latent.policy must implement a raw-observation prefix batch encoder"
+        )
     policy.eval().to(device)
-    encoded_trajectories: list[torch.Tensor] = []
+    encoded_trajectories: list[EncodedTrajectory] = []
     for trajectory in trajectories:
         chunks: list[torch.Tensor] = []
+        mask_chunks: list[torch.Tensor] = []
         for begin in range(0, trajectory.length, int(batch_size)):
             end = min(trajectory.length, begin + int(batch_size))
             raw = [
@@ -337,15 +367,32 @@ def _encode_trajectories(
                 for index in range(begin, end)
             ]
             prefix = encode(raw)
-            if not isinstance(prefix, torch.Tensor):
-                raise TypeError("π0.5 prefix encoder must return torch.Tensor")
-            chunks.append(prefix.detach().to(device="cpu", dtype=torch.float16))
+            if isinstance(prefix, torch.Tensor):
+                latent = prefix
+                attention_mask = None
+            else:
+                latent = getattr(prefix, "latent", None)
+                attention_mask = getattr(prefix, "attention_mask", None)
+                if not isinstance(latent, torch.Tensor):
+                    raise TypeError("π0.5 prefix encoder must return a tensor or latent bundle")
+            chunks.append(latent.detach().to(device="cpu", dtype=torch.float16))
+            if attention_mask is not None:
+                if not isinstance(attention_mask, torch.Tensor):
+                    raise TypeError("π0.5 prefix attention_mask must be a tensor")
+                mask_chunks.append(attention_mask.detach().to(device="cpu", dtype=torch.bool))
             print(
                 f"[encode] task={trajectory.task_id} episode={trajectory.episode_id} "
                 f"frames={end}/{trajectory.length}",
                 flush=True,
             )
-        encoded_trajectories.append(torch.cat(chunks, dim=0))
+        if mask_chunks and len(mask_chunks) != len(chunks):
+            raise RuntimeError("π0.5 prefix encoder returned masks for only part of a trajectory")
+        encoded_trajectories.append(
+            EncodedTrajectory(
+                latent=torch.cat(chunks, dim=0),
+                attention_mask=torch.cat(mask_chunks, dim=0) if mask_chunks else None,
+            )
+        )
     del policy
     gc.collect()
     if device.type == "cuda":
@@ -357,12 +404,17 @@ def _encode_trajectories(
 def _closed_loop_tokens(
     wm: torch.nn.Module,
     trajectory: CollectedTrajectory,
-    encoded: torch.Tensor,
+    encoded: EncodedTrajectory,
     *,
     num_chunks: int,
     device: torch.device,
 ) -> tuple[torch.Tensor, dict[str, float]]:
-    obs = encoded.to(device=device, dtype=torch.float32)
+    obs = encoded.latent.to(device=device, dtype=torch.float32)
+    attention_mask = (
+        None
+        if encoded.attention_mask is None
+        else encoded.attention_mask.to(device=device, dtype=torch.bool)
+    )
     actions = torch.from_numpy(trajectory.actions).to(device=device, dtype=torch.float32)
     proprio = torch.from_numpy(trajectory.proprio).to(device=device, dtype=torch.float32)
     autocast = torch.autocast(
@@ -377,6 +429,7 @@ def _closed_loop_tokens(
             actions,
             int(num_chunks),
             proprio=proprio,
+            attention_mask=attention_mask,
         )
     visual_width = int(wm.token_dim)
     pred_visual = predicted[..., :visual_width].float()
@@ -391,6 +444,27 @@ def _closed_loop_tokens(
         "latent_cosine_mean": float(cosine.mean().item()),
         "latent_cosine_final": float(cosine[-1].item()),
     }
+    if attention_mask is not None:
+        begin = int(wm.num_hist)
+        valid = attention_mask[begin : begin + int(pred_visual.shape[0])]
+        token_mse = (pred_visual - target_visual).square().mean(dim=-1)
+        token_cosine = torch.nn.functional.cosine_similarity(
+            pred_visual,
+            target_visual,
+            dim=-1,
+        )
+        valid_float = valid.to(dtype=token_mse.dtype)
+        per_frame_count = valid_float.sum(dim=1).clamp_min(1)
+        valid_mse = (token_mse * valid_float).sum(dim=1) / per_frame_count
+        valid_cosine = (token_cosine * valid_float).sum(dim=1) / per_frame_count
+        metrics.update(
+            {
+                "valid_token_latent_mse_mean": float(valid_mse.mean().item()),
+                "valid_token_latent_mse_final": float(valid_mse[-1].item()),
+                "valid_token_latent_cosine_mean": float(valid_cosine.mean().item()),
+                "valid_token_latent_cosine_final": float(valid_cosine[-1].item()),
+            }
+        )
     return predicted.detach().to(device="cpu", dtype=torch.float16), metrics
 
 
@@ -536,13 +610,14 @@ def _comparison_frame(
     *,
     step: int,
     warmup_frames: int,
+    wm_label: str,
 ) -> np.ndarray:
     phase = "warm-start" if int(step) < int(warmup_frames) else "closed-loop"
     panels = [
         _source_panel(reference, source_label="collected", step=step, phase="reference"),
         _source_panel(libero, source_label="LIBERO", step=step, phase="physics"),
         _source_panel(oracle, source_label="true-latent decoder", step=step, phase="decoder-only"),
-        _source_panel(imagined, source_label="WM decoder", step=step, phase=phase),
+        _source_panel(imagined, source_label=wm_label, step=step, phase=phase),
     ]
     return np.concatenate(panels, axis=1)
 
@@ -639,7 +714,7 @@ def _per_frame_pixel_metrics(
 
 def _run_one(
     trajectory: CollectedTrajectory,
-    encoded: torch.Tensor,
+    encoded: EncodedTrajectory,
     live_raw: np.ndarray,
     live_states: np.ndarray,
     *,
@@ -650,6 +725,7 @@ def _run_one(
     decode_batch_size: int,
     device: torch.device,
     fps: int,
+    wm_label: str,
 ) -> dict[str, Any]:
     predicted, latent_metrics = _closed_loop_tokens(
         wm,
@@ -661,7 +737,7 @@ def _run_one(
     warmup_frames = int(wm.num_hist)
     oracle_reconstruction = _decode_tokens(
         decoder,
-        encoded,
+        encoded.latent,
         device=device,
         batch_size=decode_batch_size,
     )
@@ -693,6 +769,7 @@ def _run_one(
             imagined[index],
             step=index,
             warmup_frames=warmup_frames,
+            wm_label=wm_label,
         )
         for index in range(len(reference))
     ]
@@ -716,7 +793,7 @@ def _run_one(
     imagined_frames = [
         _source_panel(
             frame,
-            source_label="WM decoder",
+            source_label=wm_label,
             step=index,
             phase="warm-start" if index < warmup_frames else "closed-loop",
         )
@@ -789,6 +866,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--wm-ckpt", type=Path, required=True)
+    parser.add_argument("--wm-label", default="WM decoder")
     parser.add_argument("--decoder-ckpt", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--suite-name", default="libero_object")
@@ -891,6 +969,7 @@ def main() -> None:
                 decode_batch_size=int(args.decode_batch_size),
                 device=device,
                 fps=int(args.fps),
+                wm_label=str(args.wm_label),
             )
         )
     manifest = {
