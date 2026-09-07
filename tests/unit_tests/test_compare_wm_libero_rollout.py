@@ -44,15 +44,13 @@ def test_video_panels_have_even_codec_safe_dimensions() -> None:
     comparison = _comparison_frame(
         views,
         views,
-        views,
-        views,
         step=3,
         warmup_frames=3,
         wm_label="pre-JEPA",
     )
 
     assert panel.shape == (92, 32, 3)
-    assert comparison.shape == (92, 128, 3)
+    assert comparison.shape == (92, 64, 3)
     assert panel.shape[0] % 2 == panel.shape[1] % 2 == 0
     assert comparison.shape[0] % 2 == comparison.shape[1] % 2 == 0
 
@@ -66,14 +64,14 @@ def test_decoder_attribution_metrics_report_joint_views_and_time() -> None:
     imagined[:, 1] = 51
 
     summary = _pixel_metrics_by_view(oracle, target)
-    per_frame = _per_frame_pixel_metrics(oracle, imagined, target)
+    per_frame = _per_frame_pixel_metrics(oracle, imagined)
 
     assert summary["by_view"]["base"]["mae"] == pytest.approx(0.0)
     assert summary["by_view"]["wrist"]["mae"] == pytest.approx(0.2)
     assert len(per_frame) == 2
-    assert per_frame[0]["decoder_only"]["base"]["mae"] == pytest.approx(0.0)
-    assert per_frame[0]["decoder_only"]["wrist"]["mae"] == pytest.approx(0.2)
-    assert per_frame[1]["wm_decoder"]["base"]["mae"] == pytest.approx(0.4)
+    direct = per_frame[0]["rollout_decode_vs_encode_decode"]
+    assert direct["base"]["mae"] == pytest.approx(0.4)
+    assert direct["wrist"]["mae"] == pytest.approx(0.0)
 
 
 class _MaskAwareWorldModel:

@@ -1,11 +1,12 @@
 # ruff: noqa: E402
-"""Render aligned collected/LIBERO/world-model trajectory comparisons.
+"""Render aligned encode-decode/world-model-rollout trajectory comparisons.
 
 The diagnostic starts every branch from one collected rollout.  Stored raw
 LIBERO actions are replayed in a freshly constructed physics environment while
-the same actions drive a closed-loop ChunkAwareWorldModel.  A separately
-trained latent pixel decoder turns both the true encoder tokens and imagined
-tokens into base/wrist RGB, isolating decoder-only error from world-model drift.
+the same actions drive a closed-loop ChunkAwareWorldModel. A separately
+trained latent pixel decoder turns both the encoder tokens and rollout tokens
+into base/wrist RGB. The primary comparison therefore isolates world-model
+drift in a shared decoder space instead of comparing either branch to raw RGB.
 
 Example::
 
@@ -603,10 +604,8 @@ def _source_panel(
 
 
 def _comparison_frame(
-    reference: np.ndarray,
-    libero: np.ndarray,
-    oracle: np.ndarray,
-    imagined: np.ndarray,
+    encoded_decoded: np.ndarray,
+    rollout_decoded: np.ndarray,
     *,
     step: int,
     warmup_frames: int,
@@ -614,10 +613,18 @@ def _comparison_frame(
 ) -> np.ndarray:
     phase = "warm-start" if int(step) < int(warmup_frames) else "closed-loop"
     panels = [
-        _source_panel(reference, source_label="collected", step=step, phase="reference"),
-        _source_panel(libero, source_label="LIBERO", step=step, phase="physics"),
-        _source_panel(oracle, source_label="true-latent decoder", step=step, phase="decoder-only"),
-        _source_panel(imagined, source_label=wm_label, step=step, phase=phase),
+        _source_panel(
+            encoded_decoded,
+            source_label="encode -> decode",
+            step=step,
+            phase="reference",
+        ),
+        _source_panel(
+            rollout_decoded,
+            source_label=f"{wm_label} rollout -> decode",
+            step=step,
+            phase=phase,
+        ),
     ]
     return np.concatenate(panels, axis=1)
 
@@ -670,40 +677,27 @@ def _pixel_metrics_by_view(prediction: np.ndarray, target: np.ndarray) -> dict[s
 
 
 def _per_frame_pixel_metrics(
-    oracle: np.ndarray,
-    imagined: np.ndarray,
-    target: np.ndarray,
+    encoded_decoded: np.ndarray,
+    rollout_decoded: np.ndarray,
 ) -> list[dict[str, Any]]:
-    """Return inexpensive per-frame/per-view MAE and PSNR attribution metrics."""
+    """Return per-frame rollout-decode error against encode-decode output."""
 
-    if oracle.shape != imagined.shape or oracle.shape != target.shape or oracle.ndim != 5:
-        raise ValueError("oracle, imagined, and target must share [T,V,H,W,C] shape")
+    if encoded_decoded.shape != rollout_decoded.shape or encoded_decoded.ndim != 5:
+        raise ValueError("encoded and rollout decoder outputs must share [T,V,H,W,C] shape")
 
-    def series(prediction: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        error = prediction.astype(np.float32) / 255.0 - target.astype(np.float32) / 255.0
-        mae = np.mean(np.abs(error), axis=(2, 3, 4))
-        mse = np.mean(np.square(error), axis=(2, 3, 4))
-        psnr = -10.0 * np.log10(np.maximum(mse, 1.0e-10))
-        return mae, psnr
-
-    oracle_mae, oracle_psnr = series(oracle)
-    wm_mae, wm_psnr = series(imagined)
+    error = (rollout_decoded.astype(np.float32) - encoded_decoded.astype(np.float32)) / 255.0
+    mae = np.mean(np.abs(error), axis=(2, 3, 4))
+    mse = np.mean(np.square(error), axis=(2, 3, 4))
+    psnr = -10.0 * np.log10(np.maximum(mse, 1.0e-10))
     rows: list[dict[str, Any]] = []
-    for step in range(int(target.shape[0])):
+    for step in range(int(encoded_decoded.shape[0])):
         rows.append(
             {
                 "step": step,
-                "decoder_only": {
+                "rollout_decode_vs_encode_decode": {
                     label: {
-                        "mae": float(oracle_mae[step, index]),
-                        "psnr_db": float(oracle_psnr[step, index]),
-                    }
-                    for index, label in enumerate(VIEW_LABELS)
-                },
-                "wm_decoder": {
-                    label: {
-                        "mae": float(wm_mae[step, index]),
-                        "psnr_db": float(wm_psnr[step, index]),
+                        "mae": float(mae[step, index]),
+                        "psnr_db": float(psnr[step, index]),
                     }
                     for index, label in enumerate(VIEW_LABELS)
                 },
@@ -763,8 +757,6 @@ def _run_one(
     trajectory_dir = output_dir / name
     comparison_frames = [
         _comparison_frame(
-            reference[index],
-            live[index],
             oracle_reconstruction[index],
             imagined[index],
             step=index,
@@ -784,16 +776,16 @@ def _run_one(
     oracle_frames = [
         _source_panel(
             frame,
-            source_label="true-latent decoder",
+            source_label="encode -> decode",
             step=index,
-            phase="decoder-only",
+            phase="reference",
         )
         for index, frame in enumerate(oracle_reconstruction)
     ]
     imagined_frames = [
         _source_panel(
             frame,
-            source_label=wm_label,
+            source_label=f"{wm_label} rollout -> decode",
             step=index,
             phase="warm-start" if index < warmup_frames else "closed-loop",
         )
@@ -817,6 +809,10 @@ def _run_one(
         oracle_reconstruction[horizon_slice], reference[horizon_slice]
     )
     wm_decoder_metrics = _pixel_metrics_by_view(imagined[horizon_slice], reference[horizon_slice])
+    rollout_vs_encode_decode = _pixel_metrics_by_view(
+        imagined[horizon_slice],
+        oracle_reconstruction[horizon_slice],
+    )
     decoder_joint = decoder_only_metrics["all_views"]
     wm_joint = wm_decoder_metrics["all_views"]
     state_delta = live_states - trajectory.states
@@ -831,6 +827,7 @@ def _run_one(
         "warmup_frames": warmup_frames,
         "imagined_frames": int(predicted.shape[0]),
         "world_model": latent_metrics,
+        "rollout_decode_vs_encode_decode": rollout_vs_encode_decode,
         "decoder_only_pixels_vs_collected": decoder_only_metrics,
         "wm_decoder_pixels_vs_collected": wm_decoder_metrics,
         "wm_penalty_over_decoder": {
@@ -853,7 +850,6 @@ def _run_one(
     per_frame = _per_frame_pixel_metrics(
         oracle_reconstruction,
         imagined,
-        reference,
     )
     (trajectory_dir / "per_frame_metrics.jsonl").write_text(
         "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in per_frame),
@@ -975,8 +971,8 @@ def main() -> None:
     manifest = {
         "protocol": "same stored init_state and raw action sequence",
         "decoder_ablation": (
-            "collected pixels vs true encoder latent decoded pixels vs "
-            "closed-loop world-model latent decoded pixels"
+            "encoder latent decoded pixels vs closed-loop world-model latent decoded pixels; "
+            "both branches use the same frozen decoder"
         ),
         "suite_name": str(args.suite_name),
         "task_id": int(args.task_id),
