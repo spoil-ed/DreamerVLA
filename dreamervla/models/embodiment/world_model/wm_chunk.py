@@ -183,11 +183,34 @@ class ChunkAwareWorldModel(WorldModel):
         vjepa2_residual_prediction: bool = False,
         vjepa2_residual_output_init_std: float = 1.0e-3,
         vjepa2_truncate_rollout_gradients: bool = True,
+        vjepa2_rollout_bptt_steps: int = 1,
+        vjepa2_proprio_representation: str = "legacy",
+        vjepa2_proprio_loss_scale: float = 0.0,
+        vjepa2_one_step_loss_scale: float = 0.0,
+        vjepa2_temporal_difference_loss_scale: float = 0.0,
+        vjepa2_layer_scale_init: float | None = None,
         **kwargs: Any,
     ) -> None:
         self.transition_type = str(transition_type).strip().lower()
         self.transition_init = str(transition_init).strip().lower()
         self.vjepa2_truncate_rollout_gradients = bool(vjepa2_truncate_rollout_gradients)
+        self.vjepa2_rollout_bptt_steps = int(vjepa2_rollout_bptt_steps)
+        if self.vjepa2_rollout_bptt_steps < 1:
+            raise ValueError("vjepa2_rollout_bptt_steps must be positive")
+        self.vjepa2_proprio_representation = str(vjepa2_proprio_representation)
+        if self.vjepa2_proprio_representation not in {"legacy", "raw_padded"}:
+            raise ValueError("vjepa2_proprio_representation must be legacy or raw_padded")
+        self.vjepa2_proprio_loss_scale = float(vjepa2_proprio_loss_scale)
+        self.vjepa2_one_step_loss_scale = float(vjepa2_one_step_loss_scale)
+        self.vjepa2_temporal_difference_loss_scale = float(vjepa2_temporal_difference_loss_scale)
+        if self.vjepa2_one_step_loss_scale < 0 or self.vjepa2_temporal_difference_loss_scale < 0:
+            raise ValueError("AC one-step and temporal-difference loss scales must be non-negative")
+        if self.vjepa2_proprio_loss_scale < 0:
+            raise ValueError("vjepa2_proprio_loss_scale must be non-negative")
+        self._raw_proprio_slots = (
+            self.transition_type == "vjepa2_ac"
+            and self.vjepa2_proprio_representation == "raw_padded"
+        )
         self.vjepa2_residual_output_init_std = float(vjepa2_residual_output_init_std)
         if self.transition_type not in {"original", "vjepa2_ac"}:
             raise ValueError("transition_type must be 'original' or 'vjepa2_ac'")
@@ -249,6 +272,17 @@ class ChunkAwareWorldModel(WorldModel):
         else:
             self.proprio_encoder = None
             self.proprio_decoder = None
+        if self._raw_proprio_slots and self.proprio_dim > 0:
+            if self.proprio_condition_dim < self.proprio_dim:
+                raise ValueError("raw_padded proprio slots must fit every raw proprio dimension")
+            if self.vjepa2_proprio_loss_scale <= 0:
+                raise ValueError(
+                    "raw_padded state prediction requires vjepa2_proprio_loss_scale > 0"
+                )
+            # Raw state is already the external physical contract. Padding and
+            # slicing preserve it exactly, unlike a learned LayerNorm codec.
+            self.proprio_encoder = nn.Identity()
+            self.proprio_decoder = nn.Identity()
         self.obs_token_dim = self.token_dim + self.proprio_condition_dim
 
         self.lang_dim = int(lang_dim)
@@ -423,6 +457,8 @@ class ChunkAwareWorldModel(WorldModel):
                 use_activation_checkpointing=self.grad_checkpoint,
                 residual_prediction=bool(vjepa2_residual_prediction),
                 residual_output_init_std=float(vjepa2_residual_output_init_std),
+                state_residual_prediction=self._raw_proprio_slots and self.proprio_dim > 0,
+                layer_scale_init=vjepa2_layer_scale_init,
             )
             if self.transition_init == "pretrained":
                 if not vjepa2_checkpoint_path:
@@ -460,18 +496,37 @@ class ChunkAwareWorldModel(WorldModel):
             for name, parameter in self.named_parameters()
             if parameter.requires_grad
         ]
-        if self.transition_type != "vjepa2_ac" or self.transition_init != "pretrained":
+        if self.transition_type != "vjepa2_ac":
             return [
                 {
                     "group_name": "default",
                     "params": [parameter for _, parameter in trainable],
                 }
             ]
-        if self.pretrained_load_report is None:
-            raise RuntimeError("pretrained transition is missing its load report")
-        loaded_names = {
-            f"vjepa2_transition.{name}" for name in self.pretrained_load_report.loaded_keys
-        }
+        if self.transition_init == "pretrained":
+            if self.pretrained_load_report is None:
+                raise RuntimeError("pretrained transition is missing its load report")
+            loaded_names = {
+                f"vjepa2_transition.{name}" for name in self.pretrained_load_report.loaded_keys
+            }
+        else:
+            # The random-AC control must use the same alignment and LR protocol
+            # as the transferred backbone. Keep the historical group name for
+            # optimizer/checkpoint compatibility; here it names the module role.
+            prefixes = tuple(
+                f"vjepa2_transition.{prefix}"
+                for prefix in (
+                    "predictor_blocks.",
+                    "predictor_norm.",
+                    "action_encoder.",
+                    "state_encoder.",
+                )
+            )
+            loaded_names = {
+                name
+                for name, _ in trainable
+                if name.startswith(prefixes) and not name.endswith("_layer_scale")
+            }
         backbone = [parameter for name, parameter in trainable if name in loaded_names]
         adapters = [parameter for name, parameter in trainable if name not in loaded_names]
         return [
@@ -611,9 +666,12 @@ class ChunkAwareWorldModel(WorldModel):
         if self.proprio_encoder is None:
             raise RuntimeError("proprio encoder is missing")
         proprio = proprio_raw.to(device=self._module_device(), dtype=self._module_dtype())
-        emb = self.proprio_encoder(proprio)
-        if self.num_proprio_repeat > 1:
-            emb = emb.repeat(1, 1, self.num_proprio_repeat)
+        if self._raw_proprio_slots:
+            emb = F.pad(proprio, (0, self.proprio_condition_dim - self.proprio_dim))
+        else:
+            emb = self.proprio_encoder(proprio)
+            if self.num_proprio_repeat > 1:
+                emb = emb.repeat(1, 1, self.num_proprio_repeat)
         tiled = emb[:, :, None, :].expand(-1, -1, vision_tokens.shape[2], -1)
         return torch.cat([vision_tokens, tiled], dim=-1)
 
@@ -636,7 +694,9 @@ class ChunkAwareWorldModel(WorldModel):
         pad = proprio[:, :1].expand(-1, int(steps) - proprio.shape[1], -1)
         return torch.cat([pad, proprio], dim=1)
 
-    def _raw_proprio_from_obs_tokens(self, obs_tokens: torch.Tensor) -> torch.Tensor:
+    def _raw_proprio_from_obs_tokens(
+        self, obs_tokens: torch.Tensor, token_mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
         """Decode predicted proprio tokens back to raw proprio for classifier scoring."""
         if self.proprio_condition_dim == 0:
             raise RuntimeError("raw proprio decoding requires proprio_emb_dim>0")
@@ -646,7 +706,18 @@ class ChunkAwareWorldModel(WorldModel):
             raise ValueError(
                 f"obs token width {obs_tokens.shape[-1]} is smaller than obs_token_dim={self.obs_token_dim}"
             )
-        proprio_emb = obs_tokens[..., self.token_dim : self.obs_token_dim].mean(dim=-2)
+        proprio_tokens = obs_tokens[..., self.token_dim : self.obs_token_dim]
+        if token_mask is None:
+            proprio_emb = proprio_tokens.mean(dim=-2)
+        else:
+            weights = token_mask.to(device=obs_tokens.device, dtype=obs_tokens.dtype)
+            if weights.shape != obs_tokens.shape[:-1]:
+                raise ValueError("proprio pooling mask must match observation token axes")
+            proprio_emb = (proprio_tokens * weights[..., None]).sum(dim=-2) / (
+                weights.sum(dim=-1, keepdim=True).clamp_min(1)
+            )
+        if self._raw_proprio_slots:
+            return proprio_emb[..., : self.proprio_dim]
         return self.proprio_decoder(proprio_emb)
 
     def _condition_tokens(
@@ -910,7 +981,12 @@ class ChunkAwareWorldModel(WorldModel):
         if isinstance(history, torch.Tensor):
             if history.ndim == 5:
                 history = history[:, -1]
-            if history.ndim == 4 and history.shape[-1] == self.obs_dim:
+            if (
+                history.ndim == 4
+                and history.shape[-1] == self.obs_dim
+                and history.shape[-2:]
+                not in {(self.token_count, self.token_dim), (self.token_count, self.obs_token_dim)}
+            ):
                 history = history[:, -1]
             return self._obs_tokens_from_obs(history)[:, -1]
         raise KeyError("VLA latent must contain `hidden` or `history`.")
@@ -920,7 +996,12 @@ class ChunkAwareWorldModel(WorldModel):
             history = latent["history"]
             if history.ndim == 5:
                 history = history[:, -1]
-            elif history.ndim == 4 and history.shape[-1] == self.obs_dim:
+            elif (
+                history.ndim == 4
+                and history.shape[-1] == self.obs_dim
+                and history.shape[-2:]
+                not in {(self.token_count, self.token_dim), (self.token_count, self.obs_token_dim)}
+            ):
                 history = history[:, -1]
             tokens = self._obs_tokens_from_obs(history)
         else:
@@ -939,6 +1020,24 @@ class ChunkAwareWorldModel(WorldModel):
         bsz = int(history.shape[0])
         lang = self._latent_lang(latent)
         proprio = self._latent_proprio(latent)
+        proprio_history = None
+        if self.transition_type == "vjepa2_ac" and proprio is not None:
+            history_value = (
+                latent.get("proprio_history", proprio) if isinstance(latent, dict) else proprio
+            )
+            if (
+                self._raw_proprio_slots
+                and history_value.ndim == 2
+                and history.shape[-1] == self.obs_token_dim
+            ):
+                # Older callers may retain only observation history. Raw slots
+                # still contain every historical state, so recover them exactly
+                # rather than broadcasting the latest state over real frames.
+                history_mask = self._history_token_mask(
+                    latent, batch_size=bsz, frames=int(history.shape[1])
+                )
+                history_value = self._raw_proprio_from_obs_tokens(history, history_mask)
+            proprio_history = self._proprio_for_steps(history_value, int(history.shape[1]))
         action = actions[:, 0] if actions.ndim == 3 else actions
         if action.ndim != 2 or action.shape[-1] != self.action_dim:
             raise ValueError(
@@ -961,7 +1060,7 @@ class ChunkAwareWorldModel(WorldModel):
         if self.transition_type == "vjepa2_ac":
             encode_input = {"obs_embedding": model_history}
             if proprio is not None:
-                encode_input["proprio"] = proprio
+                encode_input["proprio"] = proprio_history
         z = self.encode(
             encode_input,
             action_history,
@@ -976,7 +1075,12 @@ class ChunkAwareWorldModel(WorldModel):
         pred_z = self.predict(z, token_mask=token_mask)
         next_hidden = pred_z[:, -1][..., : self.obs_token_dim]
         next_proprio = (
-            self._raw_proprio_from_obs_tokens(next_hidden)
+            self._raw_proprio_from_obs_tokens(
+                next_hidden,
+                token_mask[:, -1]
+                if self.transition_type == "vjepa2_ac" and token_mask is not None
+                else None,
+            )
             if self.proprio_condition_dim > 0
             else None
         )
@@ -1013,6 +1117,10 @@ class ChunkAwareWorldModel(WorldModel):
                 out["prefix_attention_mask"] = next_mask[:, None]
         if next_proprio is not None:
             out["proprio"] = next_proprio
+            if proprio_history is not None:
+                out["proprio_history"] = torch.cat(
+                    [proprio_history[:, 1:], next_proprio[:, None]], dim=1
+                )
         return out
 
     def _predict_next_step(
@@ -1030,45 +1138,9 @@ class ChunkAwareWorldModel(WorldModel):
         if not (self.grad_checkpoint and self.training and torch.is_grad_enabled()):
             return self.predict_next(cur, action)
 
-        lang = cur.get("lang")
-        prefix_attention_mask = cur.get("prefix_attention_mask")
-
-        proprio = cur.get("proprio")
-        if not isinstance(proprio, torch.Tensor):
-            proprio = cur["hidden"].new_zeros(cur["hidden"].shape[0], 0)
-
-        def _fn(hidden, history, actions, proprio_raw, act):
-            latent = {
-                "hidden": hidden,
-                "history": history,
-                "actions": actions,
-                "lang": lang,
-            }
-            if isinstance(prefix_attention_mask, torch.Tensor):
-                latent["prefix_attention_mask"] = prefix_attention_mask
-            if proprio_raw.shape[-1] > 0:
-                latent["proprio"] = proprio_raw
-            out = self.predict_next(latent, act)
-            out_proprio = out.get("proprio")
-            if not isinstance(out_proprio, torch.Tensor):
-                out_proprio = proprio_raw
-            return out["hidden"], out["history"], out["actions"], out_proprio
-
-        hidden, history, actions, proprio_out = checkpoint(
-            _fn,
-            cur["hidden"],
-            cur["history"],
-            cur["actions"],
-            proprio,
-            action,
-            use_reentrant=False,
-        )
-        out = {"hidden": hidden, "history": history, "actions": actions, "lang": lang}
-        if isinstance(prefix_attention_mask, torch.Tensor):
-            out["prefix_attention_mask"] = prefix_attention_mask
-        if proprio_out.shape[-1] > 0:
-            out["proprio"] = proprio_out
-        return out
+        # Non-reentrant checkpointing supports nested tensor dictionaries.
+        # Preserve every sidecar, including the shifted mask and state history.
+        return checkpoint(self.predict_next, cur, action, use_reentrant=False)
 
     def _truncate_vjepa2_rollout_state(
         self,
@@ -1077,10 +1149,10 @@ class ChunkAwareWorldModel(WorldModel):
         """Stop gradients between AC rollout steps without changing their values.
 
         A chunk objective can invoke the 24-layer AC predictor dozens of times.
-        Backpropagating through that entire recurrent chain is both unnecessary
-        for the per-step supervised targets and numerically unstable in bf16.
-        Each prediction remains trainable; only its use as the next prediction's
-        input is detached.  The original transition never takes this path.
+        Limit recurrent credit assignment to configured segments to bound memory
+        and gradient growth. Per-step supervision remains active, but truncation
+        does remove gradients across segment boundaries. The original transition
+        never takes this path.
         """
 
         if not (
@@ -1143,6 +1215,8 @@ class ChunkAwareWorldModel(WorldModel):
             cur["prefix_attention_mask"] = latent["prefix_attention_mask"]
         if isinstance(latent, dict) and isinstance(latent.get("proprio"), torch.Tensor):
             cur["proprio"] = latent["proprio"].to(device=device, dtype=dtype)
+        if isinstance(latent, dict) and isinstance(latent.get("proprio_history"), torch.Tensor):
+            cur["proprio_history"] = latent["proprio_history"].to(device=device, dtype=dtype)
         # A previous chunk may have returned a live graph.  Detach it before
         # beginning this chunk, then truncate again between its individual
         # autoregressive steps below.
@@ -1154,7 +1228,7 @@ class ChunkAwareWorldModel(WorldModel):
             preds.append(cur["hidden"])
             if isinstance(cur.get("proprio"), torch.Tensor):
                 proprio_preds.append(cur["proprio"])
-            if step + 1 < K:
+            if step + 1 < K and (step + 1) % self.vjepa2_rollout_bptt_steps == 0:
                 cur = self._truncate_vjepa2_rollout_state(cur)
         hidden_seq = torch.stack(preds, dim=1)
 
@@ -1170,6 +1244,8 @@ class ChunkAwareWorldModel(WorldModel):
         if proprio_preds:
             out["proprio"] = cur["proprio"]
             out["proprio_seq"] = torch.stack(proprio_preds, dim=1)
+        if isinstance(cur.get("proprio_history"), torch.Tensor):
+            out["proprio_history"] = cur["proprio_history"]
         return out
 
     def initial_imagination_state(
@@ -1208,6 +1284,9 @@ class ChunkAwareWorldModel(WorldModel):
             state["lang"] = lang_emb.to(device=history.device, dtype=history.dtype)
         if proprio is not None:
             state["proprio"] = proprio.to(device=history.device, dtype=history.dtype)
+            if self.transition_type == "vjepa2_ac":
+                state["proprio_history"] = self._proprio_for_steps(proprio, self.num_hist)
+                state["proprio"] = state["proprio_history"][:, -1]
         if prefix_attention_mask is not None:
             state["prefix_attention_mask"] = prefix_attention_mask.to(device=history.device)
         return state
@@ -1287,6 +1366,8 @@ class ChunkAwareWorldModel(WorldModel):
             latent["prefix_attention_mask"] = history_token_mask
         if isinstance(batch.get("proprio"), torch.Tensor):
             latent["proprio"] = batch["proprio"][:, H - 1]
+            if self.transition_type == "vjepa2_ac":
+                latent["proprio_history"] = batch["proprio"][:, :H]
         out = self.predict_next_chunk(latent, chunk_actions)
         hidden_pred = out["hidden_seq"]
         self._last_hidden_target_width = int(hidden_target.shape[-1])
@@ -1296,6 +1377,38 @@ class ChunkAwareWorldModel(WorldModel):
             hidden_target,
             token_mask=target_token_mask,
         )
+        ac_loss_metrics: dict[str, torch.Tensor] = {}
+        if self.transition_type == "vjepa2_ac":
+            # Give the prediction from a real context an explicit objective;
+            # otherwise it is diluted among K recursively generated contexts.
+            if self.vjepa2_one_step_loss_scale > 0:
+                one_step_loss, _, _ = self._hidden_loss_terms(
+                    hidden_pred[:, :1],
+                    hidden_target[:, :1],
+                    token_mask=None if target_token_mask is None else target_token_mask[:, :1],
+                )
+                loss = loss + self.vjepa2_one_step_loss_scale * one_step_loss
+                ac_loss_metrics["one_step_prediction_loss"] = one_step_loss.detach()
+            if self.vjepa2_temporal_difference_loss_scale > 0:
+                predicted_visual = hidden_pred[..., : self.token_dim].float()
+                previous = torch.cat(
+                    [vision_tokens[:, H - 1 : H].detach().float(), predicted_visual[:, :-1]], dim=1
+                )
+                true_delta = (
+                    (vision_tokens[:, H : H + K] - vision_tokens[:, H - 1 : H + K - 1])
+                    .detach()
+                    .float()
+                )
+                delta_mask = (
+                    None
+                    if target_token_mask is None
+                    else (target_token_mask & prefix_attention_mask[:, H - 1 : H + K - 1])
+                )
+                _, delta_mse, _ = self._hidden_loss_terms(
+                    predicted_visual - previous, true_delta, token_mask=delta_mask
+                )
+                loss = loss + self.vjepa2_temporal_difference_loss_scale * delta_mse
+                ac_loss_metrics["temporal_difference_loss"] = delta_mse.detach()
         # Comparable visual diagnostics deliberately exclude proprio/language
         # conditioning and never contribute to the optimized objective.  A
         # "model step" is one replay transition for Chunk-WM (environment
@@ -1303,6 +1416,34 @@ class ChunkAwareWorldModel(WorldModel):
         with torch.no_grad():
             visual_pred = hidden_pred.detach()[..., : self.token_dim].float()
             visual_target = hidden_target.detach()[..., : self.token_dim].float()
+            previous_pred = torch.cat(
+                [vision_tokens[:, H - 1 : H].float(), visual_pred[:, :-1]], dim=1
+            )
+            previous_target = vision_tokens[:, H - 1 : H + K - 1].float()
+            pred_delta = visual_pred - previous_pred
+            target_delta = visual_target - previous_target
+            motion_mask = torch.ones_like(visual_pred[..., 0], dtype=torch.bool)
+            if target_token_mask is not None:
+                motion_mask = target_token_mask & prefix_attention_mask[:, H - 1 : H + K - 1]
+            motion_weights = motion_mask[..., None].to(dtype=torch.float32)
+            motion_count = (motion_weights.sum() * self.token_dim).clamp_min(1)
+            predicted_motion_rms = (
+                (pred_delta.square() * motion_weights).sum() / motion_count
+            ).sqrt()
+            target_motion_rms = (
+                (target_delta.square() * motion_weights).sum() / motion_count
+            ).sqrt()
+            visual_delta_mse = (
+                (pred_delta - target_delta).square() * motion_weights
+            ).sum() / motion_count
+            del (
+                previous_pred,
+                previous_target,
+                pred_delta,
+                target_delta,
+                motion_weights,
+                motion_mask,
+            )
             one_step_cosine = F.cosine_similarity(
                 visual_pred[:, 0],
                 visual_target[:, 0],
@@ -1336,10 +1477,15 @@ class ChunkAwareWorldModel(WorldModel):
                     persistence_cosine * persistence_mask
                 ).sum() / persistence_mask.sum().clamp_min(1)
         proprio_out: dict[str, torch.Tensor] = {}
+        proprio_loss_scale = (
+            self.vjepa2_proprio_loss_scale
+            if self._raw_proprio_slots
+            else self.proprio_reconstruction_loss_scale
+        )
         if self.proprio_condition_dim > 0 and isinstance(out.get("proprio_seq"), torch.Tensor):
             proprio_target = batch.get("proprio")
             if not isinstance(proprio_target, torch.Tensor):
-                if self.proprio_reconstruction_loss_scale > 0:
+                if proprio_loss_scale > 0:
                     raise KeyError(
                         "proprio_reconstruction_loss_scale > 0 requires batch['proprio']"
                     )
@@ -1349,8 +1495,8 @@ class ChunkAwareWorldModel(WorldModel):
                     dtype=out["proprio_seq"].dtype,
                 )
                 proprio_loss = F.mse_loss(out["proprio_seq"], target)
-                if self.proprio_reconstruction_loss_scale > 0:
-                    loss = loss + self.proprio_reconstruction_loss_scale * proprio_loss
+                if proprio_loss_scale > 0:
+                    loss = loss + proprio_loss_scale * proprio_loss
                 proprio_out = {
                     "proprio_reconstruction_loss": proprio_loss.detach(),
                     "proprio_pred_norm": out["proprio_seq"].detach().float().norm(dim=-1).mean(),
@@ -1379,11 +1525,16 @@ class ChunkAwareWorldModel(WorldModel):
                 cur_latent["prefix_attention_mask"] = out["prefix_attention_mask"]
             if isinstance(out.get("proprio"), torch.Tensor):
                 cur_latent["proprio"] = out["proprio"]
+            if isinstance(out.get("proprio_history"), torch.Tensor):
+                cur_latent["proprio_history"] = out["proprio_history"]
             rollout_preds: list[torch.Tensor] = []
+            rollout_proprio_preds: list[torch.Tensor] = []
             for c in range(1, N):
                 cca = actions[:, H - 1 + c * K : H - 1 + (c + 1) * K]
                 out_c = self.predict_next_chunk(cur_latent, cca)
                 rollout_preds.append(out_c["hidden_seq"])
+                if isinstance(out_c.get("proprio_seq"), torch.Tensor):
+                    rollout_proprio_preds.append(out_c["proprio_seq"])
                 cur_latent = {
                     "hidden": out_c["hidden"],
                     "history": out_c["history"],
@@ -1394,6 +1545,8 @@ class ChunkAwareWorldModel(WorldModel):
                     cur_latent["prefix_attention_mask"] = out_c["prefix_attention_mask"]
                 if isinstance(out_c.get("proprio"), torch.Tensor):
                     cur_latent["proprio"] = out_c["proprio"]
+                if isinstance(out_c.get("proprio_history"), torch.Tensor):
+                    cur_latent["proprio_history"] = out_c["proprio_history"]
             rollout_pred = torch.cat(rollout_preds, dim=1)
             rollout_target = obs_tokens[:, H + K : H + N * K].detach()
             rollout_token_mask = (
@@ -1406,6 +1559,12 @@ class ChunkAwareWorldModel(WorldModel):
                 rollout_target,
                 token_mask=rollout_token_mask,
             )
+            if self._raw_proprio_slots and rollout_proprio_preds:
+                rollout_proprio = torch.cat(rollout_proprio_preds, dim=1)
+                raw_target = batch["proprio"][:, H + K : H + N * K].to(rollout_proprio)
+                state_loss = F.mse_loss(rollout_proprio.float(), raw_target.float())
+                rollout_loss_total = rollout_loss_total + proprio_loss_scale * state_loss
+                proprio_out["rollout_proprio_reconstruction_loss"] = state_loss.detach()
             with torch.no_grad():
                 rollout_cosine_values = F.cosine_similarity(
                     rollout_pred.detach()[..., : self.token_dim].float(),
@@ -1452,6 +1611,7 @@ class ChunkAwareWorldModel(WorldModel):
 
         zero = loss.new_zeros(())
         out_dict: dict[str, torch.Tensor] = {
+            **ac_loss_metrics,
             "_loss": loss,
             "loss": loss.detach(),
             "next_latent_loss": hidden_mse.detach(),
@@ -1459,6 +1619,10 @@ class ChunkAwareWorldModel(WorldModel):
             "next_latent_cosine_loss": hidden_cosine.detach(),
             "hidden_loss": hidden_mse.detach(),
             "hidden_mse": hidden_mse.detach(),
+            "visual_predicted_motion_rms": predicted_motion_rms,
+            "visual_target_motion_rms": target_motion_rms,
+            "visual_motion_ratio": predicted_motion_rms / target_motion_rms.clamp_min(1.0e-8),
+            "visual_delta_mse": visual_delta_mse,
             "hidden_cosine_loss": hidden_cosine.detach(),
             "one_step_cosine_similarity": one_step_cosine_similarity,
             "persistence_cosine_similarity": persistence_cosine_similarity,

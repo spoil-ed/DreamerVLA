@@ -81,6 +81,198 @@ def test_frame_causal_mask_exposes_current_and_past_frames_only() -> None:
     assert torch.equal(mask, expected)
 
 
+def _raw_state_wm(**overrides) -> ChunkAwareWorldModel:
+    config = dict(
+        model_dim=10,
+        proprio_dim=3,
+        proprio_emb_dim=4,
+        vjepa2_proprio_representation="raw_padded",
+        vjepa2_proprio_loss_scale=1.0,
+        vjepa2_residual_prediction=True,
+        vjepa2_rollout_bptt_steps=2,
+    )
+    config.update(overrides)
+    return _tiny_chunk_wm(**config)
+
+
+def test_raw_state_codec_preserves_absolute_values_and_ignores_padding() -> None:
+    wm = _raw_state_wm()
+    raw = torch.tensor([[[10.0, -7.0, 0.4], [21.0, -5.0, 0.8]]])
+    obs = wm._observation_tokens(torch.randn(1, 2, 2, 4), raw)
+    torch.testing.assert_close(wm._raw_proprio_from_obs_tokens(obs), raw, rtol=0, atol=0)
+    mask = torch.tensor([[[True, False], [True, False]]])
+    obs[:, :, 1] = 1000.0
+    torch.testing.assert_close(wm._raw_proprio_from_obs_tokens(obs, mask), raw, rtol=0, atol=0)
+    assert not list(wm.proprio_encoder.parameters())
+    assert not list(wm.proprio_decoder.parameters())
+
+
+@pytest.mark.parametrize("checkpointed", [False, True])
+def test_raw_state_history_survives_steps_chunks_and_checkpointing(checkpointed: bool) -> None:
+    torch.manual_seed(47)
+    wm = _raw_state_wm(
+        grad_checkpoint=checkpointed, chunk_rollout_chunks=2, chunk_rollout_loss_scale=0.2
+    )
+    raw = torch.randn(1, 6, 3)
+    observed_states = []
+
+    def capture(_module, args):
+        observed_states.append(args[2].detach().clone())
+
+    handle = wm.vjepa2_transition.register_forward_pre_hook(capture)
+    batch = {
+        "obs_embedding": torch.randn(1, 6, 2, 4),
+        "actions": torch.randn(1, 6, 2),
+        "proprio": raw,
+        "prefix_attention_mask": torch.tensor([[[True, False]] * 6]),
+    }
+    output = wm.chunk_loss(batch)
+    torch.testing.assert_close(observed_states[0], raw[:, :2])
+    torch.testing.assert_close(observed_states[1][:, 0], raw[:, 1])
+    # At the next chunk, history must retain the previous predicted state,
+    # not broadcast its latest value over the whole history.
+    torch.testing.assert_close(observed_states[2][:, 0], observed_states[1][:, 1])
+    assert "rollout_proprio_reconstruction_loss" in output
+    output["_loss"].backward()
+    grad = wm.vjepa2_transition.state_output_adapter.weight.grad
+    assert grad is not None and torch.isfinite(grad).all() and grad.norm() > 0
+    handle.remove()
+
+
+@pytest.mark.parametrize("segment_steps", [1, 2])
+def test_bptt_segment_controls_credit_into_previous_prediction(segment_steps: int) -> None:
+    torch.manual_seed(51)
+    wm = _raw_state_wm(vjepa2_rollout_bptt_steps=segment_steps)
+    outputs = []
+
+    def capture(_module, _args, output):
+        output.retain_grad()
+        outputs.append(output)
+
+    handle = wm.vjepa2_transition.register_forward_hook(capture)
+    state = wm.initial_imagination_state(torch.randn(1, 2, 2, 4), proprio=torch.randn(1, 2, 3))
+    out = wm.predict_next_chunk(state, torch.randn(1, 2, 2))
+    out["proprio_seq"][:, -1].square().mean().backward()
+    if segment_steps == 1:
+        assert outputs[0].grad is None or outputs[0].grad.norm() == 0
+    else:
+        assert outputs[0].grad is not None and outputs[0].grad.norm() > 0
+    handle.remove()
+
+
+def test_raw_state_requires_direct_supervision_and_sufficient_slots() -> None:
+    with pytest.raises(ValueError, match="requires vjepa2_proprio_loss_scale"):
+        _raw_state_wm(vjepa2_proprio_loss_scale=0)
+    with pytest.raises(ValueError, match="slots must fit"):
+        _raw_state_wm(proprio_emb_dim=2, model_dim=8)
+
+
+def test_raw_state_history_can_be_recovered_from_masked_observation_slots() -> None:
+    wm = _raw_state_wm().eval()
+    raw = torch.tensor([[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]])
+    mask = torch.tensor([[[True, False], [True, False]]])
+    state = wm.initial_imagination_state(
+        torch.randn(1, 2, 2, 4), proprio=raw, prefix_attention_mask=mask
+    )
+    old_state = dict(state)
+    old_state.pop("proprio_history")
+    old_state["history"] = old_state["history"].masked_fill(~mask[..., None], 0)
+    action = torch.randn(1, 2)
+    with torch.no_grad():
+        expected = wm.predict_next(state, action)
+        actual = wm.predict_next(old_state, action)
+    torch.testing.assert_close(actual["proprio_history"], expected["proprio_history"])
+    torch.testing.assert_close(actual["hidden"], expected["hidden"])
+
+
+def test_random_ac_uses_backbone_and_adapter_groups_for_matched_init_comparison() -> None:
+    wm = _raw_state_wm()
+    groups = {
+        g["group_name"]: {id(p) for p in g["params"]} for g in wm.optimizer_parameter_groups()
+    }
+    assert (
+        id(wm.vjepa2_transition.predictor_blocks[0].attn.qkv.weight)
+        in groups["pretrained_backbone"]
+    )
+    assert id(wm.vjepa2_transition.action_encoder.weight) in groups["pretrained_backbone"]
+    assert id(wm.vjepa2_transition.state_output_adapter.weight) in groups["adapter"]
+    assert id(wm.vjepa2_transition.output_adapter.weight) in groups["adapter"]
+
+
+def test_temporal_supervision_penalizes_static_predictions_with_valid_gradients(
+    monkeypatch,
+) -> None:
+    wm = _tiny_chunk_wm(
+        token_normalization="none",
+        hidden_loss_scale=0.0,
+        vjepa2_temporal_difference_loss_scale=1.0,
+    )
+    obs = torch.arange(4.0).view(1, 4, 1, 1).expand(1, 4, 2, 4).clone()
+    obs[:, :, 1] *= 1000
+    prediction = torch.nn.Parameter(torch.ones(1, 2, 2, 4))
+    monkeypatch.setattr(wm, "predict_next_chunk", lambda *_: {"hidden_seq": prediction})
+    output = wm.chunk_loss(
+        dict(
+            obs_embedding=obs,
+            actions=torch.zeros(1, 4, 2),
+            prefix_attention_mask=torch.tensor([[[True, False]] * 4]),
+        )
+    )
+    assert output["temporal_difference_loss"].item() == pytest.approx(1.0)
+    output["_loss"].backward()
+    assert prediction.grad is not None and prediction.grad.norm() > 0
+    assert prediction.grad[:, :, 1].count_nonzero() == 0
+
+
+def test_training_and_both_evaluation_paths_agree_with_raw_state_and_mask() -> None:
+    from dreamervla.diagnostics.compare_wm_libero_rollout import _rollout_closed_loop
+    from dreamervla.runtime.cotrain_eval import (
+        EncodedEvalTrajectory,
+        closed_loop_world_model_trajectory,
+    )
+
+    torch.manual_seed(61)
+    wm = _raw_state_wm(chunk_rollout_chunks=2, chunk_rollout_loss_scale=0.2).eval()
+    obs = torch.randn(1, 6, 2, 4) * 4 + 3
+    raw = torch.randn(1, 6, 3)
+    actions = torch.randn(1, 6, 2)
+    mask = torch.tensor([[[True, False]] * 6])
+    seen = []
+    handle = wm.vjepa2_transition.register_forward_pre_hook(
+        lambda _m, args: seen.append(args[2].clone())
+    )
+    with torch.no_grad():
+        expected, _ = _rollout_closed_loop(
+            wm, obs[0], actions[0], 2, proprio=raw[0], attention_mask=mask[0]
+        )
+        diagnostic_states = list(seen)
+        seen.clear()
+        wm.chunk_loss(
+            dict(obs_embedding=obs, actions=actions, proprio=raw, prefix_attention_mask=mask)
+        )
+        for a, b in zip(diagnostic_states, seen, strict=True):
+            torch.testing.assert_close(a, b, rtol=0, atol=0)
+        result = closed_loop_world_model_trajectory(
+            wm,
+            EncodedEvalTrajectory(
+                task_id=0,
+                success=True,
+                hidden=obs[0],
+                actions=actions[0],
+                proprio=raw[0],
+                prefix_attention_mask=mask[0],
+            ),
+        )
+    handle.remove()
+    torch.testing.assert_close(result.predicted_hidden, expected[..., :4], rtol=0, atol=0)
+    torch.testing.assert_close(
+        result.predicted_proprio,
+        wm._raw_proprio_from_obs_tokens(expected, mask[0, 2:]),
+        rtol=0,
+        atol=0,
+    )
+
+
 def test_future_frame_cannot_change_past_transition_outputs() -> None:
     torch.manual_seed(7)
     transition = _tiny_transition().eval()
@@ -150,6 +342,38 @@ def test_residual_output_adapter_starts_near_persistence_with_gradient_flow() ->
         transition.action_input_adapter.weight,
         torch.eye(transition.action_dim),
     )
+
+
+def test_unit_layer_scales_preserve_block_function_and_nonzero_scales_train() -> None:
+    torch.manual_seed(71)
+    original = _tiny_transition()
+    scaled = _tiny_transition(layer_scale_init=1.0)
+    result = scaled.load_state_dict(original.state_dict(), strict=False)
+    assert len(result.missing_keys) == 4
+    assert all(key.endswith("_layer_scale") for key in result.missing_keys)
+    assert not result.unexpected_keys
+    args = (torch.randn(1, 2, 2, 5), torch.randn(1, 2, 2), torch.randn(1, 2, 3))
+    torch.testing.assert_close(scaled(*args), original(*args), rtol=0, atol=0)
+    for block in scaled.predictor_blocks:
+        with torch.no_grad():
+            block.attn_layer_scale.fill_(0.01)
+            block.mlp_layer_scale.fill_(0.01)
+    scaled(*args).square().mean().backward()
+    for block in scaled.predictor_blocks:
+        assert block.mlp.fc1.weight.grad.norm() > 0
+        assert block.attn.qkv.weight.grad.norm() > 0
+        assert block.mlp_layer_scale.grad.norm() > 0
+        assert block.attn_layer_scale.grad.norm() > 0
+
+
+def test_random_ac_layer_scales_belong_to_adapter_group() -> None:
+    wm = _raw_state_wm(vjepa2_layer_scale_init=0.01)
+    groups = {
+        g["group_name"]: {id(p) for p in g["params"]} for g in wm.optimizer_parameter_groups()
+    }
+    for block in wm.vjepa2_transition.predictor_blocks:
+        assert id(block.attn_layer_scale) in groups["adapter"]
+        assert id(block.mlp_layer_scale) in groups["adapter"]
 
 
 def test_masked_hidden_loss_ignores_padding_tokens() -> None:

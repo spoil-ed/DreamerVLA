@@ -39,6 +39,18 @@ world_model:
   # Keep every per-step AC prediction supervised, but do not backpropagate
   # recursively through 40 applications of the 24-layer predictor.
   vjepa2_truncate_rollout_gradients: true
+  vjepa2_rollout_bptt_steps: 2
+  # Predict physical state directly; preserve the external proprio slot width
+  # with an invertible pad/slice codec and supervise it at every rollout step.
+  vjepa2_proprio_representation: raw_padded
+  vjepa2_proprio_loss_scale: 1.0
+  # Preserve clean-context one-step learning and supervise actual changes,
+  # rather than accepting static decoded output on aggregate latent MSE alone.
+  vjepa2_one_step_loss_scale: 1.0
+  vjepa2_temporal_difference_loss_scale: 1.0
+  # New nonzero LayerScale adapters bound transferred residual branches while
+  # the PI0.5 input adapter aligns. Original QKV/MLP/LN tensors stay untouched.
+  vjepa2_layer_scale_init: 0.01
   # π0.5 emits three genuine 16x16 image-patch groups. Keep their separate
   # grids and learn a view embedding instead of inventing one 768-token grid.
   vjepa2_spatial_grid: ${task.observation_latent.image_patch_grid}
@@ -65,6 +77,12 @@ ray_components:
       vjepa2_attention_dropout: ${world_model.vjepa2_attention_dropout}
       vjepa2_use_rope: ${world_model.vjepa2_use_rope}
       vjepa2_truncate_rollout_gradients: ${world_model.vjepa2_truncate_rollout_gradients}
+      vjepa2_rollout_bptt_steps: ${world_model.vjepa2_rollout_bptt_steps}
+      vjepa2_proprio_representation: ${world_model.vjepa2_proprio_representation}
+      vjepa2_proprio_loss_scale: ${world_model.vjepa2_proprio_loss_scale}
+      vjepa2_one_step_loss_scale: ${world_model.vjepa2_one_step_loss_scale}
+      vjepa2_temporal_difference_loss_scale: ${world_model.vjepa2_temporal_difference_loss_scale}
+      vjepa2_layer_scale_init: ${world_model.vjepa2_layer_scale_init}
       vjepa2_spatial_grid: ${world_model.vjepa2_spatial_grid}
       vjepa2_spatial_group_count: ${world_model.vjepa2_spatial_group_count}
       vjepa2_pretrained_grid_size: ${world_model.vjepa2_pretrained_grid_size}

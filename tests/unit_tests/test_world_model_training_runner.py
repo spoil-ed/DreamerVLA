@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 import torch
 
 
@@ -280,6 +281,53 @@ def test_world_model_warmup_can_defer_loss_device_to_host_transfer():
 
     assert isinstance(metrics["loss"], torch.Tensor)
     assert isinstance(metrics["grad_norm"], torch.Tensor)
+
+
+@pytest.mark.parametrize("metrics_mode", ["loss_tensor", "full"])
+def test_world_model_warmup_preserves_motion_and_state_diagnostics(metrics_mode):
+    from omegaconf import OmegaConf
+
+    from dreamervla.algorithms.dreamervla import (
+        namespaced_world_model_metrics,
+        world_model_pretrain_step,
+    )
+
+    diagnostics = {
+        "one_step_prediction_loss": 0.5,
+        "temporal_difference_loss": 0.2,
+        "rollout_proprio_reconstruction_loss": 0.3,
+        "visual_predicted_motion_rms": 0.4,
+        "visual_target_motion_rms": 0.6,
+        "visual_motion_ratio": 0.7,
+        "visual_delta_mse": 0.8,
+    }
+
+    class TinyWM(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.ones(()))
+
+        def forward(self, batch):
+            del batch
+            loss = self.weight.square()
+            return {"_loss": loss, **{k: loss * v for k, v in diagnostics.items()}}
+
+    wm = TinyWM()
+    metrics = world_model_pretrain_step(
+        policy=torch.nn.Identity(),
+        world_model=wm,
+        optimizer=torch.optim.SGD(wm.parameters(), lr=0.01),
+        batch={"obs_embedding": torch.zeros(1, 1)},
+        device=torch.device("cpu"),
+        optim_cfg=OmegaConf.create({"precision": "fp32", "grad_clip_norm": 1.0}),
+        metrics_mode=metrics_mode,
+    )
+    public = namespaced_world_model_metrics(metrics)
+    for key, value in diagnostics.items():
+        assert public[f"wm/{key}"] == pytest.approx(value)
+        if metrics_mode == "loss_tensor":
+            assert isinstance(metrics[key], torch.Tensor)
+            assert not metrics[key].requires_grad
 
 
 def test_world_model_warmup_keeps_detached_cosine_diagnostics_on_device():

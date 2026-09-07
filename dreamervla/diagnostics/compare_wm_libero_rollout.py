@@ -204,6 +204,7 @@ def _rollout_closed_loop(
         current["prefix_attention_mask"] = attention_mask[:history_frames].unsqueeze(0)
     if proprio_batch is not None:
         current["proprio"] = proprio_batch[:, history_frames - 1]
+        current["proprio_history"] = proprio_batch[:, :history_frames]
 
     predictions: list[torch.Tensor] = []
     targets: list[torch.Tensor] = []
@@ -224,6 +225,8 @@ def _rollout_closed_loop(
             current["prefix_attention_mask"] = output["prefix_attention_mask"]
         if isinstance(output.get("proprio"), torch.Tensor):
             current["proprio"] = output["proprio"]
+        if isinstance(output.get("proprio_history"), torch.Tensor):
+            current["proprio_history"] = output["proprio_history"]
     return torch.cat(predictions, dim=0), torch.cat(targets, dim=0)
 
 

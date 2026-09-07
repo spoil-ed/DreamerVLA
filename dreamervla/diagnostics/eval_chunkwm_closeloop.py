@@ -268,6 +268,7 @@ def rollout(
     }
     if proprio_batch is not None:
         cur_latent["proprio"] = proprio_batch[:, H - 1]
+        cur_latent["proprio_history"] = proprio_batch[:, :H]
 
     for c in range(N):
         chunk_actions = actions[H - 1 + c * K : H - 1 + c * K + K].unsqueeze(0)  # [1, K, A]
@@ -302,6 +303,7 @@ def rollout(
             }
             if proprio_batch is not None:
                 cur_latent["proprio"] = proprio_batch[:, end - 1]
+                cur_latent["proprio_history"] = proprio_batch[:, start:end]
         else:  # close
             cur_latent = {
                 "history": out["history"],
@@ -311,6 +313,8 @@ def rollout(
             }
             if isinstance(out.get("proprio"), torch.Tensor):
                 cur_latent["proprio"] = out["proprio"]
+            if isinstance(out.get("proprio_history"), torch.Tensor):
+                cur_latent["proprio_history"] = out["proprio_history"]
 
     return torch.cat(preds, dim=0), torch.cat(targets, dim=0)
 

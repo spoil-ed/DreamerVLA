@@ -31,6 +31,7 @@ class EncodedEvalTrajectory:
     proprio: torch.Tensor | None = None
     lang_emb: torch.Tensor | None = None
     reset_state_id: int | None = None
+    prefix_attention_mask: torch.Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -103,6 +104,9 @@ def encoded_eval_trajectory_from_real(
         (step.get("lang_emb") for step in transitions if step.get("lang_emb") is not None),
         None,
     )
+    masks = [step.get("prefix_attention_mask") for step in transitions]
+    if any(value is not None for value in masks) and not all(value is not None for value in masks):
+        raise ValueError("cotrain eval token masks must be present on every transition")
     return EncodedEvalTrajectory(
         task_id=int(trajectory.task_id),
         success=bool(trajectory.success),
@@ -111,6 +115,11 @@ def encoded_eval_trajectory_from_real(
         proprio=proprio,
         lang_emb=(None if language is None else torch.as_tensor(language)),
         reset_state_id=int(trajectory.episode_id),
+        prefix_attention_mask=(
+            torch.stack([torch.as_tensor(value, dtype=torch.bool) for value in masks])
+            if masks and masks[0] is not None
+            else None
+        ),
     )
 
 
@@ -156,9 +165,10 @@ def closed_loop_world_model_trajectory(
     # recursively rolled evaluation. Stream token validation in bounded pieces
     # and retain the full trajectory for closed-loop scoring.
     encode_limit = max(1, int(getattr(world_model, "max_seq_len", total_steps)))
+    normalize = getattr(world_model, "_normalize_raw_vision_tokens", world_model.obs_to_tokens)
     vision_tokens = torch.cat(
         [
-            world_model.obs_to_tokens(hidden[start : start + encode_limit].unsqueeze(0))
+            normalize(hidden[start : start + encode_limit].unsqueeze(0))
             for start in range(0, total_steps, encode_limit)
         ],
         dim=1,
@@ -206,6 +216,13 @@ def closed_loop_world_model_trajectory(
     }
     if proprio is not None:
         latent["proprio"] = proprio[history_length - 1].unsqueeze(0)
+        latent["proprio_history"] = proprio[:history_length].unsqueeze(0)
+    token_mask = trajectory.prefix_attention_mask
+    if token_mask is not None:
+        token_mask = token_mask.to(device=device, dtype=torch.bool)
+        if tuple(token_mask.shape) != tuple(vision_tokens.shape[1:-1]):
+            raise ValueError("cotrain eval token mask must match [T,N] latent tokens")
+        latent["prefix_attention_mask"] = token_mask[:history_length].unsqueeze(0)
 
     predicted_parts: list[torch.Tensor] = []
     target_parts: list[torch.Tensor] = []
@@ -234,12 +251,24 @@ def closed_loop_world_model_trajectory(
         }
         if isinstance(output.get("proprio"), torch.Tensor):
             latent["proprio"] = output["proprio"]
+        for key in ("proprio_history", "prefix_attention_mask"):
+            if isinstance(output.get(key), torch.Tensor):
+                latent[key] = output[key]
 
     predicted_hidden = torch.cat(predicted_parts, dim=0)
     target_hidden = torch.cat(target_parts, dim=0)
     predicted_flat = predicted_hidden.float().reshape(predicted_hidden.shape[0], -1)
     target_flat = target_hidden.float().reshape(target_hidden.shape[0], -1)
-    mse = (predicted_flat - target_flat).square().mean(dim=-1)
+    if token_mask is None:
+        mse = (predicted_flat - target_flat).square().mean(dim=-1)
+    else:
+        valid = token_mask[history_length : history_length + predicted_hidden.shape[0]]
+        expanded = valid[..., None].expand_as(predicted_hidden).reshape_as(predicted_flat)
+        predicted_flat = predicted_flat.masked_fill(~expanded, 0)
+        target_flat = target_flat.masked_fill(~expanded, 0)
+        mse = (predicted_flat - target_flat).square().sum(dim=-1) / expanded.sum(dim=-1).clamp_min(
+            1
+        )
     cosine = F.cosine_similarity(predicted_flat, target_flat, dim=-1)
     predicted_proprio = (
         torch.cat(predicted_proprio_parts, dim=0) if predicted_proprio_parts else None

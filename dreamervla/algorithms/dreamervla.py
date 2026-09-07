@@ -76,7 +76,18 @@ def _named_grad_norm(module: nn.Module, name_fragment: str) -> float:
     return float(total.sqrt().cpu())
 
 
+_WM_TRANSITION_DIAGNOSTIC_KEYS = (
+    "one_step_prediction_loss",
+    "temporal_difference_loss",
+    "rollout_proprio_reconstruction_loss",
+    "visual_predicted_motion_rms",
+    "visual_target_motion_rms",
+    "visual_motion_ratio",
+    "visual_delta_mse",
+)
+
 _WM_LOG_METRIC_KEYS = (
+    *_WM_TRANSITION_DIAGNOSTIC_KEYS,
     "loss",
     "hidden_rec_loss",
     "hidden_mse",
@@ -239,6 +250,7 @@ def world_model_pretrain_step(
                 "grad_norm": torch.as_tensor(grad_norm).detach(),
             }
             for key in (
+                *_WM_TRANSITION_DIAGNOSTIC_KEYS,
                 "next_latent_mse",
                 "hidden_cosine_loss",
                 "hidden_pred_norm",
@@ -314,6 +326,9 @@ def world_model_pretrain_step(
                 "latent_norm": _f("latent_norm"),
                 "grad_norm": grad_norm_value,
             }
+            metrics.update(
+                {key: _f(key) for key in _WM_TRANSITION_DIAGNOSTIC_KEYS if key in losses}
+            )
     if profile_timings is not None:
         profile_timings.update(timer.finish())
     return metrics

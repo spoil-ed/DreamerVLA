@@ -257,6 +257,7 @@ class _VJEPA2ACBlock(nn.Module):
         attention_dropout: float,
         use_rope: bool,
         pretrained_grid_size: int,
+        layer_scale_init: float | None = None,
     ) -> None:
         super().__init__()
         self.norm1 = nn.LayerNorm(dim, eps=1.0e-6)
@@ -271,6 +272,16 @@ class _VJEPA2ACBlock(nn.Module):
         )
         self.norm2 = nn.LayerNorm(dim, eps=1.0e-6)
         self.mlp = _VJEPA2ACMLP(dim, int(dim * mlp_ratio), dropout)
+        self.attn_layer_scale = (
+            nn.Parameter(torch.full((dim,), float(layer_scale_init)))
+            if layer_scale_init is not None
+            else None
+        )
+        self.mlp_layer_scale = (
+            nn.Parameter(torch.full((dim,), float(layer_scale_init)))
+            if layer_scale_init is not None
+            else None
+        )
 
     def forward(
         self,
@@ -283,7 +294,7 @@ class _VJEPA2ACBlock(nn.Module):
         spatial_grid: tuple[int, int] | None,
         spatial_group_count: int,
     ) -> torch.Tensor:
-        x = x + self.attn(
+        attended = self.attn(
             self.norm1(x),
             attention_mask=attention_mask,
             frames=frames,
@@ -292,7 +303,13 @@ class _VJEPA2ACBlock(nn.Module):
             spatial_grid=spatial_grid,
             spatial_group_count=spatial_group_count,
         )
-        return x + self.mlp(self.norm2(x))
+        if self.attn_layer_scale is not None:
+            attended = attended * self.attn_layer_scale
+        x = x + attended
+        residual = self.mlp(self.norm2(x))
+        if self.mlp_layer_scale is not None:
+            residual = residual * self.mlp_layer_scale
+        return x + residual
 
 
 @dataclass(frozen=True)
@@ -344,6 +361,8 @@ class VJEPA2ACTransition(nn.Module):
         use_activation_checkpointing: bool = False,
         residual_prediction: bool = False,
         residual_output_init_std: float = 1.0e-3,
+        state_residual_prediction: bool = False,
+        layer_scale_init: float | None = None,
     ) -> None:
         super().__init__()
         self.input_dim = int(input_dim)
@@ -356,12 +375,17 @@ class VJEPA2ACTransition(nn.Module):
         self.predictor_dim = int(predictor_dim)
         self.depth = int(depth)
         self.num_heads = int(num_heads)
+        if layer_scale_init is not None and not 0.0 < float(layer_scale_init) <= 1.0:
+            raise ValueError("layer_scale_init must be in (0, 1] or null")
         self.mlp_ratio = float(mlp_ratio)
         self.use_rope = bool(use_rope)
         self.pretrained_grid_size = int(pretrained_grid_size)
         self.use_activation_checkpointing = bool(use_activation_checkpointing)
         self.residual_prediction = bool(residual_prediction)
         self.residual_output_init_std = float(residual_output_init_std)
+        self.state_residual_prediction = bool(state_residual_prediction)
+        if self.state_residual_prediction and self.state_output_dim < self.state_dim:
+            raise ValueError("Residual raw-state output must have room for every state dimension")
         if self.residual_output_init_std <= 0.0:
             raise ValueError("residual_output_init_std must be positive")
         if self.residual_prediction and self.input_dim != self.output_dim:
@@ -406,6 +430,7 @@ class VJEPA2ACTransition(nn.Module):
                     attention_dropout=float(attention_dropout),
                     use_rope=self.use_rope,
                     pretrained_grid_size=self.pretrained_grid_size,
+                    layer_scale_init=layer_scale_init,
                 )
                 for _ in range(self.depth)
             ]
@@ -433,6 +458,11 @@ class VJEPA2ACTransition(nn.Module):
                     std=self.residual_output_init_std,
                 )
                 self.output_adapter.bias.zero_()
+            if self.state_residual_prediction:
+                nn.init.trunc_normal_(
+                    self.state_output_adapter.weight, std=self.residual_output_init_std
+                )
+                self.state_output_adapter.bias.zero_()
 
     def _validate_spatial_grid(
         self, spatial_grid: tuple[int, int] | None
@@ -730,6 +760,10 @@ class VJEPA2ACTransition(nn.Module):
             output = output + tokens
         if self.state_output_adapter is not None:
             state_output = self.state_output_adapter(self.predictor_norm(state_hidden))
+            if self.state_residual_prediction:
+                state_output = state_output + F.pad(
+                    states, (0, self.state_output_dim - self.state_dim)
+                )
             state_output = state_output[:, :, None, :].expand(-1, -1, self.token_count, -1)
             output = torch.cat([output, state_output], dim=-1)
         if token_mask is not None:
