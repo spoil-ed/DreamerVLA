@@ -47,6 +47,9 @@ world_model:
   # Learn a transition delta around persistence so the 1024-d adapter does not
   # have to reconstruct every 2048-d PI0.5 feature component from scratch.
   vjepa2_residual_prediction: true
+  # A small non-zero residual head keeps the initial delta RMS modest while
+  # allowing gradients to reach the pretrained predictor on update one.
+  vjepa2_residual_output_init_std: 1.0e-3
 
 ray_components:
   world_model:
@@ -66,3 +69,4 @@ ray_components:
       vjepa2_spatial_group_count: ${world_model.vjepa2_spatial_group_count}
       vjepa2_pretrained_grid_size: ${world_model.vjepa2_pretrained_grid_size}
       vjepa2_residual_prediction: ${world_model.vjepa2_residual_prediction}
+      vjepa2_residual_output_init_std: ${world_model.vjepa2_residual_output_init_std}

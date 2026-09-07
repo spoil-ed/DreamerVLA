@@ -181,12 +181,14 @@ class ChunkAwareWorldModel(WorldModel):
         vjepa2_spatial_group_count: int = 1,
         vjepa2_pretrained_grid_size: int = 16,
         vjepa2_residual_prediction: bool = False,
+        vjepa2_residual_output_init_std: float = 1.0e-3,
         vjepa2_truncate_rollout_gradients: bool = True,
         **kwargs: Any,
     ) -> None:
         self.transition_type = str(transition_type).strip().lower()
         self.transition_init = str(transition_init).strip().lower()
         self.vjepa2_truncate_rollout_gradients = bool(vjepa2_truncate_rollout_gradients)
+        self.vjepa2_residual_output_init_std = float(vjepa2_residual_output_init_std)
         if self.transition_type not in {"original", "vjepa2_ac"}:
             raise ValueError("transition_type must be 'original' or 'vjepa2_ac'")
         if self.transition_init not in {"random", "pretrained"}:
@@ -420,6 +422,7 @@ class ChunkAwareWorldModel(WorldModel):
                 pretrained_grid_size=int(vjepa2_pretrained_grid_size),
                 use_activation_checkpointing=self.grad_checkpoint,
                 residual_prediction=bool(vjepa2_residual_prediction),
+                residual_output_init_std=float(vjepa2_residual_output_init_std),
             )
             if self.transition_init == "pretrained":
                 if not vjepa2_checkpoint_path:

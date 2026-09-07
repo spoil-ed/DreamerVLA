@@ -128,7 +128,8 @@ def test_grouped_spatial_rope_masks_padded_image_slots() -> None:
     assert torch.count_nonzero(actual[:, :, 4:]).item() == 0
 
 
-def test_residual_output_adapter_starts_from_exact_persistence() -> None:
+def test_residual_output_adapter_starts_near_persistence_with_gradient_flow() -> None:
+    torch.manual_seed(13)
     transition = _tiny_transition(output_dim=5, residual_prediction=True).eval()
     tokens = torch.randn(1, 2, 2, 5)
     output = transition(
@@ -137,7 +138,14 @@ def test_residual_output_adapter_starts_from_exact_persistence() -> None:
         torch.randn(1, 2, 3),
     )
 
-    torch.testing.assert_close(output, tokens)
+    delta = output - tokens
+    assert torch.count_nonzero(delta).item() > 0
+    assert 0.0 < delta.square().mean().sqrt().item() < 0.1
+    output.square().mean().backward()
+    assert transition.predictor_blocks[0].attn.qkv.weight.grad is not None
+    assert transition.predictor_blocks[0].attn.qkv.weight.grad.norm().item() > 0.0
+    assert transition.action_encoder.weight.grad is not None
+    assert transition.action_encoder.weight.grad.norm().item() > 0.0
     torch.testing.assert_close(
         transition.action_input_adapter.weight,
         torch.eye(transition.action_dim),
@@ -425,11 +433,13 @@ def test_pi05_rgb_wm_config_declares_strict_transition_ablation_without_sidecars
     assert list(world_model.vjepa2_spatial_grid) == [16, 16]
     assert world_model.vjepa2_spatial_group_count == 3
     assert world_model.vjepa2_residual_prediction is True
+    assert world_model.vjepa2_residual_output_init_std == 1.0e-3
     assert config.offline_warmup.online_latent.encoder_method.endswith("bundle_batch")
     assert world_model.vjepa2_truncate_rollout_gradients is True
     assert worker.transition_type == "vjepa2_ac"
     assert worker.transition_init == "random"
     assert worker.vjepa2_predictor_dim == world_model.vjepa2_predictor_dim
+    assert worker.vjepa2_residual_output_init_std == world_model.vjepa2_residual_output_init_std
     assert worker.vjepa2_truncate_rollout_gradients == world_model.vjepa2_truncate_rollout_gradients
     assert config.optim.world_model.lr_scheduler == "cosine"
     assert config.optim.world_model.adapter_alignment_steps == 500

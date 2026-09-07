@@ -343,6 +343,7 @@ class VJEPA2ACTransition(nn.Module):
         pretrained_grid_size: int = 16,
         use_activation_checkpointing: bool = False,
         residual_prediction: bool = False,
+        residual_output_init_std: float = 1.0e-3,
     ) -> None:
         super().__init__()
         self.input_dim = int(input_dim)
@@ -360,6 +361,9 @@ class VJEPA2ACTransition(nn.Module):
         self.pretrained_grid_size = int(pretrained_grid_size)
         self.use_activation_checkpointing = bool(use_activation_checkpointing)
         self.residual_prediction = bool(residual_prediction)
+        self.residual_output_init_std = float(residual_output_init_std)
+        if self.residual_output_init_std <= 0.0:
+            raise ValueError("residual_output_init_std must be positive")
         if self.residual_prediction and self.input_dim != self.output_dim:
             raise ValueError(
                 "residual_prediction requires input_dim == output_dim, got "
@@ -419,7 +423,15 @@ class VJEPA2ACTransition(nn.Module):
             self.action_input_adapter.weight.copy_(torch.eye(self.action_dim))
             self.action_input_adapter.bias.zero_()
             if self.residual_prediction:
-                self.output_adapter.weight.zero_()
+                # An exact-zero residual head makes the initial prediction a
+                # persistence copy, but also multiplies every gradient flowing
+                # into the transferred predictor by zero on the first update.
+                # Keep the safe near-persistence start while opening that
+                # gradient path immediately with a small non-zero branch.
+                nn.init.trunc_normal_(
+                    self.output_adapter.weight,
+                    std=self.residual_output_init_std,
+                )
                 self.output_adapter.bias.zero_()
 
     def _validate_spatial_grid(
