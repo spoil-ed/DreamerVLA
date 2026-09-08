@@ -1,4 +1,4 @@
-"""Frozen, checkpoint-selected visual readout for closed-loop dynamics supervision."""
+"""Evaluation-only decoded rollout metrics; never a world-model training loss."""
 
 from __future__ import annotations
 
@@ -9,20 +9,17 @@ from pathlib import Path
 import torch
 from hydra.utils import instantiate
 from torch import nn
-from torch.utils.checkpoint import checkpoint
 
 from dreamervla.utils.run_config import load_run_config
 
 logger = logging.getLogger(__name__)
 
 
-class FrozenDecodedVisualLoss(nn.Module):
-    """Compare rollout→decode to encode→decode without training the decoder.
+class DecodedRolloutMetrics(nn.Module):
+    """Compare rollout→decode to encode→decode with an independent frozen readout.
 
-    Dynamic-region reconstruction prevents background-dominated latent MSE from
-    hiding visible prediction errors. Signed temporal differences penalize wrong
-    motion, not simply too little motion. Targets never enter recurrent history.
-    The readout is serialized with the WM but excluded from its optimizer.
+    All decoding is no-grad, even when called inside a gradient-enabled context.
+    Do not attach this evaluator to the WM, its optimizer, or its checkpoint.
     """
 
     def __init__(
@@ -30,19 +27,14 @@ class FrozenDecodedVisualLoss(nn.Module):
         checkpoint_path: str | None = None,
         *,
         decoder: nn.Module | None = None,
-        loss_scale: float = 0.5,
-        temporal_scale: float = 1.0,
+        temporal_include_anchor: bool = True,
         frame_stride: int = 5,
         decode_batch_size: int = 2,
         energy_floor: float = 1.0e-5,
-        gradient_checkpointing: bool = True,
     ) -> None:
         super().__init__()
         if (checkpoint_path is None) == (decoder is None):
             raise ValueError("Provide exactly one of checkpoint_path or decoder")
-        for name, value in (("loss_scale", loss_scale), ("temporal_scale", temporal_scale)):
-            if not math.isfinite(value) or value < 0:
-                raise ValueError(f"{name} must be finite and non-negative")
         if frame_stride < 1 or decode_batch_size < 1:
             raise ValueError("frame_stride and decode_batch_size must be positive")
         if not math.isfinite(energy_floor) or energy_floor <= 0:
@@ -63,27 +55,23 @@ class FrozenDecodedVisualLoss(nn.Module):
         if not isinstance(decoder, nn.Module):
             raise TypeError("decoder must be a torch module")
         self.decoder = decoder.requires_grad_(False).eval()
-        self.loss_scale = float(loss_scale)
-        self.temporal_scale = float(temporal_scale)
+        self.temporal_include_anchor = bool(temporal_include_anchor)
         self.frame_stride = int(frame_stride)
         self.decode_batch_size = int(decode_batch_size)
         self.energy_floor = float(energy_floor)
-        self.gradient_checkpointing = bool(gradient_checkpointing)
         self.train(False)
 
-    def train(self, mode: bool = True) -> FrozenDecodedVisualLoss:
-        """Keep dropout/statistics fixed even when the owning world model trains."""
+    def train(self, mode: bool = True) -> DecodedRolloutMetrics:
+        """Keep dropout/statistics fixed regardless of the caller's mode."""
         super().train(False)
         return self
 
+    @torch.no_grad()
     def _decode(self, tokens: torch.Tensor) -> torch.Tensor:
         flat = tokens.flatten(0, 1)
         outputs = []
         for part in flat.split(self.decode_batch_size):
-            if self.gradient_checkpointing and torch.is_grad_enabled() and part.requires_grad:
-                value = checkpoint(self.decoder, part, use_reentrant=False)
-            else:
-                value = self.decoder(part)
+            value = self.decoder(part)
             outputs.append(value.float())
         return torch.cat(outputs).unflatten(0, tokens.shape[:2])
 
@@ -98,6 +86,7 @@ class FrozenDecodedVisualLoss(nn.Module):
             dim=-1,
         )[..., None, None, None]
 
+    @torch.no_grad()
     def forward(
         self,
         prediction: torch.Tensor,
@@ -107,7 +96,7 @@ class FrozenDecodedVisualLoss(nn.Module):
         token_mask: torch.Tensor | None = None,
         anchor_mask: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
-        """Supervise selected future frames from ``[B,T,N,D]`` latent tensors."""
+        """Measure selected future frames without creating any gradient path."""
         if prediction.ndim != 4 or prediction.shape != target.shape:
             raise ValueError("prediction and target must have equal [B,T,N,D] shape")
         if anchor.shape != (prediction.shape[0], 1, *prediction.shape[2:]):
@@ -119,6 +108,8 @@ class FrozenDecodedVisualLoss(nn.Module):
         if not selected or selected[-1] != steps - 1:
             selected.append(steps - 1)
         indices = torch.tensor(selected, device=prediction.device, dtype=torch.long)
+        if not self.temporal_include_anchor and len(selected) < 2:
+            raise ValueError("Ongoing temporal metrics require at least two decoded frames")
         with torch.no_grad():
             reference = self._decode(target.detach().index_select(1, indices))
             initial = self._decode(anchor.detach())
@@ -141,19 +132,21 @@ class FrozenDecodedVisualLoss(nn.Module):
             )
             true_delta = reference - torch.cat([initial, reference[:, :-1]], dim=1)
             delta_valid = valid * torch.cat([valid[:, :1], valid[:, :-1]], dim=1)
+            temporal_valid = delta_valid.clone()
+            if not self.temporal_include_anchor:
+                temporal_valid[:, 0] = 0
             delta_energy = (
-                (true_delta.square() * delta_valid)
+                (true_delta.square() * temporal_valid)
                 .mean((1, 2, 3, 4, 5))
                 .clamp_min(self.energy_floor)
             )
         decoded = self._decode(prediction.index_select(1, indices))
         reconstruction = ((decoded - reference).square() * weights).mean((1, 2, 3, 4, 5)) / energy
         pred_delta = decoded - torch.cat([initial, decoded[:, :-1]], dim=1)
-        temporal = ((pred_delta - true_delta).square() * delta_valid).mean(
+        temporal = ((pred_delta - true_delta).square() * temporal_valid).mean(
             (1, 2, 3, 4, 5)
         ) / delta_energy
         rec_loss, temporal_loss = reconstruction.mean(), temporal.mean()
-        total = rec_loss + self.temporal_scale * temporal_loss
         with torch.no_grad():
             motion_ratio = (
                 (pred_delta.square() * delta_valid).sum()
@@ -162,11 +155,32 @@ class FrozenDecodedVisualLoss(nn.Module):
             pixel_mse = ((decoded - reference).square() * valid).sum() / (
                 valid.expand_as(decoded).sum().clamp_min(1)
             )
+            # The anchor-inclusive RMS can be high after one jump followed by
+            # completely static predictions. Report prediction-to-prediction
+            # motion separately, including its direction and target energy.
+            ongoing_valid = delta_valid[:, 1:]
+            ongoing_pred, ongoing_true = pred_delta[:, 1:], true_delta[:, 1:]
+            pred_energy = (ongoing_pred.square() * ongoing_valid).sum()
+            true_energy = (ongoing_true.square() * ongoing_valid).sum()
+            ongoing_error = ((ongoing_pred - ongoing_true).square() * ongoing_valid).sum()
+            ongoing_count = ongoing_valid.expand_as(ongoing_true).sum().clamp_min(1)
+            late_start = max(1, len(selected) // 2)
+            late_valid = delta_valid[:, late_start:]
+            late_ratio = (
+                (pred_delta[:, late_start:].square() * late_valid).sum()
+                / (true_delta[:, late_start:].square() * late_valid).sum().clamp_min(1e-8)
+            ).sqrt()
         return {
-            "_loss": self.loss_scale * total,
-            "decoded_visual_loss": total.detach(),
             "decoded_reconstruction_ratio": rec_loss.detach(),
             "decoded_temporal_error_ratio": temporal_loss.detach(),
             "decoded_motion_ratio": motion_ratio,
             "decoded_pixel_mse": pixel_mse,
+            "decoded_ongoing_motion_ratio": (pred_energy / true_energy.clamp_min(1e-8)).sqrt(),
+            "decoded_ongoing_temporal_error_ratio": ongoing_error
+            / true_energy.clamp_min(self.energy_floor * ongoing_count),
+            "decoded_ongoing_motion_cosine": (ongoing_pred * ongoing_true * ongoing_valid).sum()
+            / (pred_energy * true_energy).sqrt().clamp_min(1e-8),
+            "decoded_ongoing_target_motion_rms": (true_energy / ongoing_count).sqrt(),
+            "decoded_ongoing_valid_pairs": ongoing_valid.sum(),
+            "decoded_late_motion_ratio": late_ratio,
         }

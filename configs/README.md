@@ -42,7 +42,7 @@ python -m dreamervla.launchers.train --config collect_rollouts_pi05_spatial gpus
   collect.policy_ckpt_path=/path/to/pi05-sft-run
 torchrun --standalone --nproc-per-node=8 -m dreamervla.train experiment=wm_pi05_collected_train
 torchrun --standalone --nproc-per-node=8 -m dreamervla.train experiment=wm_pi05_prefix_input_train
-torchrun --standalone --nproc-per-node=2 -m dreamervla.train experiment=pi05_pixel_decoder
+torchrun --standalone --nproc-per-node=8 -m dreamervla.train experiment=pi05_pixel_decoder
 python -m dreamervla.launchers.train --config pi05_pixel_decoder_collected
 python -m dreamervla.launchers.train --config pi05_pixel_decoder_collected \
   pixel_decoder=pi05-prefix-spatial run.name=pi05_pixel_decoder_collected_spatial
@@ -88,7 +88,7 @@ wandb beta sync --live /path/to/run_root/wandb
 | π0.5 RGB rollout collection | `python -m dreamervla.train experiment=collect_rollouts_pi05` | `collect_rollouts_pi05` |
 | π0.5 online-prefix WM warmup | `torchrun --standalone --nproc-per-node=8 -m dreamervla.train experiment=wm_pi05_collected_train` | `wm_pi05_collected_train` |
 | π0.5 native prefix-input WM warmup | `torchrun --standalone --nproc-per-node=8 -m dreamervla.train experiment=wm_pi05_prefix_input_train` | `wm_pi05_prefix_input_train` |
-| π0.5 latent-to-pixel decoder | `torchrun --standalone --nproc-per-node=2 -m dreamervla.train experiment=pi05_pixel_decoder` | `pi05_pixel_decoder` |
+| π0.5 latent-to-pixel decoder | `torchrun --standalone --nproc-per-node=8 -m dreamervla.train experiment=pi05_pixel_decoder` | `pi05_pixel_decoder` |
 | π0.5 collected-data decoder ablation | `python -m dreamervla.launchers.train --config pi05_pixel_decoder_collected` | `pi05_pixel_decoder_collected` |
 
 ## Experiments
@@ -100,7 +100,7 @@ wandb beta sync --live /path/to/run_root/wandb
 | `collect_rollouts_pi05_spatial` | Two-GPU π0.5 SFT collection of 100 RGB-only trajectories for each LIBERO-Spatial task |
 | `pi05_libero_sft` | RLinf-aligned π0.5 flow-matching SFT on `physical-intelligence/libero` |
 | `wm_pi05_collected_train` | DDP Chunk-WM warmup with online frozen π0.5 prefixes |
-| `wm_pi05_vjepa2_decoded_train` | Opt-in AC full-rollout gradients plus frozen encode→decode reconstruction/temporal supervision; requires `WM_PIXEL_DECODER_CKPT` |
+| `wm_pi05_vjepa2_latent_train` | AC pretrained, full-rollout latent/state supervision; no decoder dependency. Train the decoder separately with `pi05_pixel_decoder_collected`. |
 | `wm_pi05_prefix_input_train` | DDP visual-only WM over native pre-PaliGemma `[968,2048]` prefix inputs |
 | `pi05_pixel_decoder` | DDP pixel reconstruction from frozen π0.5 prefix tokens |
 | `pi05_pixel_decoder_collected` | DDP baseline/spatial decoder training over all 2,000 collected Object trajectories |
@@ -119,9 +119,17 @@ wandb beta sync --live /path/to/run_root/wandb
 | `eval_libero_vla` | LIBERO rollout eval |
 
 `profile=production` preserves the selected experiment. `profile=debug` declares
-short budgets, while `profile=smoke` declares a complete two-GPU real+WM topology.
+short budgets, while `profile=smoke` declares a complete eight-GPU real+WM topology.
 Profiles are composed after experiments, so every effective budget remains visible
 in Hydra's `.hydra/config.yaml`.
+
+Training defaults to one node with eight GPUs via `launch=ddp`; the generic
+`python -m dreamervla.launchers.train --config <experiment>` command launches eight
+processes unless the selected route declares Ray or evaluation mechanics. Short
+training smoke runs reduce step/sample budgets, not the default GPU count.
+Direct `python -m dreamervla.train` does not spawn workers: use the launcher or an
+explicit eight-process `torchrun` command. Collection/evaluation resources and
+synthetic unit-test topologies remain independent of this training default.
 
 The release training path is OpenVLA-OFT one-trajectory cold-start cotrain.
 The two `*_official_upper_bound` stages form an isolated `libero_goal`-only

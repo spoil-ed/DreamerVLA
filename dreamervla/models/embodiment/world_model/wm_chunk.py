@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import torch
@@ -187,8 +188,11 @@ class ChunkAwareWorldModel(WorldModel):
         vjepa2_proprio_representation: str = "legacy",
         vjepa2_proprio_loss_scale: float = 0.0,
         vjepa2_one_step_loss_scale: float = 0.0,
+        vjepa2_teacher_forcing_loss_scale: float = 0.0,
+        vjepa2_teacher_forcing_stride: int = 5,
         vjepa2_temporal_difference_loss_scale: float = 0.0,
         vjepa2_layer_scale_init: float | None = None,
+        vjepa2_condition_film_init_std: float | None = None,
         decoded_visual_loss: nn.Module | None = None,
         **kwargs: Any,
     ) -> None:
@@ -203,6 +207,18 @@ class ChunkAwareWorldModel(WorldModel):
             raise ValueError("vjepa2_proprio_representation must be legacy or raw_padded")
         self.vjepa2_proprio_loss_scale = float(vjepa2_proprio_loss_scale)
         self.vjepa2_one_step_loss_scale = float(vjepa2_one_step_loss_scale)
+        self.vjepa2_teacher_forcing_loss_scale = float(vjepa2_teacher_forcing_loss_scale)
+        self.vjepa2_teacher_forcing_stride = int(vjepa2_teacher_forcing_stride)
+        if (
+            not math.isfinite(self.vjepa2_teacher_forcing_loss_scale)
+            or self.vjepa2_teacher_forcing_loss_scale < 0
+            or self.vjepa2_teacher_forcing_stride < 1
+        ):
+            raise ValueError(
+                "teacher-forcing scale must be finite/non-negative and stride positive"
+            )
+        if self.vjepa2_teacher_forcing_loss_scale > 0 and self.transition_type != "vjepa2_ac":
+            raise ValueError("teacher-forcing auxiliary is opt-in on the V-JEPA2-AC route only")
         self.vjepa2_temporal_difference_loss_scale = float(vjepa2_temporal_difference_loss_scale)
         if self.vjepa2_one_step_loss_scale < 0 or self.vjepa2_temporal_difference_loss_scale < 0:
             raise ValueError("AC one-step and temporal-difference loss scales must be non-negative")
@@ -460,6 +476,7 @@ class ChunkAwareWorldModel(WorldModel):
                 residual_output_init_std=float(vjepa2_residual_output_init_std),
                 state_residual_prediction=self._raw_proprio_slots and self.proprio_dim > 0,
                 layer_scale_init=vjepa2_layer_scale_init,
+                condition_film_init_std=vjepa2_condition_film_init_std,
             )
             if self.transition_init == "pretrained":
                 if not vjepa2_checkpoint_path:
@@ -469,23 +486,22 @@ class ChunkAwareWorldModel(WorldModel):
                 )
         self.out_norm = nn.Identity()
         self.out_proj = nn.Identity()
-        self.decoded_visual_loss = decoded_visual_loss
         if decoded_visual_loss is not None:
-            if self.transition_type != "vjepa2_ac":
-                raise ValueError("decoded_visual_loss is opt-in on the V-JEPA2-AC route only")
-            if self.vjepa2_truncate_rollout_gradients:
-                raise ValueError("decoded_visual_loss requires full closed-loop gradients")
-            if self.task_conditioning_enabled:
-                raise ValueError("decoded_visual_loss requires unmodified visual tokens")
+            raise ValueError(
+                "WM supervision must be latent-only; train the decoder independently "
+                "and decode only in no-grad evaluation (decoded_visual_loss is retired)"
+            )
         if self.freeze_input_embeddings_requested:
             self.freeze_input_embeddings()
             if self.vjepa2_transition is not None:
                 input_modules = (
                     self.vjepa2_transition.input_adapter,
+                    self.vjepa2_transition.action_input_adapter,
                     self.vjepa2_transition.action_encoder,
                     self.vjepa2_transition.state_input_adapter,
                     self.vjepa2_transition.state_encoder,
                     self.vjepa2_transition.context_encoder,
+                    self.vjepa2_transition.condition_film,
                 )
                 for module in input_modules:
                     if module is None:
@@ -1303,6 +1319,60 @@ class ChunkAwareWorldModel(WorldModel):
     # ------------------------------------------------------------------ #
     # Chunk-objective training loss                                      #
     # ------------------------------------------------------------------ #
+    def _teacher_forced_loss(
+        self,
+        observations: torch.Tensor,
+        actions: torch.Tensor,
+        proprio: torch.Tensor | None,
+        token_mask: torch.Tensor | None,
+        lang: torch.Tensor | None,
+        stop: int,
+    ) -> dict[str, torch.Tensor]:
+        """Supervise local dynamics at real contexts without resetting the rollout.
+
+        Each target t sees only [t-H, t) observations/states and [t-H, t)
+        actions. Windows retain the inference history length and RoPE indexing.
+        Stride one covers every transition; larger strides bound training cost.
+        """
+        H = self.num_hist
+        positions = list(range(H, stop, self.vjepa2_teacher_forcing_stride))
+        if positions[-1] != stop - 1:
+            positions.append(stop - 1)
+        losses, state_losses = [], []
+        for t in positions:
+            history = observations[:, t - H : t].detach()
+            context = {
+                "hidden": history[:, -1],
+                "history": history,
+                "actions": actions[:, t - H : t],
+                "lang": lang,
+            }
+            if token_mask is not None:
+                context["prefix_attention_mask"] = token_mask[:, t - H : t]
+            if proprio is not None:
+                context["proprio"] = proprio[:, t - 1].detach()
+                context["proprio_history"] = proprio[:, t - H : t].detach()
+            predicted = self._predict_next_step(context, actions[:, t - 1])
+            local_loss, _, _ = self._hidden_loss_terms(
+                predicted["hidden"][:, None],
+                observations[:, t : t + 1].detach(),
+                token_mask=None if token_mask is None else token_mask[:, t : t + 1],
+            )
+            losses.append(local_loss)
+            if self._raw_proprio_slots and proprio is not None:
+                state_losses.append(
+                    F.mse_loss(predicted["proprio"].float(), proprio[:, t].detach().float())
+                )
+        visual = torch.stack(losses).mean()
+        state = torch.stack(state_losses).mean() if state_losses else visual.new_zeros(())
+        return {
+            "_loss": self.vjepa2_teacher_forcing_loss_scale
+            * (visual + self.vjepa2_proprio_loss_scale * state),
+            "teacher_forced_prediction_loss": visual.detach(),
+            "teacher_forced_proprio_loss": state.detach(),
+            "teacher_forced_contexts": visual.new_tensor(float(len(positions))),
+        }
+
     def chunk_loss(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         """Train end-to-end as a K-step chunk predictor.
 
@@ -1518,7 +1588,7 @@ class ChunkAwareWorldModel(WorldModel):
         # Actions are still REAL demo chunk actions throughout — this loss only
         # cures WM-internal drift, not actor sensitivity to drift.
         rollout_out: dict[str, torch.Tensor] = {}
-        visual_loss_predictions = [hidden_pred]
+        supervised_steps = hidden_pred.shape[1]
         if self.chunk_rollout_chunks > 1 and self.chunk_rollout_loss_scale > 0.0:
             N = self.chunk_rollout_chunks
             if T < H + N * K:
@@ -1558,7 +1628,7 @@ class ChunkAwareWorldModel(WorldModel):
                 if isinstance(out_c.get("proprio_history"), torch.Tensor):
                     cur_latent["proprio_history"] = out_c["proprio_history"]
             rollout_pred = torch.cat(rollout_preds, dim=1)
-            visual_loss_predictions.append(rollout_pred)
+            supervised_steps += rollout_pred.shape[1]
             rollout_target = obs_tokens[:, H + K : H + N * K].detach()
             rollout_token_mask = (
                 None
@@ -1598,24 +1668,13 @@ class ChunkAwareWorldModel(WorldModel):
                 "rollout_chunks": loss.new_tensor(float(N)),
             }
 
-        if self.decoded_visual_loss is not None:
-            visual_prediction = torch.cat(visual_loss_predictions, dim=1)[..., : self.token_dim]
-            stop = H + visual_prediction.shape[1]
-            decoded_terms = self.decoded_visual_loss(
-                visual_prediction,
-                vision_tokens[:, H:stop].detach(),
-                vision_tokens[:, H - 1 : H].detach(),
-                token_mask=None
-                if prefix_attention_mask is None
-                else prefix_attention_mask[:, H:stop],
-                anchor_mask=None
-                if prefix_attention_mask is None
-                else prefix_attention_mask[:, H - 1 : H],
+        if self.vjepa2_teacher_forcing_loss_scale > 0:
+            stop = H + supervised_steps
+            teacher_terms = self._teacher_forced_loss(
+                obs_tokens, actions, batch.get("proprio"), prefix_attention_mask, lang_emb, stop
             )
-            loss = loss + decoded_terms["_loss"]
-            ac_loss_metrics.update(
-                {key: value.detach() for key, value in decoded_terms.items() if key != "_loss"}
-            )
+            loss = loss + teacher_terms["_loss"]
+            ac_loss_metrics.update({k: v for k, v in teacher_terms.items() if k != "_loss"})
 
         reward_out: dict[str, torch.Tensor] = {}
         if self.reward_loss_scale > 0.0:

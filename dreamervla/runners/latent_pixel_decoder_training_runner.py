@@ -343,6 +343,7 @@ class LatentPixelDecoderTrainingRunner(BaseRunner):
         # OpenPI's model-space pixels use [-1, 1]. Decoder output is [0, 1].
         return observation, ((target.float() + 1.0) * 0.5).clamp(0.0, 1.0)
 
+    @torch.no_grad()
     def _encode_frozen_prefix(self, observation: Any) -> torch.Tensor:
         """Encode one prefix with the runner's frozen latent producer."""
 
@@ -350,7 +351,7 @@ class LatentPixelDecoderTrainingRunner(BaseRunner):
         prefix = self.policy.encode_observation_prefix(observation)
         if not isinstance(prefix, torch.Tensor):
             raise TypeError("latent producer must return a tensor prefix")
-        return prefix
+        return prefix.detach()
 
     def _prepare_replay_batch(self, batch: Any) -> tuple[torch.Tensor, torch.Tensor]:
         """Move one single-frame collected replay batch to decoder model space."""
@@ -386,7 +387,7 @@ class LatentPixelDecoderTrainingRunner(BaseRunner):
                 align_corners=False,
                 antialias=True,
             ).unflatten(0, (-1, int(target.shape[1])))
-        return prefix, target
+        return prefix.detach(), target.detach()
 
     def _prepare_training_batch(self, batch: Any) -> tuple[torch.Tensor, torch.Tensor]:
         """Resolve either an official OpenPI batch or an encoded RGB replay batch."""
@@ -394,7 +395,7 @@ class LatentPixelDecoderTrainingRunner(BaseRunner):
         if self.trajectory_replay is not None:
             return self._prepare_replay_batch(batch)
         observation, target = self._prepare_observation(batch)
-        return self._encode_frozen_prefix(observation), target
+        return self._encode_frozen_prefix(observation), target.detach()
 
     def run(self) -> list[dict[str, float]]:
         assert self.policy is not None

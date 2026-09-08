@@ -41,7 +41,7 @@ latent_producer:
       rotate_images_180: ${task.pi05.rotate_images_180}
 
 decoder_training:
-  # 2 GPUs: micro 16 x 2 x accumulation 4 = global 128.
+  # 8 GPUs: micro 16 x 8 x accumulation 1 = global 128.
   micro_batch_size: 16
   global_batch_size: 128
   precision: bf16

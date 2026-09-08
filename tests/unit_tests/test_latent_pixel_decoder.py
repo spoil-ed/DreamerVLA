@@ -103,7 +103,8 @@ def test_frozen_prefix_boundary_updates_only_decoder() -> None:
     optimizer = torch.optim.SGD(decoder.parameters(), lr=0.1)
     producer_before = runner.policy.weight.detach().clone()
 
-    prefix = runner._encode_frozen_prefix(torch.randn(2, 4))
+    observation = torch.randn(2, 4, requires_grad=True)
+    prefix = runner._encode_frozen_prefix(observation)
     assert not prefix.requires_grad
     assert not prefix.is_inference()
     loss = decoder(prefix).square().mean()
@@ -112,6 +113,7 @@ def test_frozen_prefix_boundary_updates_only_decoder() -> None:
 
     assert decoder.weight.grad is not None
     assert runner.policy.weight.grad is None
+    assert observation.grad is None
     torch.testing.assert_close(runner.policy.weight, producer_before)
 
 
@@ -147,7 +149,7 @@ def test_prepare_collected_replay_batch_resizes_pixels_and_removes_time_axis() -
     runner = LatentPixelDecoderTrainingRunner.__new__(LatentPixelDecoderTrainingRunner)
     runner.device = torch.device("cpu")
     runner.cfg = OmegaConf.create({"pixel_decoder": {"image_size": 4}})
-    prefix = torch.randn(2, 1, 48, 32, dtype=torch.float16)
+    prefix = torch.randn(2, 1, 48, 32, dtype=torch.float16, requires_grad=True)
     images = torch.full((2, 1, 2, 8, 8, 3), 255, dtype=torch.uint8)
 
     prepared_prefix, target = runner._prepare_replay_batch(
@@ -156,6 +158,7 @@ def test_prepare_collected_replay_batch_resizes_pixels_and_removes_time_axis() -
 
     assert prepared_prefix.shape == (2, 48, 32)
     assert prepared_prefix.dtype == torch.float16
+    assert not prepared_prefix.requires_grad
     assert target.shape == (2, 2, 3, 4, 4)
     torch.testing.assert_close(target, torch.ones_like(target))
 
@@ -203,11 +206,11 @@ def test_decoder_rejects_non_square_view_tokens() -> None:
         LatentTokenPixelDecoder(token_dim=8, token_count=20, tokens_per_view=10)
 
 
-def test_pi05_pixel_decoder_config_validates_for_two_gpu_ddp() -> None:
+def test_pi05_pixel_decoder_config_validates_for_eight_gpu_ddp() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(version_base=None, config_dir=str(config_dir)):
         cfg = compose(config_name="train", overrides=["experiment=pi05_pixel_decoder"])
-    validate_cfg(cfg, world_size=2)
+    validate_cfg(cfg, world_size=8)
     assert cfg.data.loader._target_ == ("dreamervla.dataset.LeRobotLIBERODataLoaderFactory")
     assert cfg.data.loader.repo_id == "physical-intelligence/libero"
     assert cfg.pixel_decoder.token_count == 768

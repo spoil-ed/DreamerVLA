@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
+import sys
 from dataclasses import asdict
 from pathlib import Path
 
@@ -17,6 +20,7 @@ import torch
 from hydra import compose, initialize_config_dir
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
+from torch.nn.parallel import DistributedDataParallel
 
 from dreamervla.config_resolvers import register_dreamervla_resolvers
 from dreamervla.diagnostics.compare_wm_libero_rollout import (
@@ -28,6 +32,7 @@ from dreamervla.diagnostics.compare_wm_libero_rollout import (
     _rollout_closed_loop,
     _write_video,
 )
+from dreamervla.diagnostics.decoded_rollout_metrics import DecodedRolloutMetrics
 from dreamervla.utils.optim import apply_optimizer_lr_schedule, build_optimizer
 
 
@@ -38,7 +43,7 @@ def main() -> None:
     parser.add_argument("--decoder-ckpt", type=Path, required=True)
     parser.add_argument("--steps", type=int, default=20)
     parser.add_argument("--task-id", type=int, default=0)
-    parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--wandb-mode", choices=("online", "offline"), required=True)
     parser.add_argument("--override", action="append", default=[])
     parser.add_argument("--encoded-cache", type=Path)
     parser.add_argument("--init-checkpoint", type=Path, help="Weights-only warm start; NOT resume")
@@ -46,10 +51,40 @@ def main() -> None:
     args = parser.parse_args()
     if args.steps < 1:
         raise ValueError("steps must be positive")
+    if int(os.environ.get("WORLD_SIZE", "1")) == 1:
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "torch.distributed.run",
+                "--master-addr=127.0.0.1",
+                "--master-port=29517",
+                "--nproc-per-node=8",
+                "--module",
+                "dreamervla.diagnostics.vjepa2_ac_state_smoke",
+                *sys.argv[1:],
+            ],
+            check=True,
+        )
+        return
+    rank = int(os.environ["RANK"])
+    local_rank = int(os.environ["LOCAL_RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
+    if world_size != 8:
+        raise ValueError("Training diagnostics require the default eight-GPU topology")
+    if args.encoded_cache is None or not args.encoded_cache.is_file():
+        raise ValueError(
+            "DDP probe requires a verified pre-encoded cache; no concurrent cache writes"
+        )
+    torch.cuda.set_device(local_rank)
+    device = torch.device("cuda", local_rank)
+    torch.distributed.init_process_group("nccl", device_id=device)
     root = args.output_dir.resolve()
-    root.mkdir(parents=True, exist_ok=False)
-    (root / ".hydra").mkdir()
-    (root / "checkpoints").mkdir()
+    if rank == 0:
+        root.mkdir(parents=True, exist_ok=False)
+        (root / ".hydra").mkdir()
+        (root / "checkpoints").mkdir()
+    torch.distributed.barrier()
     torch.set_num_threads(4)
     torch.manual_seed(7)
     register_dreamervla_resolvers()
@@ -67,8 +102,8 @@ def main() -> None:
                 *args.override,
             ],
         )
-    OmegaConf.save(cfg, root / ".hydra" / "resolved_config.yaml", resolve=True)
-    device = torch.device(args.device)
+    if rank == 0:
+        OmegaConf.save(cfg, root / ".hydra" / "resolved_config.yaml", resolve=True)
     length = (
         cfg.world_model.num_hist + cfg.world_model.chunk_size * cfg.world_model.chunk_rollout_chunks
     )
@@ -128,18 +163,31 @@ def main() -> None:
         initial_state = torch.load(
             args.init_checkpoint, map_location="cpu", weights_only=False, mmap=True
         )
-        state = initial_state["state_dicts"]["world_model"]
+        from dreamervla.utils.legacy_wm_readout import discard_legacy_wm_readout
+
+        state = discard_legacy_wm_readout(initial_state["state_dicts"]["world_model"])
         fresh = wm.state_dict()
         added = set(fresh) - set(state)
-        if any(not key.startswith("decoded_visual_loss.") for key in added):
+        new_adapter = {key for key in added if key.startswith("vjepa2_transition.condition_film.")}
+        if added != new_adapter:
             raise ValueError(f"Warm start is missing transition parameters: {sorted(added)}")
-        # The readout was independently loaded strictly from its own checkpoint.
-        # Every transition tensor must match exactly; only this new frozen
-        # auxiliary component may be absent from the older WM checkpoint.
-        print(json.dumps({"new_frozen_readout_keys": sorted(added)}), flush=True)
+        # Only explicitly selected new adapters may be absent. No decoder is
+        # owned by this model or loaded into its training state.
+        if rank == 0:
+            print(
+                json.dumps(
+                    {
+                        "new_trainable_adapter_keys": sorted(new_adapter),
+                    }
+                ),
+                flush=True,
+            )
         wm.load_state_dict({**{key: fresh[key] for key in added}, **state}, strict=True)
         del initial_state
     optimizer = build_optimizer(wm, cfg.optim.world_model)
+    wrapped = DistributedDataParallel(
+        wm, device_ids=[local_rank], static_graph=True, broadcast_buffers=False
+    )
     batches = [
         dict(
             obs_embedding=enc.latent.to(device=device, dtype=torch.float32).unsqueeze(0),
@@ -150,15 +198,39 @@ def main() -> None:
         for traj, enc in zip(trajectories, encoded, strict=True)
     ]
     results = {"episodes": [r["episode_id"] for r in selected], "training": [], "evaluations": []}
+    results["world_size"] = world_size
+    results["batch_contract"] = (
+        "One identical fixed training episode per rank; NOT eight unique episodes"
+    )
     results["init_checkpoint"] = None if args.init_checkpoint is None else str(args.init_checkpoint)
     results["evaluation_scope"] = (
         "Second episode is excluded only from THIS probe's updates; a warm-start "
         "checkpoint may already have trained on both episodes. Not a dataset holdout."
     )
     decoder = _load_pixel_decoder(args.decoder_ckpt, device)
+    decoded_evaluator = DecodedRolloutMetrics(decoder=decoder, frame_stride=5).to(device)
     decoder.requires_grad_(False)
     if wm.pretrained_load_report is not None:
         results["pretrained_load_report"] = asdict(wm.pretrained_load_report)
+    tracking = None
+    if rank == 0:
+        import wandb
+
+        tracking = wandb.init(
+            project=str(cfg.runner.logger.project_name),
+            name=root.name,
+            group="wm-dynamics-fixed-clip-ablation",
+            mode=args.wandb_mode,
+            dir=str(root),
+            config={
+                "experiment": args.experiment,
+                "steps": args.steps,
+                "world_size": world_size,
+                "init_checkpoint": results["init_checkpoint"],
+                "evaluation_scope": results["evaluation_scope"],
+                "batch_contract": results["batch_contract"],
+            },
+        )
 
     @torch.no_grad()
     def evaluate(step: int) -> list[torch.Tensor]:
@@ -218,9 +290,30 @@ def main() -> None:
                 .mean()
                 .item(),
             )
+            metrics["correct_action_mse_advantage"] = (
+                metrics["changed_action_visual_mse"] - metrics["visual_mse"]
+            )
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                decoded_metrics = decoded_evaluator(
+                    visual[None],
+                    target_visual[None],
+                    persistence[None, None],
+                    token_mask=valid[None],
+                    anchor_mask=batch["prefix_attention_mask"][:, wm.num_hist - 1 : wm.num_hist],
+                )
+            metrics.update({k: v.item() for k, v in decoded_metrics.items()})
             results["evaluations"].append(metrics)
             predictions.append(visual.cpu())
-            print(json.dumps(metrics), flush=True)
+            if rank == 0:
+                print(json.dumps(metrics), flush=True)
+                tracking.log(
+                    {
+                        f"eval/{metrics['split']}/{k}": v
+                        for k, v in metrics.items()
+                        if k not in {"step", "split"}
+                    },
+                    step=step,
+                )
         return predictions
 
     initial = evaluate(0)
@@ -231,16 +324,13 @@ def main() -> None:
         )
         optimizer.zero_grad(set_to_none=True)
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            output = wm.chunk_loss(batches[0])
+            output = wrapped(batches[0])
         loss = output["_loss"]
         if not torch.isfinite(loss):
             raise RuntimeError(f"Nonfinite loss at step {step}")
         loss.backward()
-        if wm.decoded_visual_loss is not None:
-            assert not wm.decoded_visual_loss.decoder.training
-            assert all(
-                p.grad is None and not p.requires_grad for p in wm.decoded_visual_loss.parameters()
-            )
+        assert not decoder.training
+        assert all(p.grad is None and not p.requires_grad for p in decoder.parameters())
         state_grad = wm.vjepa2_transition.state_output_adapter.weight.grad
         if state_grad is None or not torch.isfinite(state_grad).all() or state_grad.norm() == 0:
             raise RuntimeError(f"State prediction lost its training signal at step {step}")
@@ -259,11 +349,25 @@ def main() -> None:
             grad_norm=grad_norm.item(),
             visual_motion_ratio=output["visual_motion_ratio"].item(),
             visual_delta_mse=output["visual_delta_mse"].item(),
-            **{key: value.item() for key, value in output.items() if key.startswith("decoded_")},
+            **{
+                key: value.item()
+                for key, value in output.items()
+                if key.startswith(("decoded_", "teacher_forced_"))
+            },
             **schedule,
         )
         results["training"].append(metrics)
-        print(json.dumps(metrics), flush=True)
+        if rank == 0:
+            print(json.dumps(metrics), flush=True)
+            tracking.log({f"train/{key}": value for key, value in metrics.items()}, step=step + 1)
+    # Check synchronization before releasing ranks that do not write artifacts.
+    synced = wm.vjepa2_transition.output_adapter.weight.detach().clone()
+    torch.distributed.broadcast(synced, src=0)
+    torch.testing.assert_close(wm.vjepa2_transition.output_adapter.weight, synced, rtol=0, atol=0)
+    torch.distributed.barrier()
+    torch.distributed.destroy_process_group()
+    if rank != 0:
+        return
     final = evaluate(args.steps)
     torch.save(
         {
@@ -275,6 +379,12 @@ def main() -> None:
         },
         root / "checkpoints" / "latest.ckpt",
     )
+    saved = torch.load(
+        root / "checkpoints" / "latest.ckpt", map_location="cpu", weights_only=True, mmap=True
+    )
+    wm.load_state_dict(saved["state_dicts"]["world_model"], strict=True)
+    optimizer.load_state_dict(saved["state_dicts"]["world_model_optimizer"])
+    results["strict_reload"] = True
     for i, batch in enumerate(batches):
         target = wm._normalize_raw_vision_tokens(batch["obs_embedding"])[0, wm.num_hist :].cpu()
         videos = [
@@ -307,6 +417,12 @@ def main() -> None:
         )
     (root / "results.json").write_text(json.dumps(results, indent=2) + "\n")
     print(json.dumps(results["decoded_motion"]), flush=True)
+    for row in results["decoded_motion"]:
+        tracking.log(
+            {f"eval/{row['split']}/{key}": value for key, value in row.items() if key != "split"},
+            step=args.steps,
+        )
+    tracking.finish()
 
 
 if __name__ == "__main__":

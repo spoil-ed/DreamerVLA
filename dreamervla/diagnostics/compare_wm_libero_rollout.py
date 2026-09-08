@@ -110,6 +110,13 @@ def _policy_hydra_config(value: Any) -> DictConfig:
 
 
 def _world_model_hydra_config(cfg: DictConfig) -> DictConfig:
+    # Historical evaluation must not instantiate a training-time readout or
+    # require its old environment-variable path. Preserve the caller's config.
+    cfg = OmegaConf.create(OmegaConf.to_container(cfg, resolve=False))
+    for path in ("world_model", "ray_components.world_model.kwargs"):
+        component_cfg = OmegaConf.select(cfg, path, default=None)
+        if isinstance(component_cfg, DictConfig):
+            component_cfg.pop("decoded_visual_loss", None)
     direct = cfg.get("world_model")
     if isinstance(direct, DictConfig) and OmegaConf.select(direct, "_target_", default=None):
         return direct
@@ -141,7 +148,9 @@ def _load_chunk_wm(checkpoint_path: Path, device: torch.device) -> ChunkAwareWor
         state = payload["world_model"]
     else:
         raise ValueError(f"checkpoint has no world-model state: {checkpoint_path}")
-    model.load_state_dict(state, strict=True)
+    from dreamervla.utils.legacy_wm_readout import discard_legacy_wm_readout
+
+    model.load_state_dict(discard_legacy_wm_readout(state), strict=True)
     print(
         f"[load] WM warmup_epoch={payload.get('warmup_epoch')} "
         f"warmup_step={payload.get('warmup_step')}",

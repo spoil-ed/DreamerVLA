@@ -1,6 +1,6 @@
 # @package _global_
-# Smallest complete two-GPU cotrain geometry. It still includes real and WM env
-# workers and preserves the actor grouping/window contracts.
+# Short eight-GPU cotrain geometry, retaining the production GPU count while
+# reducing budgets and preserving the real/WM and actor grouping contracts.
 profile:
   name: smoke
 
@@ -19,11 +19,11 @@ dataloader:
 
 cluster:
   num_nodes: 1
-  num_gpus: 2
+  num_gpus: 8
   component_placement: null
 
 manual_cotrain:
-  ngpu: 2
+  ngpu: 8
   global_steps: 1
   checkpoint_every: 1
   eval_interval_global_steps: 0
@@ -35,7 +35,7 @@ manual_cotrain:
   real_rollout_epoch: 1
   wm_rollout_epoch: 1
   real_rollout_target_trajectories: 1
-  wm_rollout_target_trajectories: 8
+  wm_rollout_target_trajectories: 56
   max_steps_per_rollout_epoch: 64
   real_max_steps_per_rollout_epoch: 64
 

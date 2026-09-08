@@ -857,6 +857,9 @@ class WorldModelTrainingBase(BaseRunner):
             sd = payload.get("model")
         if sd is None:
             raise RuntimeError(f"{path} has no state_dicts.world_model or model state dict")
+        from dreamervla.utils.legacy_wm_readout import discard_legacy_wm_readout
+
+        sd = discard_legacy_wm_readout(sd)
         target_dtype = next(self.world_model.parameters()).dtype
         sd = {
             k: (v.to(dtype=target_dtype) if torch.is_floating_point(v) else v)

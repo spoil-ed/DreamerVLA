@@ -117,6 +117,13 @@ stepping 和 trajectory assembly。DreamerVLA manual route 额外增加 `Learner
 
 ## How Training Runs
 
+Training defaults to one node with **8 GPUs**, including distributed training
+smoke checks. Do not add two-GPU training presets or automatically reduce the GPU
+count; use another count only when the user explicitly requests it. Keep defaults
+in Hydra and show 8-GPU training commands in current documentation. This does not
+change independent collection/evaluation resources or small synthetic unit-test
+topologies.
+
 `python -m dreamervla.train experiment=<name> task=<suite>` does this:
 
 1. Register DreamerVLA OmegaConf resolvers.
@@ -177,6 +184,13 @@ artifacts elsewhere. Evaluation is the deliberate exception: its run root is
 ---
 
 ## Metrics, Checkpoints, Evaluation
+
+- PI0.5 WM supervision is latent alignment against a frozen encoder, with optional
+  latent temporal-difference and proprio targets. Never backpropagate decoded
+  image reconstruction or decoded temporal losses into the WM. Train pixel
+  decoders independently from real encoder latents; encoder and WM stay fixed.
+  Video evaluation is no-grad rollout→decode versus encode→decode. Decoder
+  parameters do not belong in a WM optimizer or WM checkpoint.
 
 - Route metrics through `BaseRunner.log_metrics`.
 - Use namespaces: `train/`, `eval/`, `env/`, `rollout/`, `replay_buffer/`,

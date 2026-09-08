@@ -46,6 +46,15 @@ def validate_cfg(cfg: DictConfig, *, world_size: int | None = None) -> DictConfi
     ``validation.require_existing_paths=true`` so config composition remains
     usable on machines without the full dataset mounted.
     """
+    for path in (
+        "world_model.decoded_visual_loss",
+        "ray_components.world_model.kwargs.decoded_visual_loss",
+    ):
+        if OmegaConf.select(cfg, path, default=None) is not None:
+            raise ValueError(
+                f"{path} is retired: WM supervision is latent-only; "
+                "train the decoder independently and decode only during no-grad evaluation"
+            )
     _validate_logger_backends(cfg)
     _validate_algorithm_routes(cfg)
     _validate_algorithm_hyperparameters(cfg)

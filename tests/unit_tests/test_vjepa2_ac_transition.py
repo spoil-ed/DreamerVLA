@@ -81,6 +81,76 @@ def test_frame_causal_mask_exposes_current_and_past_frames_only() -> None:
     assert torch.equal(mask, expected)
 
 
+def test_condition_film_preserves_old_initialization_and_opens_local_action_path() -> None:
+    torch.manual_seed(75)
+    baseline = _tiny_transition(layer_scale_init=0.01)
+    torch.manual_seed(75)
+    conditioned = _tiny_transition(layer_scale_init=0.01, condition_film_init_std=1e-3)
+    for key, value in baseline.state_dict().items():
+        torch.testing.assert_close(conditioned.state_dict()[key], value, rtol=0, atol=0)
+    assert conditioned.condition_film.weight.std() > 0
+    # Isolate the new path: visual outputs must still depend on local actions
+    # when the attention residual is removed in this synthetic test only.
+    with torch.no_grad():
+        for model in (baseline, conditioned):
+            for block in model.predictor_blocks:
+                block.attn_layer_scale.zero_()
+                block.mlp_layer_scale.zero_()
+    tokens, states = torch.randn(1, 3, 2, 5), torch.randn(1, 3, 3)
+    actions = torch.randn(1, 3, 2, requires_grad=True)
+    mask = torch.tensor([[[True, False]] * 3])
+    output = conditioned(tokens, actions, states, token_mask=mask)
+    output[:, 0].sum().backward()
+    assert actions.grad[:, 0].norm() > 0
+    assert actions.grad[:, 1:].count_nonzero() == 0
+    assert output[:, :, 1].count_nonzero() == 0
+    assert conditioned.condition_film.weight.grad.norm() > 0
+    changed = actions.detach().clone()
+    changed[:, 1:] += 10
+    torch.testing.assert_close(
+        output[:, 0], conditioned(tokens, changed, states, token_mask=mask)[:, 0], rtol=0, atol=0
+    )
+    torch.testing.assert_close(
+        baseline(tokens, actions, states), baseline(tokens, changed, states), rtol=0, atol=0
+    )
+
+
+def test_condition_film_is_a_new_adapter_and_roundtrips_strictly(tmp_path) -> None:
+    wm = _raw_state_wm(vjepa2_condition_film_init_std=1e-3)
+    groups = {
+        g["group_name"]: {id(p) for p in g["params"]} for g in wm.optimizer_parameter_groups()
+    }
+    for parameter in wm.vjepa2_transition.condition_film.parameters():
+        assert id(parameter) in groups["adapter"]
+    path = tmp_path / "wm.pt"
+    torch.save(wm.state_dict(), path)
+    other = _raw_state_wm(vjepa2_condition_film_init_std=1e-3)
+    other.load_state_dict(torch.load(path, weights_only=True), strict=True)
+    for key, value in wm.state_dict().items():
+        torch.testing.assert_close(other.state_dict()[key], value, rtol=0, atol=0)
+
+
+def test_conditioning_adapters_honor_explicit_input_embedding_freeze() -> None:
+    wm = _raw_state_wm(vjepa2_condition_film_init_std=1e-3, freeze_input_embeddings=True)
+    transition = wm.vjepa2_transition
+    for module in (
+        transition.input_adapter,
+        transition.action_input_adapter,
+        transition.action_encoder,
+        transition.state_input_adapter,
+        transition.state_encoder,
+        transition.condition_film,
+    ):
+        assert all(not parameter.requires_grad for parameter in module.parameters())
+    assert transition.output_adapter.weight.requires_grad
+
+
+@pytest.mark.parametrize("std", [0, -1, float("nan"), float("inf")])
+def test_condition_film_rejects_invalid_initialization(std) -> None:
+    with pytest.raises(ValueError, match="condition_film_init_std"):
+        _tiny_transition(condition_film_init_std=std)
+
+
 def _raw_state_wm(**overrides) -> ChunkAwareWorldModel:
     config = dict(
         model_dim=10,
@@ -95,36 +165,49 @@ def _raw_state_wm(**overrides) -> ChunkAwareWorldModel:
     return _tiny_chunk_wm(**config)
 
 
-def test_decoded_auxiliary_receives_all_chunks_and_preserves_rollout_interface() -> None:
-    class ReadoutLoss(torch.nn.Module):
-        def forward(self, prediction, target, anchor, **kwargs):
-            self.seen = (prediction, target, anchor)
-            return {"_loss": (prediction - target).square().mean()}
-
-    auxiliary = ReadoutLoss()
+def test_wm_rejects_image_supervision_and_has_no_decoder_state() -> None:
+    with pytest.raises(ValueError, match="latent-only"):
+        _raw_state_wm(decoded_visual_loss=torch.nn.Identity())
     wm = _raw_state_wm(
         chunk_rollout_chunks=2,
         chunk_rollout_loss_scale=0.2,
         grad_checkpoint=True,
         vjepa2_truncate_rollout_gradients=False,
-        decoded_visual_loss=auxiliary,
     )
+    assert not hasattr(wm, "decoded_visual_loss")
+    assert not any(key.startswith("decoded_visual_loss.") for key in wm.state_dict())
     batch = dict(
         obs_embedding=torch.randn(1, 6, 2, 4),
         actions=torch.randn(1, 6, 2),
         proprio=torch.randn(1, 6, 3),
     )
     result = wm.chunk_loss(batch)
-    prediction, target, anchor = auxiliary.seen
-    assert prediction.shape == target.shape == (1, 4, 2, 4)
-    assert prediction.requires_grad and not target.requires_grad and not anchor.requires_grad
-    torch.testing.assert_close(
-        anchor, wm._normalize_raw_vision_tokens(batch["obs_embedding"])[:, 1:2]
-    )
+    assert not any(key.startswith("decoded_") for key in result)
     result["_loss"].backward()
     assert wm.vjepa2_transition.output_adapter.weight.grad.norm() > 0
-    with pytest.raises(ValueError, match="full closed-loop"):
-        _raw_state_wm(decoded_visual_loss=ReadoutLoss())
+
+
+def test_pixel_data_cannot_change_wm_latent_loss_or_gradients() -> None:
+    wm = _raw_state_wm(vjepa2_truncate_rollout_gradients=False).eval()
+    batch = dict(
+        obs_embedding=torch.randn(1, 4, 2, 4),
+        actions=torch.randn(1, 4, 2),
+        proprio=torch.randn(1, 4, 3),
+        images=torch.randn(1, 4, 2, 3, 2, 2, requires_grad=True),
+    )
+    first = wm.chunk_loss(batch)["_loss"]
+    first.backward()
+    grad = wm.vjepa2_transition.output_adapter.weight.grad.clone()
+    assert batch["images"].grad is None
+    wm.zero_grad(set_to_none=True)
+    batch["images"] = torch.full_like(batch["images"], 1000, requires_grad=True)
+    second = wm.chunk_loss(batch)["_loss"]
+    second.backward()
+    torch.testing.assert_close(first, second, rtol=0, atol=0)
+    torch.testing.assert_close(
+        wm.vjepa2_transition.output_adapter.weight.grad, grad, rtol=0, atol=0
+    )
+    assert batch["images"].grad is None
 
 
 def test_raw_state_codec_preserves_absolute_values_and_ignores_padding() -> None:
@@ -137,6 +220,76 @@ def test_raw_state_codec_preserves_absolute_values_and_ignores_padding() -> None
     torch.testing.assert_close(wm._raw_proprio_from_obs_tokens(obs, mask), raw, rtol=0, atol=0)
     assert not list(wm.proprio_encoder.parameters())
     assert not list(wm.proprio_decoder.parameters())
+
+
+@pytest.mark.parametrize("checkpointed", [False, True])
+def test_teacher_forcing_uses_aligned_local_contexts_and_preserves_rollout(checkpointed) -> None:
+    torch.manual_seed(82)
+    wm = _raw_state_wm(
+        grad_checkpoint=checkpointed,
+        chunk_rollout_chunks=2,
+        chunk_rollout_loss_scale=0.2,
+        vjepa2_truncate_rollout_gradients=False,
+        vjepa2_teacher_forcing_loss_scale=1.0,
+        vjepa2_teacher_forcing_stride=2,
+    )
+    batch = dict(
+        obs_embedding=torch.randn(1, 6, 2, 4),
+        actions=torch.randn(1, 6, 2),
+        proprio=torch.randn(1, 6, 3),
+        prefix_attention_mask=torch.tensor([[[True, False]] * 6]),
+    )
+    seen = []
+    handle = wm.vjepa2_transition.register_forward_pre_hook(
+        lambda _module, args: seen.append(tuple(value.detach().clone() for value in args[:3]))
+    )
+    result = wm.chunk_loss(batch)
+    handle.remove()
+    assert result["teacher_forced_contexts"] == 3  # targets 2, 4, 5, including endpoint
+    assert len(seen) == 7  # four closed-loop steps plus three independent contexts
+    real = wm._normalize_raw_vision_tokens(batch["obs_embedding"])
+    for captured, t in zip(seen[4:], (2, 4, 5), strict=True):
+        torch.testing.assert_close(captured[0], real[:, t - 2 : t])
+        torch.testing.assert_close(captured[1], batch["actions"][:, t - 2 : t])
+        torch.testing.assert_close(captured[2], batch["proprio"][:, t - 2 : t])
+    wm.vjepa2_teacher_forcing_loss_scale = 0.0
+    control = wm.chunk_loss(batch)
+    expected = result["teacher_forced_prediction_loss"] + result["teacher_forced_proprio_loss"]
+    torch.testing.assert_close(result["_loss"] - control["_loss"], expected)
+    for key in ("hidden_mse", "rollout_mse", "rollout_proprio_reconstruction_loss"):
+        torch.testing.assert_close(result[key], control[key], rtol=0, atol=0)
+    result["_loss"].backward()
+    assert wm.vjepa2_transition.action_encoder.weight.grad.norm() > 0
+    assert torch.isfinite(wm.vjepa2_transition.output_adapter.weight.grad).all()
+
+
+def test_teacher_forcing_targets_cannot_leak_into_context_or_encoder_gradients() -> None:
+    wm = _raw_state_wm(vjepa2_teacher_forcing_loss_scale=1.0)
+    observations = torch.randn(1, 3, 2, 8, requires_grad=True)
+    actions = torch.randn(1, 3, 2)
+    proprio = torch.randn(1, 3, 3, requires_grad=True)
+    predictions = []
+    handle = wm.vjepa2_transition.register_forward_hook(
+        lambda _module, _args, value: predictions.append(value.detach().clone())
+    )
+    first = wm._teacher_forced_loss(observations, actions, proprio, None, None, 3)
+    changed = observations.detach().clone()
+    changed[:, 2] += 100
+    future_actions = actions.clone()
+    future_actions[:, 2] += 100
+    future_proprio = proprio.detach().clone()
+    future_proprio[:, 2] += 100
+    wm._teacher_forced_loss(changed, future_actions, future_proprio, None, None, 3)
+    handle.remove()
+    torch.testing.assert_close(predictions[0], predictions[1], rtol=0, atol=0)
+    first["_loss"].backward()
+    assert observations.grad is proprio.grad is None
+
+
+@pytest.mark.parametrize("scale,stride", [(-1, 5), (float("nan"), 5), (1, 0)])
+def test_teacher_forcing_rejects_invalid_configuration(scale, stride) -> None:
+    with pytest.raises(ValueError, match="teacher-forcing"):
+        _raw_state_wm(vjepa2_teacher_forcing_loss_scale=scale, vjepa2_teacher_forcing_stride=stride)
 
 
 @pytest.mark.parametrize("checkpointed", [False, True])

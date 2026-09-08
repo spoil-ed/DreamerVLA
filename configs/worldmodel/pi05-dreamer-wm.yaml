@@ -28,7 +28,6 @@ world_model:
   #   vjepa2_ac/pretrained  = AC architecture with the official predictor
   transition_type: original
   transition_init: random
-  decoded_visual_loss: null
   vjepa2_checkpoint_path: ${oc.env:VJEPA2_AC_CKPT,null}
   vjepa2_predictor_dim: 1024
   vjepa2_depth: 24
@@ -48,10 +47,13 @@ world_model:
   # Preserve clean-context one-step learning and supervise actual changes,
   # rather than accepting static decoded output on aggregate latent MSE alone.
   vjepa2_one_step_loss_scale: 1.0
+  vjepa2_teacher_forcing_loss_scale: 0.0
+  vjepa2_teacher_forcing_stride: 5
   vjepa2_temporal_difference_loss_scale: 1.0
   # New nonzero LayerScale adapters bound transferred residual branches while
   # the PI0.5 input adapter aligns. Original QKV/MLP/LN tensors stay untouched.
   vjepa2_layer_scale_init: 0.01
+  vjepa2_condition_film_init_std: null
   # π0.5 emits three genuine 16x16 image-patch groups. Keep their separate
   # grids and learn a view embedding instead of inventing one 768-token grid.
   vjepa2_spatial_grid: ${task.observation_latent.image_patch_grid}
@@ -69,7 +71,6 @@ ray_components:
     kwargs:
       transition_type: ${world_model.transition_type}
       transition_init: ${world_model.transition_init}
-      decoded_visual_loss: ${world_model.decoded_visual_loss}
       vjepa2_checkpoint_path: ${world_model.vjepa2_checkpoint_path}
       vjepa2_predictor_dim: ${world_model.vjepa2_predictor_dim}
       vjepa2_depth: ${world_model.vjepa2_depth}
@@ -83,8 +84,11 @@ ray_components:
       vjepa2_proprio_representation: ${world_model.vjepa2_proprio_representation}
       vjepa2_proprio_loss_scale: ${world_model.vjepa2_proprio_loss_scale}
       vjepa2_one_step_loss_scale: ${world_model.vjepa2_one_step_loss_scale}
+      vjepa2_teacher_forcing_loss_scale: ${world_model.vjepa2_teacher_forcing_loss_scale}
+      vjepa2_teacher_forcing_stride: ${world_model.vjepa2_teacher_forcing_stride}
       vjepa2_temporal_difference_loss_scale: ${world_model.vjepa2_temporal_difference_loss_scale}
       vjepa2_layer_scale_init: ${world_model.vjepa2_layer_scale_init}
+      vjepa2_condition_film_init_std: ${world_model.vjepa2_condition_film_init_std}
       vjepa2_spatial_grid: ${world_model.vjepa2_spatial_grid}
       vjepa2_spatial_group_count: ${world_model.vjepa2_spatial_group_count}
       vjepa2_pretrained_grid_size: ${world_model.vjepa2_pretrained_grid_size}

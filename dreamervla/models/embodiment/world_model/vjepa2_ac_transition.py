@@ -363,6 +363,7 @@ class VJEPA2ACTransition(nn.Module):
         residual_output_init_std: float = 1.0e-3,
         state_residual_prediction: bool = False,
         layer_scale_init: float | None = None,
+        condition_film_init_std: float | None = None,
     ) -> None:
         super().__init__()
         self.input_dim = int(input_dim)
@@ -463,6 +464,19 @@ class VJEPA2ACTransition(nn.Module):
                     self.state_output_adapter.weight, std=self.residual_output_init_std
                 )
                 self.state_output_adapter.bias.zero_()
+
+        # Opt-in conditioning inside the NEW input adapter. Initialize after
+        # existing modules so disabled/enabled ablations share all old weights.
+        # Original action/state tokens and every pretrained block remain intact.
+        self.condition_film: nn.Linear | None = None
+        if condition_film_init_std is not None:
+            if not math.isfinite(condition_film_init_std) or condition_film_init_std <= 0:
+                raise ValueError("condition_film_init_std must be finite and positive or null")
+            self.condition_film = nn.Linear(
+                self.action_dim + self.state_dim, 2 * self.predictor_dim
+            )
+            nn.init.trunc_normal_(self.condition_film.weight, std=condition_film_init_std)
+            nn.init.zeros_(self.condition_film.bias)
 
     def _validate_spatial_grid(
         self, spatial_grid: tuple[int, int] | None
@@ -704,6 +718,9 @@ class VJEPA2ACTransition(nn.Module):
             token_mask = token_mask.to(device=tokens.device, dtype=torch.bool)
 
         visual = self.input_adapter(tokens)
+        if self.condition_film is not None:
+            scale, shift = self.condition_film(torch.cat([actions, states], dim=-1)).chunk(2, -1)
+            visual = visual * (1 + scale.unsqueeze(2)) + shift.unsqueeze(2)
         if self.spatial_group_embedding is not None:
             patches_per_group = self.spatial_grid[0] * self.spatial_grid[1]
             group_ids = torch.arange(self.token_count, device=visual.device) // patches_per_group

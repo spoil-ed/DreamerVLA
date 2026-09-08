@@ -77,11 +77,9 @@ def _named_grad_norm(module: nn.Module, name_fragment: str) -> float:
 
 
 _WM_TRANSITION_DIAGNOSTIC_KEYS = (
-    "decoded_visual_loss",
-    "decoded_reconstruction_ratio",
-    "decoded_temporal_error_ratio",
-    "decoded_motion_ratio",
-    "decoded_pixel_mse",
+    "teacher_forced_prediction_loss",
+    "teacher_forced_proprio_loss",
+    "teacher_forced_contexts",
     "one_step_prediction_loss",
     "temporal_difference_loss",
     "rollout_proprio_reconstruction_loss",

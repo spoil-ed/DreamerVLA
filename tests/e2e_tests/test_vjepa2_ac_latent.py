@@ -1,6 +1,6 @@
-"""Opt-in real-latent full-rollout update, DDP and frozen-readout resume checks.
+"""Opt-in real-latent latent-only full-rollout update, DDP and strict resume checks.
 
-May run under ``torchrun --nproc_per_node=2 -m pytest`` for the production DDP
+May run under ``torchrun --nproc_per_node=8 -m pytest`` for the production DDP
 static-graph contract. WM_ENCODED_SMOKE_CACHE selects a previously verified cache.
 """
 
@@ -16,12 +16,18 @@ from hydra.utils import instantiate
 from torch.nn.parallel import DistributedDataParallel
 
 pytestmark = pytest.mark.skipif(
-    os.environ.get("RUN_VJEPA2_DECODED_SMOKE") != "1",
-    reason="Requires real AC/decoder checkpoints, encoded cache and CUDA",
+    os.environ.get("RUN_VJEPA2_LATENT_SMOKE") != "1",
+    reason="Requires real AC checkpoint, encoded cache and eight CUDA GPUs",
 )
 
 
-def test_full_rollout_frozen_decoder_update_and_reload(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "experiment",
+    [
+        "wm_pi05_vjepa2_latent_train",
+    ],
+)
+def test_latent_only_full_rollout_update_and_reload(tmp_path: Path, experiment: str) -> None:
     from dreamervla.algorithms.dreamervla import world_model_pretrain_step
     from dreamervla.config_resolvers import register_dreamervla_resolvers
     from dreamervla.diagnostics.compare_wm_libero_rollout import _load_trajectory
@@ -30,7 +36,8 @@ def test_full_rollout_frozen_decoder_update_and_reload(tmp_path: Path) -> None:
     torch.set_num_threads(4)
     torch.manual_seed(7)
     register_dreamervla_resolvers()
-    distributed = int(os.environ.get("WORLD_SIZE", "1")) > 1
+    assert int(os.environ.get("WORLD_SIZE", "1")) == 8, "Training smoke requires eight GPUs"
+    distributed = True
     rank = int(os.environ.get("LOCAL_RANK", "0"))
     torch.cuda.set_device(rank)
     device = torch.device("cuda", rank)
@@ -42,7 +49,7 @@ def test_full_rollout_frozen_decoder_update_and_reload(tmp_path: Path) -> None:
         cfg = compose(
             config_name="train",
             overrides=[
-                "experiment=wm_pi05_vjepa2_decoded_train",
+                f"experiment={experiment}",
                 "task=pi05_libero_object",
                 "profile=sinfra_pi05_object",
                 "optim.world_model.lr_warmup_steps=1",
@@ -54,19 +61,14 @@ def test_full_rollout_frozen_decoder_update_and_reload(tmp_path: Path) -> None:
     report = wm.pretrained_load_report
     assert report.loaded_parameters == 302327808
     assert report.pretrained_parameter_ratio > 0.98
-    readout_before = {
-        key: value.cpu().clone() for key, value in wm.decoded_visual_loss.state_dict().items()
-    }
+    assert not hasattr(wm, "decoded_visual_loss")
+    assert not any(key.startswith("decoded_visual_loss.") for key in wm.state_dict())
     wrapped = (
         DistributedDataParallel(wm, device_ids=[rank], static_graph=True, broadcast_buffers=False)
         if distributed
         else wm
     )
     optimizer = build_optimizer(wrapped, cfg.optim.world_model)
-    frozen_ids = {id(p) for p in wm.decoded_visual_loss.parameters()}
-    assert not frozen_ids.intersection(
-        id(p) for group in optimizer.param_groups for p in group["params"]
-    )
     cache = torch.load(os.environ["WM_ENCODED_SMOKE_CACHE"], map_location="cpu", weights_only=True)
     index = rank % len(cache["episodes"])
     traj = _load_trajectory(
@@ -84,15 +86,8 @@ def test_full_rollout_frozen_decoder_update_and_reload(tmp_path: Path) -> None:
         metrics = world_model_pretrain_step(
             None, wrapped, optimizer, batch, device, cfg.optim, metrics_mode="loss_tensor"
         )
-        assert all(
-            torch.isfinite(metrics[key]) for key in ("loss", "grad_norm", "decoded_visual_loss")
-        )
-        assert not wm.decoded_visual_loss.decoder.training
-        assert all(p.grad is None for p in wm.decoded_visual_loss.parameters())
-    for key, before in readout_before.items():
-        torch.testing.assert_close(
-            wm.decoded_visual_loss.state_dict()[key].cpu(), before, rtol=0, atol=0
-        )
+        assert all(torch.isfinite(metrics[key]) for key in ("loss", "grad_norm"))
+        assert not any(key.startswith("decoded_") for key in metrics)
     if distributed:
         value = wm.vjepa2_transition.output_adapter.weight.detach().clone()
         torch.distributed.broadcast(value, src=0)

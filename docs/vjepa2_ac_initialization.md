@@ -107,8 +107,8 @@ warmup/alignment to 5 updates to exercise unfreezing; production retains its sch
 ## Run and reproduce
 
 For the original three-way ablation, start a fresh WM from official pretrained weights,
-not an old collapsed WM checkpoint. The separate decoded-supervision continuation
-experiment described below deliberately uses an explicit weights-only warm start.
+not an old collapsed WM checkpoint. The latent-only full-gradient recipe below
+also allows an explicit weights-only warm start.
 Old runs remain readable with their own saved configs; raw-state/LayerScale training
 must not silently resume a legacy architecture. Production keeps RGB streaming,
 frozen PI0.5, global batch 128 on 8 GPUs, H=3, K=10, four chunks, BF16, and AdamW.
@@ -140,90 +140,113 @@ JAX_PLATFORMS=cpu RUN_VJEPA2_AC_SMOKE=1 VJEPA2_AC_CKPT=/path/to/vjepa2-ac-vitg.p
 JAX_PLATFORMS=cpu VJEPA2_AC_CKPT=/path/to/vjepa2-ac-vitg.pt \
   .venv-pi05/bin/python -m dreamervla.diagnostics.vjepa2_ac_state_smoke \
   --output-dir /path/to/new-probe --decoder-ckpt /path/to/frozen-decoder.ckpt \
+  --wandb-mode online --encoded-cache /path/to/verified-cache.pt \
   --steps 40 --override optim.world_model.lr_warmup_steps=5 \
   --override optim.world_model.adapter_alignment_steps=5 \
   --override optim.world_model.pretrained_backbone_warmup_steps=5
 ```
 
-## Closed-loop follow-up: frozen visual supervision (2026-09-08)
+## Supervision boundary (2026-09-08, supersedes decoded-loss experiments)
 
-The earlier numerical/state-feedback fixes did **not** establish absence of visual
-collapse. At production step 1000, episodes 3/7 still had only 7.64%/6.45% of the
-encode→decode frame-to-frame motion, despite declining latent MSE. Feeding oracle
-proprio or LayerNorm-normalizing predicted feedback did not restore motion.
-Teacher-forced real visual history restored apparent motion, but that is not an
-autoregressive prediction result: fresh observations supply most of that motion.
+WM training aligns its predicted latent to the **frozen PI0.5 encoder's real
+latent**, with configured latent temporal-difference and raw proprio objectives.
+There is no decoded reconstruction or decoded temporal loss. Freezing decoder
+parameters alone was insufficient: the former implementation still differentiated
+through its decoder into the WM. That training path and its experiment recipes
+have been removed.
 
-Paired probes warm-started from the exact same step-1000 weights and used the same
-episode, update count and compressed 5-step schedule. Full 40-step gradients alone
-improved latent error but did not restore decoded motion. An extra latent
-displacement/cosine objective also failed the motion comparison and was removed.
+The active full-gradient recipe is `wm_pi05_vjepa2_latent_train`: pretrained AC,
+H=3, K=10, four closed-loop chunks, no recurrent detach, global batch 64 on eight
+GPUs (8/rank), unchanged 250-step adapter warmup / 500-step alignment / 500-step
+backbone warmup and cosine schedule. It does not require a decoder checkpoint.
+The existing `wm_pi05_collected_train` original/random/pretrained ablation remains
+available with its own default batch and truncation policy.
 
-The new **opt-in** `wm_pi05_vjepa2_decoded_train` recipe adds:
+An optional, default-disabled multi-position teacher-forced **latent** objective
+(`vjepa2_teacher_forcing_loss_scale`, `vjepa2_teacher_forcing_stride`) uses only
+real past contexts and next-latent/state targets. It never resets the closed-loop
+rollout. The optional condition-FiLM adapter is also disabled by default; it has
+not established a quality improvement and is not enabled by the latent recipe.
 
-- Full recurrent gradients over all four chunks, using activation recomputation.
-- A checkpoint/Hydra-selected frozen pixel decoder. Its weights stay in eval mode,
-  out of optimizer groups, and are included in strict WM checkpoint save/reload.
-- Motion-region pixel reconstruction relative to the real initial context and
-  **signed temporal-difference error**, both targeting encode→decode, not raw RGB.
-  A persistence prediction costs one for each relative objective on moving clips;
-  stationary clips do not reward invented motion. Missing views are masked.
-- Default auxiliary scale 0.5, temporal scale 1, every fifth future frame (including
-  the final frame), decoder microbatch 2, and an energy floor for nearly static clips.
-- Separate W&B metrics `decoded_reconstruction_ratio`,
-  `decoded_temporal_error_ratio`, `decoded_motion_ratio`, `decoded_pixel_mse`, and
-  `decoded_visual_loss`. The training motion ratio uses sparse, anchor-inclusive
-  RMS differences; it must not be confused with dense-video mean-absolute motion.
+### Separate decoder and evaluation
 
-The encoder, latent representation, pretrained Transformer tensors, raw-state
-supervision and rollout API are unchanged. Targets are used only in the loss, never
-fed back as model history. Existing A/B/C recipes retain their previous behavior.
-Global batch is 64 (8 per rank on 8 GPUs) in the new recipe for full-gradient memory
-headroom; the old recipe remains 128. The runner does not implement gradient
-accumulation. FP32 parameters/BF16 compute and production LR schedule are retained.
-Local production-entry checks measured approximately 9.96/17.86 GiB allocated peaks
-for batches 2/4, excluding the separately frozen PI0.5 encoder.
-
-### What the real-data checks do and do not show
-
-All rows below use the same frozen decoder and 40-step rollout. Episode 3 receives
-the probe updates; episode 7 does not. **Both may have occurred in the step-1000
-pretraining data, so neither result is a dataset-holdout generalization estimate.**
-
-| Probe | Pixel MSE, ep. 3 / 7 | Dense-video motion/reference, ep. 3 / 7 |
-| --- | --- | --- |
-| Step-1000 starting point | 0.01434 / 0.01534 | 7.64% / 6.45% |
-| Existing objective, 60 extra updates | 0.01309 / 0.01405 | 11.42% / 12.07% |
-| Full-gradient decoded+temporal prototype, 60 updates | 0.00469 / 0.00788 | 27.80% / 22.51% |
-| Integrated production objective, 20 updates | 0.00814 / 0.00803 | 15.60% / 14.92% |
-
-This is a meaningful pixel-error improvement, **not a claim of complete collapse
-resolution**. The decoded wrist view remains blurry, dense motion is too small,
-and correct-vs-reversed future-action advantage is weak. The 60-update prototype
-and integrated 20-update result are distinct runs, not an apples-to-apples quality
-comparison. All auxiliary/total losses are incomparable with the old total loss.
-Continue evaluating correct-vs-shuffled actions, late-horizon motion and pixel
-error on additional trajectories; do not accept motion amplitude alone as success.
-
-Artifacts are under `/jfs/oss-import/xinglei/pi05_outputs/wm_state_feedback_smoke/`:
-`20260908_control_60`, `20260908_decoded_temporal_60`, and
-`20260908_decoded_production_20`. Videos show encode→decode / starting rollout /
-updated rollout. The frozen baseline snapshot is `displacement_init_1000.ckpt`.
-The artifact name records the first attempted ablation, not the final objective.
+- Train `pi05_pixel_decoder_collected` separately on real encoded observations
+  and their images. The encoder is frozen/eval; the producer runs under no-grad
+  and returns detached tensors. Only decoder parameters enter its optimizer.
+- WM state/optimizer do not contain any pixel decoder. The legacy constructor
+  keyword accepts null only; non-null image supervision is explicitly rejected.
+- `DecodedRolloutMetrics` is an independent evaluation module with no-grad on
+  **both** prediction and reference decoding. It returns metrics, never `_loss`.
+  Videos compare rollout→decode against encode→decode, not raw images.
+- Historical WM checkpoints containing a frozen readout remain usable for
+  evaluation and weights-only initialization: discard only
+  `decoded_visual_loss.*`, report every discarded key/count, and validate the
+  transition. Do not resume their old image-loss configuration/optimizer as a
+  latent-only run. No historical checkpoints or videos were deleted.
 
 ```bash
-# New experiment. Omit WM_INIT_CKPT to start from the official AC checkpoint.
-export VJEPA2_AC_CKPT=/path/to/vjepa2-ac-vitg.pt
-export WM_PIXEL_DECODER_CKPT=/path/to/decoder-run/checkpoints/latest.ckpt
-export WM_INIT_CKPT=/path/to/compatible-wm/checkpoints/latest.ckpt
-.venv-pi05/bin/python -m dreamervla.launchers.train \
-  --config wm_pi05_vjepa2_decoded_train task=pi05_libero_object profile=sinfra_pi05_object
+# Latent-only WM, eight GPUs by default. Fresh pretrained AC plus adapters:
+JAX_PLATFORMS=cpu VJEPA2_AC_CKPT=/path/to/vjepa2-ac-vitg.pt \
+  .venv-pi05/bin/python -m dreamervla.launchers.train \
+  --config wm_pi05_vjepa2_latent_train task=pi05_libero_object profile=sinfra_pi05_object
 
-# Real decoded/full-gradient regression; optional torchrun tests DDP static_graph.
-JAX_PLATFORMS=cpu RUN_VJEPA2_DECODED_SMOKE=1 \
-WM_ENCODED_SMOKE_CACHE=/path/to/verified-encoded-cache.pt \
-  .venv-pi05/bin/python -m pytest tests/e2e_tests/test_vjepa2_ac_decoded.py -q -s
+# Independent decoder, same frozen encoder representation, eight GPUs:
+JAX_PLATFORMS=cpu .venv-pi05/bin/python -m dreamervla.launchers.train \
+  --config pi05_pixel_decoder_collected pixel_decoder=pi05-prefix-spatial
+
+# Real latent-only pretrained forward/backward, unfreezing, strict reload:
+RUN_VJEPA2_LATENT_SMOKE=1 WM_ENCODED_SMOKE_CACHE=/path/to/verified-cache.pt \
+VJEPA2_AC_CKPT=/path/to/vjepa2-ac-vitg.pt JAX_PLATFORMS=cpu NCCL_NVLS_ENABLE=0 \
+  .venv-pi05/bin/python -m torch.distributed.run \
+  --master-addr=127.0.0.1 --master-port=29517 --nproc-per-node=8 \
+  -m pytest tests/e2e_tests/test_vjepa2_ac_latent.py -q -s
 ```
 
-Online W&B is supplied by the user-selected credential file at launch; no secrets
-are embedded in code, configuration, documentation or checkpoints.
+The bounded diagnostic `vjepa2_ac_state_smoke` also defaults to eight GPUs,
+requires `--wandb-mode online` (or explicitly offline) and a verified
+`--encoded-cache`, and loads `--decoder-ckpt` only as an independent evaluator.
+For online cluster runs the selected credential file is
+`/jfs/oss-import/xinglei/.secrets/wandb.env`; keep the existing mujoco image and
+direct JFS code mount. Its fixed training clip is replicated across ranks; the
+second clip is excluded from these probe updates but may occur in the warm-start
+checkpoint's original dataset. This is not a dataset-held-out generalization test.
+
+### Why the supervision change is not a claim that collapse is solved
+
+Before any image loss was introduced, the encoder was already frozen. Low
+autoregressive motion is therefore **prediction convergence / motion attenuation**,
+not collapse of a jointly trained encoder. At the former step-1000 checkpoint,
+dense decoded motion was only about 7.6% / 6.5% of the real-latent reference on
+episodes 3/7. Full latent gradients alone improved latent MSE in short probes but
+did not establish recovery of motion.
+
+The now-retired image-loss experiments increased motion but did not reliably
+improve correct action-conditioned dynamics. In a matched 60-update fixed-clip
+control, cross-task latent MSE worsened from 0.299→0.323 and 0.302→0.322;
+decoded motion direction remained near zero or negative. These historical
+results are evidence against interpreting “more motion” as success, not validation
+of the new latent-only boundary.
+
+Gradient measurements on the shared output adapter at the same initial state
+also showed decoded auxiliary gradient norm ~13.87 versus latent/state ~0.90.
+Removing that auxiliary removes this source of gradient domination; it cannot
+retroactively explain or solve the pre-existing latent-only prediction problem.
+Acceptance still requires matched-step closed-loop latent error, latent delta,
+proprio, changed-action controls, and independent decoded-video comparisons on
+multiple trajectories.
+
+### Boundary regression evidence
+
+The eight-rank real-checkpoint test passed on every rank in Sinfra job **1722**
+(same mujoco image, direct JFS). It loaded 302,327,808 official predictor parameters,
+ran three finite full-rollout updates including adapter/backbone schedule phases,
+verified identical synchronized output-adapter weights, and strictly reloaded WM
+plus optimizer. Peak allocation was about 9.18 GiB/rank for its one-trajectory
+microbatch; this is not the production batch-8/rank memory requirement.
+
+The accompanying 20-update latent-only diagnostic is recorded in W&B run
+[`2i98cz6g`](https://wandb.ai/zangxingawa-fudan-university-school-of-management/dreamervla/runs/2i98cz6g),
+with artifacts under
+`/jfs/oss-import/xinglei/pi05_outputs/wm_state_feedback_smoke/20260908_ddp_latent_only_20`.
+Its compressed schedule and fixed clip establish execution/gradient boundaries,
+not production convergence or recovery from motion attenuation.

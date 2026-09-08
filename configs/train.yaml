@@ -2,6 +2,7 @@
 defaults:
   - _self_
   - run: default
+  - launch: ddp
   - VLA: null
   - worldmodel: null
   - pixel_decoder: null
@@ -10,7 +11,6 @@ defaults:
   - dreamervla: null
   - evaluation: null
   - logger: tensorboard_wandb
-  - launch: null
   - experiment: null
   # Profiles load after experiments so their explicit budgets take precedence.
   - profile: production
