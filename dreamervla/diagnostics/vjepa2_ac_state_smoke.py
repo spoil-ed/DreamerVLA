@@ -41,6 +41,8 @@ def main() -> None:
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--override", action="append", default=[])
     parser.add_argument("--encoded-cache", type=Path)
+    parser.add_argument("--init-checkpoint", type=Path, help="Weights-only warm start; NOT resume")
+    parser.add_argument("--experiment", default="wm_pi05_collected_train")
     args = parser.parse_args()
     if args.steps < 1:
         raise ValueError("steps must be positive")
@@ -57,7 +59,7 @@ def main() -> None:
         cfg = compose(
             config_name="train",
             overrides=[
-                "experiment=wm_pi05_collected_train",
+                f"experiment={args.experiment}",
                 "task=pi05_libero_object",
                 "profile=sinfra_pi05_object",
                 "world_model.transition_type=vjepa2_ac",
@@ -122,6 +124,21 @@ def main() -> None:
                 args.encoded_cache,
             )
     wm = instantiate(cfg.world_model).to(device)
+    if args.init_checkpoint is not None:
+        initial_state = torch.load(
+            args.init_checkpoint, map_location="cpu", weights_only=False, mmap=True
+        )
+        state = initial_state["state_dicts"]["world_model"]
+        fresh = wm.state_dict()
+        added = set(fresh) - set(state)
+        if any(not key.startswith("decoded_visual_loss.") for key in added):
+            raise ValueError(f"Warm start is missing transition parameters: {sorted(added)}")
+        # The readout was independently loaded strictly from its own checkpoint.
+        # Every transition tensor must match exactly; only this new frozen
+        # auxiliary component may be absent from the older WM checkpoint.
+        print(json.dumps({"new_frozen_readout_keys": sorted(added)}), flush=True)
+        wm.load_state_dict({**{key: fresh[key] for key in added}, **state}, strict=True)
+        del initial_state
     optimizer = build_optimizer(wm, cfg.optim.world_model)
     batches = [
         dict(
@@ -133,6 +150,13 @@ def main() -> None:
         for traj, enc in zip(trajectories, encoded, strict=True)
     ]
     results = {"episodes": [r["episode_id"] for r in selected], "training": [], "evaluations": []}
+    results["init_checkpoint"] = None if args.init_checkpoint is None else str(args.init_checkpoint)
+    results["evaluation_scope"] = (
+        "Second episode is excluded only from THIS probe's updates; a warm-start "
+        "checkpoint may already have trained on both episodes. Not a dataset holdout."
+    )
+    decoder = _load_pixel_decoder(args.decoder_ckpt, device)
+    decoder.requires_grad_(False)
     if wm.pretrained_load_report is not None:
         results["pretrained_load_report"] = asdict(wm.pretrained_load_report)
 
@@ -150,10 +174,14 @@ def main() -> None:
                     proprio=batch["proprio"][0],
                     attention_mask=batch["prefix_attention_mask"][0],
                 )
+                changed_actions = batch["actions"][0].clone()
+                start = wm.num_hist - 1
+                stop = start + wm.chunk_size * cfg.world_model.chunk_rollout_chunks
+                changed_actions[start:stop] = changed_actions[start:stop].flip(0)
                 changed, _ = _rollout_closed_loop(
                     wm,
                     batch["obs_embedding"][0],
-                    batch["actions"][0].flip(0),
+                    changed_actions,
                     cfg.world_model.chunk_rollout_chunks,
                     proprio=batch["proprio"][0],
                     attention_mask=batch["prefix_attention_mask"][0],
@@ -168,6 +196,12 @@ def main() -> None:
                 step=step,
                 split="train" if index == 0 else "held_out",
                 visual_mse=(visual[valid] - target_visual[valid]).square().mean().item(),
+                changed_action_visual_mse=(
+                    changed[..., : wm.token_dim].float()[valid] - target_visual[valid]
+                )
+                .square()
+                .mean()
+                .item(),
                 persistence_mse=(persistence.expand_as(visual)[valid] - target_visual[valid])
                 .square()
                 .mean()
@@ -202,6 +236,11 @@ def main() -> None:
         if not torch.isfinite(loss):
             raise RuntimeError(f"Nonfinite loss at step {step}")
         loss.backward()
+        if wm.decoded_visual_loss is not None:
+            assert not wm.decoded_visual_loss.decoder.training
+            assert all(
+                p.grad is None and not p.requires_grad for p in wm.decoded_visual_loss.parameters()
+            )
         state_grad = wm.vjepa2_transition.state_output_adapter.weight.grad
         if state_grad is None or not torch.isfinite(state_grad).all() or state_grad.norm() == 0:
             raise RuntimeError(f"State prediction lost its training signal at step {step}")
@@ -220,6 +259,7 @@ def main() -> None:
             grad_norm=grad_norm.item(),
             visual_motion_ratio=output["visual_motion_ratio"].item(),
             visual_delta_mse=output["visual_delta_mse"].item(),
+            **{key: value.item() for key, value in output.items() if key.startswith("decoded_")},
             **schedule,
         )
         results["training"].append(metrics)
@@ -235,7 +275,6 @@ def main() -> None:
         },
         root / "checkpoints" / "latest.ckpt",
     )
-    decoder = _load_pixel_decoder(args.decoder_ckpt, device)
     for i, batch in enumerate(batches):
         target = wm._normalize_raw_vision_tokens(batch["obs_embedding"])[0, wm.num_hist :].cpu()
         videos = [
@@ -258,6 +297,12 @@ def main() -> None:
                 reference=motion[0],
                 initial=motion[1],
                 trained=motion[2],
+                initial_pixel_mse=float(
+                    np.square((videos[1].astype(float) - videos[0]) / 255).mean()
+                ),
+                trained_pixel_mse=float(
+                    np.square((videos[2].astype(float) - videos[0]) / 255).mean()
+                ),
             )
         )
     (root / "results.json").write_text(json.dumps(results, indent=2) + "\n")

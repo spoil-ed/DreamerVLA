@@ -28,6 +28,7 @@ world_model:
   #   vjepa2_ac/pretrained  = AC architecture with the official predictor
   transition_type: original
   transition_init: random
+  decoded_visual_loss: null
   vjepa2_checkpoint_path: ${oc.env:VJEPA2_AC_CKPT,null}
   vjepa2_predictor_dim: 1024
   vjepa2_depth: 24
@@ -68,6 +69,7 @@ ray_components:
     kwargs:
       transition_type: ${world_model.transition_type}
       transition_init: ${world_model.transition_init}
+      decoded_visual_loss: ${world_model.decoded_visual_loss}
       vjepa2_checkpoint_path: ${world_model.vjepa2_checkpoint_path}
       vjepa2_predictor_dim: ${world_model.vjepa2_predictor_dim}
       vjepa2_depth: ${world_model.vjepa2_depth}

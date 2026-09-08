@@ -100,6 +100,7 @@ wandb beta sync --live /path/to/run_root/wandb
 | `collect_rollouts_pi05_spatial` | Two-GPU π0.5 SFT collection of 100 RGB-only trajectories for each LIBERO-Spatial task |
 | `pi05_libero_sft` | RLinf-aligned π0.5 flow-matching SFT on `physical-intelligence/libero` |
 | `wm_pi05_collected_train` | DDP Chunk-WM warmup with online frozen π0.5 prefixes |
+| `wm_pi05_vjepa2_decoded_train` | Opt-in AC full-rollout gradients plus frozen encode→decode reconstruction/temporal supervision; requires `WM_PIXEL_DECODER_CKPT` |
 | `wm_pi05_prefix_input_train` | DDP visual-only WM over native pre-PaliGemma `[968,2048]` prefix inputs |
 | `pi05_pixel_decoder` | DDP pixel reconstruction from frozen π0.5 prefix tokens |
 | `pi05_pixel_decoder_collected` | DDP baseline/spatial decoder training over all 2,000 collected Object trajectories |

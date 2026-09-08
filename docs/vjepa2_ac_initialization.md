@@ -106,7 +106,9 @@ warmup/alignment to 5 updates to exercise unfreezing; production retains its sch
 
 ## Run and reproduce
 
-Start a fresh WM from official pretrained weights, not an old collapsed WM checkpoint.
+For the original three-way ablation, start a fresh WM from official pretrained weights,
+not an old collapsed WM checkpoint. The separate decoded-supervision continuation
+experiment described below deliberately uses an explicit weights-only warm start.
 Old runs remain readable with their own saved configs; raw-state/LayerScale training
 must not silently resume a legacy architecture. Production keeps RGB streaming,
 frozen PI0.5, global batch 128 on 8 GPUs, H=3, K=10, four chunks, BF16, and AdamW.
@@ -141,6 +143,86 @@ JAX_PLATFORMS=cpu VJEPA2_AC_CKPT=/path/to/vjepa2-ac-vitg.pt \
   --steps 40 --override optim.world_model.lr_warmup_steps=5 \
   --override optim.world_model.adapter_alignment_steps=5 \
   --override optim.world_model.pretrained_backbone_warmup_steps=5
+```
+
+## Closed-loop follow-up: frozen visual supervision (2026-09-08)
+
+The earlier numerical/state-feedback fixes did **not** establish absence of visual
+collapse. At production step 1000, episodes 3/7 still had only 7.64%/6.45% of the
+encode→decode frame-to-frame motion, despite declining latent MSE. Feeding oracle
+proprio or LayerNorm-normalizing predicted feedback did not restore motion.
+Teacher-forced real visual history restored apparent motion, but that is not an
+autoregressive prediction result: fresh observations supply most of that motion.
+
+Paired probes warm-started from the exact same step-1000 weights and used the same
+episode, update count and compressed 5-step schedule. Full 40-step gradients alone
+improved latent error but did not restore decoded motion. An extra latent
+displacement/cosine objective also failed the motion comparison and was removed.
+
+The new **opt-in** `wm_pi05_vjepa2_decoded_train` recipe adds:
+
+- Full recurrent gradients over all four chunks, using activation recomputation.
+- A checkpoint/Hydra-selected frozen pixel decoder. Its weights stay in eval mode,
+  out of optimizer groups, and are included in strict WM checkpoint save/reload.
+- Motion-region pixel reconstruction relative to the real initial context and
+  **signed temporal-difference error**, both targeting encode→decode, not raw RGB.
+  A persistence prediction costs one for each relative objective on moving clips;
+  stationary clips do not reward invented motion. Missing views are masked.
+- Default auxiliary scale 0.5, temporal scale 1, every fifth future frame (including
+  the final frame), decoder microbatch 2, and an energy floor for nearly static clips.
+- Separate W&B metrics `decoded_reconstruction_ratio`,
+  `decoded_temporal_error_ratio`, `decoded_motion_ratio`, `decoded_pixel_mse`, and
+  `decoded_visual_loss`. The training motion ratio uses sparse, anchor-inclusive
+  RMS differences; it must not be confused with dense-video mean-absolute motion.
+
+The encoder, latent representation, pretrained Transformer tensors, raw-state
+supervision and rollout API are unchanged. Targets are used only in the loss, never
+fed back as model history. Existing A/B/C recipes retain their previous behavior.
+Global batch is 64 (8 per rank on 8 GPUs) in the new recipe for full-gradient memory
+headroom; the old recipe remains 128. The runner does not implement gradient
+accumulation. FP32 parameters/BF16 compute and production LR schedule are retained.
+Local production-entry checks measured approximately 9.96/17.86 GiB allocated peaks
+for batches 2/4, excluding the separately frozen PI0.5 encoder.
+
+### What the real-data checks do and do not show
+
+All rows below use the same frozen decoder and 40-step rollout. Episode 3 receives
+the probe updates; episode 7 does not. **Both may have occurred in the step-1000
+pretraining data, so neither result is a dataset-holdout generalization estimate.**
+
+| Probe | Pixel MSE, ep. 3 / 7 | Dense-video motion/reference, ep. 3 / 7 |
+| --- | --- | --- |
+| Step-1000 starting point | 0.01434 / 0.01534 | 7.64% / 6.45% |
+| Existing objective, 60 extra updates | 0.01309 / 0.01405 | 11.42% / 12.07% |
+| Full-gradient decoded+temporal prototype, 60 updates | 0.00469 / 0.00788 | 27.80% / 22.51% |
+| Integrated production objective, 20 updates | 0.00814 / 0.00803 | 15.60% / 14.92% |
+
+This is a meaningful pixel-error improvement, **not a claim of complete collapse
+resolution**. The decoded wrist view remains blurry, dense motion is too small,
+and correct-vs-reversed future-action advantage is weak. The 60-update prototype
+and integrated 20-update result are distinct runs, not an apples-to-apples quality
+comparison. All auxiliary/total losses are incomparable with the old total loss.
+Continue evaluating correct-vs-shuffled actions, late-horizon motion and pixel
+error on additional trajectories; do not accept motion amplitude alone as success.
+
+Artifacts are under `/jfs/oss-import/xinglei/pi05_outputs/wm_state_feedback_smoke/`:
+`20260908_control_60`, `20260908_decoded_temporal_60`, and
+`20260908_decoded_production_20`. Videos show encode→decode / starting rollout /
+updated rollout. The frozen baseline snapshot is `displacement_init_1000.ckpt`.
+The artifact name records the first attempted ablation, not the final objective.
+
+```bash
+# New experiment. Omit WM_INIT_CKPT to start from the official AC checkpoint.
+export VJEPA2_AC_CKPT=/path/to/vjepa2-ac-vitg.pt
+export WM_PIXEL_DECODER_CKPT=/path/to/decoder-run/checkpoints/latest.ckpt
+export WM_INIT_CKPT=/path/to/compatible-wm/checkpoints/latest.ckpt
+.venv-pi05/bin/python -m dreamervla.launchers.train \
+  --config wm_pi05_vjepa2_decoded_train task=pi05_libero_object profile=sinfra_pi05_object
+
+# Real decoded/full-gradient regression; optional torchrun tests DDP static_graph.
+JAX_PLATFORMS=cpu RUN_VJEPA2_DECODED_SMOKE=1 \
+WM_ENCODED_SMOKE_CACHE=/path/to/verified-encoded-cache.pt \
+  .venv-pi05/bin/python -m pytest tests/e2e_tests/test_vjepa2_ac_decoded.py -q -s
 ```
 
 Online W&B is supplied by the user-selected credential file at launch; no secrets

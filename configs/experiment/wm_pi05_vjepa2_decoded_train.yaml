@@ -1,0 +1,33 @@
+# @package _global_
+# Explicit dynamics-supervision experiment; the existing three-way baseline is unchanged.
+defaults:
+  - wm_pi05_collected_train
+  - _self_
+
+run:
+  name: wm_pi05_vjepa2_decoded_train
+
+world_model:
+  transition_type: vjepa2_ac
+  transition_init: pretrained
+  vjepa2_truncate_rollout_gradients: false
+  decoded_visual_loss:
+    _target_: dreamervla.models.embodiment.world_model.decoded_visual_loss.FrozenDecodedVisualLoss
+    checkpoint_path: ${oc.env:WM_PIXEL_DECODER_CKPT}
+    loss_scale: 0.5
+    temporal_scale: 1.0
+    frame_stride: 5
+    decode_batch_size: 2
+    energy_floor: 1.0e-5
+    gradient_checkpointing: true
+
+init:
+  # Weights-only continuation, not optimizer/step resume. Null starts from the
+  # official AC predictor plus fresh adapters, preserving the ablation option.
+  world_model_state_ckpt: ${oc.env:WM_INIT_CKPT,null}
+
+training:
+  # Full 40-step credit assignment retains recurrent inputs. Keep headroom for
+  # the frozen PI0.5 encoder; this runner does not implement accumulation.
+  global_batch_size: 64
+  wm_warmup_checkpoint_every_steps: 100

@@ -189,6 +189,7 @@ class ChunkAwareWorldModel(WorldModel):
         vjepa2_one_step_loss_scale: float = 0.0,
         vjepa2_temporal_difference_loss_scale: float = 0.0,
         vjepa2_layer_scale_init: float | None = None,
+        decoded_visual_loss: nn.Module | None = None,
         **kwargs: Any,
     ) -> None:
         self.transition_type = str(transition_type).strip().lower()
@@ -468,6 +469,14 @@ class ChunkAwareWorldModel(WorldModel):
                 )
         self.out_norm = nn.Identity()
         self.out_proj = nn.Identity()
+        self.decoded_visual_loss = decoded_visual_loss
+        if decoded_visual_loss is not None:
+            if self.transition_type != "vjepa2_ac":
+                raise ValueError("decoded_visual_loss is opt-in on the V-JEPA2-AC route only")
+            if self.vjepa2_truncate_rollout_gradients:
+                raise ValueError("decoded_visual_loss requires full closed-loop gradients")
+            if self.task_conditioning_enabled:
+                raise ValueError("decoded_visual_loss requires unmodified visual tokens")
         if self.freeze_input_embeddings_requested:
             self.freeze_input_embeddings()
             if self.vjepa2_transition is not None:
@@ -1509,6 +1518,7 @@ class ChunkAwareWorldModel(WorldModel):
         # Actions are still REAL demo chunk actions throughout — this loss only
         # cures WM-internal drift, not actor sensitivity to drift.
         rollout_out: dict[str, torch.Tensor] = {}
+        visual_loss_predictions = [hidden_pred]
         if self.chunk_rollout_chunks > 1 and self.chunk_rollout_loss_scale > 0.0:
             N = self.chunk_rollout_chunks
             if T < H + N * K:
@@ -1548,6 +1558,7 @@ class ChunkAwareWorldModel(WorldModel):
                 if isinstance(out_c.get("proprio_history"), torch.Tensor):
                     cur_latent["proprio_history"] = out_c["proprio_history"]
             rollout_pred = torch.cat(rollout_preds, dim=1)
+            visual_loss_predictions.append(rollout_pred)
             rollout_target = obs_tokens[:, H + K : H + N * K].detach()
             rollout_token_mask = (
                 None
@@ -1586,6 +1597,25 @@ class ChunkAwareWorldModel(WorldModel):
                 "rollout_cosine_similarity": rollout_cosine_similarity,
                 "rollout_chunks": loss.new_tensor(float(N)),
             }
+
+        if self.decoded_visual_loss is not None:
+            visual_prediction = torch.cat(visual_loss_predictions, dim=1)[..., : self.token_dim]
+            stop = H + visual_prediction.shape[1]
+            decoded_terms = self.decoded_visual_loss(
+                visual_prediction,
+                vision_tokens[:, H:stop].detach(),
+                vision_tokens[:, H - 1 : H].detach(),
+                token_mask=None
+                if prefix_attention_mask is None
+                else prefix_attention_mask[:, H:stop],
+                anchor_mask=None
+                if prefix_attention_mask is None
+                else prefix_attention_mask[:, H - 1 : H],
+            )
+            loss = loss + decoded_terms["_loss"]
+            ac_loss_metrics.update(
+                {key: value.detach() for key, value in decoded_terms.items() if key != "_loss"}
+            )
 
         reward_out: dict[str, torch.Tensor] = {}
         if self.reward_loss_scale > 0.0:

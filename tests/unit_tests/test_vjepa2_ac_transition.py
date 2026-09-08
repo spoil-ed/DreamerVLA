@@ -95,6 +95,38 @@ def _raw_state_wm(**overrides) -> ChunkAwareWorldModel:
     return _tiny_chunk_wm(**config)
 
 
+def test_decoded_auxiliary_receives_all_chunks_and_preserves_rollout_interface() -> None:
+    class ReadoutLoss(torch.nn.Module):
+        def forward(self, prediction, target, anchor, **kwargs):
+            self.seen = (prediction, target, anchor)
+            return {"_loss": (prediction - target).square().mean()}
+
+    auxiliary = ReadoutLoss()
+    wm = _raw_state_wm(
+        chunk_rollout_chunks=2,
+        chunk_rollout_loss_scale=0.2,
+        grad_checkpoint=True,
+        vjepa2_truncate_rollout_gradients=False,
+        decoded_visual_loss=auxiliary,
+    )
+    batch = dict(
+        obs_embedding=torch.randn(1, 6, 2, 4),
+        actions=torch.randn(1, 6, 2),
+        proprio=torch.randn(1, 6, 3),
+    )
+    result = wm.chunk_loss(batch)
+    prediction, target, anchor = auxiliary.seen
+    assert prediction.shape == target.shape == (1, 4, 2, 4)
+    assert prediction.requires_grad and not target.requires_grad and not anchor.requires_grad
+    torch.testing.assert_close(
+        anchor, wm._normalize_raw_vision_tokens(batch["obs_embedding"])[:, 1:2]
+    )
+    result["_loss"].backward()
+    assert wm.vjepa2_transition.output_adapter.weight.grad.norm() > 0
+    with pytest.raises(ValueError, match="full closed-loop"):
+        _raw_state_wm(decoded_visual_loss=ReadoutLoss())
+
+
 def test_raw_state_codec_preserves_absolute_values_and_ignores_padding() -> None:
     wm = _raw_state_wm()
     raw = torch.tensor([[[10.0, -7.0, 0.4], [21.0, -5.0, 0.8]]])

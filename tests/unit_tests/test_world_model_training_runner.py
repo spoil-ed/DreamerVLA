@@ -300,6 +300,11 @@ def test_world_model_warmup_preserves_motion_and_state_diagnostics(metrics_mode)
         "visual_target_motion_rms": 0.6,
         "visual_motion_ratio": 0.7,
         "visual_delta_mse": 0.8,
+        "decoded_visual_loss": 0.8,
+        "decoded_reconstruction_ratio": 0.3,
+        "decoded_temporal_error_ratio": 0.5,
+        "decoded_motion_ratio": 0.4,
+        "decoded_pixel_mse": 0.01,
     }
 
     class TinyWM(torch.nn.Module):
