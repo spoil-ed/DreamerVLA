@@ -3,13 +3,13 @@ from __future__ import annotations
 import torch
 from omegaconf import OmegaConf
 
-import dreamervla.runtime.world_model_training_base as training_base
+import dreamervla.runtime.training.world_model_training_base as training_base
 from dreamervla.runners.world_model_training_runner import WorldModelTrainingRunner
-from dreamervla.runtime.world_model_training_common import (
+from dreamervla.runtime.training.world_model_training_common import (
     _component_hydra_cfg,
     _WorldModelTrainingCommon,
 )
-from dreamervla.utils.torch_utils import precision_dtype
+from dreamervla.utils.training.torch_utils import precision_dtype
 
 
 class _FakeDistributed:

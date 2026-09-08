@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from dreamervla.utils.checkpoint_util import (
+from dreamervla.utils.checkpoint.checkpoint_util import (
     TopKCheckpointManager,
     format_metric_checkpoint_name,
 )

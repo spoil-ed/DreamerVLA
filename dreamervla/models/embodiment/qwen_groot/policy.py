@@ -302,8 +302,8 @@ class QwenGR00TPolicy(nn.Module):
     def load_sft_delta(self, checkpoint_path: str) -> None:
         """Restore a DreamerVLA trainable-parameter checkpoint."""
 
-        from dreamervla.utils.hf_checkpoint import load_runner_payload
-        from dreamervla.utils.run_paths import resolve_resume_checkpoint
+        from dreamervla.utils.checkpoint.hf_checkpoint import load_runner_payload
+        from dreamervla.utils.checkpoint.run_artifacts import resolve_resume_checkpoint
 
         resolved = resolve_resume_checkpoint(checkpoint_path)
         payload = load_runner_payload(resolved)

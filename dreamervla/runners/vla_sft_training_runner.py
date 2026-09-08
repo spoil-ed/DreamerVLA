@@ -41,13 +41,13 @@ from torch.distributed.checkpoint.state_dict import (
     set_optimizer_state_dict,
 )
 
-from dreamervla.dataset import (
+from dreamervla.models.embodiment.pi05.sft_data import (
     configured_download_endpoint,
     get_official_openpi_sft_num_batches,
     openpi_torch_loader,
 )
 from dreamervla.runners.base_runner import BaseRunner
-from dreamervla.runtime.distributed import NopretokenizeSFTDistributedHelper
+from dreamervla.utils.training.distributed import NopretokenizeSFTDistributedHelper
 
 _LEGACY_UNUSED_LM_HEAD_PREFIX = "model.paligemma_with_expert.gemma_expert.lm_head."
 

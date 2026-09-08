@@ -6,7 +6,7 @@ import pytest
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
-from dreamervla.diagnostics.eval_openvla_oft_libero import (
+from dreamervla.diagnostics.evaluation.eval_openvla_oft_libero import (
     parse_suite_name,
     resolve_num_images_for_camera_inputs,
 )
@@ -37,9 +37,9 @@ def test_camera_inputs_rejects_removed_multiview_route(
 
 def test_openvla_oft_eval_entry_is_hydra_configured() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    text = (project_root / "dreamervla" / "diagnostics" / "eval_openvla_oft_libero.py").read_text(
-        encoding="utf-8"
-    )
+    text = (
+        project_root / "dreamervla/diagnostics/evaluation/eval_openvla_oft_libero.py"
+    ).read_text(encoding="utf-8")
     config_text = (
         project_root / "configs" / "experiment" / "openvla_oft_official_eval" / "eval.yaml"
     ).read_text(encoding="utf-8")

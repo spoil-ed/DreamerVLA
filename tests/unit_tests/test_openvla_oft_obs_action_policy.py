@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from dreamervla.diagnostics.openvla_oft_obs_action_policy import (
+from dreamervla.diagnostics.evaluation.openvla_oft_obs_action_policy import (
     OpenVLAOFTObsActionPolicy,
     resolve_unnorm_key,
     set_runtime_env,

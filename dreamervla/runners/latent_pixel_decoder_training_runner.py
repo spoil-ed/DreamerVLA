@@ -16,18 +16,18 @@ from omegaconf import DictConfig, OmegaConf
 from PIL import Image
 from torch.utils._pytree import tree_map
 
-from dreamervla.dataset import (
+from dreamervla.models.embodiment.pi05.pytree import register_pytree_dataclasses
+from dreamervla.models.embodiment.pi05.sft_data import (
     configured_download_endpoint,
     get_official_openpi_sft_num_batches,
     openpi_torch_loader,
 )
-from dreamervla.models.embodiment.pi05.pytree import register_pytree_dataclasses
 from dreamervla.models.embodiment.world_model.latent_pixel_decoder import (
     latent_pixel_reconstruction_loss,
 )
 from dreamervla.runners.base_runner import BaseRunner
 from dreamervla.runners.vla_sft_training_runner import _policy_hydra_config
-from dreamervla.runtime.distributed import NopretokenizeSFTDistributedHelper
+from dreamervla.utils.training.distributed import NopretokenizeSFTDistributedHelper
 
 
 class LatentPixelDecoderTrainingRunner(BaseRunner):

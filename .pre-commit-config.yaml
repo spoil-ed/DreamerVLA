@@ -14,7 +14,7 @@ repos:
     hooks:
       - id: dreamervla-commit-message
         name: Check DreamerVLA commit message
-        entry: python3 dreamervla/diagnostics/check_commit_message.py
+        entry: python3 dreamervla/diagnostics/checks/check_commit_message.py
         language: system
         stages: [commit-msg]
 

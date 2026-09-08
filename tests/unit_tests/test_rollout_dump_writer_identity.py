@@ -1,7 +1,7 @@
 import h5py
 import numpy as np
 
-from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
+from dreamervla.dataset.storage.rollout_dump_writer import RolloutDumpWriter
 
 
 def _one_step():

@@ -7,8 +7,8 @@ import pytest
 import torch
 
 from dreamervla.runners.libero_vla_evaluation_runner import LIBEROVLAEvaluationRunner
-from dreamervla.runtime.libero_vla_evaluation_base import LIBEROVLAEvaluationBase
-from dreamervla.runtime.world_model_training_base import WorldModelTrainingBase
+from dreamervla.runtime.evaluation.libero_vla_evaluation_base import LIBEROVLAEvaluationBase
+from dreamervla.runtime.training.world_model_training_base import WorldModelTrainingBase
 
 
 class _SpatialWorldModel:

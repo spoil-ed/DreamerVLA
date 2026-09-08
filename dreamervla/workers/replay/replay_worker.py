@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from dreamervla.runtime.offline_seed import seed_replay_from_offline
-from dreamervla.runtime.online_replay import OnlineReplay
+from dreamervla.runtime.replay.offline_seed import seed_replay_from_offline
+from dreamervla.runtime.replay.online_replay import OnlineReplay
 from dreamervla.scheduler.worker import Worker
 from dreamervla.workers.cotrain.messages import RealTrajectoryBatch
 

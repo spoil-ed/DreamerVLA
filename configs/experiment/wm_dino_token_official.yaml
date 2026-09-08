@@ -62,7 +62,7 @@ dino_wm:
 
 dataset:
   train:
-    _target_: dreamervla.dataset.DinoTokenTrajectoryDataset
+    _target_: dreamervla.dataset.base.latent_token_dataloader.DinoTokenTrajectoryDataset
     raw_dir: ${task.hdf5_reward_dir}
     hidden_dir: ${task.openvla_oft.hidden_token_dir}
     split: train
@@ -76,7 +76,7 @@ dataset:
     normalize_proprio: ${dino_wm.normalize_proprio}
     max_episodes: ${dino_wm.max_episodes}
   valid:
-    _target_: dreamervla.dataset.DinoTokenTrajectoryDataset
+    _target_: dreamervla.dataset.base.latent_token_dataloader.DinoTokenTrajectoryDataset
     raw_dir: ${task.hdf5_reward_dir}
     hidden_dir: ${task.openvla_oft.hidden_token_dir}
     split: valid

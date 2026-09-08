@@ -20,7 +20,7 @@ from omegaconf import DictConfig, OmegaConf
 from dreamervla.config_resolvers import register_dreamervla_resolvers
 from dreamervla.launchers.task_cli import normalize_task_flag
 from dreamervla.preprocess.check_artifacts import validate_hdf5_dir
-from dreamervla.runtime.reproduction import (
+from dreamervla.runtime.common.reproduction import (
     ReproductionError,
     atomic_write_json,
     decide_stage,

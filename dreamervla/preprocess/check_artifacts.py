@@ -11,7 +11,7 @@ from dreamervla.preprocess.sidecar_schema import (
     required_demo_datasets_from_config,
     validate_hidden_token_sidecar_dir,
 )
-from dreamervla.utils.hydra_config import script_namespace
+from dreamervla.utils.config.hydra_config import script_namespace
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 

@@ -1,8 +1,8 @@
 import torch
 
-from dreamervla.runtime.metrics import SuccessTracker
-from dreamervla.utils import console
-from dreamervla.utils.console import format_progress_line
+from dreamervla.utils.logging import console
+from dreamervla.utils.logging.console import format_progress_line
+from dreamervla.utils.logging.metrics import SuccessTracker
 
 
 def test_fmt_value_thresholds():

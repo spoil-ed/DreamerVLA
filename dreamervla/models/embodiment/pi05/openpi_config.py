@@ -26,7 +26,7 @@ import dataclasses
 from pathlib import Path
 from typing import Any
 
-from dreamervla.utils.openpi_imports import ensure_openpi_on_path
+from dreamervla.utils.integrations.openpi_imports import ensure_openpi_on_path
 
 PI05_LIBERO_CONFIG_NAME = "pi05_libero"
 PI05_LIBERO_REPO_ID = "physical-intelligence/libero"
@@ -37,6 +37,7 @@ def get_pi05_libero_config(
     model_path: str,
     assets_path: str,
     repo_id: str = PI05_LIBERO_REPO_ID,
+    normalization_asset_id: str | None = None,
     batch_size: int = 256,
     action_horizon: int = 10,
     num_workers: int | None = None,
@@ -71,7 +72,10 @@ def get_pi05_libero_config(
         data=LeRobotLiberoDataConfig(
             repo_id=str(repo_id),
             base_config=DataConfig(prompt_from_task=True),
-            assets=AssetsConfig(assets_dir=str(Path(assets_path).expanduser())),
+            assets=AssetsConfig(
+                assets_dir=str(Path(assets_path).expanduser()),
+                asset_id=normalization_asset_id,
+            ),
             extra_delta_transform=False,
         ),
         batch_size=int(batch_size),

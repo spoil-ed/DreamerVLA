@@ -8,8 +8,8 @@ from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
 from dreamervla.config import validate_cfg
-from dreamervla.diagnostics.compare_wm_libero_rollout import _world_model_hydra_config
-from dreamervla.utils.legacy_wm_readout import discard_legacy_wm_readout
+from dreamervla.diagnostics.evaluation.compare_wm_libero_rollout import _world_model_hydra_config
+from dreamervla.utils.checkpoint.legacy_wm_readout import discard_legacy_wm_readout
 
 
 def test_latent_recipe_has_no_decoder_dependency(monkeypatch) -> None:

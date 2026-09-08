@@ -23,7 +23,7 @@ class _TinyTokenizer:
 
 
 def test_openvla_oft_path_stays_inside_dreamervla_tree() -> None:
-    from dreamervla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
+    from dreamervla.utils.integrations.openvla_oft_imports import ensure_openvla_oft_on_path
 
     selected = ensure_openvla_oft_on_path()
 
@@ -32,13 +32,15 @@ def test_openvla_oft_path_stays_inside_dreamervla_tree() -> None:
 
 
 def test_official_openvla_oft_default_root_lives_under_dreamervla() -> None:
-    from dreamervla.diagnostics.openvla_oft_obs_action_policy import default_openvla_oft_root
+    from dreamervla.diagnostics.evaluation.openvla_oft_obs_action_policy import (
+        default_openvla_oft_root,
+    )
 
     assert default_openvla_oft_root() == VENDORED_OPENVLA_OFT
 
 
 def test_prismatic_imports_resolve_to_dreamervla_tree() -> None:
-    from dreamervla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
+    from dreamervla.utils.integrations.openvla_oft_imports import ensure_openvla_oft_on_path
 
     ensure_openvla_oft_on_path()
     modules = [
@@ -61,7 +63,7 @@ def test_prismatic_imports_resolve_to_dreamervla_tree() -> None:
 
 
 def test_action_tokenizer_action_head_and_collator_interfaces() -> None:
-    from dreamervla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
+    from dreamervla.utils.integrations.openvla_oft_imports import ensure_openvla_oft_on_path
 
     ensure_openvla_oft_on_path()
     from prismatic.models.action_heads import L1RegressionActionHead

@@ -1,4 +1,4 @@
-from dreamervla.runtime.libero_rollout import run_vectorized_rollout
+from dreamervla.runtime.rollout.libero_rollout import run_vectorized_rollout
 
 
 class _FakeVecEnv:
@@ -91,7 +91,7 @@ class _StubOFTExtractor:
 def test_parallel_oft_slots_isolate_per_slot_call_count():
     import numpy as np
 
-    from dreamervla.runtime.libero_vla_evaluation_base import _EvalFrameHistoryExtractor
+    from dreamervla.runtime.evaluation.libero_vla_evaluation_base import _EvalFrameHistoryExtractor
 
     def rec(v):
         img = np.zeros((4, 4, 3), dtype=np.uint8)

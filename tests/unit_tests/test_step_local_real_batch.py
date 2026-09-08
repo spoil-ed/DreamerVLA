@@ -25,7 +25,7 @@ class _ReplaySink:
 def _worker(*, horizon: int = 1, num_action_chunks: int = 1) -> RealEnvWorker:
     worker = RealEnvWorker(
         env_cfg={
-            "target": "dreamervla.workers.env._test_envs:NoSidecarTrainEnv",
+            "target": "dreamervla.diagnostics.fixtures.envs:NoSidecarTrainEnv",
             "kwargs": {"horizon": horizon, "image_shape": [4, 4, 3]},
         },
         num_slots=1,
@@ -44,7 +44,7 @@ def _worker(*, horizon: int = 1, num_action_chunks: int = 1) -> RealEnvWorker:
 def test_real_task_schedule_balances_32_trajectories_over_selected_suite() -> None:
     worker = RealEnvWorker(
         env_cfg={
-            "target": "dreamervla.workers.env._test_envs:NoSidecarTrainEnv",
+            "target": "dreamervla.diagnostics.fixtures.envs:NoSidecarTrainEnv",
             "kwargs": {"horizon": 1, "image_shape": [4, 4, 3]},
         },
         num_slots=8,
@@ -116,7 +116,7 @@ def test_real_trajectory_batch_drains_exactly_once_with_raw_and_tokens() -> None
 def test_eval_trajectory_batch_drains_once_without_replay_writes() -> None:
     worker = EvaluationEnvironmentWorker(
         env_cfg={
-            "target": "dreamervla.workers.env._test_envs:NoSidecarTrainEnv",
+            "target": "dreamervla.diagnostics.fixtures.envs:NoSidecarTrainEnv",
             "kwargs": {"horizon": 1, "image_shape": [4, 4, 3]},
         },
         num_slots=1,

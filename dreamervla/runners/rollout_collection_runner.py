@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dreamervla.runtime.rollout_collection_ray import _RayRolloutCollection
+from dreamervla.runtime.rollout.rollout_collection_ray import _RayRolloutCollection
 
 
 class RolloutCollectionRunner(_RayRolloutCollection):

@@ -8,7 +8,7 @@ import torch
 
 
 def test_set_seed_reproduces_python_numpy_and_torch_draws():
-    from dreamervla.utils.seed import set_seed
+    from dreamervla.utils.training.seed import set_seed
 
     set_seed(4242)
     expected = (random.random(), np.random.random(), torch.rand(()))
@@ -21,7 +21,7 @@ def test_set_seed_reproduces_python_numpy_and_torch_draws():
 
 
 def test_set_seed_and_restore_rng_state_reproduce_all_cpu_draws():
-    from dreamervla.utils.seed import capture_rng_state, restore_rng_state, set_seed
+    from dreamervla.utils.training.seed import capture_rng_state, restore_rng_state, set_seed
 
     set_seed(20260715)
     state = capture_rng_state()
@@ -46,7 +46,7 @@ def test_set_seed_and_restore_rng_state_reproduce_all_cpu_draws():
 
 
 def test_restore_rng_state_tolerates_missing_or_none_payload():
-    from dreamervla.utils.seed import restore_rng_state
+    from dreamervla.utils.training.seed import restore_rng_state
 
     # Backward compatibility: old checkpoints have no "rng" key.
     restore_rng_state(None)
@@ -55,7 +55,7 @@ def test_restore_rng_state_tolerates_missing_or_none_payload():
 
 @pytest.mark.parametrize("missing", ["python", "numpy", "torch", "cuda"])
 def test_restore_rng_state_strict_rejects_each_missing_key(missing):
-    from dreamervla.utils.seed import capture_rng_state, restore_rng_state
+    from dreamervla.utils.training.seed import capture_rng_state, restore_rng_state
 
     state = capture_rng_state()
     state.pop(missing)
@@ -74,7 +74,7 @@ def test_restore_rng_state_strict_rejects_each_missing_key(missing):
     ],
 )
 def test_restore_rng_state_strict_rejects_invalid_types(key, bad_value):
-    from dreamervla.utils.seed import capture_rng_state, restore_rng_state
+    from dreamervla.utils.training.seed import capture_rng_state, restore_rng_state
 
     state = capture_rng_state()
     state[key] = bad_value
@@ -85,7 +85,7 @@ def test_restore_rng_state_strict_rejects_invalid_types(key, bad_value):
 
 @pytest.mark.parametrize("key", ["python", "numpy"])
 def test_restore_rng_state_strict_wraps_malformed_tuple_state(key):
-    from dreamervla.utils.seed import capture_rng_state, restore_rng_state
+    from dreamervla.utils.training.seed import capture_rng_state, restore_rng_state
 
     state = capture_rng_state()
     state[key] = ()
@@ -95,7 +95,7 @@ def test_restore_rng_state_strict_wraps_malformed_tuple_state(key):
 
 
 def test_restore_rng_state_strict_rejects_cuda_topology_mismatch(monkeypatch):
-    from dreamervla.utils.seed import capture_rng_state, restore_rng_state
+    from dreamervla.utils.training.seed import capture_rng_state, restore_rng_state
 
     state = capture_rng_state()
     state["cuda"] = [torch.zeros(1, dtype=torch.uint8)]
@@ -107,7 +107,7 @@ def test_restore_rng_state_strict_rejects_cuda_topology_mismatch(monkeypatch):
 
 
 def test_select_rank_rng_state_handles_rank_lists_single_mapping_and_invalid_inputs():
-    from dreamervla.utils.seed import capture_rng_state, select_rank_rng_state
+    from dreamervla.utils.training.seed import capture_rng_state, select_rank_rng_state
 
     rank_zero = capture_rng_state()
     rank_one = capture_rng_state()
@@ -122,7 +122,7 @@ def test_select_rank_rng_state_handles_rank_lists_single_mapping_and_invalid_inp
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
 def test_restore_rng_state_reproduces_cuda_draws():
-    from dreamervla.utils.seed import capture_rng_state, restore_rng_state, set_seed
+    from dreamervla.utils.training.seed import capture_rng_state, restore_rng_state, set_seed
 
     set_seed(314159)
     state = capture_rng_state()

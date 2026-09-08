@@ -10,9 +10,9 @@ import torch
 from torch import nn
 
 import dreamervla.workers.actor.embodied_fsdp_actor as embodied_fsdp_actor
+from dreamervla.diagnostics.fixtures.actor_models import TinyLumosPolicy
 from dreamervla.hybrid_engines.weight_syncer import BucketWeightSyncer
 from dreamervla.scheduler.cluster import Cluster
-from dreamervla.workers.actor._test_models import TinyLumosPolicy
 from dreamervla.workers.actor.embodied_fsdp_actor import EmbodiedFSDPActor
 from dreamervla.workers.cotrain.messages import TrajectoryShard, collate_trajectory_shards
 from dreamervla.workers.env.trajectory_env_worker import _concat_trajectory_shards
@@ -38,7 +38,7 @@ def _actor_cfg(store_name: str | None = None) -> dict:
         train_cfg["syncer"] = {"store_name": store_name}
     return {
         "policy_cfg": {
-            "target": "dreamervla.workers.actor._test_models:TinyLumosPolicy",
+            "target": "dreamervla.diagnostics.fixtures.actor_models:TinyLumosPolicy",
             "kwargs": {"hidden_dim": 4, "action_dim": 3, "chunk_size": 2},
         },
         "init_ckpt": {},

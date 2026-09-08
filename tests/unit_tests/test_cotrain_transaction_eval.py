@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 import torch
 
-import dreamervla.runtime.cotrain_eval as eval_transaction
-from dreamervla.runtime.cotrain_eval import (
+import dreamervla.runtime.evaluation.cotrain_eval as eval_transaction
+from dreamervla.runtime.evaluation.cotrain_eval import (
     CotrainEvalObserver,
     CotrainTransactionAccumulator,
     EncodedEvalTrajectory,

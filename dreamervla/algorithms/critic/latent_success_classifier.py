@@ -31,8 +31,8 @@ class LatentSuccessClassifierConfig:
     output_dim: int = 2
     # head_type ∈ {transformer, linear, mlp2}. "transformer" is the original
     # 8-layer 137 M model. "linear" is a single nn.Linear(L*W, 2) — the
-    # sklearn-LR-equivalent low-capacity head shown to hit F1≈0.87 on real
-    # hidden (CLAUDE.md). "mlp2" is a 2-layer GELU MLP between the two.
+    # sklearn-LR-equivalent low-capacity head. "mlp2" is a 2-layer GELU MLP
+    # between the two.
     head_type: str = "spatial_tf"
     # Time granularity at which the classifier consumes its window:
     #   "action": W consecutive env-step hiddens (the original LUMOS setup).

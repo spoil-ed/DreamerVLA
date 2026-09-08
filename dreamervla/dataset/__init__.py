@@ -1,67 +1,39 @@
-from .base_dataset import BaseDataset
-from .dino_token_dataset import DinoTokenTrajectoryDataset
-from .one_trajectory_pretokenize_dataset import (
-    OneTrajectoryPretokenizeActionChunkDataset,
-)
-from .pi05_sft import (
-    OFFICIAL_PI05_LIBERO_REPO,
-    OFFICIAL_PI05_LIBERO_REVISION,
-    LeRobotLIBERODataLoaderFactory,
-    OpenPISFTDataLoaderBundle,
-    configured_download_endpoint,
-    get_official_openpi_sft_num_batches,
-    openpi_torch_loader,
-    resolve_lerobot_source,
-)
-from .pixel_hidden_sequence_dataset import (
-    PixelHiddenSequenceDataset,
-)
-from .pixel_sequence_dataset import (
-    PixelSequenceDataset,
-    PixelSequenceSpec,
-)
-from .pretokenize_dataset import (
-    PretokenizeActionChunkDataset,
-    PretokenizeDataset,
-    PretokenizeDataSpec,
-)
-from .token_sequence_dataset import (
-    TokenSequenceDataset,
-    TokenSequenceSpec,
-)
-from .vla_sft_hdf5_dataset import (
-    VLASFTHDF5Dataset,
-    VLASFTHDF5DatasetFactory,
-    VLASFTHDF5Spec,
-)
-from .vla_sft_rlds_dataset import (
-    VLASFTRLDSDatasetBundle,
-    VLASFTRLDSDatasetFactory,
-)
+"""Public datasets, loaded on demand without importing optional model stacks."""
 
-__all__ = [
-    "OFFICIAL_PI05_LIBERO_REPO",
-    "OFFICIAL_PI05_LIBERO_REVISION",
-    "BaseDataset",
-    "DinoTokenTrajectoryDataset",
-    "LeRobotLIBERODataLoaderFactory",
-    "OneTrajectoryPretokenizeActionChunkDataset",
-    "OpenPISFTDataLoaderBundle",
-    "PixelHiddenSequenceDataset",
-    "PixelSequenceDataset",
-    "PixelSequenceSpec",
-    "PretokenizeActionChunkDataset",
-    "PretokenizeDataSpec",
-    "PretokenizeDataset",
-    "TokenSequenceDataset",
-    "TokenSequenceSpec",
-    "VLASFTHDF5Dataset",
-    "VLASFTHDF5DatasetFactory",
-    "VLASFTHDF5Spec",
-    "VLASFTRLDSDatasetBundle",
-    "VLASFTRLDSDatasetFactory",
-    "configured_download_endpoint",
-    "get_official_openpi_sft_num_batches",
-    "openpi_torch_loader",
-    "resolve_lerobot_source",
-]
+from importlib import import_module
+from typing import Any
+
+_MODULES = {
+    "BaseDataset": "base.base_dataloader",
+    "DatasetLoaderBundle": "base.base_dataloader",
+    "HDF5Dataset": "base.hdf5_dataloader",
+    "HDF5ActionChunkDataset": "base.hdf5_dataloader",
+    "HDF5ActionChunkSpec": "base.hdf5_dataloader",
+    "PixelSequenceDataset": "base.hdf5_dataloader",
+    "PixelSequenceSpec": "base.hdf5_dataloader",
+    "DinoTokenTrajectoryDataset": "base.latent_token_dataloader",
+    "PixelHiddenSequenceDataset": "base.latent_token_dataloader",
+    "LeRobotV3DataLoader": "base.lerobot_v3_dataloader",
+    "MultiDataset": "base.multi_dataloader",
+    "DistributedMixtureSampler": "base.multi_dataloader",
+    "LiberoDataset": "libero",
+    "LeRobotV3LIBERODataLoaderFactory": "libero",
+    "VLASFTHDF5Dataset": "libero",
+    "VLASFTHDF5DatasetFactory": "libero",
+    "BalancedTerminalDataset": "classifier_dataset",
+    "BalancedTerminalSampler": "classifier_dataset",
+    "CollectedRolloutClassifierDataset": "classifier_dataset",
+    "LumosAlignedLatentTrainDataset": "classifier_dataset",
+    "LumosAlignedLatentValDataset": "classifier_dataset",
+}
+
+__all__ = list(_MODULES)
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve retained dataset exports without eagerly loading every reader."""
+    if name not in _MODULES:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(f"{__name__}.{_MODULES[name]}"), name)
+    globals()[name] = value
+    return value

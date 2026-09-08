@@ -39,7 +39,7 @@ import cloudpickle
 import gym
 import numpy as np
 
-from dreamervla.utils.egl_device import apply_egl_device_regime
+from dreamervla.runtime.envs.render_device import apply_egl_device_regime
 
 gym_old_venv_step_type = Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
 gym_new_venv_step_type = Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
@@ -1211,7 +1211,7 @@ class _EglSubprocEnvWorker(SubprocEnvWorker):
 
 def _default_factory(cfg_kwargs: dict[str, Any]) -> Any:
     """Build + enter the DreamerVLA online train env (same env as the osmesa path)."""
-    from dreamervla.runtime.vec_rollout_env import default_env_factory
+    from dreamervla.runtime.envs.vec_rollout_env import default_env_factory
 
     return default_env_factory(cfg_kwargs)
 

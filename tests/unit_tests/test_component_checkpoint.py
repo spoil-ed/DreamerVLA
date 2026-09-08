@@ -6,11 +6,11 @@ import pytest
 import torch
 from torch import nn
 
-from dreamervla.utils.component_checkpoint import (
+from dreamervla.utils.checkpoint.component_checkpoint import (
     load_component_checkpoint,
     state_dict_sha256,
 )
-from dreamervla.utils.hf_module import save_module_pretrained
+from dreamervla.utils.checkpoint.hf_module import save_module_pretrained
 
 
 def test_load_component_checkpoint_supports_wm_and_classifier_schemas(

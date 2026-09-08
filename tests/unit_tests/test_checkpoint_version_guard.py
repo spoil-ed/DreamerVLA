@@ -2,7 +2,7 @@
 
 The payload always stores ``format_version`` but nothing ever checked it, so a
 newer-format checkpoint loaded by older code would be silently mishandled.
-RLinf stores and validates its version on load; CLAUDE.md likewise calls for
+RLinf stores and validates its version on load; AGENTS.md likewise calls for
 early validation of resume checkpoints. The guard only hard-fails the unsafe
 direction (checkpoint newer than the code); missing/older versions stay
 loadable so the dual-read backward-compat contract is preserved.
@@ -12,7 +12,7 @@ import pytest
 import torch
 
 from dreamervla.constants import CHECKPOINT_FORMAT_VERSION
-from dreamervla.utils.hf_checkpoint import load_runner_payload
+from dreamervla.utils.checkpoint.hf_checkpoint import load_runner_payload
 
 
 def test_load_runner_payload_rejects_future_format_version(tmp_path):

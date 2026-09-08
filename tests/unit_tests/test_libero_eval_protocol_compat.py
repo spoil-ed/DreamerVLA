@@ -166,7 +166,7 @@ def test_manual_ray_oft_eval_normalizer_keeps_stateless_latent_mode() -> None:
             },
             "rollout": {
                 "encoder_cfg": {
-                    "target": "dreamervla.models.embodiment.openvla_oft.oft_rollout:OFTRolloutBundle"
+                    "target": "dreamervla.workers.inference.oft_rollout:OFTRolloutBundle"
                 }
             },
             "eval": {},
@@ -185,7 +185,7 @@ def test_manual_ray_oft_eval_normalizer_keeps_stateless_latent_mode() -> None:
 
 def test_stateless_dreamer_eval_dispatches_to_dreamer_path(monkeypatch) -> None:
     from dreamervla.runners.libero_vla_evaluation_runner import LIBEROVLAEvaluationRunner
-    from dreamervla.runtime.libero_vla_evaluation_base import LIBEROVLAEvaluationBase
+    from dreamervla.runtime.evaluation.libero_vla_evaluation_base import LIBEROVLAEvaluationBase
 
     runner = LIBEROVLAEvaluationRunner.__new__(LIBEROVLAEvaluationRunner)
     runner._dreamer_eval = True
@@ -213,7 +213,7 @@ def test_stateless_dreamer_eval_dispatches_to_dreamer_path(monkeypatch) -> None:
 
 
 def test_eval_summary_averages_three_trials_per_task() -> None:
-    from dreamervla.runtime.eval_metrics import summarize_libero_task_success
+    from dreamervla.runtime.evaluation.eval_metrics import summarize_libero_task_success
 
     metrics = summarize_libero_task_success(
         [
@@ -233,7 +233,7 @@ def test_eval_summary_averages_three_trials_per_task() -> None:
 
 
 def test_eval_summary_uses_task_macro_average_not_episode_weighted() -> None:
-    from dreamervla.runtime.eval_metrics import summarize_libero_task_success
+    from dreamervla.runtime.evaluation.eval_metrics import summarize_libero_task_success
 
     metrics = summarize_libero_task_success(
         [

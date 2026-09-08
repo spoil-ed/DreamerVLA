@@ -39,11 +39,17 @@ at `/runtime`, and its persistent home at `/home/sim`. The uv executable is
 `/runtime/bin/uv`; its cache, managed Python, and virtual environment live below
 `/runtime` as well.
 
+Prepare that external runtime with uv and Python before starting an application
+job; the system image and the checked-in profile do not provide an installed
+Python environment. See the
+[environment profile](../../configs/environments/rlinf-libero-pi05/README.md)
+for dependency installation and dataset/checkpoint mounts.
+
 ```bash
 env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
     -u http_proxy -u https_proxy -u all_proxy \
   docker run --rm --gpus all --ipc host --network host \
-    --env-file environments/rlinf-libero-pi05/runtime.env \
+    --env-file configs/environments/rlinf-libero-pi05/runtime.env \
     -v "$PWD:/workspace/DreamerVLA" \
     -v "$PWD/../RLinf:/workspace/RLinf:ro" \
     -v "$PWD/.rlinf-runtime:/runtime" \

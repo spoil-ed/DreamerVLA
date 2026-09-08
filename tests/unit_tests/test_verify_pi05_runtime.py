@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from dreamervla.diagnostics.verify_pi05_runtime import (
+from dreamervla.diagnostics.checks.verify_pi05_runtime import (
     CRITICAL_PI05_DISTRIBUTION_VERSIONS,
     verify_pi05_distribution_versions,
 )

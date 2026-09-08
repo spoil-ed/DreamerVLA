@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
+from dreamervla.diagnostics.fixtures.actor_models import TinyCheckpointPolicy
 from dreamervla.hybrid_engines.fsdp import FSDPModelManager
 from dreamervla.hybrid_engines.fsdp.strategy import (
     FSDP2Strategy,
@@ -12,7 +13,6 @@ from dreamervla.hybrid_engines.fsdp.strategy import (
     FSDPStrategyBase,
     NoShardStrategy,
 )
-from dreamervla.workers.actor._test_models import TinyCheckpointPolicy
 
 
 def test_create_routes_strategy_names() -> None:

@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import torch
 
-from dreamervla.diagnostics.compare_wm_libero_rollout import (
+from dreamervla.diagnostics.evaluation.compare_wm_libero_rollout import (
     _comparison_frame,
     _per_frame_pixel_metrics,
     _pixel_metrics_by_view,

@@ -26,7 +26,7 @@ def test_env_workers_push_completed_episodes_to_replay() -> None:
         ).launch(cluster, NodePlacementStrategy(1))
         replay = replay_group.workers[0]
         env_cfg = {
-            "target": "dreamervla.workers.env._test_envs:CounterEnv",
+            "target": "dreamervla.diagnostics.fixtures.envs:CounterEnv",
             "kwargs": {"horizon": 3, "image_shape": (4, 4, 3), "embedding_dim": 6},
         }
         envs = WorkerGroup(EnvWorker, env_cfg, task_id=5, replay=replay).launch(

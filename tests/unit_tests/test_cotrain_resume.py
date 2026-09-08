@@ -18,7 +18,7 @@ from omegaconf import OmegaConf
 from dreamervla.constants import CHECKPOINT_FORMAT_VERSION
 from dreamervla.runners.base_runner import BaseRunner
 from dreamervla.runners.cotrain_runner import CotrainRunner, _load_manual_resume_payload
-from dreamervla.utils.seed import capture_rng_state
+from dreamervla.utils.training.seed import capture_rng_state
 
 
 class _Mini(BaseRunner):
@@ -146,7 +146,7 @@ def test_base_save_gathers_rng_before_non_main_early_return(tmp_path):
 
 
 def test_base_save_persists_all_gathered_rank_rng_states(tmp_path):
-    from dreamervla.utils.seed import capture_rng_state
+    from dreamervla.utils.training.seed import capture_rng_state
 
     states = [capture_rng_state(), capture_rng_state()]
     runner = _Mini(OmegaConf.create({}), tmp_path)
@@ -165,7 +165,7 @@ def test_base_save_persists_all_gathered_rank_rng_states(tmp_path):
 
 
 def test_base_load_selects_distributed_rank_rng(tmp_path):
-    from dreamervla.utils.seed import capture_rng_state
+    from dreamervla.utils.training.seed import capture_rng_state
 
     random.seed(10)
     np.random.seed(10)
@@ -252,7 +252,7 @@ def test_base_load_checkpoint_rejects_v2_without_current_rank_rng(tmp_path):
 
 def test_base_load_payload_legacy_rng_and_missing_rng_warning_once(tmp_path, monkeypatch):
     import dreamervla.runners.base_runner as base_runner_module
-    from dreamervla.utils.seed import capture_rng_state
+    from dreamervla.utils.training.seed import capture_rng_state
 
     runner = _Mini(OmegaConf.create({}), tmp_path)
     legacy_rng = capture_rng_state()

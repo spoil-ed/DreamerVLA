@@ -5,4 +5,4 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 cd "$(cd "${SCRIPT_DIR}/../../.." && pwd -P)"
 
-exec python -m dreamervla.diagnostics.eval_dino_token_wm "$@"
+exec python -m dreamervla.diagnostics.evaluation.eval_dino_token_wm "$@"

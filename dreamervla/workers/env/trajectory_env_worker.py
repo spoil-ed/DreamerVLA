@@ -16,11 +16,11 @@ from typing import Any
 import numpy as np
 import torch
 
-from dreamervla.scheduler.channel import Channel
-from dreamervla.scheduler.worker import Worker
-from dreamervla.utils.egl_device import (
+from dreamervla.runtime.envs.render_device import (
     apply_libero_render_regime,
 )
+from dreamervla.scheduler.channel import Channel
+from dreamervla.scheduler.worker import Worker
 from dreamervla.workers.cotrain.handshake_trace import trace as _hs_trace
 from dreamervla.workers.cotrain.messages import (
     ObservationBatchMsg,
@@ -59,7 +59,7 @@ def _plain_dict(value: Any) -> dict[str, Any]:
 
 
 def _libero_render_gpu_pool(env_cfg: Mapping[str, Any]) -> list[int]:
-    from dreamervla.runtime.render_device import parse_device_ids
+    from dreamervla.runtime.envs.render_device import parse_device_ids
 
     for key in ("gpu_pool", "render_devices", "egl_device_pool"):
         devices = parse_device_ids(_plain_dict(env_cfg).get(key))
@@ -2525,7 +2525,7 @@ class BaseTrajectoryEnvWorker(Worker):
         if self.action_postprocess in {"", "none", "false"}:
             env_actions = _batch_action_chunks(policy_action_chunks)
         elif self.action_postprocess in {"openvla_oft", "oft"}:
-            from dreamervla.runtime.oft_collect import process_action_batch
+            from dreamervla.runtime.rollout.oft_collect import process_action_batch
 
             env_actions = process_action_batch(_batch_action_chunks(policy_action_chunks))
         else:
@@ -3026,7 +3026,7 @@ class BaseTrajectoryEnvWorker(Worker):
         if self.action_postprocess in {"", "none", "false"}:
             return action_arr
         if self.action_postprocess in {"openvla_oft", "oft"}:
-            from dreamervla.runtime.oft_collect import process_action
+            from dreamervla.runtime.rollout.oft_collect import process_action
 
             env_action = process_action(action_arr)
             if not np.isfinite(env_action).all():

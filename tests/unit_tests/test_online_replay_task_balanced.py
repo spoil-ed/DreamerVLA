@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import torch
 
-from dreamervla.runtime.online_replay import (
+from dreamervla.runtime.replay.online_replay import (
     OnlineReplay,
     pack_replay_task_stats_for_ddp,
     unpack_replay_task_stats_from_ddp,

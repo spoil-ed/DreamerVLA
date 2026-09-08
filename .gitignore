@@ -35,6 +35,9 @@ wandb/
 .env.wandb
 
 # Local agent/editor workspaces and planning drafts
+/task_plan.md
+/findings.md
+/progress.md
 .local/
 .agents/
 .claude/
@@ -66,3 +69,6 @@ docs/papers/**/*.synctex.gz
 CLAUDE.local.md
 AGENTS.local.md
 tutorial_of_git.md
+
+# Root uv resolution is local; the isolated PI0.5 profile owns its own lockfile.
+/uv.lock

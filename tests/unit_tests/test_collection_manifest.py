@@ -10,7 +10,7 @@ import json
 import h5py
 import numpy as np
 
-from dreamervla.dataset.collection_manifest import (
+from dreamervla.dataset.storage.collection_manifest import (
     build_collection_manifest,
     collection_episode_records,
     complete_episode_ids_per_task,
@@ -474,7 +474,7 @@ def test_quarantine_incomplete_moves_reward_shard_when_hidden_sidecar_missing(tm
 
 
 def test_append_episode_index_record(tmp_path):
-    from dreamervla.dataset.collection_manifest import (
+    from dreamervla.dataset.storage.collection_manifest import (
         EPISODE_INDEX_NAME,
         append_episode_index_record,
     )
@@ -492,7 +492,7 @@ def test_append_episode_index_record(tmp_path):
 def test_append_episode_index_record_is_safe_under_parallel_writers(tmp_path):
     import multiprocessing
 
-    from dreamervla.dataset.collection_manifest import (
+    from dreamervla.dataset.storage.collection_manifest import (
         EPISODE_INDEX_NAME,
         append_episode_index_record,
     )

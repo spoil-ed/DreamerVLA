@@ -1,7 +1,6 @@
 """PERF-Q1: EMAHelper.step must fuse the EMA blend with torch._foreach_* and stay
 numerically identical to the per-parameter mul_/add_ reference loop.
 
-Plan: docs/plans/2026-06-23-perf-q1-ema-foreach.md
 """
 
 from __future__ import annotations
@@ -9,7 +8,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from dreamervla.utils.ema import EMAHelper
+from dreamervla.utils.training.ema import EMAHelper
 
 
 class _MixedModule(nn.Module):

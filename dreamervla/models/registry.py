@@ -68,7 +68,6 @@ def _lazy_get_model(module_name: str) -> ModelBuilder:
     return _builder
 
 
-register_model("openvla", _lazy_get_model("dreamervla.models.embodiment.openvla"))
 register_model("openvla_oft", _lazy_get_model("dreamervla.models.embodiment.openvla_oft"))
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 def test_oft_collect_common_exposes_shared_helpers() -> None:
-    from dreamervla.runtime.oft_collect import (
+    from dreamervla.runtime.rollout.oft_collect import (
         assert_policy_mode_matches,
         load_policy,
         make_preprocess_config,
@@ -21,7 +21,7 @@ def test_oft_collect_common_exposes_shared_helpers() -> None:
 def test_oft_collect_policy_device_accepts_cpu_sentinel() -> None:
     import torch
 
-    from dreamervla.runtime.oft_collect import _policy_device_from_id
+    from dreamervla.runtime.rollout.oft_collect import _policy_device_from_id
 
     assert _policy_device_from_id(-1) == torch.device("cpu")
     assert _policy_device_from_id("cpu") == torch.device("cpu")
@@ -30,7 +30,7 @@ def test_oft_collect_policy_device_accepts_cpu_sentinel() -> None:
 
 
 def test_vla_hidden_token_spec_derives_loaded_policy_geometry() -> None:
-    from dreamervla.runtime.oft_collect import vla_hidden_token_spec
+    from dreamervla.runtime.rollout.oft_collect import vla_hidden_token_spec
 
     class _VisionBackbone:
         per_image = 128
@@ -186,7 +186,7 @@ def test_collect_rollouts_experiment_composes() -> None:
 
 
 def test_collect_egl_render_pool_defaults_to_non_inference_gpus() -> None:
-    from dreamervla.runtime.rollout_collection_ray import (
+    from dreamervla.runtime.rollout.rollout_collection_ray import (
         _ensure_collect_render_device_pool,
     )
 
@@ -208,7 +208,7 @@ def test_collect_egl_render_pool_defaults_to_non_inference_gpus() -> None:
 def test_collect_egl_render_pool_rejects_inference_overlap_without_spare_gpu() -> None:
     import pytest
 
-    from dreamervla.runtime.rollout_collection_ray import (
+    from dreamervla.runtime.rollout.rollout_collection_ray import (
         _ensure_collect_render_device_pool,
     )
 
@@ -224,7 +224,7 @@ def test_collect_egl_render_pool_rejects_inference_overlap_without_spare_gpu() -
 
 
 def test_collect_egl_render_pool_preserves_explicit_pool() -> None:
-    from dreamervla.runtime.rollout_collection_ray import (
+    from dreamervla.runtime.rollout.rollout_collection_ray import (
         _ensure_collect_render_device_pool,
     )
 
@@ -243,14 +243,14 @@ def test_collect_egl_render_pool_preserves_explicit_pool() -> None:
 
 
 def test_ray_task_ids_expand_all_without_legacy_scheduler() -> None:
-    from dreamervla.runtime.rollout_collection_ray import _resolve_ray_task_ids
+    from dreamervla.runtime.rollout.rollout_collection_ray import _resolve_ray_task_ids
 
     assert _resolve_ray_task_ids("all", num_tasks=None, suite="libero_goal") == list(range(10))
     assert _resolve_ray_task_ids([4, 1], num_tasks=None, suite="libero_goal") == [4, 1]
 
 
 def test_ray_dump_step_records_episode_id() -> None:
-    from dreamervla.runtime.rollout_collection_ray import _build_oft_dump_step
+    from dreamervla.runtime.rollout.rollout_collection_ray import _build_oft_dump_step
 
     class _Env:
         def full_record(self):
@@ -288,7 +288,7 @@ def test_ray_dump_step_records_episode_id() -> None:
 def test_wait_worker_results_batches_ray_get(monkeypatch) -> None:
     import ray
 
-    from dreamervla.runtime.rollout_collection_ray import _wait_worker_results
+    from dreamervla.runtime.rollout.rollout_collection_ray import _wait_worker_results
 
     calls = []
 

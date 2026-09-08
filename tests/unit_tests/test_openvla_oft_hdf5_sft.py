@@ -111,7 +111,7 @@ def _write_demo_file(path: Path, num_demos: int = 3, length: int = 2) -> None:
 
 
 def test_vla_sft_hdf5_dataset_randomly_keeps_one_demo_per_file(tmp_path: Path) -> None:
-    from dreamervla.dataset.vla_sft_hdf5_dataset import VLASFTHDF5Dataset
+    from dreamervla.dataset.libero import VLASFTHDF5Dataset
 
     _write_demo_file(tmp_path / "task_alpha_demo.hdf5")
     _write_demo_file(tmp_path / "task_beta_demo.hdf5")
@@ -152,6 +152,13 @@ def test_vla_sft_hdf5_dataset_randomly_keeps_one_demo_per_file(tmp_path: Path) -
     assert first.data_spec.one_trajectory_sft is True
     assert first.data_spec.demos_per_task == 1
 
+    # Exercise the raw HDF5 reader and model transform together after the split.
+    sample = first[0]
+    np.testing.assert_allclose(sample["actions"], [[0, 0, 0, 0, 0, 0, 1]] * 2)
+    assert sample["pixel_values"].shape == (3, 224, 224)
+    assert sample["labels"].shape == sample["input_ids"].shape
+    assert (sample["labels"] != -100).sum().item() == 2 * 7 + 1
+
 
 @pytest.mark.parametrize(
     ("kwargs", "match"),
@@ -166,7 +173,7 @@ def test_vla_sft_hdf5_dataset_rejects_non_mainline_inputs(
     kwargs: dict[str, object],
     match: str,
 ) -> None:
-    from dreamervla.dataset.vla_sft_hdf5_dataset import VLASFTHDF5Dataset
+    from dreamervla.dataset.libero import VLASFTHDF5Dataset
 
     _write_demo_file(tmp_path / "task_demo.hdf5", num_demos=1, length=1)
     stats = {

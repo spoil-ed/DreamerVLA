@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from dreamervla.utils.run_paths import infer_run_root, resolve_resume_checkpoint
+from dreamervla.utils.checkpoint.run_artifacts import infer_run_root, resolve_resume_checkpoint
 
 
 def test_infer_run_root_accepts_run_and_canonical_checkpoint_paths(

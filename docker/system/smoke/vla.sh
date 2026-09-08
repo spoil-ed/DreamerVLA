@@ -6,7 +6,7 @@ set -euo pipefail
 echo "[vla-smoke] checking the complete uv-installed environment"
 uv --version
 uv pip check
-python -m dreamervla.diagnostics.verify_install
+python -m dreamervla.diagnostics.checks.verify_install
 
 python - <<'PY'
 from __future__ import annotations

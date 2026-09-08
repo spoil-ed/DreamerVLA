@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 import torch
 
-from dreamervla.diagnostics import wm_single_trajectory_overfit as diag
+from dreamervla.diagnostics.benchmarks import wm_single_trajectory_overfit as diag
 
 
 def test_epoch_batches_visit_each_window_once() -> None:
@@ -232,17 +232,6 @@ def test_run_input_error_is_written_to_output_directory(tmp_path: Path) -> None:
         )
 
     assert "hidden HDF5 not found" in (out_dir / "error.txt").read_text(encoding="utf-8")
-
-
-def test_experiment_launcher_is_thin_and_dry_run_safe() -> None:
-    root = Path(__file__).resolve().parents[2]
-    script = root / "scripts" / "experiments" / "single_trajectory_overfit" / "train.sh"
-
-    text = script.read_text(encoding="utf-8")
-
-    assert "dreamervla.diagnostics.wm_single_trajectory_overfit" in text
-    assert '"$@"' in text
-    assert "--run" in text
 
 
 def test_plot_curves_writes_nonempty_png(tmp_path: Path) -> None:

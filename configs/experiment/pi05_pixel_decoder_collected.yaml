@@ -32,7 +32,7 @@ launch:
 
 data:
   replay:
-    _target_: dreamervla.runtime.pi05_trajectory_replay.Pi05TrajectoryReplay
+    _target_: dreamervla.runtime.replay.pi05_trajectory_replay.Pi05TrajectoryReplay
     data_dir: ${task.collected_reward_dir}
     sequence_length: 1
     encode_batch_size: 4

@@ -410,8 +410,8 @@ def test_temporal_supervision_penalizes_static_predictions_with_valid_gradients(
 
 
 def test_training_and_both_evaluation_paths_agree_with_raw_state_and_mask() -> None:
-    from dreamervla.diagnostics.compare_wm_libero_rollout import _rollout_closed_loop
-    from dreamervla.runtime.cotrain_eval import (
+    from dreamervla.diagnostics.evaluation.compare_wm_libero_rollout import _rollout_closed_loop
+    from dreamervla.runtime.evaluation.cotrain_eval import (
         EncodedEvalTrajectory,
         closed_loop_world_model_trajectory,
     )

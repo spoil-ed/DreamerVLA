@@ -4,7 +4,7 @@ import torch
 from omegaconf import OmegaConf
 
 from dreamervla.runners.base_runner import BaseRunner
-from dreamervla.utils.hf_module import load_module_pretrained, save_module_pretrained
+from dreamervla.utils.checkpoint.hf_module import load_module_pretrained, save_module_pretrained
 
 
 def test_save_load_roundtrip(tmp_path):

@@ -89,6 +89,7 @@ pi05:
   # The upstream base repo has no task statistics. Reuse the official LIBERO
   # statistics from the released SFT repo without modifying either snapshot.
   assets_path: ${oc.env:PI05_ASSETS_CKPT,${task.pi05.ckpt_path}}
+  normalization_asset_id: physical-intelligence/libero
   config_name: pi05_libero
   action_horizon: 10
   replan_steps: 10

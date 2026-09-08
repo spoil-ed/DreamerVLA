@@ -4,7 +4,7 @@ import numpy as np
 from omegaconf import OmegaConf
 
 from dreamervla.envs.libero.libero_env import LiberoEnv
-from dreamervla.runtime.libero_chunk_eval import ChunkEvalTally, run_rlinf_chunk_eval
+from dreamervla.runtime.evaluation.libero_chunk_eval import ChunkEvalTally, run_rlinf_chunk_eval
 
 
 class _ScriptedChunkEnv:
@@ -177,7 +177,7 @@ def test_runner_rlinf_chunk_uses_configured_num_envs_without_episode_cap(
     monkeypatch,
     tmp_path,
 ):
-    from dreamervla.runtime.libero_vla_evaluation_base import LIBEROVLAEvaluationBase
+    from dreamervla.runtime.evaluation.libero_vla_evaluation_base import LIBEROVLAEvaluationBase
 
     created: dict[str, int] = {}
 
@@ -214,7 +214,7 @@ def test_runner_rlinf_chunk_uses_configured_num_envs_without_episode_cap(
         FakeLiberoEnv,
     )
     monkeypatch.setattr(
-        "dreamervla.runtime.libero_chunk_eval.run_rlinf_chunk_eval",
+        "dreamervla.runtime.evaluation.libero_chunk_eval.run_rlinf_chunk_eval",
         lambda *_args, **_kwargs: FakeTally(),
     )
 
@@ -267,7 +267,7 @@ def test_runner_rlinf_chunk_uses_configured_num_envs_without_episode_cap(
 def test_build_libero_env_cfg_maps_eval_knobs():
     from omegaconf import OmegaConf
 
-    from dreamervla.runtime.libero_vla_evaluation_base import build_libero_env_cfg
+    from dreamervla.runtime.evaluation.libero_vla_evaluation_base import build_libero_env_cfg
 
     eval_cfg = OmegaConf.create(
         {

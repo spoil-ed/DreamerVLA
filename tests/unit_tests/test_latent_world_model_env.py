@@ -811,11 +811,11 @@ def test_latent_world_model_env_batches_reset_observation_copy(monkeypatch) -> N
 def test_latent_world_model_env_config_modules_make_replay_transition():
     env = LatentWorldModelEnv(
         world_model={
-            "target": "dreamervla.workers.actor._test_models:TinyLumosWorldModel",
+            "target": "dreamervla.diagnostics.fixtures.actor_models:TinyLumosWorldModel",
             "kwargs": {"hidden_dim": 4, "action_dim": 7},
         },
         classifier={
-            "target": "dreamervla.workers.actor._test_models:TinySuccessClassifier",
+            "target": "dreamervla.diagnostics.fixtures.actor_models:TinySuccessClassifier",
             "kwargs": {"hidden_dim": 4, "window": 3},
         },
         latent_dim=4,

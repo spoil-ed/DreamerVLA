@@ -152,7 +152,7 @@ def test_manual_real_env_rejects_egl_when_cfg_pool_absent(monkeypatch) -> None:
 
 
 def test_eval_loop_applies_libero_helper_from_configured_pool(monkeypatch) -> None:
-    from dreamervla.runtime import libero_vla_evaluation_base
+    from dreamervla.runtime.evaluation import libero_vla_evaluation_base
 
     calls: list[tuple[str, int, list[int]]] = []
 

@@ -86,7 +86,7 @@ def _make_episode(success: bool) -> list[dict]:
 
 def test_round_trip_balanced_terminal_dataset(tmp_path: Path) -> None:
     """Writer → BalancedTerminalDataset round-trip."""
-    from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
+    from dreamervla.dataset.storage.rollout_dump_writer import RolloutDumpWriter
 
     reward_dir = tmp_path / "reward"
     hidden_dir = tmp_path / "hidden"
@@ -125,7 +125,7 @@ def test_round_trip_balanced_terminal_dataset(tmp_path: Path) -> None:
     assert cfg["rotate_images_180"] is True
 
     # ── Round-trip: load via BalancedTerminalDataset ───────────────────────────
-    from dreamervla.dataset.balanced_terminal_dataset import BalancedTerminalDataset
+    from dreamervla.dataset.classifier_dataset import BalancedTerminalDataset
 
     dataset = BalancedTerminalDataset(
         hdf5_dir=str(reward_dir),
@@ -172,7 +172,7 @@ def test_round_trip_balanced_terminal_dataset(tmp_path: Path) -> None:
 
 def test_writer_creates_directories(tmp_path: Path) -> None:
     """Writer must create reward_dir and hidden_dir if they don't exist."""
-    from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
+    from dreamervla.dataset.storage.rollout_dump_writer import RolloutDumpWriter
 
     reward_dir = tmp_path / "deep" / "reward"
     hidden_dir = tmp_path / "deep" / "hidden"
@@ -192,8 +192,8 @@ def test_writer_rgb_only_skips_latent_directory_and_embedding(tmp_path: Path) ->
     """RGB collection must not create the multi-terabyte prefix sidecar."""
     import h5py
 
-    from dreamervla.dataset.collection_manifest import complete_episode_ids_per_task
-    from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
+    from dreamervla.dataset.storage.collection_manifest import complete_episode_ids_per_task
+    from dreamervla.dataset.storage.rollout_dump_writer import RolloutDumpWriter
 
     reward_dir = tmp_path / "reward"
     hidden_dir = tmp_path / "latent"
@@ -225,7 +225,7 @@ def test_writer_dtypes(tmp_path: Path) -> None:
     """Verify HDF5 datasets have the exact dtypes from the data contract."""
     import h5py
 
-    from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
+    from dreamervla.dataset.storage.rollout_dump_writer import RolloutDumpWriter
 
     reward_dir = tmp_path / "reward"
     hidden_dir = tmp_path / "hidden"
@@ -263,7 +263,7 @@ def test_writer_shapes(tmp_path: Path) -> None:
     """Verify HDF5 dataset shapes match the data contract."""
     import h5py
 
-    from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
+    from dreamervla.dataset.storage.rollout_dump_writer import RolloutDumpWriter
 
     reward_dir = tmp_path / "reward"
     hidden_dir = tmp_path / "hidden"
@@ -303,7 +303,7 @@ def test_writer_applies_lossless_time_chunk_compression(tmp_path: Path) -> None:
     """Configured gzip is visible on reward frames and latent sidecars."""
     import h5py
 
-    from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
+    from dreamervla.dataset.storage.rollout_dump_writer import RolloutDumpWriter
 
     reward_dir = tmp_path / "reward"
     hidden_dir = tmp_path / "hidden"
@@ -340,7 +340,7 @@ def test_writer_data_attrs(tmp_path: Path) -> None:
     """data_attrs (env meta) are written once to the reward HDF5 data-group attrs."""
     import h5py
 
-    from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
+    from dreamervla.dataset.storage.rollout_dump_writer import RolloutDumpWriter
 
     reward_dir = tmp_path / "reward"
     hidden_dir = tmp_path / "hidden"
@@ -367,7 +367,7 @@ def test_writer_episode_metadata_attrs(tmp_path: Path) -> None:
     """episode_metadata is filtered to canonical cotrain resume fields."""
     import h5py
 
-    from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
+    from dreamervla.dataset.storage.rollout_dump_writer import RolloutDumpWriter
 
     reward_dir = tmp_path / "reward"
     hidden_dir = tmp_path / "hidden"

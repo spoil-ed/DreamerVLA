@@ -13,8 +13,8 @@ import numpy as np
 import pytest
 from omegaconf import OmegaConf
 
-from dreamervla.runtime.libero_vla_eval_action import EmbodiedEvalActionMixin
-from dreamervla.runtime.oft_collect import process_action, process_action_batch
+from dreamervla.runtime.evaluation.libero_vla_eval_action import EmbodiedEvalActionMixin
+from dreamervla.runtime.rollout.oft_collect import process_action, process_action_batch
 
 
 class _EvalActionHarness(EmbodiedEvalActionMixin):

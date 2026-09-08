@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from dreamervla.diagnostics import verify_install
+from dreamervla.diagnostics.checks import verify_install
 
 EXPECTED_CRITICAL_VERSIONS = {
     "diffusers": "0.33.0",

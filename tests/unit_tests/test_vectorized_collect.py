@@ -17,7 +17,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from dreamervla.runtime.vectorized_collect import collect_vectorized
+from dreamervla.runtime.rollout.vectorized_collect import collect_vectorized
 
 # ── fakes ─────────────────────────────────────────────────────────────────────
 
@@ -323,7 +323,7 @@ def test_rotating_writer_slices_demos_through_vectorized_loop(
     the rotating writer must re-emit them per shard so every sliced shard is readable."""
     import h5py
 
-    from dreamervla.dataset.rollout_dump_writer import RotatingRolloutDumpWriter
+    from dreamervla.dataset.storage.rollout_dump_writer import RotatingRolloutDumpWriter
 
     K = 2
     work_list = [(0, 0), (0, 1), (0, 2), (0, 3), (0, 4)]

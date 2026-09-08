@@ -22,7 +22,7 @@ def test_collection_real_oft_matches_sidecar_schema(tmp_path) -> None:
     from hydra import compose, initialize_config_dir
 
     from dreamervla.runners import RolloutCollectionRunner
-    from dreamervla.runtime.oft_collect import load_policy, vla_hidden_token_spec
+    from dreamervla.runtime.rollout.oft_collect import load_policy, vla_hidden_token_spec
     from dreamervla.train import run
 
     if ray.is_initialized():

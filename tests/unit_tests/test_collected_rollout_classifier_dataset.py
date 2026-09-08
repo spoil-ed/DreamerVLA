@@ -58,7 +58,7 @@ def _make_episode(success: bool) -> list[dict]:
 @pytest.fixture()
 def dump(tmp_path: Path, hidden_token_preprocess_config):
     """Write a two-demo dump (one success, one failure) and return dirs."""
-    from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
+    from dreamervla.dataset.storage.rollout_dump_writer import RolloutDumpWriter
 
     reward_dir = tmp_path / "reward"
     hidden_dir = tmp_path / "hidden"
@@ -87,7 +87,7 @@ def dump(tmp_path: Path, hidden_token_preprocess_config):
 @pytest.fixture()
 def dataset(dump):
     """Instantiate CollectedRolloutClassifierDataset over the two-demo dump."""
-    from dreamervla.dataset.collected_rollout_classifier_dataset import (
+    from dreamervla.dataset.classifier_dataset import (
         CollectedRolloutClassifierDataset,
     )
 
@@ -112,10 +112,10 @@ def dataset(dump):
 
 def test_import():
     """Class is importable from its module."""
-    from dreamervla.dataset.collected_rollout_classifier_dataset import (
+    from dreamervla.dataset.base.latent_token_dataloader import PixelHiddenSequenceDataset
+    from dreamervla.dataset.classifier_dataset import (
         CollectedRolloutClassifierDataset,
     )
-    from dreamervla.dataset.pixel_hidden_sequence_dataset import PixelHiddenSequenceDataset
 
     assert issubclass(CollectedRolloutClassifierDataset, PixelHiddenSequenceDataset)
 

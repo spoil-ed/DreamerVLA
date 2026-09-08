@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dreamervla.diagnostics.check_commit_message import validate_subject
+from dreamervla.diagnostics.checks.check_commit_message import validate_subject
 
 
 def test_commit_subject_accepts_current_dreamervla_style() -> None:

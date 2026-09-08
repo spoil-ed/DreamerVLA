@@ -8,13 +8,13 @@ import pytest
 import torch
 from omegaconf import OmegaConf
 
-from dreamervla.diagnostics.eval_chunkwm_closeloop import (
+from dreamervla.diagnostics.evaluation.eval_chunkwm_closeloop import (
     load_chunk_wm,
     load_demo,
     rollout,
     truncate_demo_to_wm_context,
 )
-from dreamervla.diagnostics.eval_dino_token_wm import _runner_config_from_checkpoint
+from dreamervla.diagnostics.evaluation.eval_dino_token_wm import _runner_config_from_checkpoint
 from dreamervla.models.embodiment.world_model.wm_chunk import ChunkAwareWorldModel
 
 

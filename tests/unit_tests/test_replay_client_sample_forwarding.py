@@ -15,7 +15,7 @@ test doubles) that don't know about staleness still work.
 from __future__ import annotations
 
 import dreamervla.workers.replay.replay_worker as replay_worker_module
-from dreamervla.runtime.online_replay import OnlineReplay
+from dreamervla.runtime.replay.online_replay import OnlineReplay
 from dreamervla.workers.actor.learner_worker import ReplayClient
 from dreamervla.workers.replay.replay_worker import ReplayWorker
 

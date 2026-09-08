@@ -32,16 +32,15 @@ ENV CONDA_ENV_NAME=base \
 WORKDIR /opt/dreamervla
 
 # Keep the expensive uv environment independent of ordinary source and
-# documentation changes. uv.lock participates in the cache key even though the
-# repository's complete runtime contract is split between requirements.txt and
-# the pinned third-party install scripts.
-COPY pyproject.toml requirements.txt uv.lock /opt/dreamervla/
+# documentation changes. Runtime dependencies come from pyproject.toml,
+# requirements.txt, and the pinned third-party install scripts.
+COPY pyproject.toml requirements.txt /opt/dreamervla/
 COPY scripts/install_env.sh /opt/dreamervla/scripts/install_env.sh
 COPY scripts/install/ /opt/dreamervla/scripts/install/
 COPY configs/scripts/install/ /opt/dreamervla/configs/scripts/install/
 COPY dreamervla/__init__.py dreamervla/config_resolvers.py /opt/dreamervla/dreamervla/
 COPY dreamervla/launchers/__init__.py dreamervla/launchers/workflow.py dreamervla/launchers/task_cli.py /opt/dreamervla/dreamervla/launchers/
-COPY dreamervla/diagnostics/__init__.py dreamervla/diagnostics/verify_install.py /opt/dreamervla/dreamervla/diagnostics/
+COPY dreamervla/diagnostics/__init__.py dreamervla/diagnostics/checks/verify_install.py /opt/dreamervla/dreamervla/diagnostics/
 RUN touch README.md \
     && git config --global http.version HTTP/1.1 \
     && if [[ -n "${GITHUB_MIRROR_PREFIX}" ]]; then \
@@ -117,7 +116,7 @@ LABEL org.opencontainers.image.revision="${DVLA_GIT_COMMIT}" \
 
 RUN python -c 'import json, pathlib; pathlib.Path(".vla-image.json").write_text(json.dumps({"schema_version": 1, "commit": "'"${DVLA_GIT_COMMIT}"'", "version": "'"${DVLA_IMAGE_VERSION}"'", "profile": "cu124-h100-libero-goal-v1", "built_at": "'"${DVLA_BUILD_TIME}"'"}, indent=2, sort_keys=True) + "\n", encoding="utf-8")' \
     && mkdir -p /data \
-    && python -m dreamervla.diagnostics.verify_install \
+    && python -m dreamervla.diagnostics.checks.verify_install \
     && uv pip check
 
 VOLUME ["/data"]

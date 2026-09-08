@@ -35,30 +35,30 @@ from omegaconf import DictConfig, OmegaConf, open_dict
 from PIL import Image
 from transformers import GenerationConfig
 
-import dreamervla.runtime.libero_vla_eval_helpers as _eh
+import dreamervla.runtime.evaluation.libero_vla_eval_helpers as _eh
 from dreamervla.constants import DEFAULT_ACTION_TOKEN_ID
-from dreamervla.runtime.cotrain_eval import CotrainEvalObserver
-from dreamervla.runtime.eval_metrics import (
+from dreamervla.runtime.evaluation.cotrain_eval import CotrainEvalObserver
+from dreamervla.runtime.evaluation.eval_metrics import (
     shard_libero_eval_tasks,
     summarize_libero_task_success,
 )
-from dreamervla.runtime.libero_vla_eval_action import EmbodiedEvalActionMixin
-from dreamervla.runtime.libero_vla_eval_export import EmbodiedEvalExportMixin
-from dreamervla.runtime.libero_vla_eval_image_token import EmbodiedEvalImageTokenMixin
-from dreamervla.runtime.libero_vla_eval_latent import EmbodiedEvalLatentMixin
-from dreamervla.runtime.libero_vla_evaluation_base import (
+from dreamervla.runtime.evaluation.libero_vla_eval_action import EmbodiedEvalActionMixin
+from dreamervla.runtime.evaluation.libero_vla_eval_export import EmbodiedEvalExportMixin
+from dreamervla.runtime.evaluation.libero_vla_eval_image_token import EmbodiedEvalImageTokenMixin
+from dreamervla.runtime.evaluation.libero_vla_eval_latent import EmbodiedEvalLatentMixin
+from dreamervla.runtime.evaluation.libero_vla_evaluation_base import (
     LIBEROVLAEvaluationBase,
     _eval_render_regime_params,
 )
-from dreamervla.utils.component_checkpoint import state_dict_sha256
-from dreamervla.utils.hf_checkpoint import (
+from dreamervla.utils.checkpoint.component_checkpoint import state_dict_sha256
+from dreamervla.utils.checkpoint.hf_checkpoint import (
     is_hf_checkpoint,
     load_runner_payload,
     resolve_hf_checkpoint_dir,
 )
-from dreamervla.utils.paths import data_path
-from dreamervla.utils.run_paths import resolve_resume_checkpoint
-from dreamervla.utils.torch_utils import freeze_module
+from dreamervla.utils.checkpoint.run_artifacts import resolve_resume_checkpoint
+from dreamervla.utils.config.paths import data_path
+from dreamervla.utils.training.torch_utils import freeze_module
 
 
 def normalize_dreamer_actor_input_source(source: Any) -> str:
@@ -1387,7 +1387,7 @@ class LIBEROVLAEvaluationRunner(
             resolve_libero_eval_protocol,
             save_rollout_video,
         )
-        from dreamervla.runtime.eval_subproc_env import EvalSubprocEnv, make_libero_env_fn
+        from dreamervla.runtime.envs.eval_subproc_env import EvalSubprocEnv, make_libero_env_fn
 
         protocol = resolve_libero_eval_protocol(self.cfg, eval_cfg)
         seed = int(protocol["seed"])
@@ -1862,7 +1862,7 @@ class LIBEROVLAEvaluationRunner(
                     np.asarray(action, dtype=np.float32)
                     for action in list(action_chunk)[: int(action_steps)]
                 ]
-            from dreamervla.runtime.oft_collect import process_action
+            from dreamervla.runtime.rollout.oft_collect import process_action
 
             return [
                 process_action(action).astype(np.float32, copy=False)

@@ -19,7 +19,7 @@ from omegaconf import DictConfig, OmegaConf
 from dreamervla.config_resolvers import register_dreamervla_resolvers
 from dreamervla.launchers.contracts import DefaultLaunchContract, LaunchContract
 from dreamervla.launchers.task_cli import normalize_task_flag
-from dreamervla.utils.run_paths import infer_run_root, resolve_resume_checkpoint
+from dreamervla.utils.checkpoint.run_artifacts import infer_run_root, resolve_resume_checkpoint
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = PROJECT_ROOT / "configs"

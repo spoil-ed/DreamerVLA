@@ -15,8 +15,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from dreamervla.runtime import vec_rollout_env as vec_mod
-from dreamervla.runtime.vec_rollout_env import VecRolloutEnv, default_env_factory
+from dreamervla.runtime.envs import vec_rollout_env as vec_mod
+from dreamervla.runtime.envs.vec_rollout_env import VecRolloutEnv, default_env_factory
 
 # ── module-level fakes (must be importable for spawn pickling) ────────────────
 

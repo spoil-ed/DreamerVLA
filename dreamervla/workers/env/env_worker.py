@@ -23,11 +23,11 @@ from typing import Any
 import numpy as np
 import ray
 
-from dreamervla.scheduler.worker import Worker
-from dreamervla.utils.egl_device import (
+from dreamervla.runtime.envs.render_device import (
     apply_libero_render_regime,
     log_egl_device_diagnostics_from_env,
 )
+from dreamervla.scheduler.worker import Worker
 
 
 def _libero_render_backend(env_cfg: dict[str, Any], default: str = "osmesa") -> str:
@@ -38,7 +38,7 @@ def _libero_render_backend(env_cfg: dict[str, Any], default: str = "osmesa") -> 
 
 
 def _libero_render_gpu_pool(env_cfg: dict[str, Any]) -> list[int]:
-    from dreamervla.runtime.render_device import parse_device_ids
+    from dreamervla.runtime.envs.render_device import parse_device_ids
 
     for key in ("gpu_pool", "render_devices", "egl_device_pool"):
         devices = parse_device_ids(env_cfg.get(key))

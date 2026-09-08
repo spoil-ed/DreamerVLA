@@ -1,29 +1,28 @@
 """Embodiment model implementations for VLA, encoders, and world models."""
 
-from dreamervla.models.embodiment.base_encoder import BaseEncoder
-from dreamervla.models.embodiment.openvla_oft_policy import OpenVLAOFTPolicy
-from dreamervla.models.embodiment.pi05 import Pi05Policy
-from dreamervla.models.embodiment.protocol import (
-    EncoderInputBatch,
-    build_encoder_input_batch,
-)
-from dreamervla.models.embodiment.qwen_groot import QwenGR00TPolicy
-from dreamervla.models.embodiment.world_model import (
-    ChunkAwareWorldModel,
-    DinoTokenWorldModel,
-    Pi05PrefixInputWorldModel,
-    WorldModel,
-)
+from importlib import import_module
+from typing import Any
 
-__all__ = [
-    "BaseEncoder",
-    "ChunkAwareWorldModel",
-    "DinoTokenWorldModel",
-    "EncoderInputBatch",
-    "OpenVLAOFTPolicy",
-    "Pi05Policy",
-    "Pi05PrefixInputWorldModel",
-    "QwenGR00TPolicy",
-    "WorldModel",
-    "build_encoder_input_batch",
-]
+_MODULES = {
+    "BaseEncoder": "base_encoder",
+    "ChunkAwareWorldModel": "world_model",
+    "DinoTokenWorldModel": "world_model",
+    "EncoderInputBatch": "protocol",
+    "OpenVLAOFTPolicy": "openvla_oft_policy",
+    "Pi05Policy": "pi05",
+    "Pi05PrefixInputWorldModel": "world_model",
+    "QwenGR00TPolicy": "qwen_groot",
+    "WorldModel": "world_model",
+    "build_encoder_input_batch": "protocol",
+}
+
+__all__ = list(_MODULES)
+
+
+def __getattr__(name: str) -> Any:
+    """Load a selected embodiment without importing unrelated model families."""
+    if name not in _MODULES:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(f"{__name__}.{_MODULES[name]}"), name)
+    globals()[name] = value
+    return value

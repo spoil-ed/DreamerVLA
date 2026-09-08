@@ -3,7 +3,7 @@ import argparse
 import numpy as np
 import pytest
 
-from dreamervla.diagnostics import libero_egl_pressure as diag
+from dreamervla.diagnostics.benchmarks import libero_egl_pressure as diag
 
 
 class _FakeEnv:

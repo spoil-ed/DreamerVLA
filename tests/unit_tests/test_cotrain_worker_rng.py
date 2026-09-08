@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import torch
 
-from dreamervla.utils.seed import capture_rng_state
+from dreamervla.utils.training.seed import capture_rng_state
 from dreamervla.workers.actor.embodied_fsdp_actor import EmbodiedFSDPActor
 from dreamervla.workers.actor.learner_worker import LearnerWorker
 

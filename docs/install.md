@@ -15,7 +15,7 @@ bash scripts/install_env.sh
 conda activate dreamervla
 ```
 
-For the Docker-independent, lockfile-backed uv environment, see
+For the Docker-independent uv environment, see
 [`uv_environment.md`](uv_environment.md). The maintained CUDA profiles are
 `cu124-train` (the official H100-compatible pins) and `cu130-train` (CUDA 13.0 /
 Blackwell with PyTorch SDPA).
@@ -51,7 +51,8 @@ bash scripts/install_env.sh only=[20_torch] force=true
 
 ## Assets
 
-Download the pinned LeRobot LIBERO data used by the π0.5 loader:
+The default π0.5 recipe reads the mounted LeRobot v3 dataset described in
+[`data_layout.md`](data_layout.md). For the optional earlier v2 input, use:
 
 ```bash
 bash scripts/download_assets.sh 'only=[20_libero_dataset]'
@@ -81,7 +82,7 @@ bash scripts/download_assets.sh download.libero=false download.calvin=true \
 ## Optional π0.5 / OpenPI
 
 The system-Docker/JFS-uv setup is defined by
-[`environments/rlinf-libero-pi05`](../environments/rlinf-libero-pi05/README.md).
+[`configs/environments/rlinf-libero-pi05`](../configs/environments/rlinf-libero-pi05/README.md).
 Its `embodied`, `libero`, and `pi05` extras install RLinf's published OpenPI
 runtime into `/runtime/venvs/openpi-libero`; DreamerVLA runs the locally migrated
 RLinf loader/transforms/FSDP SFT step. `OPENPI_ROOT`/`third_party/openpi` remains
@@ -129,13 +130,16 @@ torchrun --standalone --nproc-per-node=8 -m dreamervla.train \
 ```
 
 The SFT process uses `torchrun` plus FSDP and does not start Ray. The port retains
-RLinf's official OpenPI loader, LIBERO transforms, SFT loss, VLM-freeze,
+RLinf's OpenPI batch contract, LIBERO transforms, SFT loss, VLM-freeze,
 gradient-accumulation, optimizer, and warmup semantics locally.
 
-Training reads the completed local LeRobot root through the Hydra-selected
-`LeRobotLIBERODataLoaderFactory`. The default is a completed local path; an
-explicit Hugging Face repo id retains RLinf/OpenPI's normal download behavior.
-The factory validates the official repo identity and pinned revision. SFT initializes model
+Training reads native LeRobot v3 data through the Hydra-selected local
+`dreamervla.dataset.libero.LeRobotV3LIBERODataLoaderFactory`. The default root is
+`/jfs/public/prod/hf-datasets/datasets/lerobot/libero`; use `PI05_LIBERO_DATA` for
+another local v3 root. The earlier download command above downloads v2 data and
+does not supply this v3 input. The local reader uses PyArrow and PyAV, already
+included in the isolated π0.5 environment; the root package exposes them through
+the `lerobot-v3` extra. OpenWAM is not a runtime dependency. SFT initializes model
 parameters from `task.pi05.base_ckpt_path` and
 loads `physical-intelligence/libero/norm_stats.json` from
 `task.pi05.assets_path`. The default assets path is the official RLinf SFT repo,
@@ -148,7 +152,7 @@ normalization statistics. Evaluate a DreamerVLA SFT checkpoint with
 Run the isolated runtime verifier before π0.5 training or evaluation:
 
 ```bash
-python -m dreamervla.diagnostics.verify_pi05_runtime
+python -m dreamervla.diagnostics.checks.verify_pi05_runtime
 ```
 
 The one-episode-per-task recipe retains flat milestone checkpoints at steps
@@ -163,6 +167,3 @@ bash scripts/install/60_verify.sh
 python -m pytest tests/unit_tests -q
 ruff check dreamervla tests
 ```
-
-The fully executed native reproduction record for the separate environment is
-in [`native_environment_reproduction.md`](native_environment_reproduction.md).

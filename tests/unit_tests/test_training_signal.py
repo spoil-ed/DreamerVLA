@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dreamervla.runtime.training_signal import evaluate_imagined_success_sft_signal
+from dreamervla.runtime.training.training_signal import evaluate_imagined_success_sft_signal
 
 
 def test_imagined_success_sft_signal_passes_only_for_a_committed_parameter_change() -> None:

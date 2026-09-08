@@ -22,8 +22,8 @@ from dreamervla.preprocess.sidecar_schema import (
     required_demo_datasets,
     validate_hidden_token_preprocess_config,
 )
-from dreamervla.utils.hydra_config import script_namespace
-from dreamervla.utils.progress import ProgressReporter
+from dreamervla.utils.config.hydra_config import script_namespace
+from dreamervla.utils.logging.progress import ProgressReporter
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 OBS_HIDDEN_SOURCE = "hidden_token"
@@ -235,7 +235,7 @@ def _load_oft_components(args: SimpleNamespace, device: torch.device) -> dict[st
             "The lightweight OpenVLA-OFT loader does not support 8-bit or 4-bit loading."
         )
 
-    from dreamervla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
+    from dreamervla.utils.integrations.openvla_oft_imports import ensure_openvla_oft_on_path
 
     ensure_openvla_oft_on_path()
     from dreamervla.models.embodiment.openvla_oft_policy import OpenVLAOFTPolicy

@@ -19,7 +19,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-from dreamervla.utils.polyak import soft_update
+from dreamervla.utils.training.ema import soft_update
 
 
 class RMSNorm(nn.Module):
@@ -261,6 +261,6 @@ class ReturnPercentileTracker:
         self._high_ema = None if high_ema is None else float(high_ema)
 
 
-# soft_update now lives in dreamervla.utils.polyak (generic, model-independent);
+# soft_update now lives in dreamervla.utils.training.ema (generic, model-independent);
 # re-exported here for existing importers.
 __all__ = ["ReturnPercentileTracker", "TwohotCritic", "soft_update", "symexp", "symlog"]

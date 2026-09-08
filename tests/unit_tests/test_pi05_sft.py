@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import sys
-import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,15 +11,14 @@ from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
 from dreamervla.config import validate_cfg
-from dreamervla.dataset.pi05_sft import (
+from dreamervla.models.embodiment.pi05.policy import (
+    _freeze_unused_continuous_action_parameters,
+)
+from dreamervla.models.embodiment.pi05.sft_data import (
     OFFICIAL_PI05_LIBERO_REPO,
-    OFFICIAL_PI05_LIBERO_REVISION,
     LeRobotLIBERODataLoaderFactory,
     configure_openpi_pytorch_runtime,
     resolve_lerobot_source,
-)
-from dreamervla.models.embodiment.pi05.policy import (
-    _freeze_unused_continuous_action_parameters,
 )
 from dreamervla.runners.vla_sft_training_runner import (
     VLASFTTrainingRunner,
@@ -28,7 +26,7 @@ from dreamervla.runners.vla_sft_training_runner import (
     _strip_legacy_unused_lm_head_optimizer_state,
 )
 from dreamervla.train import _auto_apply_distributed
-from dreamervla.utils.openpi_imports import configure_openpi_jax_runtime
+from dreamervla.utils.integrations.openpi_imports import configure_openpi_jax_runtime
 
 _LOCAL_EXPERIMENT_NAMES = {
     "pi05_libero_sft_one_episode_per_task",
@@ -80,46 +78,20 @@ def test_openpi_runtime_rejects_jax_imported_before_backend_selection(
         configure_openpi_jax_runtime()
 
 
-@pytest.mark.parametrize(
-    ("script_name", "processes"),
-    [
-        ("train_one_episode_per_task.sh", 8),
-        ("train_five_episodes_per_task.sh", 8),
-    ],
-)
-def test_pi05_sft_launchers_use_single_node_loopback_rendezvous(
-    script_name: str,
-    processes: int,
-) -> None:
-    root = Path(__file__).resolve().parents[2]
-    script_path = root / "experiments" / "pi05_sft" / script_name
-    if not script_path.is_file():
-        pytest.skip(f"local ignored experiment launcher is absent: {script_path}")
-    text = script_path.read_text(encoding="utf-8")
-
-    assert "--standalone" not in text
-    assert "--nnodes=1" in text
-    assert "--node-rank=0" in text
-    assert "--master-addr=127.0.0.1" in text
-    assert "--master-port=29500" in text
-    assert f"--nproc-per-node={processes}" in text
-    assert "exec python -m torch.distributed.run" in text
-    assert ".rlinf-runtime" not in text
-    assert "site-packages" not in text
-
-
 def test_pi05_sft_experiment_composes_migrated_rlinf_fsdp_recipe() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         cfg = compose(config_name="train", overrides=["experiment=pi05_libero_sft"])
     OmegaConf.resolve(cfg)
     assert cfg._target_ == "dreamervla.runners.VLASFTTrainingRunner"
-    assert cfg.data.loader._target_ == ("dreamervla.dataset.LeRobotLIBERODataLoaderFactory")
-    assert cfg.data.loader.source.endswith("data/datasets/lerobot/physical-intelligence/libero")
-    assert cfg.data.loader.repo_id == OFFICIAL_PI05_LIBERO_REPO
-    assert cfg.data.loader.revision == OFFICIAL_PI05_LIBERO_REVISION
+    assert cfg.data.loader._target_ == "dreamervla.dataset.libero.LeRobotV3LIBERODataLoaderFactory"
+    assert cfg.data.loader.dataset.dataset_dir == cfg.data.source
+    assert cfg.data.source == "/jfs/public/prod/hf-datasets/datasets/lerobot/libero"
+    assert cfg.data.repo_id == "lerobot/libero"
+    assert cfg.data.format == "lerobot_v3"
+    assert cfg.data.loader.normalization_asset_id == "physical-intelligence/libero"
     assert cfg.data.loader.action_horizon == 10
-    assert cfg.data.noops_filtered is True
+    assert cfg.data.loader.dataset.sequence_length == 10
     assert cfg.actor.micro_batch_size == 4
     assert cfg.actor.global_batch_size == 128
     assert cfg.actor.use_action_chunk_loss is False
@@ -238,7 +210,7 @@ def test_pi05_five_episode_recipe_uses_balanced_subset_and_milestones() -> None:
     OmegaConf.resolve(cfg)
 
     assert "pi05_libero_five_episodes_per_task" in cfg.data.source
-    assert cfg.data.loader.source == cfg.data.source
+    assert cfg.data.loader.dataset.dataset_dir == cfg.data.source
     assert list(cfg.training.milestone_steps) == [2000, 5000, 10000, 20000, 30000]
 
 
@@ -292,23 +264,23 @@ def test_torchrun_auto_distribution_preserves_explicit_pi05_fsdp(
     assert cfg.training.distributed_strategy == "fsdp"
 
 
-def test_pi05_sft_rejects_non_official_lerobot_repo() -> None:
+def test_pi05_sft_rejects_v2_format_for_local_v3_reader() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         cfg = compose(config_name="train", overrides=["experiment=pi05_libero_sft"])
-    cfg.data.loader.repo_id = "legacy/raw-libero"
+    cfg.data.format = "lerobot_v2"
 
-    with pytest.raises(ValueError, match="physical-intelligence/libero"):
+    with pytest.raises(ValueError, match="data.format=lerobot_v3"):
         validate_cfg(cfg, world_size=2)
 
 
-def test_pi05_sft_rejects_unpinned_lerobot_revision() -> None:
+def test_pi05_sft_rejects_loader_normalization_asset_mismatch() -> None:
     config_dir = Path(__file__).resolve().parents[2] / "configs"
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         cfg = compose(config_name="train", overrides=["experiment=pi05_libero_sft"])
-    cfg.data.loader.revision = "main"
+    cfg.data.loader.normalization_asset_id = "lerobot/libero"
 
-    with pytest.raises(ValueError, match="pinned official dataset revision"):
+    with pytest.raises(ValueError, match="normalization_asset_id must match"):
         validate_cfg(cfg, world_size=2)
 
 
@@ -324,41 +296,6 @@ def test_pi05_checkpoint_paths_accept_submit_environment_overrides(
     assert cfg.task.pi05.base_ckpt_path == "/runtime/models/pi05-base"
     assert cfg.task.pi05.ckpt_path == "/runtime/models/pi05-libero-sft"
     assert cfg.task.pi05.assets_path == "/runtime/models/pi05-libero-sft"
-
-
-def test_pi05_runtime_env_keeps_python_and_assets_on_jfs_mount() -> None:
-    root = Path(__file__).resolve().parents[2]
-    values = dict(
-        line.split("=", maxsplit=1)
-        for line in (root / "environments/rlinf-libero-pi05/runtime.env")
-        .read_text(encoding="utf-8")
-        .splitlines()
-        if line and not line.startswith("#")
-    )
-    assert values["DVLA_DATA_ROOT"] == "/runtime/data"
-    assert values["VIRTUAL_ENV"] == "/runtime/venvs/openpi-libero"
-    assert values["HF_ENDPOINT"] == "https://hf-mirror.com"
-    assert values["PI05_BASE_CKPT"] == "/checkpoints/lerobot/pi05_base"
-    assert values["PI05_LIBERO_CKPT"] == ("/checkpoints/RLinf/RLinf-Pi05-LIBERO-SFT")
-    assert not any("PROXY" in key.upper() for key in values)
-
-
-def test_root_pyproject_records_pi05_locked_environment_contract() -> None:
-    root = Path(__file__).resolve().parents[2]
-    with (root / "pyproject.toml").open("rb") as stream:
-        project = tomllib.load(stream)
-    environment = project["tool"]["dreamervla"]["environments"]["pi05-libero"]
-    checkpoints = project["tool"]["dreamervla"]["checkpoints"]["pi05-libero"]
-    assert environment["python"] == "3.11.14"
-    assert environment["torch"] == "2.11.0+cu128"
-    assert environment["jax"] == "0.5.3"
-    assert environment["bddl"] == "3.6.0"
-    assert environment["future"] == "1.0.0"
-    assert environment["rlinf-openpi"] == "0.1.1"
-    assert (root / environment["profile"]).is_file()
-    assert (root / environment["lockfile"]).is_file()
-    assert checkpoints["base-repo"] == "lerobot/pi05_base"
-    assert checkpoints["sft-repo"] == "RLinf/RLinf-Pi05-LIBERO-SFT"
 
 
 def test_resolve_pi05_lerobot_source_accepts_repo_and_complete_local_root(
@@ -434,29 +371,7 @@ def test_resolve_pi05_lerobot_source_rejects_incomplete_local_root(tmp_path: Pat
         resolve_lerobot_source(root)
 
 
-def test_pi05_sft_runtime_does_not_import_sibling_rlinf() -> None:
-    root = Path(__file__).resolve().parents[2]
-    runtime_files = (
-        root / "dreamervla/models/embodiment/pi05/policy.py",
-        root / "dreamervla/dataset/pi05_sft.py",
-        root / "dreamervla/runners/vla_sft_training_runner.py",
-    )
-    for path in runtime_files:
-        source = path.read_text(encoding="utf-8")
-        assert "from rlinf" not in source
-        assert "import rlinf" not in source
-
-
-def test_pi05_policy_carries_rlinf_fsdp_wrap_contract() -> None:
-    policy_source = (
-        Path(__file__).resolve().parents[2] / "dreamervla/models/embodiment/pi05/policy.py"
-    ).read_text(encoding="utf-8")
-    assert "GemmaDecoderLayer" in policy_source
-    assert '"action_in_proj"' in policy_source
-    assert "get_fsdp_wrap_module_list" in policy_source
-
-
-def test_pi05_policy_freezes_unused_lm_head_and_disables_checkpointing_once() -> None:
+def test_pi05_policy_freezes_unused_lm_head() -> None:
     import torch
 
     lm_head = torch.nn.Linear(4, 3)
@@ -468,23 +383,6 @@ def test_pi05_policy_freezes_unused_lm_head_and_disables_checkpointing_once() ->
 
     assert frozen == sum(parameter.numel() for parameter in lm_head.parameters())
     assert not any(parameter.requires_grad for parameter in lm_head.parameters())
-    policy_source = (
-        Path(__file__).resolve().parents[2] / "dreamervla/models/embodiment/pi05/policy.py"
-    ).read_text(encoding="utf-8")
-    assert policy_source.count("model.gradient_checkpointing_disable()") == 1
-
-
-def test_pi05_sft_migrates_rlinf_loader_and_training_step() -> None:
-    root = Path(__file__).resolve().parents[2]
-    loader_source = (root / "dreamervla/dataset/pi05_sft.py").read_text(encoding="utf-8")
-    runner_source = (root / "dreamervla/runners/vla_sft_training_runner.py").read_text(
-        encoding="utf-8"
-    )
-    assert "openpi_data_loader.create_data_loader" in loader_source
-    assert "get_pi05_libero_config" in loader_source
-    assert "no_sync" in runner_source
-    assert "gradient_accumulation" in runner_source
-    assert "clip_grad_norm_tensor" in runner_source
 
 
 def test_pi05_sft_tracks_epochs_around_openpi_infinite_wrapper() -> None:

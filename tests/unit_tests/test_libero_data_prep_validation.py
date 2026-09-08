@@ -21,10 +21,6 @@ def test_validation_workflow_registers_only_exact_hidden_token_check() -> None:
     assert cfg.steps[0].id == "validate_suite"
     assert cfg.steps[0].script == "scripts/preprocess/20_validate.sh"
     assert cfg.steps[0].env.TASK == "{item}"
-    assert not (root / "dreamervla" / "preprocess" / "validate_libero_data_prep.py").exists()
-    assert not (
-        root / "configs" / "scripts" / "preprocess" / "validate_libero_data_prep.yaml"
-    ).exists()
 
 
 def test_validation_wrapper_fans_out_suites_through_hydra(tmp_path: Path) -> None:

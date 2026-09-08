@@ -1,5 +1,8 @@
 # DreamerVLA
 
+当前安装说明见 [docs/install.md](docs/install.md)，数据格式与实验入口见
+[文档索引](docs/README.md)。
+
 [English](README.md)
 
 本文说明如何复现发布的 `libero_goal` baseline。推荐使用 Docker，因为镜像中已经

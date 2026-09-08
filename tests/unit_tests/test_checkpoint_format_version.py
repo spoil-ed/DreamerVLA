@@ -5,7 +5,7 @@ from __future__ import annotations
 import torch
 
 from dreamervla.constants import CHECKPOINT_FORMAT_VERSION
-from dreamervla.utils.hf_checkpoint import (
+from dreamervla.utils.checkpoint.hf_checkpoint import (
     is_hf_checkpoint,
     load_runner_payload,
     resolve_hf_checkpoint_dir,

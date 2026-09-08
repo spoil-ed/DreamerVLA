@@ -89,7 +89,7 @@ def test_reproduction_launcher_accepts_supported_task_flag() -> None:
 
 
 def test_official_openvla_eval_accepts_task_flag() -> None:
-    from dreamervla.diagnostics.eval_openvla_oft_libero import _parse_hydra_like_argv
+    from dreamervla.diagnostics.evaluation.eval_openvla_oft_libero import _parse_hydra_like_argv
 
     config_name, overrides = _parse_hydra_like_argv(["--task", "libero_goal", "ckpt=/tmp/model"])
 

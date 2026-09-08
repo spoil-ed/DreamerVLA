@@ -16,15 +16,15 @@ class _FakeSyncer:
 def test_learner_worker_syncs_independent_component_versions():
     model_cfg = {
         "policy": {
-            "target": "dreamervla.workers.actor._test_models:TinySharedPolicy",
+            "target": "dreamervla.diagnostics.fixtures.actor_models:TinySharedPolicy",
             "kwargs": {"hidden_dim": 4, "action_dim": 7},
         },
         "world_model": {
-            "target": "dreamervla.workers.actor._test_models:TinyTrainableWorldModel",
+            "target": "dreamervla.diagnostics.fixtures.actor_models:TinyTrainableWorldModel",
             "kwargs": {"hidden_dim": 4},
         },
         "classifier": {
-            "target": "dreamervla.workers.actor._test_models:TinySuccessClassifier",
+            "target": "dreamervla.diagnostics.fixtures.actor_models:TinySuccessClassifier",
             "kwargs": {"hidden_dim": 4, "window": 3},
         },
     }
@@ -52,11 +52,11 @@ def test_learner_worker_syncs_independent_component_versions():
 def test_learner_worker_checkpoint_round_trips_component_optimizers() -> None:
     model_cfg = {
         "world_model": {
-            "target": "dreamervla.workers.actor._test_models:TinyTrainableWorldModel",
+            "target": "dreamervla.diagnostics.fixtures.actor_models:TinyTrainableWorldModel",
             "kwargs": {"hidden_dim": 4},
         },
         "classifier": {
-            "target": "dreamervla.workers.actor._test_models:TinySuccessClassifier",
+            "target": "dreamervla.diagnostics.fixtures.actor_models:TinySuccessClassifier",
             "kwargs": {"hidden_dim": 4, "window": 3},
         },
     }

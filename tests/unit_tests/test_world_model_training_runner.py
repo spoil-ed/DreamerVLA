@@ -8,13 +8,6 @@ import pytest
 import torch
 
 
-def test_world_model_training_common_has_extracted_methods():
-    from dreamervla.runtime.world_model_training_common import _WorldModelTrainingCommon
-
-    assert hasattr(_WorldModelTrainingCommon, "_build_components")
-    assert not hasattr(_WorldModelTrainingCommon, "_online_cotrain_loop")
-
-
 def test_wm_pretrain_batch_omits_images_when_hidden_token_exist():
     from dreamervla.runners.world_model_training_runner import (
         WorldModelTrainingRunner,
@@ -457,7 +450,7 @@ def test_dreamer_wm_replay_budget_uses_dino_style_epoch_progress():
 def test_trainable_classifier_preserves_hydra_target(monkeypatch):
     from omegaconf import OmegaConf
 
-    import dreamervla.runtime.world_model_training_common as mod
+    import dreamervla.runtime.training.world_model_training_common as mod
 
     runner = mod._WorldModelTrainingCommon.__new__(mod._WorldModelTrainingCommon)
     runner.device = torch.device("cpu")
@@ -492,7 +485,7 @@ def test_trainable_classifier_preserves_hydra_target(monkeypatch):
 def test_trainable_classifier_restores_swept_threshold_from_ckpt(tmp_path, monkeypatch):
     from omegaconf import OmegaConf
 
-    import dreamervla.runtime.world_model_training_common as mod
+    import dreamervla.runtime.training.world_model_training_common as mod
 
     runner = mod._WorldModelTrainingCommon.__new__(mod._WorldModelTrainingCommon)
     runner.device = torch.device("cpu")
@@ -525,7 +518,9 @@ def test_trainable_classifier_restores_swept_threshold_from_ckpt(tmp_path, monke
 def test_task_conditioning_validation_is_disabled_by_default():
     from omegaconf import OmegaConf
 
-    from dreamervla.runtime.world_model_training_common import validate_task_conditioning_cfg
+    from dreamervla.runtime.training.world_model_training_common import (
+        validate_task_conditioning_cfg,
+    )
 
     validate_task_conditioning_cfg(
         OmegaConf.create({}),
@@ -538,7 +533,9 @@ def test_task_conditioning_validation_fails_without_module_support():
     import pytest
     from omegaconf import OmegaConf
 
-    from dreamervla.runtime.world_model_training_common import validate_task_conditioning_cfg
+    from dreamervla.runtime.training.world_model_training_common import (
+        validate_task_conditioning_cfg,
+    )
 
     cfg = OmegaConf.create(
         {"task_conditioning": {"enabled": True, "num_tasks": 10, "embedding_dim": 64}}
@@ -555,7 +552,9 @@ def test_task_conditioning_validation_fails_without_module_support():
 def test_task_conditioning_validation_accepts_capable_modules():
     from omegaconf import OmegaConf
 
-    from dreamervla.runtime.world_model_training_common import validate_task_conditioning_cfg
+    from dreamervla.runtime.training.world_model_training_common import (
+        validate_task_conditioning_cfg,
+    )
 
     class Capable(torch.nn.Linear):
         supports_task_conditioning = True
@@ -649,9 +648,9 @@ def _demo_steps(T, success):
 
 
 def _seeded_replay(tmp_path, seq_len=4):
-    from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
-    from dreamervla.runtime.offline_seed import seed_replay_from_offline
-    from dreamervla.runtime.online_replay import OnlineReplay
+    from dreamervla.dataset.storage.rollout_dump_writer import RolloutDumpWriter
+    from dreamervla.runtime.replay.offline_seed import seed_replay_from_offline
+    from dreamervla.runtime.replay.online_replay import OnlineReplay
 
     rdir, hdir = tmp_path / "reward", tmp_path / "hidden"
     with RolloutDumpWriter(rdir, hdir, "r0_shard.hdf5") as w:
@@ -1216,7 +1215,7 @@ def test_debug_profile_owns_offline_warmup_budget():
 
 
 def test_task_conditioned_classifier_receives_replay_task_ids():
-    from dreamervla.runtime.classifier_update import online_classifier_update_step
+    from dreamervla.runtime.training.classifier_update import online_classifier_update_step
 
     class Replay:
         def sample_classifier_windows(
@@ -1874,7 +1873,7 @@ def test_wm_warmup_checkpoint_atomically_overwrites_canonical_path(tmp_path):
     assert payload["complete"] is False
     assert {"world_model", "world_model_optimizer"}.issubset(payload["state_dicts"])
     assert payload["rng_by_rank"]
-    from dreamervla.utils.component_checkpoint import load_component_checkpoint
+    from dreamervla.utils.checkpoint.component_checkpoint import load_component_checkpoint
 
     loaded = load_component_checkpoint(second, "world_model")
     assert set(loaded.state_dict) == set(runner.world_model.state_dict())
@@ -2202,7 +2201,7 @@ def test_classifier_final_topk_uses_f1_not_accuracy():
 def test_warmup_only_component_build_skips_rollout_encoder(monkeypatch):
     from omegaconf import OmegaConf
 
-    import dreamervla.runtime.world_model_training_common as mod
+    import dreamervla.runtime.training.world_model_training_common as mod
 
     runner = mod._WorldModelTrainingCommon.__new__(mod._WorldModelTrainingCommon)
     runner.device = torch.device("cpu")
@@ -2337,7 +2336,7 @@ def test_sweep_metrics_is_exported_and_picks_separating_threshold():
     # (so the cotrain pipeline does not depend on the classifier runner) and
     # select a threshold that perfectly separates a linearly-separable set.
     from dreamervla.runners.success_classifier_training_runner import _sweep_metrics
-    from dreamervla.runtime.classifier_metrics import sweep_threshold_metrics
+    from dreamervla.runtime.evaluation.classifier_metrics import sweep_threshold_metrics
 
     assert _sweep_metrics is sweep_threshold_metrics
 

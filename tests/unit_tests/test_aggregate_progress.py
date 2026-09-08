@@ -6,7 +6,7 @@ multi-rank collect shows up as one moving total instead of a rank-0-only view.
 
 from __future__ import annotations
 
-from dreamervla.utils.progress import AggregateProgress
+from dreamervla.utils.logging.progress import AggregateProgress
 
 
 def test_global_sums_done_and_total_across_ranks(tmp_path):

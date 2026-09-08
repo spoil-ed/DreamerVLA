@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from dreamervla.utils.hydra_config import (
+from dreamervla.utils.config.hydra_config import (
     SCRIPT_CONFIG_DIR,
     script_config,
     script_namespace,

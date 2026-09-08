@@ -5,12 +5,12 @@ from types import SimpleNamespace
 
 import torch
 
-from dreamervla.runtime.classifier_update import online_classifier_update_step
-from dreamervla.workers.actor._test_models import TinySuccessClassifier
+from dreamervla.diagnostics.fixtures.actor_models import TinySuccessClassifier
+from dreamervla.runtime.training.classifier_update import online_classifier_update_step
 
 
 def test_classifier_update_has_role_based_module() -> None:
-    assert importlib.util.find_spec("dreamervla.runtime.classifier_update") is not None
+    assert importlib.util.find_spec("dreamervla.runtime.training.classifier_update") is not None
 
 
 def test_tiny_success_classifier_pools_window_and_chunk_axes() -> None:

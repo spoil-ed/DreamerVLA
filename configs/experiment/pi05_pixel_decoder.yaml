@@ -2,7 +2,7 @@
 # Reconstruct OpenPI model-space base/wrist RGB from the exact π0.5 WM tokens.
 defaults:
   - /task: pi05_libero
-  - /data: physical_intelligence_libero
+  - /data: lerobot_libero
   - override /pixel_decoder: pi05-prefix
   - _self_
 
@@ -14,14 +14,15 @@ run:
 
 data:
   loader:
-    _target_: dreamervla.dataset.LeRobotLIBERODataLoaderFactory
-    source: ${data.source}
+    _target_: dreamervla.dataset.libero.LeRobotV3LIBERODataLoaderFactory
+    dataset: ${data.dataset}
     repo_id: ${data.repo_id}
-    revision: ${data.revision}
+    normalization_asset_id: ${task.pi05.normalization_asset_id}
     model_path: ${task.pi05.ckpt_path}
     assets_path: ${task.pi05.assets_path}
     config_name: ${task.pi05.config_name}
     batch_size: ${decoder_training.micro_batch_size}
+    action_horizon: ${task.pi05.action_horizon}
     num_workers: 2
     seed: ${seed}
     shuffle: true

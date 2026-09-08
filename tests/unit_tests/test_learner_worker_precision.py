@@ -134,19 +134,19 @@ class _ImageSensitiveReplay(_DirectReplay):
 def _cotrain_model_cfg() -> dict[str, Any]:
     return {
         "policy": {
-            "target": "dreamervla.workers.actor._test_models:TinySharedPolicy",
+            "target": "dreamervla.diagnostics.fixtures.actor_models:TinySharedPolicy",
             "kwargs": {"hidden_dim": 4, "action_dim": 7},
         },
         "world_model": {
-            "target": "dreamervla.workers.actor._test_models:TinyTrainableWorldModel",
+            "target": "dreamervla.diagnostics.fixtures.actor_models:TinyTrainableWorldModel",
             "kwargs": {"hidden_dim": 4},
         },
         "critic": {
-            "target": "dreamervla.workers.actor._test_models:TinyValueCritic",
+            "target": "dreamervla.diagnostics.fixtures.actor_models:TinyValueCritic",
             "kwargs": {"hidden_dim": 4},
         },
         "classifier": {
-            "target": "dreamervla.workers.actor._test_models:TinySuccessClassifier",
+            "target": "dreamervla.diagnostics.fixtures.actor_models:TinySuccessClassifier",
             "kwargs": {"hidden_dim": 4, "window": 3},
         },
     }
@@ -470,11 +470,11 @@ def test_dreamervla_cotrain_mode_requires_components() -> None:
 def _wm_classifier_only_model_cfg() -> dict[str, Any]:
     return {
         "world_model": {
-            "target": "dreamervla.workers.actor._test_models:TinyLumosWorldModel",
+            "target": "dreamervla.diagnostics.fixtures.actor_models:TinyLumosWorldModel",
             "kwargs": {"hidden_dim": 4, "action_dim": 7},
         },
         "classifier": {
-            "target": "dreamervla.workers.actor._test_models:TinySuccessClassifier",
+            "target": "dreamervla.diagnostics.fixtures.actor_models:TinySuccessClassifier",
             "kwargs": {"hidden_dim": 4, "window": 3},
         },
     }
@@ -517,7 +517,7 @@ def test_wm_classifier_only_rejects_policy_component(
     _patch_dummy_syncer(monkeypatch)
     cfg = _wm_classifier_only_model_cfg()
     cfg["policy"] = {
-        "target": "dreamervla.workers.actor._test_models:TinySharedPolicy",
+        "target": "dreamervla.diagnostics.fixtures.actor_models:TinySharedPolicy",
         "kwargs": {"hidden_dim": 4, "action_dim": 7},
     }
     learner = LearnerWorker(cfg, {}, _wm_classifier_only_train_cfg(), replay=None)

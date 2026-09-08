@@ -7,7 +7,7 @@ import pytest
 
 @pytest.mark.parametrize("world_size", [None, "1"])
 def test_probe_defaults_to_eight_ranks_with_static_loopback(monkeypatch, world_size):
-    from dreamervla.diagnostics import vjepa2_ac_state_smoke as diagnostic
+    from dreamervla.diagnostics.checks import vjepa2_ac_state_smoke as diagnostic
 
     if world_size is None:
         monkeypatch.delenv("WORLD_SIZE", raising=False)
@@ -35,7 +35,7 @@ def test_probe_defaults_to_eight_ranks_with_static_loopback(monkeypatch, world_s
 
 
 def test_help_does_not_spawn_workers(monkeypatch):
-    from dreamervla.diagnostics import vjepa2_ac_state_smoke as diagnostic
+    from dreamervla.diagnostics.checks import vjepa2_ac_state_smoke as diagnostic
 
     monkeypatch.delenv("WORLD_SIZE", raising=False)
     monkeypatch.setattr(sys, "argv", ["probe", "--help"])

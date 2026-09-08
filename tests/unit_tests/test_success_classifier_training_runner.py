@@ -12,7 +12,7 @@ from dreamervla.algorithms.critic.latent_success_classifier import (
     LatentSuccessClassifier,
     LatentSuccessClassifierConfig,
 )
-from dreamervla.dataset.lumos_aligned_latent_dataset import (
+from dreamervla.dataset.classifier_dataset import (
     LumosAlignedLatentTrainDataset,
     LumosAlignedLatentValDataset,
     _DemoRecord,
@@ -23,7 +23,7 @@ from dreamervla.runners.success_classifier_training_runner import (
     _classifier_loss_and_predictions,
     _success_probabilities_from_logits,
 )
-from dreamervla.runtime.classifier_metrics import sweep_threshold_metrics
+from dreamervla.runtime.evaluation.classifier_metrics import sweep_threshold_metrics
 
 
 def test_classifier_checkpoint_includes_all_resume_loop_state() -> None:

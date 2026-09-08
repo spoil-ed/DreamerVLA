@@ -3,7 +3,7 @@
 DDP / the process group cannot be constructed on a single CPU process, so these
 tests follow the established pattern in ``test_reduce_mean_dict_batched.py``:
 build the helper directly with ``world_size > 1`` and monkeypatch the
-``dreamervla.runtime.distributed`` module globals (``DDP`` / ``dist`` /
+``dreamervla.utils.training.distributed`` module globals (``DDP`` / ``dist`` /
 ``torch.cuda``) to capture what the helper *would* construct.
 """
 
@@ -15,7 +15,7 @@ from datetime import timedelta
 import pytest
 import torch
 
-from dreamervla.runtime.distributed import NopretokenizeSFTDistributedHelper
+from dreamervla.utils.training.distributed import NopretokenizeSFTDistributedHelper
 
 
 def _make_helper(
@@ -48,7 +48,7 @@ class _FakeDDP(torch.nn.Module):
 
 
 def _patch_ddp(monkeypatch) -> None:
-    monkeypatch.setattr("dreamervla.runtime.distributed.DDP", _FakeDDP)
+    monkeypatch.setattr("dreamervla.utils.training.distributed.DDP", _FakeDDP)
 
 
 def test_fsdp_uses_local_rank_when_current_device_changes(monkeypatch):
@@ -69,9 +69,13 @@ def test_fsdp_uses_local_rank_when_current_device_changes(monkeypatch):
         fsdp_mixed_precision="bf16",
         enable_activation_checkpointing=False,
     )
-    monkeypatch.setattr("dreamervla.runtime.distributed.FSDP", _FakeFSDP)
-    monkeypatch.setattr("dreamervla.runtime.distributed.torch.cuda.current_device", lambda: 0)
-    monkeypatch.setattr("dreamervla.runtime.distributed.torch.cuda.synchronize", lambda: None)
+    monkeypatch.setattr("dreamervla.utils.training.distributed.FSDP", _FakeFSDP)
+    monkeypatch.setattr(
+        "dreamervla.utils.training.distributed.torch.cuda.current_device", lambda: 0
+    )
+    monkeypatch.setattr(
+        "dreamervla.utils.training.distributed.torch.cuda.synchronize", lambda: None
+    )
 
     helper.wrap_trainable_module(torch.nn.Linear(2, 2))
 
@@ -198,14 +202,16 @@ def test_wrap_world_model_still_uses_hardcoded_defaults(monkeypatch):
 def _patch_init(monkeypatch, captured: dict) -> None:
     monkeypatch.setenv("WORLD_SIZE", "2")
     monkeypatch.setenv("LOCAL_RANK", "0")
-    monkeypatch.setattr("dreamervla.runtime.distributed.dist.is_available", lambda: True)
-    monkeypatch.setattr("dreamervla.runtime.distributed.dist.is_initialized", lambda: False)
-    monkeypatch.setattr("dreamervla.runtime.distributed.torch.cuda.is_available", lambda: False)
+    monkeypatch.setattr("dreamervla.utils.training.distributed.dist.is_available", lambda: True)
+    monkeypatch.setattr("dreamervla.utils.training.distributed.dist.is_initialized", lambda: False)
+    monkeypatch.setattr(
+        "dreamervla.utils.training.distributed.torch.cuda.is_available", lambda: False
+    )
 
     def _fake_init(**kwargs):  # noqa: ANN003
         captured.update(kwargs)
 
-    monkeypatch.setattr("dreamervla.runtime.distributed.dist.init_process_group", _fake_init)
+    monkeypatch.setattr("dreamervla.utils.training.distributed.dist.init_process_group", _fake_init)
 
 
 def test_initialize_passes_nccl_timeout_when_set(monkeypatch):
@@ -267,13 +273,13 @@ def test_object_barrier_uses_cpu_collective_group(monkeypatch):
     helper.object_group = object_group
     captured: dict = {}
 
-    monkeypatch.setattr("dreamervla.runtime.distributed.dist.is_available", lambda: True)
-    monkeypatch.setattr("dreamervla.runtime.distributed.dist.is_initialized", lambda: True)
+    monkeypatch.setattr("dreamervla.utils.training.distributed.dist.is_available", lambda: True)
+    monkeypatch.setattr("dreamervla.utils.training.distributed.dist.is_initialized", lambda: True)
 
     def _fake_barrier(**kwargs):  # noqa: ANN003
         captured.update(kwargs)
 
-    monkeypatch.setattr("dreamervla.runtime.distributed.dist.barrier", _fake_barrier)
+    monkeypatch.setattr("dreamervla.utils.training.distributed.dist.barrier", _fake_barrier)
 
     helper.object_barrier()
 
@@ -283,14 +289,16 @@ def test_object_barrier_uses_cpu_collective_group(monkeypatch):
 def test_gloo_barrier_does_not_pass_cuda_device_ids(monkeypatch):
     helper = _make_helper(world_size=4, backend="gloo")
     captured: dict = {}
-    monkeypatch.setattr("dreamervla.runtime.distributed.dist.is_available", lambda: True)
-    monkeypatch.setattr("dreamervla.runtime.distributed.dist.is_initialized", lambda: True)
-    monkeypatch.setattr("dreamervla.runtime.distributed.torch.cuda.is_available", lambda: True)
+    monkeypatch.setattr("dreamervla.utils.training.distributed.dist.is_available", lambda: True)
+    monkeypatch.setattr("dreamervla.utils.training.distributed.dist.is_initialized", lambda: True)
+    monkeypatch.setattr(
+        "dreamervla.utils.training.distributed.torch.cuda.is_available", lambda: True
+    )
 
     def _fake_barrier(**kwargs):  # noqa: ANN003
         captured.update(kwargs)
 
-    monkeypatch.setattr("dreamervla.runtime.distributed.dist.barrier", _fake_barrier)
+    monkeypatch.setattr("dreamervla.utils.training.distributed.dist.barrier", _fake_barrier)
 
     helper.barrier()
 

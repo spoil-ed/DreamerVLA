@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from dreamervla.utils.paths import checkpoints_path, data_root, processed_data_path
+from dreamervla.utils.config.paths import checkpoints_path, data_root, processed_data_path
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = PACKAGE_ROOT.parents[1]

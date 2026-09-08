@@ -30,14 +30,14 @@ from dreamervla.workers.rollout.multistep_rollout_worker import (
 
 def _policy_cfg() -> dict:
     return {
-        "target": "dreamervla.workers.actor._test_models:TinyLumosPolicy",
+        "target": "dreamervla.diagnostics.fixtures.actor_models:TinyLumosPolicy",
         "kwargs": {"hidden_dim": 4, "action_dim": 3, "chunk_size": 2},
     }
 
 
 def _counting_policy_cfg() -> dict:
     return {
-        "target": "dreamervla.workers.actor._test_models:CountingTinyLumosPolicy",
+        "target": "dreamervla.diagnostics.fixtures.actor_models:CountingTinyLumosPolicy",
         "kwargs": {"hidden_dim": 4, "action_dim": 3, "chunk_size": 2},
     }
 
@@ -180,7 +180,7 @@ def _real_obs(step: int = 0, *, is_first: bool = False, seed: int = 5) -> Observ
 
 def _encoder_cfg() -> dict:
     return {
-        "target": "dreamervla.workers.inference._test_rollout_stub:StubRolloutBundle",
+        "target": "dreamervla.diagnostics.fixtures.rollout:StubRolloutBundle",
         "kwargs": {"action_dim": 3, "hidden_dim": 4, "emit_lang": True},
     }
 

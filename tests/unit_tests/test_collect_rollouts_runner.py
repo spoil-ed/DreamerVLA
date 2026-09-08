@@ -102,7 +102,7 @@ def test_build_collect_cfg_forwards_ray_worker_controls() -> None:
 
 
 def test_successful_vla_collection_writes_manifest(monkeypatch) -> None:
-    import dreamervla.runtime.rollout_collection_ray as collection_module
+    import dreamervla.runtime.rollout.rollout_collection_ray as collection_module
 
     cfg = _fake_cfg()
     cfg.mode = "vla"

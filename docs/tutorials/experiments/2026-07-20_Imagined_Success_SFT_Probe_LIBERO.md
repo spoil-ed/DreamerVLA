@@ -186,7 +186,7 @@ tensorboard --logdir \
 docker run --rm \
   --volume "${DREAMERVLA_DATA}:/data" \
   "${DREAMERVLA_IMAGE}" \
-  python -m dreamervla.diagnostics.verify_training_signal \
+  python -m dreamervla.diagnostics.checks.verify_training_signal \
     /data/outputs/reproduction/libero_goal/openvla_libero_success_sft_probe/dreamer
 ```
 

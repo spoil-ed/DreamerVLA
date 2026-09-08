@@ -45,8 +45,8 @@ from dreamervla.preprocess.libero_utils.parallel_replay import (
     load_resume_metadata,
     write_task_metadata_shard,
 )
-from dreamervla.utils.hydra_config import script_namespace
-from dreamervla.utils.progress import ProgressReporter
+from dreamervla.utils.config.hydra_config import script_namespace
+from dreamervla.utils.logging.progress import ProgressReporter
 
 NOOP_MARKING_SCHEME = SCHEME_NAME
 

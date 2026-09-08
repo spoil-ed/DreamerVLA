@@ -36,9 +36,9 @@ from torch.distributions import Normal
 
 from dreamervla.algorithms.critic.twohot_critic import ReturnPercentileTracker
 from dreamervla.algorithms.validation import validate_ppo_hyperparameters
-from dreamervla.utils.polyak import soft_update
-from dreamervla.utils.torch_utils import autocast_context, move_mapping_to_device
-from dreamervla.utils.update_timing import GradientUpdateTimer
+from dreamervla.utils.logging.update_timing import GradientUpdateTimer
+from dreamervla.utils.training.ema import soft_update
+from dreamervla.utils.training.torch_utils import autocast_context, move_mapping_to_device
 
 
 @contextmanager

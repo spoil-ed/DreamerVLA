@@ -7,6 +7,7 @@ stable training entrypoint; `experiment=<name>` selects one recipe under
 ```text
 configs/
 ├── train.yaml
+├── environments/         # Independent Python projects; not Hydra config groups
 ├── experiment/
 ├── profile/
 ├── launch/
@@ -26,6 +27,10 @@ configs/
 training/evaluation shell entries select
 `configs/experiment/` recipes directly; experiment `launch` blocks own local
 torchrun/GPU metadata.
+
+[`environments/rlinf-libero-pi05/`](environments/rlinf-libero-pi05/README.md)
+contains the isolated RLinf/OpenPI dependency profile and container variables.
+Its Python dependency lock is separate from the repository-root environment.
 
 Shell launchers should stay thin. Put experiment behavior in config or Python
 runners, and keep shell overrides limited to GPUs, data roots, output roots,
@@ -234,16 +239,17 @@ does not change `wm_pi05_collected_train` or its post-transformer image-only
 `pi05_prefix_output [768,2048]` semantics. See
 [`docs/pi05_prefix_input_latent.md`](../docs/pi05_prefix_input_latent.md).
 
-The `pi05_libero_sft` experiment uses OpenPI's official PyTorch LeRobot loader and
-flow-matching SFT loss. `data.loader._target_` selects
-`dreamervla.dataset.LeRobotLIBERODataLoaderFactory`; runners do not hardcode a
-dataset builder. Its default local dataset root is
-`data/datasets/lerobot/physical-intelligence/libero`; override it with
-`PI05_LIBERO_DATA`. The repo and revision are pinned by
-`data.{repo_id,revision}`, and the local root must be the complete official
-LeRobot snapshot. RLinf-aligned defaults are micro batch 4, global batch 128,
+The `pi05_libero_sft` experiment uses DreamerVLA's local LeRobot v3 reader with
+OpenPI model transforms and flow-matching SFT loss. `data.loader._target_` selects
+`dreamervla.dataset.libero.LeRobotV3LIBERODataLoaderFactory`, and its nested
+`dataset._target_` selects `dreamervla.dataset.libero.LiberoDataset`. The default
+source is `/jfs/public/prod/hf-datasets/datasets/lerobot/libero`; override it with
+`PI05_LIBERO_DATA`. `configs/data/lerobot_libero.yaml` owns the native camera,
+action and state keys. `task.pi05.normalization_asset_id` names the checkpoint's
+normalization assets separately from `data.repo_id`. The pixel decoder uses
+the same reader. RLinf-aligned defaults are micro batch 4, global batch 128,
 30,000 steps, AdamW `2.5e-5`, and 1,000 warmup steps. Training is launched by
-`torchrun` and uses FSDP by default. The official OpenPI loader, LIBERO transforms,
+`torchrun` and uses FSDP by default. The OpenPI batch wrapper, LIBERO transforms,
 and RLinf worker-step semantics are migrated locally; Ray is not required for this
 offline route. This route does not construct a PPO value head or
 enter the cotrain loop.

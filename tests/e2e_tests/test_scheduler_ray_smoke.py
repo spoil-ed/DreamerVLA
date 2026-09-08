@@ -12,7 +12,7 @@ from dreamervla.scheduler.worker_group import WorkerGroup
 
 def test_scheduler_primitives_move_items_between_ray_workers() -> None:
     try:
-        from dreamervla.scheduler._test_workers import ChannelWorker
+        from dreamervla.diagnostics.fixtures.scheduler_workers import ChannelWorker
     except ImportError as exc:
         raise AssertionError("ChannelWorker test actor should exist") from exc
 

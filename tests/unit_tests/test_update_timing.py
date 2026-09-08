@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 
-from dreamervla.utils.update_timing import GradientUpdateTimer
+from dreamervla.utils.logging.update_timing import GradientUpdateTimer
 
 
 def test_gradient_update_timer_records_cpu_and_device_stages() -> None:

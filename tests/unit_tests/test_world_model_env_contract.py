@@ -37,12 +37,12 @@ def test_world_model_env_protocol_runtime_checkable():
 def test_latent_world_model_env_builds_flat_hydra_configs_for_inference():
     env = LatentWorldModelEnv(
         world_model={
-            "_target_": ("dreamervla.workers.actor._test_models.TinyLumosWorldModel"),
+            "_target_": ("dreamervla.diagnostics.fixtures.actor_models.TinyLumosWorldModel"),
             "hidden_dim": 2,
             "action_dim": 1,
         },
         classifier={
-            "_target_": ("dreamervla.workers.actor._test_models.TinySuccessClassifier"),
+            "_target_": ("dreamervla.diagnostics.fixtures.actor_models.TinySuccessClassifier"),
             "hidden_dim": 2,
         },
         latent_dim=2,

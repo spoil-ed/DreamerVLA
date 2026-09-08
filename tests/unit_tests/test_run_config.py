@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from dreamervla.utils.run_config import find_run_config, load_run_config
+from dreamervla.utils.checkpoint.run_artifacts import find_run_config, load_run_config
 
 
 def _write_yaml(path: Path, text: str = "value: 1\n") -> Path:

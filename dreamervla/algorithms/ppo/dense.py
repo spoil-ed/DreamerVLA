@@ -64,8 +64,8 @@ from dreamervla.algorithms.ppo.tdmpc_critic import (
     _tdmpc_value_mode,
 )
 from dreamervla.algorithms.validation import validate_ppo_hyperparameters
-from dreamervla.utils.polyak import soft_update
-from dreamervla.utils.torch_utils import move_mapping_to_device
+from dreamervla.utils.training.ema import soft_update
+from dreamervla.utils.training.torch_utils import move_mapping_to_device
 
 
 def _dense_actor_backward_microbatched(

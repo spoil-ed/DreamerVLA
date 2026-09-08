@@ -2,6 +2,9 @@
 
 [中文](README.zh-CN.md)
 
+Current setup instructions are in [docs/install.md](docs/install.md).
+See the [documentation index](docs/README.md) for data formats and active recipes.
+
 This guide reproduces the published `libero_goal` baseline. Docker is recommended
 because it already contains the DreamerVLA source code, Python/CUDA packages, and
 the pinned `third_party` repositories.

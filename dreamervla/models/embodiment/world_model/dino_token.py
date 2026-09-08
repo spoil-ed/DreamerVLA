@@ -4,7 +4,7 @@ The predictor, conditioning layout, shifted embedding loss, and rollout are adap
 from the MIT-licensed DINO-WM implementation at
 ``Related_Work/worldmodel/dino_wm/models``. DreamerVLA replaces only DINO's frozen
 visual encoder: ``visual`` is already the external ``[B,T,N,D]`` token sidecar.
-See ``licenses/DINO_WM_LICENSE`` for the retained upstream license.
+See ``docs/licenses/DINO_WM_LICENSE`` for the retained upstream license.
 """
 
 from __future__ import annotations

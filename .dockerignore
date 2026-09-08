@@ -20,7 +20,12 @@ third_party
 .ruff_cache
 .mypy_cache
 .venv
+.venv-*
 venv
+.rlinf-runtime
+build
+dist
+*.egg-info
 .local
 .agents
 .codex
@@ -28,3 +33,9 @@ venv
 .cursor
 .planning
 .DS_Store
+
+# Local planning drafts and root dependency resolution
+/task_plan.md
+/findings.md
+/progress.md
+/uv.lock

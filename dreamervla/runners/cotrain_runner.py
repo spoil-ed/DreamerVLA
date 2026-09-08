@@ -1,6 +1,6 @@
 """Target manual-cotrain Ray runner.
 
-This route follows ``spec/99_manual_notes.md``: LearnerGroup owns WM/classifier
+This route follows ``docs/architecture/99_manual_notes.md``: LearnerGroup owns WM/classifier
 state, ActorGroup owns VLA updates, RolloutGroup owns no-grad policy inference, and
 EnvGroup owns real/WM env interaction. The public cotrain recipe updates the world
 model and classifier from real trajectories before staged policy updates.
@@ -29,11 +29,12 @@ from dreamervla.runners.base_runner import (
     _atomic_torch_save,
     _materialize_checkpoint_copy,
 )
-from dreamervla.runtime.render_device import (
+from dreamervla.runtime.envs.render_device import (
+    _ZERO_GPU_EGL_ERROR,
     cuda_visible_devices_from_env,
     parse_device_ids,
 )
-from dreamervla.runtime.training_signal import evaluate_imagined_success_sft_signal
+from dreamervla.runtime.training.training_signal import evaluate_imagined_success_sft_signal
 from dreamervla.scheduler.channel import Channel
 from dreamervla.scheduler.cluster import Cluster
 from dreamervla.scheduler.placement import (
@@ -41,12 +42,14 @@ from dreamervla.scheduler.placement import (
     ResourceMapPlacementStrategy,
 )
 from dreamervla.scheduler.worker_group import WorkerGroup
-from dreamervla.utils.checkpoint_util import TopKCheckpointManager
-from dreamervla.utils.component_checkpoint import load_component_checkpoint, state_dict_sha256
-from dreamervla.utils.egl_device import _ZERO_GPU_EGL_ERROR
-from dreamervla.utils.hf_checkpoint import load_runner_payload
-from dreamervla.utils.run_paths import resolve_resume_checkpoint
-from dreamervla.utils.seed import capture_rng_state, restore_rng_state
+from dreamervla.utils.checkpoint.checkpoint_util import TopKCheckpointManager
+from dreamervla.utils.checkpoint.component_checkpoint import (
+    load_component_checkpoint,
+    state_dict_sha256,
+)
+from dreamervla.utils.checkpoint.hf_checkpoint import load_runner_payload
+from dreamervla.utils.checkpoint.run_artifacts import resolve_resume_checkpoint
+from dreamervla.utils.training.seed import capture_rng_state, restore_rng_state
 from dreamervla.workers.actor.embodied_fsdp_actor import EmbodiedFSDPActor
 from dreamervla.workers.actor.learner_worker import LearnerWorker
 from dreamervla.workers.cotrain.config_placement import (

@@ -11,7 +11,7 @@ from torch.distributions import Categorical
 
 from dreamervla.algorithms.actor._load import extract_state_dict
 from dreamervla.algorithms.actor.base_actor import BaseActor
-from dreamervla.utils.hf_checkpoint import is_hf_checkpoint, load_hf_prefixed_tensors
+from dreamervla.utils.checkpoint.hf_checkpoint import is_hf_checkpoint, load_hf_prefixed_tensors
 
 logger = logging.getLogger(__name__)
 

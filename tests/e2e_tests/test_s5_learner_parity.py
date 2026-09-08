@@ -14,11 +14,11 @@ import numpy as np
 import ray
 import torch
 
+from dreamervla.diagnostics.fixtures.replay import FixedBatchReplay
 from dreamervla.scheduler.cluster import Cluster
 from dreamervla.scheduler.placement import NodePlacementStrategy
 from dreamervla.scheduler.worker_group import WorkerGroup
 from dreamervla.workers.actor.learner_worker import LearnerWorker
-from dreamervla.workers.replay._test_replays import FixedBatchReplay
 from dreamervla.workers.replay.replay_worker import ReplayWorker
 
 
@@ -51,15 +51,15 @@ def _episode(length: int = 5) -> list[dict]:
 def _model_cfg() -> dict:
     return {
         "policy": {
-            "target": "dreamervla.workers.actor._test_models:TinyLumosPolicy",
+            "target": "dreamervla.diagnostics.fixtures.actor_models:TinyLumosPolicy",
             "kwargs": {"hidden_dim": 4, "action_dim": 7, "chunk_size": 1},
         },
         "world_model": {
-            "target": "dreamervla.workers.actor._test_models:TinyLumosWorldModel",
+            "target": "dreamervla.diagnostics.fixtures.actor_models:TinyLumosWorldModel",
             "kwargs": {"hidden_dim": 4, "action_dim": 7},
         },
         "classifier": {
-            "target": "dreamervla.workers.actor._test_models:TinySuccessClassifier",
+            "target": "dreamervla.diagnostics.fixtures.actor_models:TinySuccessClassifier",
             "kwargs": {"hidden_dim": 4, "window": 3},
         },
     }

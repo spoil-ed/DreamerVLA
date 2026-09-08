@@ -4,7 +4,7 @@ import subprocess
 
 
 def test_parse_nvidia_smi_csv_summarizes_utilization_and_memory() -> None:
-    from dreamervla.utils.resource_metrics import parse_nvidia_smi_csv
+    from dreamervla.utils.logging.metrics import parse_nvidia_smi_csv
 
     metrics = parse_nvidia_smi_csv(
         """
@@ -24,7 +24,7 @@ def test_parse_nvidia_smi_csv_summarizes_utilization_and_memory() -> None:
 
 
 def test_collect_nvidia_smi_metrics_degrades_to_empty_on_failure(monkeypatch) -> None:
-    from dreamervla.utils.resource_metrics import collect_nvidia_smi_metrics
+    from dreamervla.utils.logging.metrics import collect_nvidia_smi_metrics
 
     def _fail(*args, **kwargs):
         del args, kwargs

@@ -7,14 +7,14 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from dreamervla.dataset.collection_manifest import (
+from dreamervla.dataset.storage.collection_manifest import (
     append_episode_index_record,
     record_online_rollout_episode,
 )
-from dreamervla.dataset.collection_manifest import (
+from dreamervla.dataset.storage.collection_manifest import (
     read_online_rollout_manifest as read_online_rollout_manifest,
 )
-from dreamervla.dataset.rollout_dump_writer import (
+from dreamervla.dataset.storage.rollout_dump_writer import (
     RolloutDumpWriter,
     per_trajectory_shard_name,
 )

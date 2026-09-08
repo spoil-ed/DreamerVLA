@@ -10,8 +10,8 @@ from torch import nn
 from torch.utils.data import Dataset, Sampler
 
 from dreamervla.runners.base_runner import BaseRunner
-from dreamervla.runtime.libero_vla_evaluation_base import LIBEROVLAEvaluationBase
-from dreamervla.utils.hf_checkpoint import (
+from dreamervla.runtime.evaluation.libero_vla_evaluation_base import LIBEROVLAEvaluationBase
+from dreamervla.utils.checkpoint.hf_checkpoint import (
     is_hf_checkpoint,
     load_hf_prefixed_tensors,
     resolve_hf_checkpoint_dir,
@@ -299,8 +299,8 @@ def test_base_runner_checkpoint_uses_state_dict_hooks(tmp_path: Path) -> None:
 
 def test_vla_family_runners_inherit_shared_base_helpers() -> None:
     from dreamervla.runners.libero_vla_evaluation_runner import LIBEROVLAEvaluationRunner
-    from dreamervla.runtime.libero_vla_evaluation_base import LIBEROVLAEvaluationBase
-    from dreamervla.runtime.world_model_training_base import WorldModelTrainingBase
+    from dreamervla.runtime.evaluation.libero_vla_evaluation_base import LIBEROVLAEvaluationBase
+    from dreamervla.runtime.training.world_model_training_base import WorldModelTrainingBase
 
     for cls in (
         LIBEROVLAEvaluationBase,
@@ -323,7 +323,7 @@ def test_vla_family_runners_inherit_shared_base_helpers() -> None:
 
 
 def test_vla_hf_sidecar_strips_encoder_backbone_prefix() -> None:
-    from dreamervla.runtime.libero_vla_evaluation_base import LIBEROVLAEvaluationBase
+    from dreamervla.runtime.evaluation.libero_vla_evaluation_base import LIBEROVLAEvaluationBase
 
     state = LIBEROVLAEvaluationBase._extract_backbone_state_for_hf(
         {

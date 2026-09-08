@@ -30,8 +30,8 @@ pytestmark = pytest.mark.skipif(
 def test_latent_only_full_rollout_update_and_reload(tmp_path: Path, experiment: str) -> None:
     from dreamervla.algorithms.dreamervla import world_model_pretrain_step
     from dreamervla.config_resolvers import register_dreamervla_resolvers
-    from dreamervla.diagnostics.compare_wm_libero_rollout import _load_trajectory
-    from dreamervla.utils.optim import apply_optimizer_lr_schedule, build_optimizer
+    from dreamervla.diagnostics.evaluation.compare_wm_libero_rollout import _load_trajectory
+    from dreamervla.utils.training.optim import apply_optimizer_lr_schedule, build_optimizer
 
     torch.set_num_threads(4)
     torch.manual_seed(7)

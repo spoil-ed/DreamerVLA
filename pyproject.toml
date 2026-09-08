@@ -47,6 +47,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+lerobot-v3 = [
+    "av==18.1.0",
+    "pyarrow==25.0.1",
+]
 ray = [
     "ray==2.55.1",
 ]
@@ -111,10 +115,10 @@ required-version = ">=0.12.3"
 # The OpenVLA-OFT root environment and the pi0.5/OpenPI environment require
 # incompatible Transformers/Tokenizers versions. Keep pi0.5 as an isolated uv
 # project, while recording its reproducible top-level contract here. The full
-# 318-package resolution is checked in at the lockfile below.
+# package resolution is checked in at the lockfile below.
 [tool.dreamervla.environments.pi05-libero]
-profile = "environments/rlinf-libero-pi05/pyproject.toml"
-lockfile = "environments/rlinf-libero-pi05/uv.lock"
+profile = "configs/environments/rlinf-libero-pi05/pyproject.toml"
+lockfile = "configs/environments/rlinf-libero-pi05/uv.lock"
 python = "3.11.14"
 uv = "0.12.3"
 cuda = "12.8"

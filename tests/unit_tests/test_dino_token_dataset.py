@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 import torch
 
-from dreamervla.dataset.dino_token_dataset import DinoTokenTrajectoryDataset
+from dreamervla.dataset.base.latent_token_dataloader import DinoTokenTrajectoryDataset
 
 
 def _write_demo_pair(

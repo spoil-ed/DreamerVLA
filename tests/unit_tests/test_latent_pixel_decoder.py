@@ -211,8 +211,9 @@ def test_pi05_pixel_decoder_config_validates_for_eight_gpu_ddp() -> None:
     with initialize_config_dir(version_base=None, config_dir=str(config_dir)):
         cfg = compose(config_name="train", overrides=["experiment=pi05_pixel_decoder"])
     validate_cfg(cfg, world_size=8)
-    assert cfg.data.loader._target_ == ("dreamervla.dataset.LeRobotLIBERODataLoaderFactory")
-    assert cfg.data.loader.repo_id == "physical-intelligence/libero"
+    assert cfg.data.loader._target_ == "dreamervla.dataset.libero.LeRobotV3LIBERODataLoaderFactory"
+    assert cfg.data.repo_id == "lerobot/libero"
+    assert cfg.data.loader.normalization_asset_id == "physical-intelligence/libero"
     assert cfg.pixel_decoder.token_count == 768
     assert cfg.pixel_decoder.token_dim == 2048
     assert list(cfg.pixel_decoder.view_indices) == [0, 1]

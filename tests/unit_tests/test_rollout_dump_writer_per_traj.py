@@ -6,12 +6,12 @@ import h5py
 import numpy as np
 import pytest
 
-from dreamervla.dataset.collection_manifest import (
+from dreamervla.dataset.storage.collection_manifest import (
     EPISODE_INDEX_NAME,
     complete_episode_ids_per_task,
     count_collected_episodes,
 )
-from dreamervla.dataset.rollout_dump_writer import (
+from dreamervla.dataset.storage.rollout_dump_writer import (
     PerTrajectoryDumpWriter,
     per_trajectory_shard_name,
 )
@@ -135,7 +135,7 @@ def test_missing_identity_raises(tmp_path):
 
 
 def test_no_canonical_file_left_when_write_crashes(tmp_path, monkeypatch):
-    from dreamervla.dataset import rollout_dump_writer as rdw
+    from dreamervla.dataset.storage import rollout_dump_writer as rdw
 
     def _boom(self, *a, **kw):
         raise RuntimeError("simulated crash mid-write")

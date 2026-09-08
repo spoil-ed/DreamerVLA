@@ -5,7 +5,7 @@ import torch
 from omegaconf import OmegaConf
 
 from dreamervla.algorithms.dreamervla import world_model_pretrain_step
-from dreamervla.utils.optim import apply_optimizer_lr_schedule, build_optimizer
+from dreamervla.utils.training.optim import apply_optimizer_lr_schedule, build_optimizer
 
 
 class _GroupedModel(torch.nn.Module):

@@ -8,7 +8,7 @@ import pytest
 import torch
 from torch import nn
 
-from dreamervla.diagnostics.decoded_rollout_metrics import DecodedRolloutMetrics
+from dreamervla.diagnostics.evaluation.decoded_rollout_metrics import DecodedRolloutMetrics
 
 
 class _Readout(nn.Module):

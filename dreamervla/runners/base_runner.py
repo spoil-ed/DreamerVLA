@@ -5,7 +5,6 @@ import functools
 import hashlib
 import inspect
 import json
-import math
 import numbers
 import os
 import pathlib
@@ -27,22 +26,22 @@ from omegaconf import DictConfig, ListConfig, OmegaConf, open_dict
 from torch.utils.data import DataLoader
 
 from dreamervla.constants import CHECKPOINT_FORMAT_VERSION
-from dreamervla.runtime.metrics import SuccessTracker
-from dreamervla.utils.console import (
+from dreamervla.utils.checkpoint.hf_checkpoint import (
+    is_hf_checkpoint,
+    load_runner_payload,
+    resolve_hf_checkpoint_dir,
+)
+from dreamervla.utils.checkpoint.run_artifacts import infer_run_root, resolve_resume_checkpoint
+from dreamervla.utils.logging.console import (
     fmt_value,
     format_metric_table,
     metric_box,
     phase_banner,
 )
-from dreamervla.utils.hf_checkpoint import (
-    is_hf_checkpoint,
-    load_runner_payload,
-    resolve_hf_checkpoint_dir,
-)
-from dreamervla.utils.metric_logger import MetricLogger, NullMetricLogger
-from dreamervla.utils.progress import ProgressReporter
-from dreamervla.utils.run_paths import infer_run_root, resolve_resume_checkpoint
-from dreamervla.utils.seed import (
+from dreamervla.utils.logging.metric_logger import MetricLogger, NullMetricLogger
+from dreamervla.utils.logging.metrics import SuccessTracker, coerce_metric_scalar
+from dreamervla.utils.logging.progress import ProgressReporter
+from dreamervla.utils.training.seed import (
     capture_rng_state,
     restore_rng_state,
     select_rank_rng_state,
@@ -841,7 +840,7 @@ class BaseRunner(ABC):
             key_str = str(key)
             if key_str in {"global_step", "step", "epoch", "ts"}:
                 continue
-            scalar = self._coerce_metric_scalar(value)
+            scalar = coerce_metric_scalar(value)
             if scalar is None:
                 continue
             metric_name = self._normalize_metric_name(key_str, prefix=prefix)
@@ -864,25 +863,6 @@ class BaseRunner(ABC):
             if isinstance(value, numbers.Number):
                 return int(value)
         return int(self.global_step)
-
-    @staticmethod
-    def _coerce_metric_scalar(value: Any) -> float | None:
-        if isinstance(value, bool):
-            return None
-        if isinstance(value, numbers.Number):
-            scalar = float(value)
-        elif hasattr(value, "detach") and hasattr(value, "numel"):
-            try:
-                if int(value.numel()) != 1:
-                    return None
-                scalar = float(value.detach().item())
-            except Exception:
-                return None
-        else:
-            return None
-        if not math.isfinite(scalar):
-            return None
-        return scalar
 
     @staticmethod
     def _normalize_metric_name(key: str, *, prefix: str | None = None) -> str:

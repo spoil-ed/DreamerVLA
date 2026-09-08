@@ -7,7 +7,7 @@ from typing import Any
 from omegaconf import OmegaConf
 
 from dreamervla.runners.base_runner import BaseRunner
-from dreamervla.utils.metric_logger import MetricLogger
+from dreamervla.utils.logging.metric_logger import MetricLogger
 
 
 class _ConcreteRunner(BaseRunner):

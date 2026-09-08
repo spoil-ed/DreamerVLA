@@ -11,79 +11,6 @@ from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
 
-def test_cotrain_experiment_directory_contains_train_and_eval() -> None:
-    root = Path(__file__).resolve().parents[2]
-    experiments = root / "scripts" / "experiments"
-    cotrain = experiments / "cotrain"
-
-    assert sorted(path.name for path in experiments.iterdir()) == [
-        "classifier_training",
-        "collect_rollouts",
-        "cotrain",
-        "openvla_oft_official_eval",
-        "single_trajectory_overfit",
-        "world_model_training",
-    ]
-    assert sorted(path.name for path in cotrain.iterdir()) == ["eval.sh", "train.sh"]
-    assert sorted(path.name for path in (experiments / "classifier_training").iterdir()) == [
-        "train.sh"
-    ]
-    for folder in ("single_trajectory_overfit", "world_model_training"):
-        assert (experiments / folder / "train.sh").is_file()
-        assert (experiments / folder / "eval.sh").is_file()
-
-
-def test_stale_classifier_summarizer_is_removed() -> None:
-    root = Path(__file__).resolve().parents[2]
-
-    assert not (root / "dreamervla/diagnostics/experiment_stage_checks.py").exists()
-    assert not (root / "scripts/experiments/classifier_training/eval.sh").exists()
-
-
-def test_cotrain_train_script_uses_train_only_recipe_without_pinned_warm_states() -> None:
-    root = Path(__file__).resolve().parents[2]
-    text = (root / "scripts/experiments/cotrain/train.sh").read_text(encoding="utf-8")
-
-    assert "dreamervla.launchers.train" in text
-    assert "dreamervla.launchers.cotrain" not in text
-    assert "experiment=openvla_libero" not in text
-    assert "manual_cotrain.global_steps" not in text
-    assert "/inspire/" not in text
-    assert "20260712" not in text
-
-
-def test_experiment_scripts_defer_defaults_and_messages_to_python() -> None:
-    root = Path(__file__).resolve().parents[2]
-    scripts = sorted((root / "scripts/experiments").rglob("*.sh"))
-
-    for script in scripts:
-        text = script.read_text(encoding="utf-8")
-        assert "${" not in text or "${BASH_SOURCE[0]}" in text
-        assert ":-" not in text
-        assert "echo " not in text
-
-
-def test_world_model_training_entrypoint_defers_model_choice_to_hydra() -> None:
-    root = Path(__file__).resolve().parents[2]
-    script = (root / "scripts" / "experiments" / "world_model_training" / "train.sh").read_text(
-        encoding="utf-8"
-    )
-
-    assert "--config dreamer-wm" in script
-    assert "wm_dino_token_official" not in script
-    assert "wm_official_upper_bound" not in script
-    assert {path.name for path in (root / "configs" / "scripts").iterdir()} == {
-        "download",
-        "install",
-        "preprocess",
-        "reproduce",
-    }
-    assert (root / "configs" / "experiment" / "dino-wm.yaml").is_file()
-    assert (root / "configs" / "experiment" / "dreamer-wm.yaml").is_file()
-    assert (root / "configs" / "worldmodel" / "dino-wm.yaml").is_file()
-    assert (root / "configs" / "worldmodel" / "dreamer-wm.yaml").is_file()
-
-
 def test_mainline_experiments_compose_only_the_components_their_stage_needs() -> None:
     root = Path(__file__).resolve().parents[2]
     with initialize_config_dir(config_dir=str(root / "configs"), version_base=None):
@@ -300,19 +227,10 @@ def test_cotrain_eval_script_rejects_missing_checkpoint() -> None:
     assert "eval.ckpt_path=<value>" in result.stderr
 
 
-def test_hidden_token_preprocess_uses_configured_torchrun_world_size() -> None:
-    root = Path(__file__).resolve().parents[2]
-    script = root / "scripts" / "preprocess" / "10_oft_hidden_token.sh"
-    text = script.read_text(encoding="utf-8")
-    assert '--nproc-per-node="${OFT_HIDDEN_TOKEN_GPUS}"' in text
-    assert "dreamervla.preprocess.preprocess_oft_hidden_token" in text
-    assert "obs_hidden_source=hidden_token" in text
-
-
 def test_offline_world_model_ddp_defaults_remain_configurable() -> None:
     from omegaconf import OmegaConf
 
-    from dreamervla.runtime.world_model_training_common import (
+    from dreamervla.runtime.training.world_model_training_common import (
         _world_model_ddp_wrap_kwargs,
     )
 

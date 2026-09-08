@@ -68,7 +68,7 @@ from dreamervla.algorithms.ppo.grpo import (
     masked_mean_ratio_chunk_term,
 )
 from dreamervla.algorithms.validation import validate_ppo_hyperparameters
-from dreamervla.utils.torch_utils import move_mapping_to_device
+from dreamervla.utils.training.torch_utils import move_mapping_to_device
 
 
 def build_valid_chunk_count(

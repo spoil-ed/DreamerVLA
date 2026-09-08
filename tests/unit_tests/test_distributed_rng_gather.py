@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dreamervla.runtime.distributed import NopretokenizeSFTDistributedHelper
+from dreamervla.utils.training.distributed import NopretokenizeSFTDistributedHelper
 
 
 def _helper(world_size: int) -> NopretokenizeSFTDistributedHelper:
@@ -18,7 +18,7 @@ def test_all_gather_objects_single_process_returns_local_value(monkeypatch):
     def unexpected(*_args, **_kwargs):
         raise AssertionError("single-process gather must not call torch.distributed")
 
-    monkeypatch.setattr("dreamervla.runtime.distributed.dist.all_gather_object", unexpected)
+    monkeypatch.setattr("dreamervla.utils.training.distributed.dist.all_gather_object", unexpected)
 
     value = {"rank": 0}
     assert _helper(world_size=1).all_gather_objects(value) == [value]
@@ -31,7 +31,9 @@ def test_all_gather_objects_uses_distributed_collective(monkeypatch):
         output[:] = [value, {"rank": 1}]
         captured["group"] = group
 
-    monkeypatch.setattr("dreamervla.runtime.distributed.dist.all_gather_object", fake_all_gather)
+    monkeypatch.setattr(
+        "dreamervla.utils.training.distributed.dist.all_gather_object", fake_all_gather
+    )
 
     assert _helper(world_size=2).all_gather_objects({"rank": 0}) == [
         {"rank": 0},

@@ -36,7 +36,7 @@ openvla_oft:
   chunk_size: 8
   wm_sequence_length: 36
   sft_policy_target: dreamervla.models.embodiment.OpenVLAOFTPolicy
-  sft_dataset_target: dreamervla.dataset.VLASFTHDF5DatasetFactory
+  sft_dataset_target: dreamervla.dataset.libero.VLASFTHDF5DatasetFactory
   wm_target: dreamervla.models.embodiment.world_model.wm_chunk.ChunkAwareWorldModel
   actor_target: dreamervla.algorithms.actor.LatentToOpenVLAHiddenStateActor
   actor_head_type: oft_discrete_token

@@ -20,8 +20,9 @@ python -m dreamervla.train \
   experiment=collect_rollouts task=openvla_onetraj_coldstart_libero
 ```
 
-The reduced shell surface uses `scripts/experiments/cotrain/train.sh` and
-`scripts/experiments/cotrain/eval.sh` for the trainable WM/CLS route.
+The shell surface uses `scripts/experiments/cotrain/train.sh` and
+`scripts/experiments/cotrain/eval.sh` for the frozen-WM/CLS mainline.
+Select `openvla_onetraj_libero_cotrain` explicitly for staged WM/CLS updates.
 
 ## Supporting Training Entrypoints
 

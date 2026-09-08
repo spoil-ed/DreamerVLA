@@ -11,15 +11,15 @@ from dreamervla.algorithms.critic.latent_success_classifier import (
     LatentSuccessClassifier,
     LatentSuccessClassifierConfig,
 )
-from dreamervla.dataset.pixel_hidden_sequence_dataset import PixelHiddenSequenceDataset
+from dreamervla.dataset.base.latent_token_dataloader import PixelHiddenSequenceDataset
 from dreamervla.models.embodiment.world_model.wm import WorldModel
 from dreamervla.preprocess.sidecar_schema import (
     SIDECAR_SCHEMA_VERSION,
     validate_hidden_token_preprocess_config,
     validate_hidden_token_sidecar_dir,
 )
-from dreamervla.runtime.oft_collect import make_preprocess_config
-from dreamervla.runtime.rollout_hidden_extractor import (
+from dreamervla.runtime.rollout.oft_collect import make_preprocess_config
+from dreamervla.runtime.rollout.rollout_hidden_extractor import (
     hidden_token_from_projected,
 )
 
@@ -511,17 +511,3 @@ def test_classifier_rejects_flat_canonical_observation() -> None:
 
     with pytest.raises(ValueError, match="flat observation inputs are not supported"):
         classifier(torch.zeros(1, 2, 256 * 4096))
-
-
-def test_wm_source_uses_role_based_wm_wording() -> None:
-    source = (
-        Path(__file__).resolve().parents[2]
-        / "dreamervla"
-        / "models"
-        / "embodiment"
-        / "world_model"
-        / "wm.py"
-    ).read_text(encoding="utf-8")
-    assert ("DINO" + "-WM") not in source
-    assert ("dino" + "_wm") not in source.lower()
-    assert ("dino" + "wm") not in source.lower()

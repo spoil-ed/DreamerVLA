@@ -113,7 +113,7 @@ gradient exists, the KL transaction rolls back, or the policy hash remains uncha
 A saved run can be checked again without loading any model:
 
 ```bash
-python -m dreamervla.diagnostics.verify_training_signal /path/to/run
+python -m dreamervla.diagnostics.checks.verify_training_signal /path/to/run
 ```
 
 Mainline rollout collection:

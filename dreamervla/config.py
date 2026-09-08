@@ -18,8 +18,8 @@ from dreamervla.preprocess.sidecar_schema import (
     HIDDEN_TOKEN_ACTION_HEAD,
     HIDDEN_TOKEN_SOURCE,
 )
-from dreamervla.utils.metric_logger import MetricLogger
-from dreamervla.utils.paths import data_root
+from dreamervla.utils.config.paths import data_root
+from dreamervla.utils.logging.metric_logger import MetricLogger, normalize_logger_backends
 from dreamervla.workers.cotrain.config_placement import (
     build_manual_cotrain_placement_from_config,
 )
@@ -244,10 +244,28 @@ def _validate_latent_pixel_decoder_contract(cfg: DictConfig, *, world_size: int)
 
 
 def _validate_pi05_training_data_pipeline(cfg: DictConfig, *, route: str) -> None:
-    """Validate the migrated RLinf/OpenPI loader and pinned LeRobot source."""
+    """Validate the selected data reader and checkpoint transform contract."""
 
     loader_target = str(OmegaConf.select(cfg, "data.loader._target_", default="") or "")
-    if loader_target != "dreamervla.dataset.LeRobotLIBERODataLoaderFactory":
+    if loader_target == "dreamervla.dataset.libero.LeRobotV3LIBERODataLoaderFactory":
+        if OmegaConf.select(cfg, "data.format") != "lerobot_v3":
+            raise ValueError(f"π0.5 {route} local reader requires data.format=lerobot_v3")
+        for loader_key, reference_key in (
+            ("repo_id", "data.repo_id"),
+            ("dataset.dataset_dir", "data.source"),
+            ("dataset.sequence_length", "data.loader.action_horizon"),
+            ("action_horizon", "task.pi05.action_horizon"),
+            ("config_name", "task.pi05.config_name"),
+            ("normalization_asset_id", "task.pi05.normalization_asset_id"),
+        ):
+            actual = OmegaConf.select(cfg, f"data.loader.{loader_key}")
+            expected = OmegaConf.select(cfg, reference_key)
+            if actual is None or actual != expected:
+                raise ValueError(
+                    f"π0.5 {route} data.loader.{loader_key} must match {reference_key}"
+                )
+        return
+    if loader_target != "dreamervla.models.embodiment.pi05.sft_data.LeRobotLIBERODataLoaderFactory":
         raise ValueError(f"π0.5 {route} requires data.loader=LeRobotLIBERODataLoaderFactory")
     if str(OmegaConf.select(cfg, "data.loader.repo_id", default="")) != (
         "physical-intelligence/libero"
@@ -375,7 +393,7 @@ def _validate_precision_controls(cfg: DictConfig) -> None:
 
 
 def _validate_logger_backends(cfg: DictConfig) -> None:
-    backends = _normalize_backends(
+    backends = normalize_logger_backends(
         OmegaConf.select(cfg, "runner.logger.logger_backends", default=None)
     )
     unsupported = [backend for backend in backends if backend not in MetricLogger.supported_logger]
@@ -2236,25 +2254,6 @@ def _require_positive_int_if_present(cfg: DictConfig, key: str) -> None:
     int_value = int(value)
     if float(value) != float(int_value) or int_value <= 0:
         raise ValueError(f"{key} must be a positive integer, got {value!r}")
-
-
-def _normalize_backends(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, str):
-        raw_backends = [value]
-    elif isinstance(value, (list, tuple, ListConfig)):
-        raw_backends = list(value)
-    else:
-        raw_backends = [value]
-
-    backends: list[str] = []
-    for backend in raw_backends:
-        normalized = str(backend).strip().lower()
-        if normalized in {"", "none", "null", "false", "off", "disabled"}:
-            continue
-        backends.append(normalized)
-    return backends
 
 
 def _select_str(cfg: DictConfig, key: str) -> str | None:

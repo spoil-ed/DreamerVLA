@@ -12,10 +12,10 @@ import torch
 from omegaconf import DictConfig, OmegaConf
 
 from dreamervla.models.embodiment.world_model import DinoTokenWorldModel
-from dreamervla.runtime.distributed import unwrap_module
-from dreamervla.runtime.world_model_training_base import WorldModelTrainingBase
-from dreamervla.utils.checkpoint_util import TopKCheckpointManager
-from dreamervla.utils.torch_utils import precision_dtype
+from dreamervla.runtime.training.world_model_training_base import WorldModelTrainingBase
+from dreamervla.utils.checkpoint.checkpoint_util import TopKCheckpointManager
+from dreamervla.utils.training.distributed import unwrap_module
+from dreamervla.utils.training.torch_utils import precision_dtype
 
 
 def _adamw_from_cfg(

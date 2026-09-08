@@ -5,7 +5,7 @@ Launch path:
         experiment=wmpo_token_classifier_openvla_onetraj_libero_goal_h1 \
         task=openvla_onetraj_libero
         → dreamervla.runners.SuccessClassifierTrainingRunner.run()
-            → dreamervla.dataset.lumos_aligned_latent_dataset
+            → dreamervla.dataset.classifier_dataset
             → dreamervla.algorithms.critic.LatentSuccessClassifier
 
 Why a dedicated runner, not another standalone script:
@@ -53,11 +53,13 @@ from dreamervla.algorithms.critic import (
 from dreamervla.constants import CHECKPOINT_FORMAT_VERSION
 from dreamervla.preprocess.sidecar_schema import validate_hidden_token_sidecar_dir
 from dreamervla.runners.base_runner import BaseRunner
-from dreamervla.runtime.classifier_metrics import sweep_threshold_metrics as _sweep_metrics
-from dreamervla.runtime.distributed import NopretokenizeSFTDistributedHelper
-from dreamervla.utils.checkpoint_util import TopKCheckpointManager
-from dreamervla.utils.torch_utils import autocast_context
-from dreamervla.utils.update_timing import GradientUpdateTimer
+from dreamervla.runtime.evaluation.classifier_metrics import (
+    sweep_threshold_metrics as _sweep_metrics,
+)
+from dreamervla.utils.checkpoint.checkpoint_util import TopKCheckpointManager
+from dreamervla.utils.logging.update_timing import GradientUpdateTimer
+from dreamervla.utils.training.distributed import NopretokenizeSFTDistributedHelper
+from dreamervla.utils.training.torch_utils import autocast_context
 
 # ---------------------------------------------------------------------------
 # Runner
@@ -1181,6 +1183,6 @@ class SuccessClassifierTrainingRunner(BaseRunner):
     exclude_keys = ("train_ds", "val_ds", "train_loader", "val_loader")
 
 
-# Threshold sweep lives in dreamervla.runtime.classifier_metrics; `_sweep_metrics`
+# Threshold sweep lives in dreamervla.runtime.evaluation.classifier_metrics; `_sweep_metrics`
 # is re-exported above for existing importers.
 __all__ = ["SuccessClassifierTrainingRunner", "_sweep_metrics"]

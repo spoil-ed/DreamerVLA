@@ -21,15 +21,19 @@ from dreamervla.hybrid_engines.weight_syncer.objectstore import (
     ObjectStoreWeightSyncer,
     _independent_cpu,
 )
-from dreamervla.runtime.cotrain_eval import (
+from dreamervla.runtime.evaluation.cotrain_eval import (
     CotrainEvalObserver,
     CotrainTransactionAccumulator,
     encoded_eval_trajectory_from_real,
     evaluate_encoded_cotrain_trajectory,
 )
 from dreamervla.scheduler.worker import Worker
-from dreamervla.utils.seed import capture_rng_state, restore_rng_state, select_rank_rng_state
-from dreamervla.utils.torch_utils import precision_dtype
+from dreamervla.utils.training.seed import (
+    capture_rng_state,
+    restore_rng_state,
+    select_rank_rng_state,
+)
+from dreamervla.utils.training.torch_utils import precision_dtype
 from dreamervla.workers.cotrain.messages import RealTrajectoryBatch
 
 
@@ -1274,7 +1278,7 @@ def namespaced_world_model_metrics(metrics: dict[str, Any]) -> dict[str, float]:
 def online_classifier_update_step(**kwargs: Any) -> dict[str, Any]:
     """Lazy import wrapper preserving optional-Ray import isolation."""
 
-    from dreamervla.runtime.classifier_update import online_classifier_update_step as _impl
+    from dreamervla.runtime.training.classifier_update import online_classifier_update_step as _impl
 
     return _impl(**kwargs)
 

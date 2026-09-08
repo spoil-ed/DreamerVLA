@@ -5,7 +5,7 @@ import torch
 from torch import nn
 
 from dreamervla.envs.world_model.latent_world_model_env import LatentWorldModelEnv
-from dreamervla.runtime.online_replay import OnlineReplay
+from dreamervla.runtime.replay.online_replay import OnlineReplay
 from dreamervla.workers.env.trajectory_env_worker import WMEnvWorker
 
 
@@ -148,7 +148,7 @@ def test_wm_env_worker_bootstraps_initial_latents_from_replay() -> None:
             "target": ("dreamervla.envs.world_model.latent_world_model_env:LatentWorldModelEnv"),
             "kwargs": {
                 "world_model": {
-                    "target": ("dreamervla.workers.actor._test_models:TinyLumosWorldModel"),
+                    "target": ("dreamervla.diagnostics.fixtures.actor_models:TinyLumosWorldModel"),
                     "kwargs": {"hidden_dim": 2, "action_dim": 1},
                 },
                 "classifier": None,
@@ -181,7 +181,7 @@ def test_wm_env_worker_bootstraps_aligned_multi_task_conditions() -> None:
             "target": ("dreamervla.envs.world_model.latent_world_model_env:LatentWorldModelEnv"),
             "kwargs": {
                 "world_model": {
-                    "target": ("dreamervla.workers.actor._test_models:TinyLumosWorldModel"),
+                    "target": ("dreamervla.diagnostics.fixtures.actor_models:TinyLumosWorldModel"),
                     "kwargs": {"hidden_dim": 2, "action_dim": 1},
                 },
                 "classifier": None,
@@ -231,7 +231,7 @@ def test_wm_env_worker_repeats_one_aligned_condition_for_each_policy_group() -> 
             "defer_initial_condition_bootstrap": True,
             "kwargs": {
                 "world_model": {
-                    "target": ("dreamervla.workers.actor._test_models:TinyLumosWorldModel"),
+                    "target": ("dreamervla.diagnostics.fixtures.actor_models:TinyLumosWorldModel"),
                     "kwargs": {"hidden_dim": 2, "action_dim": 1},
                 },
                 "classifier": None,
@@ -280,7 +280,7 @@ def test_wm_env_worker_forwards_failure_initial_condition_selector() -> None:
             "initial_condition_selector": "failed_episode_start",
             "kwargs": {
                 "world_model": {
-                    "target": ("dreamervla.workers.actor._test_models:TinyLumosWorldModel"),
+                    "target": ("dreamervla.diagnostics.fixtures.actor_models:TinyLumosWorldModel"),
                     "kwargs": {"hidden_dim": 2, "action_dim": 1},
                 },
                 "classifier": None,
@@ -316,7 +316,7 @@ def test_wm_env_worker_bootstraps_initial_lang_embs_from_replay() -> None:
             "target": ("dreamervla.envs.world_model.latent_world_model_env:LatentWorldModelEnv"),
             "kwargs": {
                 "world_model": {
-                    "target": ("dreamervla.workers.actor._test_models:TinyLumosWorldModel"),
+                    "target": ("dreamervla.diagnostics.fixtures.actor_models:TinyLumosWorldModel"),
                     "kwargs": {"hidden_dim": 2, "action_dim": 1},
                 },
                 "classifier": None,
@@ -353,7 +353,7 @@ def test_wm_env_worker_bootstraps_initial_proprios_from_replay() -> None:
             "target": ("dreamervla.envs.world_model.latent_world_model_env:LatentWorldModelEnv"),
             "kwargs": {
                 "world_model": {
-                    "target": ("dreamervla.workers.actor._test_models:TinyLumosWorldModel"),
+                    "target": ("dreamervla.diagnostics.fixtures.actor_models:TinyLumosWorldModel"),
                     "kwargs": {"hidden_dim": 2, "action_dim": 1},
                 },
                 "classifier": None,

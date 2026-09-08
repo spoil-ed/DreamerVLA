@@ -6,7 +6,7 @@ import os
 
 import pytest
 
-from dreamervla.utils import egl_device
+from dreamervla.runtime.envs import render_device as egl_device
 
 _RENDER_ENV_KEYS = (
     "MUJOCO_GL",

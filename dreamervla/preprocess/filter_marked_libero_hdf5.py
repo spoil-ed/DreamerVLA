@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from dreamervla.preprocess.libero_utils.noop_marking import filter_marked_hdf5_dir
-from dreamervla.utils.hydra_config import script_namespace
+from dreamervla.utils.config.hydra_config import script_namespace
 
 
 def parse_args() -> SimpleNamespace:

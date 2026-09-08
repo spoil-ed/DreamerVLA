@@ -620,7 +620,7 @@ class MultiStepRolloutWorker(Worker):
             task_description = str(obs.get("task_description", obs.get("language", "")))
             preps.append(dict(prepare(obs, task_description)))
 
-        from dreamervla.runtime.rollout_hidden_extractor import _left_pad_batch
+        from dreamervla.runtime.rollout.rollout_hidden_extractor import _left_pad_batch
 
         tokenizer = getattr(getattr(policy, "processor", None), "tokenizer", None)
         if tokenizer is None:

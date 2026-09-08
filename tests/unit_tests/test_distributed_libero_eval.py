@@ -2,7 +2,7 @@
 
 import pytest
 
-from dreamervla.runtime.eval_metrics import (
+from dreamervla.runtime.evaluation.eval_metrics import (
     allocate_divisible_worker_budget,
     merge_libero_eval_rank_payloads,
     shard_libero_eval_tasks,

@@ -1,100 +1,59 @@
 from __future__ import annotations
 
+import ast
+import importlib
+import subprocess
+import sys
 from pathlib import Path
 
-from hydra import compose, initialize_config_dir
 from hydra.utils import get_class
+from omegaconf import OmegaConf
 
 
-def test_dataset_public_api_exports_only_retained_routes() -> None:
-    import dreamervla.dataset as dataset
+def test_all_nested_dataset_config_references_resolve() -> None:
+    """Include factory selectors and nested targets, not just root datasets."""
+    root = Path(__file__).resolve().parents[2]
 
-    expected = {
-        "BaseDataset",
-        "OFFICIAL_PI05_LIBERO_REPO",
-        "OFFICIAL_PI05_LIBERO_REVISION",
-        "PixelHiddenSequenceDataset",
-        "PixelSequenceDataset",
-        "PixelSequenceSpec",
-        "TokenSequenceDataset",
-        "TokenSequenceSpec",
-        "DinoTokenTrajectoryDataset",
-        "LeRobotLIBERODataLoaderFactory",
-        "OpenPISFTDataLoaderBundle",
-        "OneTrajectoryPretokenizeActionChunkDataset",
-        "VLASFTHDF5Dataset",
-        "VLASFTHDF5DatasetFactory",
-        "VLASFTHDF5Spec",
-        "VLASFTRLDSDatasetBundle",
-        "VLASFTRLDSDatasetFactory",
-        "PretokenizeActionChunkDataset",
-        "PretokenizeDataSpec",
-        "PretokenizeDataset",
-        "configured_download_endpoint",
-        "get_official_openpi_sft_num_batches",
-        "openpi_torch_loader",
-        "resolve_lerobot_source",
-    }
+    def check(value: object) -> None:
+        if isinstance(value, dict):
+            for child in value.values():
+                check(child)
+        elif isinstance(value, list):
+            for child in value:
+                check(child)
+        elif isinstance(value, str) and value.startswith("dreamervla.dataset."):
+            get_class(value)
 
-    assert set(dataset.__all__) == expected
-    for name in expected:
-        assert hasattr(dataset, name)
-
-    removed_names = {
-        "LIBERODataSpec",
-        "LIBEROTransitionDataset",
-        "PretokenizeFlatDataset",
-        "TrainingDataSpec",
-        "TransitionDataset",
-    }
-    for name in removed_names:
-        assert name not in dataset.__all__
-        assert not hasattr(dataset, name)
+    for path in (root / "configs").rglob("*.yaml"):
+        check(OmegaConf.to_container(OmegaConf.load(path), resolve=False))
 
 
-def test_removed_dataset_files_are_absent() -> None:
-    project_root = Path(__file__).resolve().parents[2]
-    removed_files = {
-        "dreamervla/dataset/libero_dataset.py",
-        "dreamervla/dataset/transition_dataset.py",
-    }
+def test_dataset_imports_in_runtime_and_tests_resolve() -> None:
+    """Catch stale Python module/symbol references after moving files."""
+    root = Path(__file__).resolve().parents[2]
+    for folder in ("dreamervla", "tests"):
+        for path in (root / folder).rglob("*.py"):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name.startswith("dreamervla.dataset"):
+                            importlib.import_module(alias.name)
+                elif isinstance(node, ast.ImportFrom) and (node.module or "").startswith(
+                    "dreamervla.dataset"
+                ):
+                    module = importlib.import_module(node.module)
+                    for alias in node.names:
+                        if alias.name != "*" and not hasattr(module, alias.name):
+                            importlib.import_module(f"{node.module}.{alias.name}")
 
-    for relative_path in removed_files:
-        assert not (project_root / relative_path).exists()
 
-
-def test_configs_use_importable_dreamervla_dataset_targets() -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-    config_names = sorted(
-        str(path.relative_to(config_dir).with_suffix(""))
-        for path in config_dir.rglob("*.yaml")
-        if "experiment" not in path.relative_to(config_dir).parts
+def test_importing_dataset_package_does_not_load_optional_model_stacks() -> None:
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import dreamervla.dataset; assert not {'openpi', 'prismatic', 'jax'} & sys.modules.keys()",
+        ],
+        check=True,
+        cwd=Path(__file__).resolve().parents[2],
     )
-
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        cfgs = [compose(config_name=config_name) for config_name in config_names]
-        experiment_names = sorted(path.stem for path in (config_dir / "experiment").glob("*.yaml"))
-        cfgs.extend(
-            compose(config_name="train", overrides=[f"experiment={experiment_name}"])
-            for experiment_name in experiment_names
-        )
-        for cfg in cfgs:
-            for section in ("dataset", "dataset_val_ind", "dataset_val_ood"):
-                target = (
-                    cfg.get(section, {}).get("_target_") if cfg.get(section) is not None else None
-                )
-                if target is not None:
-                    assert str(target).startswith("dreamervla.dataset.")
-                    get_class(str(target))
-
-
-def test_task_classifier_dataset_targets_are_importable() -> None:
-    config_dir = Path(__file__).resolve().parents[2] / "configs"
-    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
-        cfg = compose(
-            config_name="train",
-            overrides=["experiment=classifier_official_upper_bound"],
-        )
-
-    get_class(str(cfg.task.classifier.dataset.train._target_))
-    get_class(str(cfg.task.classifier.dataset.validation._target_))

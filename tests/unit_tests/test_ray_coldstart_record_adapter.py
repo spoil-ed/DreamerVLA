@@ -51,7 +51,7 @@ def test_step_round_trips_through_rollout_dump_writer(
 ) -> None:
     import h5py
 
-    from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
+    from dreamervla.dataset.storage.rollout_dump_writer import RolloutDumpWriter
 
     steps = [
         build_dump_step(
@@ -91,7 +91,7 @@ def test_build_dump_step_preserves_hidden_token_shape(
 ) -> None:
     import h5py
 
-    from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
+    from dreamervla.dataset.storage.rollout_dump_writer import RolloutDumpWriter
 
     tokenized = np.zeros(HIDDEN_TOKEN_SHAPE, dtype=np.float16)
     steps = [

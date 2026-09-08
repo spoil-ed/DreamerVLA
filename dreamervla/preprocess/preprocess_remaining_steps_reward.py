@@ -9,8 +9,8 @@ from typing import Any
 import h5py
 import numpy as np
 
-from dreamervla.utils.hydra_config import script_namespace
-from dreamervla.utils.progress import ProgressReporter
+from dreamervla.utils.config.hydra_config import script_namespace
+from dreamervla.utils.logging.progress import ProgressReporter
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 

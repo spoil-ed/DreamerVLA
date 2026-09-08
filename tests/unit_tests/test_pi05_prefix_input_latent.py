@@ -246,7 +246,7 @@ def test_prefix_input_hydra_route_passes_full_validation(tmp_path: Path) -> None
 
 
 def test_prefix_input_latent_sidecar_contract_has_distinct_source() -> None:
-    from dreamervla.runtime.observation_latent import ObservationLatentSpec
+    from dreamervla.runtime.common.observation_latent import ObservationLatentSpec
 
     spec = ObservationLatentSpec(
         policy_family="pi05",

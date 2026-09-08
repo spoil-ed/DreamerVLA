@@ -10,7 +10,7 @@ from dreamervla.workers.cotrain.messages import RealTrajectory, RealTrajectoryBa
 def _actor() -> EmbodiedFSDPActor:
     actor = EmbodiedFSDPActor(
         policy_cfg={
-            "target": "dreamervla.workers.actor._test_models:TinyStagedVLAPolicy",
+            "target": "dreamervla.diagnostics.fixtures.actor_models:TinyStagedVLAPolicy",
             "kwargs": {"num_bins": 3},
         },
         init_ckpt={},

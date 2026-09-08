@@ -50,16 +50,35 @@ The registered checkpoint steps are `scripts/download/00_openvla_oft.sh` and
 
 ## Datasets
 
-The default π0.5 dataset is the complete LeRobot snapshot:
+The default π0.5 SFT and pixel-decoder dataset is the mounted native LeRobot v3
+LIBERO dataset, selected by `configs/data/lerobot_libero.yaml`:
 
 ```text
-${DVLA_DATA_ROOT}/datasets/lerobot/physical-intelligence/libero/
-  meta/
-  data/
-  videos/
+/jfs/public/prod/hf-datasets/datasets/lerobot/libero/
+  meta/info.json                 # codebase_version: v3.0
+  meta/tasks.parquet
+  meta/episodes/chunk-*/file-*.parquet
+  data/chunk-*/file-*.parquet
+  videos/<camera>/chunk-*/file-*.mp4
 ```
 
-Download its pinned revision once with:
+Override the source with `PI05_LIBERO_DATA`. The mounted dataset has 1,693
+episodes, 273,465 frames and 40 tasks. Its two cameras are AV1 videos;
+actions retain 7 dimensions and state retains 8 dimensions. DreamerVLA's local
+`dataset/base/lerobot_v3_dataloader.py` owns Parquet indexing and video decoding,
+with `dataset/libero.py` mapping native features to policy inputs. The implementation
+adapts OpenWAM's reader logic without importing or depending on OpenWAM.
+
+Windows stay within an episode. Action tails repeat the last real action and
+the reader exposes a validity mask; the existing OpenPI SFT transform retains
+its endpoint-repetition training convention. Checkpoint normalization remains
+`task.pi05.assets_path/physical-intelligence/libero/norm_stats.json`, independent
+of the v3 source repository name. Model transforms still own image resizing and
+model-width padding. This migration does not claim pixel identity between the
+AV1 source and the earlier image dataset.
+
+The earlier v2 source remains available through the legacy data configuration
+and factory. Its download helper is unchanged:
 
 ```bash
 bash scripts/download_assets.sh 'only=[20_libero_dataset]'

@@ -5,7 +5,7 @@ import types
 import numpy as np
 import torch
 
-from dreamervla.diagnostics.eval_dino_token_wm import (
+from dreamervla.diagnostics.evaluation.eval_dino_token_wm import (
     deterministic_window_starts,
     one_step_token_predictions,
     token_prediction_metrics,

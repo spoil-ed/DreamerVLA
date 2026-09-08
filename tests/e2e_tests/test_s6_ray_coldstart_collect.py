@@ -22,7 +22,7 @@ def test_ray_coldstart_runner_writes_reward_and_sidecar(tmp_path) -> None:
         "env": {
             "num_workers": 2,
             "cfg": {
-                "target": "dreamervla.workers.env._test_envs:DumpCounterEnv",
+                "target": "dreamervla.diagnostics.fixtures.envs:DumpCounterEnv",
                 "kwargs": {"horizon": 3, "image_shape": (4, 4, 3), "embedding_dim": 4},
             },
         },
@@ -41,15 +41,17 @@ def test_ray_coldstart_runner_writes_reward_and_sidecar(tmp_path) -> None:
         },
         "policy": {
             "cfg": {
-                "target": "dreamervla.workers.actor._test_models:TinySharedPolicy",
+                "target": "dreamervla.diagnostics.fixtures.actor_models:TinySharedPolicy",
                 "kwargs": {"hidden_dim": 4, "action_dim": 7},
             }
         },
         "inference": {
             "cfg": {
-                "encoder": {"target": "dreamervla.workers.inference._test_models:TinyEncoder"},
+                "encoder": {
+                    "target": "dreamervla.diagnostics.fixtures.inference_models:TinyEncoder"
+                },
                 "world_model": {
-                    "target": "dreamervla.workers.inference._test_models:TinyWorldModel",
+                    "target": "dreamervla.diagnostics.fixtures.inference_models:TinyWorldModel",
                     "kwargs": {"hidden_dim": 4, "action_dim": 7},
                 },
                 "device": "cpu",
@@ -98,7 +100,7 @@ def test_ray_coldstart_overlaps_env_and_inference(tmp_path) -> None:
         "env": {
             "num_workers": 2,
             "cfg": {
-                "target": "dreamervla.workers.env._test_envs:DumpCounterEnv",
+                "target": "dreamervla.diagnostics.fixtures.envs:DumpCounterEnv",
                 "kwargs": {"horizon": 3, "image_shape": (4, 4, 3), "embedding_dim": 4},
             },
         },
@@ -117,15 +119,17 @@ def test_ray_coldstart_overlaps_env_and_inference(tmp_path) -> None:
         },
         "policy": {
             "cfg": {
-                "target": "dreamervla.workers.actor._test_models:TinySharedPolicy",
+                "target": "dreamervla.diagnostics.fixtures.actor_models:TinySharedPolicy",
                 "kwargs": {"hidden_dim": 4, "action_dim": 7},
             }
         },
         "inference": {
             "cfg": {
-                "encoder": {"target": "dreamervla.workers.inference._test_models:TinyEncoder"},
+                "encoder": {
+                    "target": "dreamervla.diagnostics.fixtures.inference_models:TinyEncoder"
+                },
                 "world_model": {
-                    "target": "dreamervla.workers.inference._test_models:TinyWorldModel",
+                    "target": "dreamervla.diagnostics.fixtures.inference_models:TinyWorldModel",
                     "kwargs": {"hidden_dim": 4, "action_dim": 7},
                 },
                 "device": "cpu",
@@ -149,8 +153,8 @@ def test_fake_coldstart_50pct_success_seeds_cotrain_warmup(tmp_path, monkeypatch
     import torch
 
     from dreamervla.runners import RolloutCollectionRunner
-    from dreamervla.runtime.offline_seed import seed_replay_from_offline
-    from dreamervla.runtime.online_replay import OnlineReplay
+    from dreamervla.runtime.replay.offline_seed import seed_replay_from_offline
+    from dreamervla.runtime.replay.online_replay import OnlineReplay
 
     if ray.is_initialized():
         ray.shutdown()
@@ -161,7 +165,7 @@ def test_fake_coldstart_50pct_success_seeds_cotrain_warmup(tmp_path, monkeypatch
         "env": {
             "num_workers": 2,
             "cfg": {
-                "target": "dreamervla.workers.env._test_envs:AlternatingSuccessDumpEnv",
+                "target": "dreamervla.diagnostics.fixtures.envs:AlternatingSuccessDumpEnv",
                 "kwargs": {"horizon": 4, "image_shape": (4, 4, 3), "embedding_dim": 4},
             },
         },
@@ -180,15 +184,17 @@ def test_fake_coldstart_50pct_success_seeds_cotrain_warmup(tmp_path, monkeypatch
         },
         "policy": {
             "cfg": {
-                "target": "dreamervla.workers.actor._test_models:TinySharedPolicy",
+                "target": "dreamervla.diagnostics.fixtures.actor_models:TinySharedPolicy",
                 "kwargs": {"hidden_dim": 4, "action_dim": 7},
             }
         },
         "inference": {
             "cfg": {
-                "encoder": {"target": "dreamervla.workers.inference._test_models:TinyEncoder"},
+                "encoder": {
+                    "target": "dreamervla.diagnostics.fixtures.inference_models:TinyEncoder"
+                },
                 "world_model": {
-                    "target": "dreamervla.workers.inference._test_models:TinyWorldModel",
+                    "target": "dreamervla.diagnostics.fixtures.inference_models:TinyWorldModel",
                     "kwargs": {"hidden_dim": 4, "action_dim": 7},
                 },
                 "device": "cpu",

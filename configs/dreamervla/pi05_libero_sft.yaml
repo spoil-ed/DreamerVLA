@@ -5,10 +5,10 @@ seed: 0
 
 data:
   loader:
-    _target_: dreamervla.dataset.LeRobotLIBERODataLoaderFactory
-    source: ${data.source}
+    _target_: dreamervla.dataset.libero.LeRobotV3LIBERODataLoaderFactory
+    dataset: ${data.dataset}
     repo_id: ${data.repo_id}
-    revision: ${data.revision}
+    normalization_asset_id: ${task.pi05.normalization_asset_id}
     model_path: ${task.pi05.base_ckpt_path}
     assets_path: ${task.pi05.assets_path}
     config_name: ${task.pi05.config_name}

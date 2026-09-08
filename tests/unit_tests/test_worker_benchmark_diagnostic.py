@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from dreamervla.diagnostics.benchmark_manual_workers import (
+from dreamervla.diagnostics.benchmarks.benchmark_manual_workers import (
     GpuSampler,
     SyntheticBatchWMEnv,
     build_rollout_result,
@@ -46,7 +46,7 @@ def test_runs_wm_env_direct_benchmark_with_batch_step(tmp_path) -> None:
     output = tmp_path / "bench.json"
     metrics = run_wm_env_direct_benchmark(
         env_cfg={
-            "target": "dreamervla.diagnostics.benchmark_manual_workers:SyntheticBatchWMEnv",
+            "target": "dreamervla.diagnostics.benchmarks.benchmark_manual_workers:SyntheticBatchWMEnv",
             "kwargs": {
                 "num_envs": 2,
                 "latent_dim": 4,
@@ -83,7 +83,7 @@ def test_runs_wm_env_interact_benchmark_with_production_loop(tmp_path) -> None:
     output = tmp_path / "bench_interact.json"
     metrics = run_wm_env_interact_benchmark(
         env_cfg={
-            "target": "dreamervla.diagnostics.benchmark_manual_workers:SyntheticBatchWMEnv",
+            "target": "dreamervla.diagnostics.benchmarks.benchmark_manual_workers:SyntheticBatchWMEnv",
             "kwargs": {
                 "num_envs": 2,
                 "latent_dim": 4,
@@ -125,7 +125,7 @@ def test_pair_direct_benchmark_uses_batched_rollout_generation(
 
     metrics = run_pair_direct_benchmark(
         env_cfg={
-            "target": "dreamervla.diagnostics.benchmark_manual_workers:SyntheticBatchWMEnv",
+            "target": "dreamervla.diagnostics.benchmarks.benchmark_manual_workers:SyntheticBatchWMEnv",
             "kwargs": {
                 "num_envs": 2,
                 "latent_dim": 4,
@@ -134,7 +134,7 @@ def test_pair_direct_benchmark_uses_batched_rollout_generation(
             },
         },
         policy_cfg={
-            "target": "dreamervla.workers.actor._test_models:TinyLumosPolicy",
+            "target": "dreamervla.diagnostics.fixtures.actor_models:TinyLumosPolicy",
             "kwargs": {"hidden_dim": 4, "action_dim": 3, "chunk_size": 2},
         },
         train_cfg={"device": "cpu"},
@@ -177,7 +177,7 @@ def test_pair_direct_benchmark_uses_batched_observation_payload(
 
     metrics = run_pair_direct_benchmark(
         env_cfg={
-            "target": "dreamervla.diagnostics.benchmark_manual_workers:SyntheticBatchWMEnv",
+            "target": "dreamervla.diagnostics.benchmarks.benchmark_manual_workers:SyntheticBatchWMEnv",
             "kwargs": {
                 "num_envs": 2,
                 "latent_dim": 4,
@@ -186,7 +186,7 @@ def test_pair_direct_benchmark_uses_batched_observation_payload(
             },
         },
         policy_cfg={
-            "target": "dreamervla.workers.actor._test_models:TinyLumosPolicy",
+            "target": "dreamervla.diagnostics.fixtures.actor_models:TinyLumosPolicy",
             "kwargs": {"hidden_dim": 4, "action_dim": 3, "chunk_size": 2},
         },
         train_cfg={"device": "cpu"},

@@ -60,7 +60,7 @@ def test_learner_worker_runs_synthetic_ppo_and_syncs_policy_weights() -> None:
 
         model_cfg = {
             "policy": {
-                "target": "dreamervla.workers.actor._test_models:TinyTrainablePolicy",
+                "target": "dreamervla.diagnostics.fixtures.actor_models:TinyTrainablePolicy",
                 "kwargs": {"hidden_dim": 4, "action_dim": 7},
             }
         }
@@ -129,11 +129,11 @@ def test_learner_worker_runs_configured_phase_updater() -> None:
 
         model_cfg = {
             "policy": {
-                "target": "dreamervla.workers.actor._test_models:TinyTrainablePolicy",
+                "target": "dreamervla.diagnostics.fixtures.actor_models:TinyTrainablePolicy",
                 "kwargs": {"hidden_dim": 4, "action_dim": 7},
             },
             "world_model": {
-                "target": "dreamervla.workers.actor._test_models:TinyScalarModel",
+                "target": "dreamervla.diagnostics.fixtures.actor_models:TinyScalarModel",
                 "kwargs": {"hidden_dim": 4},
             },
         }
@@ -142,7 +142,7 @@ def test_learner_worker_runs_configured_phase_updater() -> None:
             "batch_size": 2,
             "device": "cpu",
             "phase_updater": {
-                "target": "dreamervla.workers.actor._test_models:TinyWorldModelPhaseUpdater",
+                "target": "dreamervla.diagnostics.fixtures.actor_models:TinyWorldModelPhaseUpdater",
                 "kwargs": {},
             },
             "optimizers": {
@@ -180,7 +180,7 @@ def test_learner_worker_applies_manual_fsdp_manager_settings() -> None:
 
         model_cfg = {
             "policy": {
-                "target": "dreamervla.workers.actor._test_models:TinyCheckpointPolicy",
+                "target": "dreamervla.diagnostics.fixtures.actor_models:TinyCheckpointPolicy",
                 "kwargs": {"hidden_dim": 4, "action_dim": 7},
             }
         }

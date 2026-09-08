@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from dreamervla.workers.inference._test_rollout_stub import HIDDEN_DIM
+from dreamervla.diagnostics.fixtures.rollout import HIDDEN_DIM
 from dreamervla.workers.inference.rollout_inference_worker import RolloutInferenceWorker
 
 
@@ -10,7 +10,7 @@ def _cfg() -> dict:
     return {
         "device": "cpu",
         "action_dim": 7,
-        "decoder": {"target": "dreamervla.workers.inference._test_rollout_stub:StubRolloutBundle"},
+        "decoder": {"target": "dreamervla.diagnostics.fixtures.rollout:StubRolloutBundle"},
     }
 
 

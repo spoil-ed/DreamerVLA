@@ -1,7 +1,7 @@
 # AGENTS.md
 
-Brief for AI coding agents working on DreamerVLA. For contribution mechanics, commit
-style, and PR process, see [CONTRIBUTING.md](CONTRIBUTING.md).
+Repository guidance for AI coding agents working on DreamerVLA, including
+architecture, development checks, and commit conventions.
 
 **Quick orientation:** DreamerVLA is a single-machine VLA + world-model training stack
 for LIBERO. Hydra owns configuration. A `Runner` owns one train/eval job. The current
@@ -12,9 +12,9 @@ mainline is the OpenVLA-OFT one-trajectory cold-start workflow:
 The mainline experiments are `collect_rollouts`, independent WM/classifier warmup,
 `openvla_libero`, and `eval_cotrain`. Ray is the implementation backend
 for collection and cotrain, so public route names do not carry a `ray` suffix.
-The command-level reference is [spec/04_complete_loop.md](spec/04_complete_loop.md).
-Architecture source documents live under [spec/](spec/), with
-[spec/99_manual_notes.md](spec/99_manual_notes.md) as the highest-priority user
+The command-level reference is [docs/architecture/04_complete_loop.md](docs/architecture/04_complete_loop.md).
+Architecture source documents live under [docs/architecture/](docs/architecture/), with
+[docs/architecture/99_manual_notes.md](docs/architecture/99_manual_notes.md) as the highest-priority user
 guidance. Keep this file as the repository brief.
 
 The official-data WM and classifier recipes remain supporting capacity checks; they
@@ -48,14 +48,21 @@ do not replace the collect/warmup/online-cotrain flow.
     `envs/world_model/LatentWorldModelEnv`.
   - `workers/`, `scheduler/`, `hybrid_engines/` - Ray mainline backend:
     env, inference, replay, learner, rollout dump, placement, channels, and weight sync.
-  - `diagnostics/` - executable install, eval, smoke, and measurement CLIs.
-  - `runtime/` - shared local runner support, including metrics, offline warmup,
-    collection adapters, and cotrain evaluation.
-  - `utils/` - checkpoint, logging, metrics, paths, timers, EGL, HF modules, shared helpers.
+  - `diagnostics/` - `checks/` for install and runtime checks, `evaluation/` for
+    rollout inspection, `benchmarks/` for performance/overfit probes, and
+    `fixtures/` for importable synthetic components used by diagnostics and Ray tests.
+  - `runtime/` - shared workflow support grouped into `rollout/`, `replay/`,
+    `training/`, `evaluation/`, `envs/`, and `common/`. Environment rendering and
+    episode-end behavior live in `runtime/envs/`.
+  - `utils/` - utilities grouped into `checkpoint/`, `config/`, `logging/`,
+    `training/`, `integrations/`, and `visualization/`. Generic distributed,
+    optimizer, averaging, and RNG helpers live in `utils/training/`.
 - **`configs/`** - Hydra source of truth:
   - `train.yaml` composes `VLA/`, `worldmodel/`, `classifier/`, `dreamervla/`,
     `evaluation/`, `logger/`, and `experiment/`.
   - `configs/experiment/` selects complete recipes.
+  - `configs/environments/` contains isolated Python dependency profiles and
+    container variables, separate from Hydra's experiment config groups.
   - `configs/task/` carries LIBERO suite, checkpoint, image/history, sidecar metadata,
     and the task-owned classifier model, data target, and input contract.
 - **`scripts/`** - thin shell launchers. Implementation belongs in `dreamervla/` and
@@ -66,6 +73,8 @@ do not replace the collect/warmup/online-cotrain flow.
   datasets, checkpoints, collected rollouts, processed data, and outputs.
 - **`third_party/`** - ignored, read-only upstream runtime dependencies. Inspect
   them when needed, but never edit or stage them from this repository.
+- **`docs/`** - usage guides, `architecture/` contracts and original manual notes,
+  `reference/` notes, tutorials, papers, and retained upstream `licenses/`.
 
 ---
 
@@ -266,7 +275,7 @@ artifacts elsewhere. Evaluation is the deliberate exception: its run root is
   parsers; use Python/Hydra for iteration and dispatch. `if` is acceptable for
   run/skip/required-input guards.
 - No bare `print` in training-loop code except concise rank-0 progress lines already
-  used by runners. Prefer runner logging and `utils/json_logger.py`.
+  used by runners. Prefer runner logging and `utils/logging/json_logger.py`.
 - New behavior needs tests under `tests/`; GPU/Ray/real-env coverage belongs in
   `tests/e2e_tests/` and must be gated appropriately.
 - Commits use `[type]: description`, at most 72 characters, imperative mood,
@@ -277,12 +286,12 @@ artifacts elsewhere. Evaluation is the deliberate exception: its run root is
 
 ## Further Reading
 
-- [Architecture overview](spec/00_overview.md)
-- [Project goals](spec/01_goal.md)
-- [Naming principles](spec/02_naming.md)
-- [Coding style](spec/03_coding_style.md)
-- [Complete cotrain loop](spec/04_complete_loop.md)
-- [Manual notes](spec/99_manual_notes.md)
+- [Architecture overview](docs/architecture/00_overview.md)
+- [Project goals](docs/architecture/01_goal.md)
+- [Naming principles](docs/architecture/02_naming.md)
+- [Coding style](docs/architecture/03_coding_style.md)
+- [Complete cotrain loop](docs/architecture/04_complete_loop.md)
+- [Manual notes](docs/architecture/99_manual_notes.md)
 - [Parameter reference](docs/PARAMETERS.md)
 - [Install](docs/install.md)
 - [Data layout](docs/data_layout.md)

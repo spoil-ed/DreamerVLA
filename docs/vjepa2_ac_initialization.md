@@ -138,7 +138,7 @@ JAX_PLATFORMS=cpu RUN_VJEPA2_AC_SMOKE=1 VJEPA2_AC_CKPT=/path/to/vjepa2-ac-vitg.p
 
 # Bounded real-data probe; output directory must not already exist.
 JAX_PLATFORMS=cpu VJEPA2_AC_CKPT=/path/to/vjepa2-ac-vitg.pt \
-  .venv-pi05/bin/python -m dreamervla.diagnostics.vjepa2_ac_state_smoke \
+  .venv-pi05/bin/python -m dreamervla.diagnostics.checks.vjepa2_ac_state_smoke \
   --output-dir /path/to/new-probe --decoder-ckpt /path/to/frozen-decoder.ckpt \
   --wandb-mode online --encoded-cache /path/to/verified-cache.pt \
   --steps 40 --override optim.world_model.lr_warmup_steps=5 \

@@ -10,13 +10,13 @@ from dreamervla.scheduler.worker_group import WorkerGroup
 
 def _cfg() -> dict:
     return {
-        "encoder": {"target": "dreamervla.workers.inference._test_models:TinyEncoder"},
+        "encoder": {"target": "dreamervla.diagnostics.fixtures.inference_models:TinyEncoder"},
         "world_model": {
-            "target": "dreamervla.workers.inference._test_models:TinyWorldModel",
+            "target": "dreamervla.diagnostics.fixtures.inference_models:TinyWorldModel",
             "kwargs": {"hidden_dim": 4, "action_dim": 7},
         },
         "policy": {
-            "target": "dreamervla.workers.inference._test_models:TinyPolicy",
+            "target": "dreamervla.diagnostics.fixtures.inference_models:TinyPolicy",
             "kwargs": {"hidden_dim": 4, "action_dim": 7},
         },
         "device": "cpu",
@@ -105,7 +105,7 @@ def test_inference_worker_handles_dict_latent_state() -> None:
     try:
         cfg = _cfg()
         cfg["world_model"] = {
-            "target": "dreamervla.workers.inference._test_models:TinyDictWorldModel",
+            "target": "dreamervla.diagnostics.fixtures.inference_models:TinyDictWorldModel",
             "kwargs": {"hidden_dim": 4, "action_dim": 7},
         }
         group = WorkerGroup(InferenceWorker, cfg, {}, num_envs=2).launch(

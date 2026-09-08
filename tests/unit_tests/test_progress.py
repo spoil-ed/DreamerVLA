@@ -1,4 +1,4 @@
-from dreamervla.utils.progress import ProgressReporter
+from dreamervla.utils.logging.progress import ProgressReporter
 
 
 class _Clock:

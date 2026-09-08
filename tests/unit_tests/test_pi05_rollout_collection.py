@@ -185,7 +185,7 @@ def test_pi05_policy_loads_sft_delta_from_run_root(tmp_path) -> None:
 def test_pi05_observation_latent_schema_rejects_non_rlinf_geometry() -> None:
     import pytest
 
-    from dreamervla.runtime.observation_latent import ObservationLatentSpec
+    from dreamervla.runtime.common.observation_latent import ObservationLatentSpec
 
     spec = ObservationLatentSpec(
         policy_family="pi05",
@@ -205,8 +205,8 @@ def test_pi05_observation_latent_schema_rejects_non_rlinf_geometry() -> None:
 def test_pi05_prefix_sidecar_round_trip(tmp_path) -> None:
     import h5py
 
-    from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
-    from dreamervla.runtime.observation_latent import ObservationLatentSpec
+    from dreamervla.dataset.storage.rollout_dump_writer import RolloutDumpWriter
+    from dreamervla.runtime.common.observation_latent import ObservationLatentSpec
 
     spec = ObservationLatentSpec(
         policy_family="pi05",

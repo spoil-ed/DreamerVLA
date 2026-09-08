@@ -12,7 +12,7 @@ from torch import nn
 from torch.distributions import Categorical
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
-from dreamervla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
+from dreamervla.utils.integrations.openvla_oft_imports import ensure_openvla_oft_on_path
 
 
 def _torch_dtype(name: str | torch.dtype) -> torch.dtype:
@@ -922,7 +922,7 @@ class OpenVLAOFTPolicy(nn.Module):
 
         if self.processor is None:
             raise RuntimeError("make_extractor requires a checkpoint-loaded processor")
-        from dreamervla.runtime.rollout_hidden_extractor import (
+        from dreamervla.runtime.rollout.rollout_hidden_extractor import (
             OFTRolloutHiddenExtractor,
         )
 

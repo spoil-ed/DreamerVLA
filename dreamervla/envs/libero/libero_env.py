@@ -41,7 +41,7 @@ from dreamervla.envs.libero.utils import (
     resize_hwc_uint8,
 )
 from dreamervla.envs.libero.venv import ReconfigureSubprocEnv
-from dreamervla.utils.episode_end import resolve_episode_end
+from dreamervla.runtime.envs.episode_end import resolve_episode_end
 
 
 def _load_libero_init_states(task_suite: Any, task_id: int) -> Any:

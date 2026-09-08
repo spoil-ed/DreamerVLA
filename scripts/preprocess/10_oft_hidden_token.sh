@@ -55,7 +55,7 @@ fi
 
 if [[ "${OFT_FAKE_COMPONENTS}" != "1" ]]; then
   python - <<'PY'
-from dreamervla.utils.openvla_oft_imports import ensure_openvla_oft_on_path
+from dreamervla.utils.integrations.openvla_oft_imports import ensure_openvla_oft_on_path
 
 root = ensure_openvla_oft_on_path()
 from prismatic.vla.constants import ACTION_DIM, NUM_ACTIONS_CHUNK

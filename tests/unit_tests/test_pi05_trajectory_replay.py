@@ -60,7 +60,7 @@ def _step(index: int) -> dict:
 
 
 def _write_rgb_trajectory(root: Path, episode_id: int, task_id: int) -> None:
-    from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
+    from dreamervla.dataset.storage.rollout_dump_writer import RolloutDumpWriter
 
     with RolloutDumpWriter(
         root,
@@ -79,7 +79,7 @@ def _write_rgb_trajectory(root: Path, episode_id: int, task_id: int) -> None:
 
 
 def test_pi05_rgb_replay_uses_every_failure_window_and_rank_shards(tmp_path: Path) -> None:
-    from dreamervla.runtime.pi05_trajectory_replay import Pi05TrajectoryReplay
+    from dreamervla.runtime.replay.pi05_trajectory_replay import Pi05TrajectoryReplay
 
     reward = tmp_path / "reward"
     for episode_id in range(3):
@@ -119,7 +119,7 @@ def test_pi05_rgb_replay_uses_every_failure_window_and_rank_shards(tmp_path: Pat
 
 
 def test_pi05_rgb_replay_carries_prefix_input_attention_mask(tmp_path: Path) -> None:
-    from dreamervla.runtime.pi05_trajectory_replay import Pi05TrajectoryReplay
+    from dreamervla.runtime.replay.pi05_trajectory_replay import Pi05TrajectoryReplay
 
     reward = tmp_path / "reward"
     _write_rgb_trajectory(reward, episode_id=0, task_id=0)
@@ -145,7 +145,7 @@ def test_pi05_rgb_replay_carries_prefix_input_attention_mask(tmp_path: Path) -> 
 
 
 def test_pi05_rgb_replay_carries_image_slot_attention_mask(tmp_path: Path) -> None:
-    from dreamervla.runtime.pi05_trajectory_replay import Pi05TrajectoryReplay
+    from dreamervla.runtime.replay.pi05_trajectory_replay import Pi05TrajectoryReplay
 
     reward = tmp_path / "reward"
     _write_rgb_trajectory(reward, episode_id=0, task_id=0)
@@ -171,7 +171,7 @@ def test_pi05_rgb_replay_carries_image_slot_attention_mask(tmp_path: Path) -> No
 
 
 def test_pi05_rgb_replay_returns_encoder_aligned_images(tmp_path: Path) -> None:
-    from dreamervla.runtime.pi05_trajectory_replay import Pi05TrajectoryReplay
+    from dreamervla.runtime.replay.pi05_trajectory_replay import Pi05TrajectoryReplay
 
     reward = tmp_path / "reward"
     _write_rgb_trajectory(reward, episode_id=0, task_id=0)

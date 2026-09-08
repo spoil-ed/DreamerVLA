@@ -16,7 +16,7 @@ conda activate "${CONDA_ENV_NAME}"
 
 echo "[install:60_verify] checking imports in conda env=${CONDA_ENV_NAME}"
 echo "[install:60_verify] verifying imports and CUDA visibility"
-python -m dreamervla.diagnostics.verify_install
+python -m dreamervla.diagnostics.checks.verify_install
 
 # OpenVLA-OFT needs moojink's transformers fork (bidirectional Llama attention).
 # Vanilla transformers passes every version check (both report 4.40.1) but gives
@@ -33,7 +33,7 @@ if not is_fork:
     sys.exit(
         "[install:60_verify] FATAL: transformers is VANILLA, not the OpenVLA-OFT fork "
         "(moojink/transformers-openvla-oft). OFT inference will give 0% garbage actions. "
-        "Re-run 40_third_party.sh (offline: set TRANSFORMERS_OFT_FORK_SRC). See SETUP.md section 1."
+        "Re-run 40_third_party.sh (offline: set TRANSFORMERS_OFT_FORK_SRC). See docs/install.md."
     )
 PY
 
@@ -55,7 +55,7 @@ except Exception as e:
         "fork (4.40.1). peft>=0.12 imports transformers.EncoderDecoderCache (absent in the "
         "fork), so OFT policy load crashes in collect/cotrain (incl. Ray inference workers). "
         "Pin it back: pip install peft==0.11.0  (requirements.txt pins this; a stray "
-        "openvla-oft install WITHOUT --no-deps upgrades it). See SETUP.md section 1."
+        "openvla-oft install WITHOUT --no-deps upgrades it). See docs/install.md."
     )
 print(f"[install:60_verify] peft {peft.__version__} OK (compatible with OFT transformers fork)")
 PY

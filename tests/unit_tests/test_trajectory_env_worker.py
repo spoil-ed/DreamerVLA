@@ -10,6 +10,7 @@ import pytest
 import torch
 
 import dreamervla.workers.env.trajectory_env_worker as trajectory_env_worker
+from dreamervla.diagnostics.fixtures.envs import CounterEnv
 from dreamervla.workers.cotrain.messages import (
     ObservationBatchMsg,
     ObservationMsg,
@@ -17,7 +18,6 @@ from dreamervla.workers.cotrain.messages import (
     RolloutResultMsg,
     TrajectoryShard,
 )
-from dreamervla.workers.env._test_envs import CounterEnv
 from dreamervla.workers.env.trajectory_env_worker import (
     BaseTrajectoryEnvWorker,
     RealEnvWorker,
@@ -62,21 +62,21 @@ class _MemoryReplay:
 
 def _counter_env_cfg() -> dict[str, Any]:
     return {
-        "target": "dreamervla.workers.env._test_envs:CounterEnv",
+        "target": "dreamervla.diagnostics.fixtures.envs:CounterEnv",
         "kwargs": {"horizon": 2, "embedding_dim": 4},
     }
 
 
 def _long_horizon_counter_env_cfg() -> dict[str, Any]:
     return {
-        "target": "dreamervla.workers.env._test_envs:CounterEnv",
+        "target": "dreamervla.diagnostics.fixtures.envs:CounterEnv",
         "kwargs": {"horizon": 99, "embedding_dim": 4},
     }
 
 
 def _batched_counter_env_cfg() -> dict[str, Any]:
     return {
-        "target": "dreamervla.workers.env._test_envs:BatchedCounterEnv",
+        "target": "dreamervla.diagnostics.fixtures.envs:BatchedCounterEnv",
         "kwargs": {"num_envs": 3, "horizon": 2, "embedding_dim": 4},
     }
 
@@ -86,11 +86,11 @@ def _tiny_wm_env_cfg() -> dict[str, Any]:
         "target": "dreamervla.envs.world_model.latent_world_model_env:LatentWorldModelEnv",
         "kwargs": {
             "world_model": {
-                "target": "dreamervla.workers.actor._test_models:TinyLumosWorldModel",
+                "target": "dreamervla.diagnostics.fixtures.actor_models:TinyLumosWorldModel",
                 "kwargs": {"hidden_dim": 4, "action_dim": 3},
             },
             "classifier": {
-                "target": "dreamervla.workers.actor._test_models:TinySuccessClassifier",
+                "target": "dreamervla.diagnostics.fixtures.actor_models:TinySuccessClassifier",
                 "kwargs": {"hidden_dim": 4, "window": 3},
             },
             "latent_dim": 4,
@@ -103,14 +103,14 @@ def _tiny_wm_env_cfg() -> dict[str, Any]:
 
 def _short_horizon_counter_env_cfg() -> dict[str, Any]:
     return {
-        "target": "dreamervla.workers.env._test_envs:CounterEnv",
+        "target": "dreamervla.diagnostics.fixtures.envs:CounterEnv",
         "kwargs": {"horizon": 1, "embedding_dim": 4},
     }
 
 
 def _no_sidecar_env_cfg() -> dict[str, Any]:
     return {
-        "target": "dreamervla.workers.env._test_envs:NoSidecarTrainEnv",
+        "target": "dreamervla.diagnostics.fixtures.envs:NoSidecarTrainEnv",
         "kwargs": {"horizon": 1, "state_dim": 2},
     }
 
@@ -1769,7 +1769,7 @@ def test_interact_flushes_partial_episode_at_rollout_epoch_boundary(
     replay = _MemoryReplay()
     worker = RealEnvWorker(
         env_cfg={
-            "target": "dreamervla.workers.env._test_envs:CounterEnv",
+            "target": "dreamervla.diagnostics.fixtures.envs:CounterEnv",
             "kwargs": {"horizon": 10, "embedding_dim": 4},
         },
         num_slots=1,

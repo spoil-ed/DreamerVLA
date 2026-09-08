@@ -15,9 +15,9 @@ classifier:
     _target_: dreamervla.algorithms.critic.LatentSuccessClassifier
   dataset:
     train:
-      _target_: dreamervla.dataset.lumos_aligned_latent_dataset.LumosAlignedLatentTrainDataset
+      _target_: dreamervla.dataset.classifier_dataset.LumosAlignedLatentTrainDataset
     validation:
-      _target_: dreamervla.dataset.lumos_aligned_latent_dataset.LumosAlignedLatentValDataset
+      _target_: dreamervla.dataset.classifier_dataset.LumosAlignedLatentValDataset
   input:
     latent_dim: ${task.openvla_oft.hidden_token.classifier_latent_dim}
     action_dim: ${task.action_dim}
@@ -86,7 +86,7 @@ openvla_oft:
     num_action_repeat: 1
     model_dim: 4148
   sft_policy_target: dreamervla.models.embodiment.OpenVLAOFTPolicy
-  sft_dataset_target: dreamervla.dataset.VLASFTHDF5DatasetFactory
+  sft_dataset_target: dreamervla.dataset.libero.VLASFTHDF5DatasetFactory
   wm_target: dreamervla.models.embodiment.world_model.wm_chunk.ChunkAwareWorldModel
   actor_target: dreamervla.algorithms.actor.LatentToOpenVLAHiddenStateActor
   actor_head_type: oft_discrete_token

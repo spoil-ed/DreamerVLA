@@ -5,7 +5,7 @@ import os
 import pytest
 import ray
 
-from dreamervla.scheduler._test_workers import EchoWorker
+from dreamervla.diagnostics.fixtures.scheduler_workers import EchoWorker
 from dreamervla.scheduler.cluster import Cluster
 from dreamervla.scheduler.placement import NodePlacementStrategy, PackedPlacementStrategy
 from dreamervla.scheduler.worker_group import WorkerGroup

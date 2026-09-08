@@ -23,7 +23,7 @@ def test_env_worker_uses_injected_record_builder() -> None:
         return {"marker": 1, "obs_embedding": np.asarray(obs_embedding, np.float16)}
 
     cfg = {
-        "target": "dreamervla.workers.env._test_envs:DumpCounterEnv",
+        "target": "dreamervla.diagnostics.fixtures.envs:DumpCounterEnv",
         "kwargs": {"horizon": 2, "image_shape": (4, 4, 3), "embedding_dim": 4},
     }
 
@@ -64,7 +64,7 @@ def test_env_worker_pushes_completed_episode_to_remote_replay(monkeypatch) -> No
     monkeypatch.setattr(env_worker_mod.ray, "get", fake_get)
 
     cfg = {
-        "target": "dreamervla.workers.env._test_envs:DumpCounterEnv",
+        "target": "dreamervla.diagnostics.fixtures.envs:DumpCounterEnv",
         "kwargs": {"horizon": 2, "image_shape": (4, 4, 3), "embedding_dim": 4},
     }
     sink = _Sink()
@@ -110,7 +110,7 @@ def test_env_worker_pushes_completed_episode_to_replay_and_dump(monkeypatch) -> 
     monkeypatch.setattr(env_worker_mod.ray, "get", lambda ref: ref)
 
     cfg = {
-        "target": "dreamervla.workers.env._test_envs:DumpCounterEnv",
+        "target": "dreamervla.diagnostics.fixtures.envs:DumpCounterEnv",
         "kwargs": {"horizon": 1, "image_shape": (4, 4, 3), "embedding_dim": 4},
     }
     replay = _Sink()
@@ -146,7 +146,7 @@ def test_env_worker_stamps_step_metadata_on_completed_episode(monkeypatch) -> No
     monkeypatch.setattr(env_worker_mod.ray, "get", lambda ref: ref)
 
     cfg = {
-        "target": "dreamervla.workers.env._test_envs:DumpCounterEnv",
+        "target": "dreamervla.diagnostics.fixtures.envs:DumpCounterEnv",
         "kwargs": {"horizon": 1, "image_shape": (4, 4, 3), "embedding_dim": 4},
     }
     dump = _Sink()
@@ -170,7 +170,7 @@ def test_env_worker_copies_state_to_proprio_for_replay() -> None:
     from dreamervla.workers.env.env_worker import EnvWorker
 
     cfg = {
-        "target": "dreamervla.workers.env._test_envs:CounterEnv",
+        "target": "dreamervla.diagnostics.fixtures.envs:CounterEnv",
         "kwargs": {"horizon": 2, "image_shape": (4, 4, 3), "embedding_dim": 4},
     }
 
@@ -201,7 +201,7 @@ def test_env_worker_passes_pre_step_full_record_to_record_builder() -> None:
         return {"obs_embedding": np.asarray(obs_embedding, np.float16)}
 
     cfg = {
-        "target": "dreamervla.workers.env._test_envs:DumpCounterEnv",
+        "target": "dreamervla.diagnostics.fixtures.envs:DumpCounterEnv",
         "kwargs": {"horizon": 2, "image_shape": (4, 4, 3), "embedding_dim": 4},
     }
 
@@ -230,7 +230,7 @@ def test_env_worker_passes_language_embedding_to_record_builder() -> None:
         }
 
     cfg = {
-        "target": "dreamervla.workers.env._test_envs:DumpCounterEnv",
+        "target": "dreamervla.diagnostics.fixtures.envs:DumpCounterEnv",
         "kwargs": {"horizon": 2, "image_shape": (4, 4, 3), "embedding_dim": 4},
     }
 

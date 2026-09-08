@@ -3,12 +3,12 @@ import numpy as np
 import pytest
 import torch
 
-from dreamervla.dataset.lumos_aligned_latent_dataset import (
+from dreamervla.dataset.base.latent_token_dataloader import find_demo_pairs
+from dreamervla.dataset.classifier_dataset import (
     LumosAlignedLatentTrainDataset,
     _load_demo,
 )
-from dreamervla.dataset.rollout_dump_writer import RolloutDumpWriter
-from dreamervla.dataset.wm_replay_classifier_dataset import _find_demo_pairs
+from dreamervla.dataset.storage.rollout_dump_writer import RolloutDumpWriter
 
 
 def _steps(T, success):
@@ -74,7 +74,7 @@ def test_find_demo_pairs_rejects_raw_hidden_demo_set_mismatch(tmp_path):
         )
 
     with pytest.raises(ValueError, match="demo set mismatch"):
-        _find_demo_pairs(raw_dir, hid_dir)
+        find_demo_pairs(raw_dir, hid_dir)
 
 
 def test_load_demo_rejects_raw_hidden_length_mismatch(tmp_path):

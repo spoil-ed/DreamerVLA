@@ -27,7 +27,7 @@ def test_release_image_contains_source_third_party_and_dry_run_contract() -> Non
         "-lc",
         " && ".join(
             (
-                "python -m dreamervla.diagnostics.verify_install",
+                "python -m dreamervla.diagnostics.checks.verify_install",
                 "test -d third_party/LIBERO/.git",
                 "test -d third_party/openvla-oft/.git",
                 "python -m dreamervla.launchers.reproduce "

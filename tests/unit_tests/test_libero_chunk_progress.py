@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from dreamervla.runtime.libero_chunk_eval import run_rlinf_chunk_eval
+from dreamervla.runtime.evaluation.libero_chunk_eval import run_rlinf_chunk_eval
 
 
 class _OneChunkEnv:

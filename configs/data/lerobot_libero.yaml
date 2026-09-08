@@ -1,0 +1,15 @@
+# Native LeRobot v3 data; checkpoint normalization assets are configured separately.
+source: ${oc.env:PI05_LIBERO_DATA,/jfs/public/prod/hf-datasets/datasets/lerobot/libero}
+repo_id: lerobot/libero
+format: lerobot_v3
+dataset:
+  _target_: dreamervla.dataset.libero.LiberoDataset
+  dataset_dir: ${data.source}
+  sequence_length: ${task.pi05.action_horizon}
+  image_key: observation.images.image
+  wrist_image_key: observation.images.image2
+  action_key: action
+  state_key: observation.state
+  window_stride: 1
+  split: train
+  pad_end: true
